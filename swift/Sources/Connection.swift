@@ -25,8 +25,15 @@ enum ConnectionType: String, CaseIterable, Identifiable {
 }
 
 enum SSHAuthType: String, CaseIterable {
-    case key, password
-    var label: String { self == .key ? "Private Key" : "Password" }
+    case agent, key, password
+
+    var label: String {
+        switch self {
+        case .agent: "Agent"
+        case .key: "Private Key"
+        case .password: "Password"
+        }
+    }
 }
 
 enum SSLMode: String, CaseIterable {
@@ -115,7 +122,7 @@ struct ConnectionDraft {
     var sshHost: String = ""
     var sshPort: String = "22"
     var sshUser: String = ""
-    var sshAuthType: SSHAuthType = .key
+    var sshAuthType: SSHAuthType = .agent
     var sshKeyPath: String = ""
     var sshPassword: String = ""
     // SSL

@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 import type { Connection } from "../store/connections.js";
 import { openSSHTunnel } from "./ssh.js";
 
@@ -34,7 +35,7 @@ export async function createDriver(conn: Connection): Promise<Driver> {
       user: conn.ssh_user ?? "",
       authType: conn.ssh_auth_type ?? "agent",
       keyPath: conn.ssh_key_path,
-      password: conn.ssh_password,
+      passphrase: conn.ssh_password,
       remoteHost: effectiveHost,
       remotePort: effectivePort,
     });
@@ -43,27 +44,33 @@ export async function createDriver(conn: Connection): Promise<Driver> {
     effectivePort = t.localPort;
   }
 
-  const sslConfig = buildSSL(conn);
   let driver: Driver;
 
-  switch (conn.type) {
-    case "postgres": {
-      const { createPostgresDriver } = await import("./postgres.js");
-      driver = createPostgresDriver(conn, effectiveHost, effectivePort, sslConfig);
-      break;
+  try {
+    const sslConfig = buildSSL(conn);
+
+    switch (conn.type) {
+      case "postgres": {
+        const { createPostgresDriver } = await import("./postgres.js");
+        driver = createPostgresDriver(conn, effectiveHost, effectivePort, sslConfig);
+        break;
+      }
+      case "mysql": {
+        const { createMysqlDriver } = await import("./mysql.js");
+        driver = createMysqlDriver(conn, effectiveHost, effectivePort, sslConfig);
+        break;
+      }
+      case "sqlite": {
+        const { createSqliteDriver } = await import("./sqlite.js");
+        driver = createSqliteDriver(conn.filename!);
+        break;
+      }
+      default:
+        throw new Error(`Unsupported DB type: ${conn.type}`);
     }
-    case "mysql": {
-      const { createMysqlDriver } = await import("./mysql.js");
-      driver = createMysqlDriver(conn, effectiveHost, effectivePort, sslConfig);
-      break;
-    }
-    case "sqlite": {
-      const { createSqliteDriver } = await import("./sqlite.js");
-      driver = createSqliteDriver(conn.filename!);
-      break;
-    }
-    default:
-      throw new Error(`Unsupported DB type: ${conn.type}`);
+  } catch (err) {
+    tunnel?.close();
+    throw err;
   }
 
   if (!tunnel) return driver;
@@ -81,7 +88,6 @@ function defaultPort(type: string) {
 function buildSSL(conn: Connection): Record<string, unknown> | false {
   if (!conn.use_ssl || conn.ssl_mode === "disable") return false;
 
-  const { readFileSync } = require("fs");
   const ssl: Record<string, unknown> = {
     rejectUnauthorized: conn.ssl_mode === "verify-full" || conn.ssl_mode === "verify-ca",
   };

@@ -14,6 +14,9 @@ export function createPostgresDriver(
     user: conn.user,
     password: conn.password,
     database: conn.database,
+    connectionTimeoutMillis: 8000,
+    statement_timeout: 15000,
+    query_timeout: 20000,
     ...(conn.socket_path ? { host: conn.socket_path } : {}),
     ...(ssl ? { ssl } : {}),
   });

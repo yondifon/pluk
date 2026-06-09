@@ -16,13 +16,19 @@ const server = Bun.serve({
     if (testId && req.method === "POST") {
       const conn = getConnectionById(testId);
       if (!conn) return Response.json({ ok: false, error: "Not found" }, { status: 404 });
+      let driver: Awaited<ReturnType<typeof createDriver>> | undefined;
       try {
-        const driver = await createDriver(conn);
+        driver = await createDriver(conn);
         await driver.testConnection();
-        await driver.close();
         return Response.json({ ok: true });
       } catch (err) {
-        return Response.json({ ok: false, error: (err as Error).message });
+        return Response.json({ ok: false, error: formatTestError(err as Error) });
+      } finally {
+        try {
+          await driver?.close();
+        } catch (err) {
+          console.error(`[pluk] test cleanup error: ${(err as Error).message}`);
+        }
       }
     }
 
@@ -37,6 +43,14 @@ const server = Bun.serve({
     return new Response("Not found", { status: 404 });
   },
 });
+
+function formatTestError(err: Error): string {
+  if (/connection timeout|timeout expired/i.test(err.message)) {
+    return "Postgres timed out after SSH connected. Check DB host/port from the SSH host and firewall/VPC rules.";
+  }
+
+  return err.message;
+}
 
 console.log(`pluk MCP server on http://localhost:${PORT}`);
 console.log(`MCP endpoint: http://localhost:${PORT}/mcp/<token>`);

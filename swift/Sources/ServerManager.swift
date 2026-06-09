@@ -6,14 +6,14 @@ final class ServerManager {
     func start() {
         killOrphanOnPort(4242)
 
-        guard let bunPath = findBun(), let serverPath = findServer() else {
-            print("[pluk] Could not locate bun or server.ts")
+        guard let server = resolveServer() else {
+            print("[pluk] Could not locate server binary")
             return
         }
 
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: bunPath)
-        p.arguments = ["run", serverPath]
+        p.executableURL = URL(fileURLWithPath: server.executable)
+        p.arguments = server.args
         p.environment = ProcessInfo.processInfo.environment
 
         do {
@@ -37,6 +37,24 @@ final class ServerManager {
         process = nil
     }
 
+    // MARK: - Server resolution
+
+    private typealias ServerSpec = (executable: String, args: [String])
+
+    private func resolveServer() -> ServerSpec? {
+        // Production: standalone binary compiled with `bun build --compile`, bundled in .app
+        if let resources = Bundle.main.resourcePath {
+            let binary = (resources as NSString).appendingPathComponent("pluk-server")
+            if FileManager.default.fileExists(atPath: binary) {
+                return (binary, [])
+            }
+        }
+
+        // Development: bun run server.ts (resolved relative to source tree)
+        guard let bun = findBun(), let serverTS = findServerTS() else { return nil }
+        return (bun, ["run", serverTS])
+    }
+
     // MARK: - Helpers
 
     private func killOrphanOnPort(_ port: Int) {
@@ -58,7 +76,7 @@ final class ServerManager {
         return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? which("bun")
     }
 
-    private func findServer() -> String? {
+    private func findServerTS() -> String? {
         let candidates: [String] = [
             ProcessInfo.processInfo.environment["PLUK_SERVER"],
             URL(fileURLWithPath: #filePath)

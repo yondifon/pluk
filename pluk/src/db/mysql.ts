@@ -14,6 +14,7 @@ export function createMysqlDriver(
     user: conn.user,
     password: conn.password,
     database: conn.database,
+    connectTimeout: 8000,
     ...(conn.socket_path ? { socketPath: conn.socket_path } : {}),
     ...(ssl ? { ssl: ssl as mysql.SslOptions } : {}),
   });

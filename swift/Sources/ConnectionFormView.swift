@@ -20,7 +20,7 @@ struct ConnectionFormView: View {
         VStack(spacing: 0) {
             formHeader
             Divider()
-            ScrollView { formBody.padding(20) }
+            ScrollView { formBody.padding(.horizontal, 18).padding(.vertical, 14) }
             Divider()
             formFooter
         }
@@ -30,8 +30,14 @@ struct ConnectionFormView: View {
 
     private var formHeader: some View {
         HStack {
-            Text(editingConn != nil ? "Edit Connection" : "New Connection")
-                .font(.system(size: 15, weight: .semibold))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(editingConn != nil ? "Edit Connection" : "New Connection")
+                    .font(.system(size: 15, weight: .semibold))
+                Text(draft.name.isEmpty ? "Connection settings" : draft.name)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
             Spacer()
             Picker("", selection: $draft.environment) {
                 ForEach(Environment.allCases, id: \.self) { env in
@@ -42,14 +48,14 @@ struct ConnectionFormView: View {
             .frame(width: 130)
             .help("Environment label (visual only)")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
     }
 
     // MARK: - Body sections
 
     private var formBody: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
 
             // ── General ───────────────────────────────────────────────
             section("General") {
@@ -138,7 +144,11 @@ struct ConnectionFormView: View {
                                     browseButton(title: "Choose…", types: []) { draft.sshKeyPath = $0 }
                                 }
                             }
-                        } else {
+                            row("Passphrase") {
+                                SecureField("Leave empty if key has no passphrase", text: $draft.sshPassword)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                        } else if draft.sshAuthType == .password {
                             row("SSH Password") {
                                 SecureField("••••••••", text: $draft.sshPassword)
                                     .textFieldStyle(.roundedBorder)
@@ -188,8 +198,15 @@ struct ConnectionFormView: View {
 
             // ── Advanced ──────────────────────────────────────────────
             section("Advanced") {
-                Toggle("Read-only mode", isOn: $draft.readOnly)
-                    .help("Prevents write queries through this connection's MCP tools")
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Read-only mode", isOn: $draft.readOnly)
+                        .help("Prevents write queries through this connection's MCP tools")
+                    Text("Recommended for production. Agents should use SELECT queries with LIMIT.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
             }
         }
     }
@@ -204,43 +221,67 @@ struct ConnectionFormView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(draft.name.trimmingCharacters(in: .whitespaces).isEmpty)
         }
-        .padding(16)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
     }
 
     // MARK: - Layout helpers
 
     private func section<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             Text(title)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.secondary)
                 .textCase(.uppercase)
-                .tracking(0.5)
-            content()
+                .padding(.bottom, 6)
+            VStack(spacing: 0) {
+                content()
+            }
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(.rect(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+            )
         }
     }
 
     private func section<C: View>(_ title: String, toggle: Binding<Bool>, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(title)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.secondary)
                     .textCase(.uppercase)
-                    .tracking(0.5)
                 Spacer()
                 Toggle("", isOn: toggle).toggleStyle(.switch).controlSize(.mini)
             }
-            content()
+            .padding(.bottom, 6)
+            VStack(spacing: 0) {
+                content()
+            }
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(.rect(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+            )
         }
     }
 
     private func row<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .center, spacing: 12) {
             Text(label)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 12))
                 .foregroundColor(.secondary)
+                .frame(width: 104, alignment: .leading)
             content()
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .overlay(alignment: .bottom) {
+            Divider().padding(.leading, 124)
         }
     }
 

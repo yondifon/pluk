@@ -98,33 +98,34 @@ struct ConnectionDetailView: View {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 Divider()
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 18) {
                     mcpURLSection
                     configSnippetSection
                     connectionDetailsSection
                     testSection
                 }
-                .padding()
+                .padding(18)
             }
         }
+        .background(Color(NSColor.windowBackgroundColor))
     }
 
     // MARK: - Header
 
     private var header: some View {
         HStack {
-            Circle()
-                .fill(dotColor)
-                .frame(width: 10, height: 10)
-            Text(conn.name)
-                .font(.system(size: 17, weight: .semibold))
-            Text(conn.type.label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(Color(NSColor.controlBackgroundColor))
-                .clipShape(.rect(cornerRadius: 4))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(dotColor)
+                        .frame(width: 8, height: 8)
+                    Text(conn.name)
+                        .font(.system(size: 15, weight: .semibold))
+                }
+                Text("\(conn.type.label) · \(conn.environment.label)")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
             Spacer()
             Button("Edit", action: onEdit)
                 .buttonStyle(.bordered)
@@ -135,30 +136,30 @@ struct ConnectionDetailView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
         }
-        .padding()
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
     }
 
     // MARK: - MCP URL
 
     private var mcpURLSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionLabel("MCP URL")
+        DetailSection("MCP") {
+            InspectorRow("URL") {
+                HStack(spacing: 8) {
+                    Text(conn.mcpURL)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    copyURLButton
+                }
+            }
+            InspectorRow("Agent hint", value: "Use SELECT with LIMIT for production data.")
+        }
+    }
 
-            HStack(spacing: 8) {
-                Text(conn.mcpURL)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(Color(NSColor.controlBackgroundColor))
-                    .clipShape(.rect(cornerRadius: 6))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
-                    )
-
+    private var copyURLButton: some View {
                 Button(urlCopied ? "Copied!" : "Copy") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(conn.mcpURL, forType: .string)
@@ -172,12 +173,6 @@ struct ConnectionDetailView: View {
                 .controlSize(.regular)
                 .tint(urlCopied ? .green : .accentColor)
                 .animation(.easeInOut(duration: 0.15), value: urlCopied)
-            }
-
-            Text("Paste this URL into your AI agent's MCP config. The agent only accesses this database.")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-        }
     }
 
     // MARK: - Config snippet
@@ -187,9 +182,12 @@ struct ConnectionDetailView: View {
     }
 
     private var configSnippetSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        DetailSection("Config") {
             HStack {
-                SectionLabel("Config Snippet")
+                Text("Client")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .frame(width: 86, alignment: .leading)
                 Spacer()
                 Picker("", selection: $selectedClient) {
                     ForEach(MCPClient.allCases) { client in
@@ -199,19 +197,16 @@ struct ConnectionDetailView: View {
                 .pickerStyle(.menu)
                 .frame(width: 110)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
 
             HStack(alignment: .top, spacing: 8) {
                 Text(configSnippet)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(Color(NSColor.controlBackgroundColor))
-                    .clipShape(.rect(cornerRadius: 6))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
-                    )
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
 
                 Button(snippetCopied ? "Copied!" : "Copy") {
                     NSPasteboard.general.clearContents()
@@ -227,26 +222,23 @@ struct ConnectionDetailView: View {
                 .tint(snippetCopied ? .green : nil)
                 .animation(.easeInOut(duration: 0.15), value: snippetCopied)
             }
-
-            Text("Add the highlighted block to your \(selectedClient.configPath).")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
+            .background(Color(NSColor.textBackgroundColor))
         }
     }
 
     // MARK: - Connection details
 
     private var connectionDetailsSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            SectionLabel("Connection")
-
+        DetailSection("Connection") {
             if conn.type == .sqlite {
-                KVRow(key: "File", value: conn.filename ?? "—")
+                InspectorRow("File", value: conn.filename ?? "-")
             } else {
-                KVRow(key: "Host", value: conn.host ?? "—")
-                KVRow(key: "Port", value: conn.port.map(String.init) ?? "—")
-                KVRow(key: "User", value: conn.user ?? "—")
-                KVRow(key: "Database", value: conn.database ?? "—")
+                InspectorRow("Host", value: conn.host ?? "-")
+                InspectorRow("Port", value: conn.port.map(String.init) ?? "-")
+                InspectorRow("User", value: conn.user ?? "-")
+                InspectorRow("Database", value: conn.database ?? "-")
+                InspectorRow("SSH", value: conn.useSSH ? (conn.sshHost ?? "-") : "Off")
+                InspectorRow("SSL", value: conn.useSSL ? conn.sslMode.label : "Off")
             }
         }
     }
@@ -254,9 +246,10 @@ struct ConnectionDetailView: View {
     // MARK: - Test
 
     private var testSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionLabel("Status")
-            testButton
+        DetailSection("Status") {
+            InspectorRow("Connection") {
+                testButton
+            }
         }
     }
 
@@ -297,6 +290,7 @@ struct ConnectionDetailView: View {
                 let url = URL(string: "http://localhost:4242/api/connections/\(conn.id)/test")!
                 var req = URLRequest(url: url)
                 req.httpMethod = "POST"
+                req.timeoutInterval = 12
                 let (data, _) = try await URLSession.shared.data(for: req)
                 let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
                 await MainActor.run {
@@ -338,23 +332,64 @@ struct SectionLabel: View {
     }
 }
 
-struct KVRow: View {
-    let key: String
-    let value: String
+struct DetailSection<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
     var body: some View {
-        HStack {
-            Text(key)
-                .frame(width: 70, alignment: .leading)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.secondary)
+                .textCase(.uppercase)
+                .padding(.bottom, 6)
+            VStack(spacing: 0) {
+                content
+            }
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(.rect(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+            )
+        }
+    }
+}
+
+struct InspectorRow<Content: View>: View {
+    let label: String
+    let content: Content
+
+    init(_ label: String, value: String) where Content == Text {
+        self.label = label
+        self.content = Text(value)
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundColor(.primary)
+    }
+
+    init(_ label: String, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(label)
                 .font(.system(size: 12))
-            Text(value)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(.primary)
-            Spacer()
+                .foregroundColor(.secondary)
+                .frame(width: 86, alignment: .leading)
+            content
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color(NSColor.controlBackgroundColor))
-        .clipShape(.rect(cornerRadius: 5))
+        .padding(.vertical, 7)
+        .overlay(alignment: .bottom) {
+            Divider().padding(.leading, 106)
+        }
     }
 }

@@ -16,7 +16,7 @@ function buildMcpServer(conn: Connection): McpServer {
 
   server.tool(
     "query",
-    "Run a SQL query against the database",
+    "Run a SQL query against the database. For production data, prefer SELECT-only queries, add explicit LIMIT clauses, and avoid broad scans or long-running statements.",
     { sql: z.string().describe("SQL query to execute") },
     async ({ sql }) => {
       const driver = await createDriver(conn);
@@ -87,8 +87,12 @@ export async function handleMcpRequest(conn: Connection, req: Request): Promise<
 
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
-    onsessioninitialized: (sid) => sessions.set(sid, session),
-    onsessionclosed: (sid) => sessions.delete(sid),
+    onsessioninitialized: (sid) => {
+      sessions.set(sid, session);
+    },
+    onsessionclosed: (sid) => {
+      sessions.delete(sid);
+    },
   });
 
   const server = buildMcpServer(conn);
