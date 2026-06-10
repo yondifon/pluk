@@ -209,7 +209,7 @@ function reserveLocalPort(): Promise<number> {
   });
 }
 
-function waitForPort(port: number): Promise<void> {
+function waitForPort(port: number, timeoutMs = 15_000): Promise<void> {
   return new Promise((resolve, reject) => {
     const started = Date.now();
 
@@ -221,8 +221,8 @@ function waitForPort(port: number): Promise<void> {
       });
       socket.once("error", (err) => {
         socket.destroy();
-        if (Date.now() - started > 5000) reject(err);
-        else setTimeout(tryConnect, 100);
+        if (Date.now() - started > timeoutMs) reject(err);
+        else setTimeout(tryConnect, 200);
       });
     };
 
@@ -260,16 +260,22 @@ async function openOpenSSHTunnel(
     env: process.env,
   });
 
-  let stderr = "";
-  child.stderr.on("data", (data: Buffer) => {
-    stderr += data.toString();
-  });
+  // Collect stderr asynchronously; child may still write after kill()
+  const stderrChunks: Buffer[] = [];
+  child.stderr.on("data", (data: Buffer) => stderrChunks.push(data));
+
+  const childClosed = new Promise<void>((res) => child.on("close", () => res()));
 
   try {
     await waitForPort(localPort);
   } catch (err) {
     child.kill();
-    throw new Error(stderr.trim() || (err as Error).message);
+    // Wait up to 1s for the child to flush all stderr before reading it
+    await Promise.race([childClosed, new Promise<void>((r) => setTimeout(r, 1000))]);
+    const stderr = Buffer.concat(stderrChunks).toString().trim();
+    // Filter out SSH's unhelpful "closed by UNKNOWN" noise; surface proxy errors first
+    const lines = stderr.split(/\r?\n/).filter(l => l && !/closed by UNKNOWN/i.test(l));
+    throw new Error(lines.join("\n") || (err as Error).message);
   }
 
   console.log(`[pluk] tunnel ready on localhost:${localPort}`);
@@ -287,7 +293,20 @@ export async function openSSHTunnel(config: SSHTunnelConfig): Promise<Tunnel> {
   const username = config.user || sshConfig.user || userInfo().username;
 
   if (sshConfig.proxyCommand) {
-    return openOpenSSHTunnel(config, sshConfig, username);
+    // Cloudflare Access and other proxy tunnels can fail transiently on DNS or auth — retry
+    let lastErr: Error | undefined;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await openOpenSSHTunnel(config, sshConfig, username);
+      } catch (err) {
+        lastErr = err as Error;
+        if (attempt < 3) {
+          console.warn(`[pluk] OpenSSH tunnel attempt ${attempt} failed: ${lastErr.message}. Retrying in 2s…`);
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+      }
+    }
+    throw lastErr!;
   }
 
   return new Promise((resolve, reject) => {

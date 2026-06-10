@@ -49,6 +49,10 @@ function formatTestError(err: Error): string {
     return "Postgres timed out after SSH connected. Check DB host/port from the SSH host and firewall/VPC rules.";
   }
 
+  if (/no such host|name or service not known/i.test(err.message)) {
+    return `SSH proxy (cloudflared?) failed DNS lookup. This is usually transient — try again. Detail: ${err.message}`;
+  }
+
   return err.message;
 }
 

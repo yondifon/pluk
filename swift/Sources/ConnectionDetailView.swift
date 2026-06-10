@@ -83,6 +83,7 @@ enum MCPClient: String, CaseIterable, Identifiable {
 
 struct ConnectionDetailView: View {
     let conn: Connection
+    let store: ConnectionStore
     let onEdit: () -> Void
     let onDelete: () -> Void
 
@@ -90,6 +91,8 @@ struct ConnectionDetailView: View {
     @State private var snippetCopied = false
     @State private var selectedClient: MCPClient = .opencode
     @State private var testStatus: TestStatus = .idle
+    @State private var showLog = false
+    @State private var logEntries: [QueryLogEntry] = []
 
     enum TestStatus { case idle, testing, ok, fail(String) }
 
@@ -102,7 +105,9 @@ struct ConnectionDetailView: View {
                     mcpURLSection
                     configSnippetSection
                     connectionDetailsSection
+                    policySection
                     testSection
+                    queryLogSection
                 }
                 .padding(18)
             }
@@ -226,6 +231,47 @@ struct ConnectionDetailView: View {
         }
     }
 
+    // MARK: - Policy summary
+
+    private var policySection: some View {
+        let policy = conn.queryPolicy
+        return DetailSection("Query Policy") {
+            InspectorRow("Preset", value: policy.preset.label)
+            InspectorRow("Allowed") {
+                Text(policy.allowed.map(\.rawValue).joined(separator: ", "))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+            }
+            InspectorRow("Guards") {
+                HStack(spacing: 6) {
+                    if policy.blockStacked {
+                        badge("no stack", color: .blue)
+                    }
+                    if policy.requireWhere {
+                        badge("WHERE req.", color: .orange)
+                    }
+                    if !policy.allowFilesystem {
+                        badge("no FS", color: .purple)
+                    }
+                    if let max = policy.maxRows {
+                        badge("≤\(max) rows", color: .gray)
+                    }
+                }
+            }
+        }
+    }
+
+    private func badge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundColor(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.8))
+            .clipShape(.capsule)
+    }
+
     // MARK: - Connection details
 
     private var connectionDetailsSection: some View {
@@ -309,6 +355,53 @@ struct ConnectionDetailView: View {
         }
     }
 
+    // MARK: - Query log
+
+    private var queryLogSection: some View {
+        DetailSection("Query Log") {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Recent agent queries and verdicts")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button(showLog ? "Hide" : "Show") {
+                        showLog.toggle()
+                        if showLog { logEntries = store.recentLog(connectionId: conn.id) }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+
+                if showLog {
+                    Divider()
+                    if logEntries.isEmpty {
+                        Text("No queries logged yet.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                    } else {
+                        ForEach(logEntries) { entry in
+                            QueryLogRow(entry: entry)
+                            Divider().padding(.leading, 10)
+                        }
+                    }
+                    Button("Refresh") {
+                        logEntries = store.recentLog(connectionId: conn.id)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(.accentColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                }
+            }
+        }
+    }
+
     private var dotColor: Color {
         switch conn.type {
         case .postgres: .green
@@ -370,6 +463,55 @@ struct DetailSection<Content: View>: View {
                 content
             }
             .cardSurface()
+        }
+    }
+}
+
+struct QueryLogRow: View {
+    let entry: QueryLogEntry
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            // Verdict badge
+            Text(entry.verdict.uppercased())
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(verdictColor)
+                .clipShape(.rect(cornerRadius: 3))
+                .frame(width: 54, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.sql)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.primary)
+                    .lineLimit(2)
+
+                HStack(spacing: 8) {
+                    if let reason = entry.reason {
+                        Text(reason)
+                            .font(.system(size: 10))
+                            .foregroundColor(.red)
+                            .lineLimit(1)
+                    }
+                    Text(entry.createdAt)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
+    private var verdictColor: Color {
+        switch entry.verdict {
+        case "allowed": return .green
+        case "blocked": return .red
+        default:        return .orange
         }
     }
 }

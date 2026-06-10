@@ -75,7 +75,7 @@ struct ContentView: View {
     @ViewBuilder
     private var detailPanel: some View {
         if let conn = selected {
-            ConnectionDetailView(conn: conn) {
+            ConnectionDetailView(conn: conn, store: store) {
                 sheet = .edit(conn)
             } onDelete: {
                 store.delete(conn)

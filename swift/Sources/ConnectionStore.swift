@@ -2,6 +2,19 @@ import Foundation
 import Observation
 import SQLite3
 
+// MARK: - Query log entry (for audit viewer)
+
+struct QueryLogEntry: Identifiable {
+    let id: Int
+    let connectionId: String
+    let connectionName: String
+    let sql: String
+    let verdict: String       // allowed | blocked | error
+    let reason: String?
+    let categories: String?
+    let createdAt: String
+}
+
 @Observable
 @MainActor
 final class ConnectionStore {
@@ -35,7 +48,21 @@ final class ConnectionStore {
             ssl_ca_path TEXT, ssl_cert_path TEXT, ssl_key_path TEXT,
             environment TEXT DEFAULT 'development',
             read_only INTEGER NOT NULL DEFAULT 0,
+            query_policy TEXT,
             token TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """)
+
+        exec("""
+        CREATE TABLE IF NOT EXISTS query_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            connection_id TEXT NOT NULL,
+            connection_name TEXT NOT NULL,
+            sql TEXT NOT NULL,
+            verdict TEXT NOT NULL,
+            reason TEXT,
+            categories TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
         """)
@@ -52,6 +79,7 @@ final class ConnectionStore {
             "ALTER TABLE connections ADD COLUMN ssl_key_path TEXT",
             "ALTER TABLE connections ADD COLUMN environment TEXT DEFAULT 'development'",
             "ALTER TABLE connections ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE connections ADD COLUMN query_policy TEXT",
         ]
         for sql in alters { exec(sql) } // silently ignores if column exists
     }
@@ -64,7 +92,7 @@ final class ConnectionStore {
         SELECT id,name,type,host,port,"user",password,database,filename,socket_path,
                use_ssh,ssh_host,ssh_port,ssh_user,ssh_auth_type,ssh_key_path,ssh_password,
                use_ssl,ssl_mode,ssl_ca_path,ssl_cert_path,ssl_key_path,
-               environment,read_only,token,created_at
+               environment,read_only,query_policy,token,created_at
         FROM connections ORDER BY created_at DESC
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -82,8 +110,8 @@ final class ConnectionStore {
           (id,name,type,host,port,"user",password,database,filename,socket_path,
            use_ssh,ssh_host,ssh_port,ssh_user,ssh_auth_type,ssh_key_path,ssh_password,
            use_ssl,ssl_mode,ssl_ca_path,ssl_cert_path,ssl_key_path,
-           environment,read_only,token)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           environment,read_only,query_policy,token)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -99,7 +127,7 @@ final class ConnectionStore {
           name=?,type=?,host=?,port=?,"user"=?,password=?,database=?,filename=?,socket_path=?,
           use_ssh=?,ssh_host=?,ssh_port=?,ssh_user=?,ssh_auth_type=?,ssh_key_path=?,ssh_password=?,
           use_ssl=?,ssl_mode=?,ssl_ca_path=?,ssl_cert_path=?,ssl_key_path=?,
-          environment=?,read_only=?
+          environment=?,read_only=?,query_policy=?
         WHERE id=?
         """
         var stmt: OpaquePointer?
@@ -117,6 +145,43 @@ final class ConnectionStore {
         bindText(stmt, 1, conn.id)
         sqlite3_step(stmt)
         load()
+    }
+
+    // MARK: - Query log
+
+    func recentLog(connectionId: String, limit: Int = 50) -> [QueryLogEntry] {
+        var stmt: OpaquePointer?
+        let sql = """
+        SELECT id, connection_id, connection_name, sql, verdict, reason, categories, created_at
+        FROM query_log
+        WHERE connection_id = ?
+        ORDER BY id DESC
+        LIMIT ?
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, connectionId)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+
+        var result: [QueryLogEntry] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            func str(_ i: Int32) -> String? {
+                guard let p = sqlite3_column_text(stmt, i) else { return nil }
+                return String(cString: p)
+            }
+            guard let createdAt = str(7) else { continue }
+            result.append(QueryLogEntry(
+                id: Int(sqlite3_column_int(stmt, 0)),
+                connectionId: str(1) ?? "",
+                connectionName: str(2) ?? "",
+                sql: str(3) ?? "",
+                verdict: str(4) ?? "",
+                reason: str(5),
+                categories: str(6),
+                createdAt: createdAt
+            ))
+        }
+        return result
     }
 
     // MARK: - Bind helpers (INSERT)
@@ -146,8 +211,9 @@ final class ConnectionStore {
         bindNullableText(stmt, 21, draft.sslCertPath.isEmpty ? nil : draft.sslCertPath)
         bindNullableText(stmt, 22, draft.sslKeyPath.isEmpty ? nil : draft.sslKeyPath)
         bindText(stmt, 23, draft.environment.rawValue)
-        bindInt(stmt, 24, draft.readOnly ? 1 : 0)
-        bindText(stmt, 25, token)
+        bindInt(stmt, 24, draft.queryPolicy.preset == .readOnly ? 1 : 0)
+        bindNullableText(stmt, 25, draft.queryPolicy.toJSON())
+        bindText(stmt, 26, token)
     }
 
     private func bindUpdate(_ stmt: OpaquePointer?, _ draft: ConnectionDraft, id: String) {
@@ -174,8 +240,9 @@ final class ConnectionStore {
         bindNullableText(stmt, 20, draft.sslCertPath.isEmpty ? nil : draft.sslCertPath)
         bindNullableText(stmt, 21, draft.sslKeyPath.isEmpty ? nil : draft.sslKeyPath)
         bindText(stmt, 22, draft.environment.rawValue)
-        bindInt(stmt, 23, draft.readOnly ? 1 : 0)
-        bindText(stmt, 24, id)
+        bindInt(stmt, 23, draft.queryPolicy.preset == .readOnly ? 1 : 0)
+        bindNullableText(stmt, 24, draft.queryPolicy.toJSON())
+        bindText(stmt, 25, id)
     }
 
     // MARK: - Row parsing
@@ -193,7 +260,15 @@ final class ConnectionStore {
 
         guard let id = str(0), let name = str(1), let typeRaw = str(2),
               let type = ConnectionType(rawValue: typeRaw),
-              let token = str(24), let createdAt = str(25) else { return nil }
+              let token = str(25), let createdAt = str(26) else { return nil }
+
+        let environment = Environment(rawValue: str(22) ?? "development") ?? .development
+        let readOnly = bool(23)
+        let queryPolicyJSON = str(24)
+
+        // Parse stored policy, falling back to legacy read_only flag
+        let queryPolicy = QueryPolicy.fromJSON(queryPolicyJSON)
+            ?? (readOnly ? .make(.readOnly) : .default(for: environment))
 
         return Connection(
             id: id, name: name, type: type,
@@ -206,8 +281,9 @@ final class ConnectionStore {
             useSSL: bool(17),
             sslMode: SSLMode(rawValue: str(18) ?? "require") ?? .require,
             sslCAPath: str(19), sslCertPath: str(20), sslKeyPath: str(21),
-            environment: Environment(rawValue: str(22) ?? "development") ?? .development,
-            readOnly: bool(23),
+            environment: environment,
+            readOnly: readOnly,
+            queryPolicy: queryPolicy,
             token: token, createdAt: createdAt
         )
     }

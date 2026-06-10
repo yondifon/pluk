@@ -38,6 +38,7 @@ db.run(`
     -- Meta
     environment TEXT DEFAULT 'development',
     read_only INTEGER NOT NULL DEFAULT 0,
+    query_policy TEXT,
     token TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )
@@ -56,6 +57,7 @@ const migrations = [
   `ALTER TABLE connections ADD COLUMN ssl_key_path TEXT`,
   `ALTER TABLE connections ADD COLUMN environment TEXT DEFAULT 'development'`,
   `ALTER TABLE connections ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE connections ADD COLUMN query_policy TEXT`,
 ];
 for (const sql of migrations) {
   try { db.run(sql); } catch { /* column already exists */ }
@@ -95,6 +97,7 @@ export interface Connection {
   // Meta
   environment?: Environment;
   read_only: number;
+  query_policy?: string | null;
   token: string;
   created_at: string;
 }
@@ -105,7 +108,7 @@ const SELECT_ALL = `
   SELECT id,name,type,host,port,"user",password,database,filename,socket_path,
          use_ssh,ssh_host,ssh_port,ssh_user,ssh_auth_type,ssh_key_path,ssh_password,
          use_ssl,ssl_mode,ssl_ca_path,ssl_cert_path,ssl_key_path,
-         environment,read_only,token,created_at
+         environment,read_only,query_policy,token,created_at
   FROM connections
 `;
 
@@ -130,8 +133,8 @@ export function createConnection(data: ConnectionInput): Connection {
       id, name, type, host, port, "user", password, database, filename, socket_path,
       use_ssh, ssh_host, ssh_port, ssh_user, ssh_auth_type, ssh_key_path, ssh_password,
       use_ssl, ssl_mode, ssl_ca_path, ssl_cert_path, ssl_key_path,
-      environment, read_only, token
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      environment, read_only, query_policy, token
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     id, data.name, data.type,
     data.host ?? null, data.port ?? null, data.user ?? null,
@@ -144,6 +147,7 @@ export function createConnection(data: ConnectionInput): Connection {
     data.ssl_mode ?? "require", data.ssl_ca_path ?? null,
     data.ssl_cert_path ?? null, data.ssl_key_path ?? null,
     data.environment ?? "development", data.read_only ?? 0,
+    data.query_policy ?? null,
     token
   );
 
@@ -161,7 +165,7 @@ export function updateConnection(id: string, data: Partial<ConnectionInput>): Co
     "name", "type", "host", "port", "user", "password", "database", "filename", "socket_path",
     "use_ssh", "ssh_host", "ssh_port", "ssh_user", "ssh_auth_type", "ssh_key_path", "ssh_password",
     "use_ssl", "ssl_mode", "ssl_ca_path", "ssl_cert_path", "ssl_key_path",
-    "environment", "read_only",
+    "environment", "read_only", "query_policy",
   ];
   const entries = Object.entries(data).filter(([k]) => allowed.includes(k));
   if (entries.length === 0) return getConnectionById(id);

@@ -39,14 +39,17 @@ struct ConnectionFormView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Picker("", selection: $draft.environment) {
+            Picker("", selection: Binding(
+                get: { draft.environment },
+                set: { draft.setEnvironment($0) }
+            )) {
                 ForEach(Environment.allCases, id: \.self) { env in
                     Text(env.label).tag(env)
                 }
             }
             .pickerStyle(.menu)
             .frame(width: 130)
-            .help("Environment label (visual only)")
+            .help("Environment — sets default query policy for new connections")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
@@ -196,18 +199,160 @@ struct ConnectionFormView: View {
                 }
             }
 
-            // ── Advanced ──────────────────────────────────────────────
-            section("Advanced") {
+            // ── Query Policy ──────────────────────────────────────────
+            queryPolicySection
+        }
+    }
+
+    // MARK: - Query policy section
+
+    private var queryPolicySection: some View {
+        section("Query Policy") {
+            VStack(alignment: .leading, spacing: 12) {
+
+                // Preset picker
                 VStack(alignment: .leading, spacing: 4) {
-                    Toggle("Read-only mode", isOn: $draft.readOnly)
-                        .help("Prevents write queries through this connection's MCP tools")
-                    Text("Recommended for production. Agents should use SELECT queries with LIMIT.")
+                    HStack {
+                        Text("Preset")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(width: 80, alignment: .leading)
+                        Picker("", selection: Binding(
+                            get: { draft.queryPolicy.preset },
+                            set: { draft.queryPolicy.apply(preset: $0) }
+                        )) {
+                            ForEach(QueryPreset.allCases) { p in
+                                Text(p.label).tag(p)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: 160, alignment: .leading)
+                    }
+                    Text(draft.queryPolicy.preset.description)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
+                        .padding(.leading, 88)
+
+                    if draft.queryPolicy.preset == .unrestricted {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.red)
+                                .font(.system(size: 11))
+                            Text("Unrestricted allows all SQL, including DROP, TRUNCATE, and filesystem ops.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.red)
+                        }
+                        .padding(.leading, 88)
+                    }
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .padding(.top, 8)
+                .padding(.bottom, 2)
+
+                Divider()
+
+                // Category toggles grouped by Read / Write / Schema / Admin
+                let groups: [(String, [StatementCategory])] = [
+                    ("Read",   [.select, .inspect]),
+                    ("Write",  [.insert, .update, .delete, .merge]),
+                    ("Schema", [.create, .alter, .drop, .truncate, .rename]),
+                    ("Admin",  statementAdminCategories),
+                ]
+
+                ForEach(groups, id: \.0) { groupName, categories in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(groupName)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.secondary)
+                            .textCase(.uppercase)
+                            .padding(.horizontal, 10)
+                            .padding(.top, 6)
+                        ForEach(categories) { cat in
+                            HStack {
+                                Toggle(cat.label, isOn: Binding(
+                                    get: { draft.queryPolicy.allowed.contains(cat) },
+                                    set: { _ in draft.queryPolicy.toggle(cat) }
+                                ))
+                                .toggleStyle(.checkbox)
+                                .font(.system(size: 12))
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
+                Divider()
+
+                // Guards
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Guards")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .textCase(.uppercase)
+                        .padding(.horizontal, 10)
+                        .padding(.top, 4)
+
+                    Toggle("Block stacked statements (SELECT 1; DROP …)", isOn: $draft.queryPolicy.blockStacked)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 12))
+                        .help("Reject queries that contain more than one SQL statement")
+                        .padding(.horizontal, 14)
+
+                    Toggle("Require WHERE on UPDATE / DELETE", isOn: $draft.queryPolicy.requireWhere)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 12))
+                        .help("Block UPDATE or DELETE without a WHERE clause")
+                        .padding(.horizontal, 14)
+
+                    Toggle("Allow filesystem / COPY ops", isOn: $draft.queryPolicy.allowFilesystem)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 12))
+                        .foregroundColor(draft.queryPolicy.allowFilesystem ? .red : .primary)
+                        .help("Allow COPY … PROGRAM, INTO OUTFILE, LOAD DATA, ATTACH DATABASE, pg_read_file")
+                        .padding(.horizontal, 14)
+
+                    HStack {
+                        Toggle("Max rows returned", isOn: Binding(
+                            get: { draft.queryPolicy.maxRows != nil },
+                            set: { on in draft.queryPolicy.maxRows = on ? 1000 : nil }
+                        ))
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 12))
+                        .frame(width: 160)
+
+                        if draft.queryPolicy.maxRows != nil {
+                            TextField("1000", value: Binding(
+                                get: { draft.queryPolicy.maxRows ?? 1000 },
+                                set: { draft.queryPolicy.maxRows = max(1, $0) }
+                            ), format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 80)
+                            Text("rows")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                }
+                .padding(.bottom, 8)
+                .onChange(of: draft.queryPolicy.blockStacked) { _, _ in markCustom() }
+                .onChange(of: draft.queryPolicy.requireWhere) { _, _ in markCustom() }
+                .onChange(of: draft.queryPolicy.allowFilesystem) { _, _ in markCustom() }
+                .onChange(of: draft.queryPolicy.maxRows) { _, _ in markCustom() }
             }
+        }
+    }
+
+    // Admin categories depend on driver type (SQLite has no GRANT)
+    private var statementAdminCategories: [StatementCategory] {
+        var cats: [StatementCategory] = [.transaction, .session, .procedure, .maintenance]
+        if draft.type != .sqlite { cats.append(.grant) }
+        return cats
+    }
+
+    private func markCustom() {
+        if draft.queryPolicy.preset != .custom {
+            draft.queryPolicy.preset = .custom
         }
     }
 
