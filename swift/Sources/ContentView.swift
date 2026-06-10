@@ -117,26 +117,78 @@ struct ConnectionRow: View {
     let conn: Connection
 
     var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(dotColor)
-                .frame(width: 8, height: 8)
-            Text(conn.name)
-                .font(.system(size: 13))
-                .lineLimit(1)
+        HStack(spacing: 9) {
+            TypeBadge(type: conn.type)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(conn.name)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+                EnvTag(environment: conn.environment)
+            }
             Spacer()
-            Text(conn.type.rawValue)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.secondary)
+            if conn.readOnly {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                    .help("Read-only")
+            }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
+    }
+}
+
+// Square badge: DB type at a glance. Muted tinted fill, no loud color.
+struct TypeBadge: View {
+    let type: ConnectionType
+    @SwiftUI.Environment(\.backgroundProminence) private var prominence
+
+    private var selected: Bool { prominence == .increased }
+
+    var body: some View {
+        Text(abbrev)
+            .font(.system(size: 9, weight: .semibold, design: .rounded))
+            .foregroundColor(selected ? .white : color)
+            .frame(width: 24, height: 24)
+            .background(
+                (selected ? Color.white.opacity(0.22) : color.opacity(0.14)),
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            )
+            .help(type.label)
     }
 
-    private var dotColor: Color {
-        switch conn.type {
-        case .postgres: .green
-        case .mysql: .orange
-        case .sqlite: .blue
+    private var abbrev: String {
+        switch type {
+        case .postgres: "PG"
+        case .mysql: "MY"
+        case .sqlite: "LT"
+        }
+    }
+
+    private var color: Color {
+        switch type {
+        case .postgres: Color(red: 0.30, green: 0.46, blue: 0.66) // muted postgres blue
+        case .mysql: Color(red: 0.78, green: 0.55, blue: 0.20)    // muted mysql amber
+        case .sqlite: Color(red: 0.45, green: 0.50, blue: 0.56)   // slate
+        }
+    }
+}
+
+// Environment cue: small dot + neutral caption that adapts to row selection.
+struct EnvTag: View {
+    let environment: Environment
+    @SwiftUI.Environment(\.backgroundProminence) private var prominence
+
+    private var selected: Bool { prominence == .increased }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(selected ? Color.white : environment.color.opacity(0.85))
+                .frame(width: 5, height: 5)
+            Text(environment.label.uppercased())
+                .font(.system(size: 9, weight: .medium))
+                .tracking(0.4)
+                .foregroundStyle(.secondary)
         }
     }
 }
