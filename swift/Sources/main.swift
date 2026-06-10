@@ -2,22 +2,39 @@ import Cocoa
 import SwiftUI
 
 @MainActor
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem!
-    private var popover: NSPopover!
+    private var window: NSWindow!
     private var serverManager = ServerManager()
     private var store = ConnectionStore()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        setupMenu()
         setupStatusBar()
-        setupPopover()
+        setupWindow()
         serverManager.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         serverManager.stop()
+    }
+
+    private func setupMenu() {
+        let mainMenu = NSMenu()
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+
+        let appMenu = NSMenu()
+        appMenu.addItem(
+            withTitle: "Quit pluk",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        appItem.submenu = appMenu
+
+        NSApp.mainMenu = mainMenu
     }
 
     private func setupStatusBar() {
@@ -27,28 +44,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         button.image = NSImage(systemSymbolName: "cable.connector", accessibilityDescription: "pluk")
         button.imagePosition = .imageLeft
         button.target = self
-        button.action = #selector(togglePopover)
+        button.action = #selector(toggleWindow)
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
     }
 
-    private func setupPopover() {
-        popover = NSPopover()
-        popover.contentSize = NSSize(width: 700, height: 540)
-        popover.behavior = .transient
-        popover.animates = true
-
-        let contentView = ContentView(store: store)
-        popover.contentViewController = NSHostingController(rootView: contentView)
+    private func setupWindow() {
+        window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 540),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "pluk"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.setFrameAutosaveName("PlukMainWindow")
+        window.center()
+        window.contentViewController = NSHostingController(rootView: ContentView(store: store))
     }
 
-    @objc private func togglePopover() {
-        guard let button = statusItem.button else { return }
-
-        if popover.isShown {
-            popover.performClose(nil)
+    @objc private func toggleWindow() {
+        if window.isVisible {
+            window.orderOut(nil)
         } else {
+            window.center()
             NSApp.activate(ignoringOtherApps: true)
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            window.makeKeyAndOrderFront(nil)
         }
     }
 }

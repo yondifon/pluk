@@ -3,95 +3,111 @@ import SwiftUI
 struct ContentView: View {
     var store: ConnectionStore
     @State private var selectedID: String?
-    @State private var mode: Mode = .empty
+    @State private var sheet: ActiveSheet?
 
-    enum Mode { case empty, detail, add, edit }
+    enum ActiveSheet: Identifiable {
+        case add
+        case edit(Connection)
+
+        var id: String {
+            switch self {
+            case .add: "add"
+            case .edit(let conn): conn.id
+            }
+        }
+    }
 
     var selected: Connection? {
         store.connections.first { $0.id == selectedID }
     }
 
     var body: some View {
-        HStack(spacing: 0) {
+        NavigationSplitView {
             sidebar
-                .frame(width: 210)
-            Divider()
-            mainPanel
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 300)
+        } detail: {
+            detailPanel
+                .frame(minWidth: 440, minHeight: 480)
         }
-        .frame(width: 700, height: 540)
-        .background(Color(NSColor.windowBackgroundColor))
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 720, minHeight: 520)
+        .sheet(item: $sheet) { active in
+            connectionSheet(active)
+        }
     }
 
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        VStack(spacing: 0) {
-            List(store.connections, selection: $selectedID) { conn in
-                ConnectionRow(conn: conn)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        selectedID = conn.id
-                        mode = .detail
-                    }
+        List(selection: $selectedID) {
+            Section("Connections") {
+                ForEach(store.connections) { conn in
+                    ConnectionRow(conn: conn)
+                        .tag(conn.id)
+                }
             }
-            .listStyle(.sidebar)
-            .onChange(of: selectedID) { _, newValue in
-                if newValue != nil { mode = .detail }
-            }
-
-            Divider()
-
-            Button(action: { selectedID = nil; mode = .add }) {
+        }
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom) {
+            Button(action: { sheet = .add }) {
                 Label("New Connection", systemImage: "plus")
                     .font(.system(size: 12))
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
             .foregroundColor(.secondary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(.bar)
         }
-        .background(Color(NSColor.controlBackgroundColor))
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: { sheet = .add }) {
+                    Label("New Connection", systemImage: "plus")
+                }
+                .help("Add a new connection")
+            }
+        }
     }
 
-    // MARK: - Main panel
+    // MARK: - Detail
 
     @ViewBuilder
-    private var mainPanel: some View {
-        switch mode {
-        case .empty:
-            EmptyStateView { selectedID = nil; mode = .add }
-
-        case .detail:
-            if let conn = selected {
-                ConnectionDetailView(conn: conn) {
-                    mode = .edit
-                } onDelete: {
-                    store.delete(conn)
-                    selectedID = nil
-                    mode = .empty
-                }
+    private var detailPanel: some View {
+        if let conn = selected {
+            ConnectionDetailView(conn: conn) {
+                sheet = .edit(conn)
+            } onDelete: {
+                store.delete(conn)
+                selectedID = nil
             }
-
-        case .add:
-            ConnectionFormView(editingConn: nil) { draft in
-                store.create(draft)
-                mode = .empty
-            } onCancel: {
-                mode = selected != nil ? .detail : .empty
-            }
-
-        case .edit:
-            if let conn = selected {
-                ConnectionFormView(editingConn: conn) { draft in
-                    store.update(conn, draft: draft)
-                    mode = .detail
-                } onCancel: {
-                    mode = .detail
-                }
-            }
+        } else {
+            EmptyStateView { sheet = .add }
         }
+    }
+
+    // MARK: - Add / Edit sheet
+
+    @ViewBuilder
+    private func connectionSheet(_ active: ActiveSheet) -> some View {
+        let editing: Connection? = {
+            if case .edit(let conn) = active { return conn }
+            return nil
+        }()
+
+        ConnectionFormView(editingConn: editing) { draft in
+            if let editing {
+                store.update(editing, draft: draft)
+                selectedID = editing.id
+            } else {
+                store.create(draft)
+                selectedID = store.connections.first?.id // newest sorts to top
+            }
+            sheet = nil
+        } onCancel: {
+            sheet = nil
+        }
+        .frame(width: 580, height: 620)
     }
 }
 
@@ -131,10 +147,13 @@ struct EmptyStateView: View {
     let onAdd: () -> Void
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
+            Image(systemName: "cable.connector")
+                .font(.system(size: 38, weight: .light))
+                .foregroundStyle(.secondary)
+
             Text("pluk")
-                .font(.system(size: 52, weight: .ultraLight, design: .default))
-                .foregroundColor(.primary)
+                .font(.system(size: 52, weight: .ultraLight))
                 .tracking(-1)
 
             Text("Plug any database into any AI agent")
@@ -143,7 +162,8 @@ struct EmptyStateView: View {
 
             Button("Add connection", action: onAdd)
                 .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
+                .controlSize(.large)
+                .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

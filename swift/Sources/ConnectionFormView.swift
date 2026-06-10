@@ -237,12 +237,7 @@ struct ConnectionFormView: View {
             VStack(spacing: 0) {
                 content()
             }
-            .background(Color(NSColor.controlBackgroundColor))
-            .clipShape(.rect(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
-            )
+            .cardSurface()
         }
     }
 
@@ -260,12 +255,7 @@ struct ConnectionFormView: View {
             VStack(spacing: 0) {
                 content()
             }
-            .background(Color(NSColor.controlBackgroundColor))
-            .clipShape(.rect(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
-            )
+            .cardSurface()
         }
     }
 

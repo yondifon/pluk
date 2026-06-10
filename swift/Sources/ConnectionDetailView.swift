@@ -320,6 +320,24 @@ struct ConnectionDetailView: View {
 
 // MARK: - Shared helpers
 
+extension View {
+    /// Liquid Glass card surface on macOS 26+, with a solid fallback for earlier systems.
+    @ViewBuilder
+    func cardSurface(cornerRadius: CGFloat = 8) -> some View {
+        if #available(macOS 26.0, *) {
+            self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        } else {
+            self
+                .background(Color(NSColor.controlBackgroundColor))
+                .clipShape(.rect(cornerRadius: cornerRadius))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+                )
+        }
+    }
+}
+
 struct SectionLabel: View {
     let title: String
     init(_ title: String) { self.title = title }
@@ -351,12 +369,7 @@ struct DetailSection<Content: View>: View {
             VStack(spacing: 0) {
                 content
             }
-            .background(Color(NSColor.controlBackgroundColor))
-            .clipShape(.rect(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
-            )
+            .cardSurface()
         }
     }
 }

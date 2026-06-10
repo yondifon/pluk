@@ -2,7 +2,7 @@ APP       := Pluk
 BUNDLE_ID := com.pluk.app
 DIST      := dist
 
-.PHONY: dev server swift-build bundle zip release publish publish-minor publish-major clean
+.PHONY: dev server swift-build bundle install zip release publish publish-minor publish-major clean
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
@@ -14,13 +14,10 @@ dev:
 server:
 	@printf "→ compiling server binary\n"
 	@mkdir -p $(DIST)
-	@# cpu-features ships a native .node addon bun can't bundle; stub it for compile only.
-	@# ssh2 wraps the require in try/catch and guards all property accesses — pure-JS fine.
-	@cp pluk/node_modules/cpu-features/lib/index.js /tmp/_cpu-features-orig.js
-	@printf "'use strict';\nmodule.exports = () => ({});\n" \
-		> pluk/node_modules/cpu-features/lib/index.js
-	cd pluk && bun build --compile src/server.ts --outfile ../$(DIST)/pluk-server; \
-		cp /tmp/_cpu-features-orig.js pluk/node_modules/cpu-features/lib/index.js
+	@# cpu-features ships a native .node addon bun can't bundle; mark it external so it's
+	@# left out of the binary. ssh2 wraps the require in try/catch, so the runtime require
+	@# fails gracefully without it — no node_modules mutation needed.
+	cd pluk && bun build --compile --external cpu-features src/server.ts --outfile ../$(DIST)/pluk-server
 	@chmod +x $(DIST)/pluk-server
 
 swift-build:
@@ -42,6 +39,16 @@ ifdef APPLE_IDENTITY
 	@printf "→ signing with $(APPLE_IDENTITY)\n"
 	codesign --deep --force --verify --sign "$(APPLE_IDENTITY)" $(DIST)/$(APP).app
 endif
+
+# ── Install ───────────────────────────────────────────────────────────────────
+
+install: bundle
+	@printf "→ installing $(APP).app to /Applications\n"
+	@osascript -e 'tell application "$(APP)" to quit' >/dev/null 2>&1 || true
+	@rm -rf "/Applications/$(APP).app"
+	@cp -R "$(DIST)/$(APP).app" "/Applications/$(APP).app"
+	@printf "→ installed /Applications/$(APP).app — launching\n"
+	@open "/Applications/$(APP).app"
 
 zip: bundle
 	@v=$$(cat VERSION); \

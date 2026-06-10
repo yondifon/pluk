@@ -15,7 +15,9 @@ export function createPostgresDriver(
     password: conn.password,
     database: conn.database,
     connectionTimeoutMillis: 8000,
-    statement_timeout: 15000,
+    // NB: statement_timeout is sent in the libpq startup packet, which poolers like
+    // PgBouncer (transaction mode, common behind Cloudflare tunnels) reject with
+    // "unsupported startup parameter". query_timeout is client-side, so it's safe.
     query_timeout: 20000,
     ...(conn.socket_path ? { host: conn.socket_path } : {}),
     ...(ssl ? { ssl } : {}),
