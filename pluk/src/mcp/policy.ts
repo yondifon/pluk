@@ -415,8 +415,27 @@ export function capRows(rows: unknown[], maxRows: number | null): CapResult {
 
 // ── Policy description (for MCP tool doc) ───────────────────────────────────
 
+const CATEGORY_DISPLAY: Partial<Record<StatementCategory, string>> = {
+  select:  "SELECT",
+  inspect: "DESCRIBE/EXPLAIN/SHOW",
+  insert:  "INSERT",
+  update:  "UPDATE",
+  delete:  "DELETE",
+  merge:   "MERGE/REPLACE",
+  create:  "CREATE",
+  alter:   "ALTER",
+  drop:    "DROP",
+  truncate:"TRUNCATE",
+  rename:  "RENAME",
+  transaction: "BEGIN/COMMIT/ROLLBACK",
+  session: "SET/USE",
+  procedure: "CALL/DO",
+  maintenance: "VACUUM/ANALYZE",
+  grant:   "GRANT/REVOKE",
+};
+
 export function policyDescription(policy: QueryPolicy): string {
-  const caps = policy.allowed.join(", ");
+  const caps = policy.allowed.map(c => CATEGORY_DISPLAY[c] ?? c).join(", ");
   const guards: string[] = [];
   if (policy.blockStacked) guards.push("no stacked statements");
   if (policy.requireWhere) guards.push("WHERE required on UPDATE/DELETE");

@@ -79,6 +79,22 @@ enum MCPClient: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Detail tabs
+
+private enum DetailTab: String, CaseIterable {
+    case overview = "Overview"
+    case queries  = "Queries"
+    case policy   = "Policy"
+
+    var icon: String {
+        switch self {
+        case .overview: "link"
+        case .queries:  "list.bullet.rectangle"
+        case .policy:   "shield"
+        }
+    }
+}
+
 // MARK: - Detail view
 
 struct ConnectionDetailView: View {
@@ -87,30 +103,22 @@ struct ConnectionDetailView: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
 
+    @State private var selectedTab: DetailTab = .overview
     @State private var urlCopied = false
     @State private var snippetCopied = false
     @State private var selectedClient: MCPClient = .opencode
     @State private var testStatus: TestStatus = .idle
-    @State private var showLog = false
-    @State private var logEntries: [QueryLogEntry] = []
 
     enum TestStatus { case idle, testing, ok, fail(String) }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                Divider()
-                VStack(alignment: .leading, spacing: 18) {
-                    mcpURLSection
-                    configSnippetSection
-                    connectionDetailsSection
-                    policySection
-                    testSection
-                    queryLogSection
-                }
-                .padding(18)
-            }
+        VStack(spacing: 0) {
+            header
+            Divider()
+            tabBar
+            Divider()
+            tabContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(NSColor.windowBackgroundColor))
     }
@@ -145,6 +153,64 @@ struct ConnectionDetailView: View {
         .padding(.vertical, 12)
     }
 
+    // MARK: - Tab bar
+
+    private var tabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(DetailTab.allCases, id: \.self) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: tab.icon)
+                            .font(.system(size: 11))
+                        Text(tab.rawValue)
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundColor(selectedTab == tab ? .accentColor : .secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .overlay(alignment: .bottom) {
+                        if selectedTab == tab {
+                            Rectangle()
+                                .fill(Color.accentColor)
+                                .frame(height: 2)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 4)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+
+    // MARK: - Tab content
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch selectedTab {
+        case .overview: overviewTab
+        case .queries:  QueriesTab(conn: conn, store: store)
+        case .policy:   policyTab
+        }
+    }
+
+    // MARK: - Overview tab
+
+    private var overviewTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                mcpURLSection
+                configSnippetSection
+                connectionDetailsSection
+                testSection
+            }
+            .padding(18)
+        }
+    }
+
     // MARK: - MCP URL
 
     private var mcpURLSection: some View {
@@ -165,19 +231,19 @@ struct ConnectionDetailView: View {
     }
 
     private var copyURLButton: some View {
-                Button(urlCopied ? "Copied!" : "Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(conn.mcpURL, forType: .string)
-                    urlCopied = true
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(1.5))
-                        urlCopied = false
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .tint(urlCopied ? .green : .accentColor)
-                .animation(.easeInOut(duration: 0.15), value: urlCopied)
+        Button(urlCopied ? "Copied!" : "Copy") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(conn.mcpURL, forType: .string)
+            urlCopied = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.5))
+                urlCopied = false
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.regular)
+        .tint(urlCopied ? .green : .accentColor)
+        .animation(.easeInOut(duration: 0.15), value: urlCopied)
     }
 
     // MARK: - Config snippet
@@ -229,47 +295,6 @@ struct ConnectionDetailView: View {
             }
             .background(Color(NSColor.textBackgroundColor))
         }
-    }
-
-    // MARK: - Policy summary
-
-    private var policySection: some View {
-        let policy = conn.queryPolicy
-        return DetailSection("Query Policy") {
-            InspectorRow("Preset", value: policy.preset.label)
-            InspectorRow("Allowed") {
-                Text(policy.allowed.map(\.rawValue).joined(separator: ", "))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(2)
-            }
-            InspectorRow("Guards") {
-                HStack(spacing: 6) {
-                    if policy.blockStacked {
-                        badge("no stack", color: .blue)
-                    }
-                    if policy.requireWhere {
-                        badge("WHERE req.", color: .orange)
-                    }
-                    if !policy.allowFilesystem {
-                        badge("no FS", color: .purple)
-                    }
-                    if let max = policy.maxRows {
-                        badge("≤\(max) rows", color: .gray)
-                    }
-                }
-            }
-        }
-    }
-
-    private func badge(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(.system(size: 10, weight: .medium))
-            .foregroundColor(.white)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.8))
-            .clipShape(.capsule)
     }
 
     // MARK: - Connection details
@@ -355,51 +380,71 @@ struct ConnectionDetailView: View {
         }
     }
 
-    // MARK: - Query log
+    // MARK: - Policy tab
 
-    private var queryLogSection: some View {
-        DetailSection("Query Log") {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("Recent agent queries and verdicts")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Button(showLog ? "Hide" : "Show") {
-                        showLog.toggle()
-                        if showLog { logEntries = store.recentLog(connectionId: conn.id) }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+    private var policyTab: some View {
+        let policy = conn.queryPolicy
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                DetailSection("Preset") {
+                    InspectorRow("Name", value: policy.preset.label)
+                    InspectorRow("Description", value: policy.preset.description)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
 
-                if showLog {
-                    Divider()
-                    if logEntries.isEmpty {
-                        Text("No queries logged yet.")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                    } else {
-                        ForEach(logEntries) { entry in
-                            QueryLogRow(entry: entry)
-                            Divider().padding(.leading, 10)
+                DetailSection("Allowed Statement Types") {
+                    let groups: [(String, [StatementCategory])] = [
+                        ("Read",   [.select, .inspect]),
+                        ("Write",  [.insert, .update, .delete, .merge]),
+                        ("Schema", [.create, .alter, .drop, .truncate, .rename]),
+                        ("Admin",  [.transaction, .session, .procedure, .maintenance, .grant]),
+                    ]
+                    ForEach(groups, id: \.0) { groupName, cats in
+                        HStack(alignment: .top) {
+                            Text(groupName)
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                                .frame(width: 86, alignment: .leading)
+                            FlowRow(cats.map { cat in
+                                (cat.label, policy.allowed.contains(cat))
+                            })
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .overlay(alignment: .bottom) {
+                            Divider().padding(.leading, 106)
                         }
                     }
-                    Button("Refresh") {
-                        logEntries = store.recentLog(connectionId: conn.id)
+                }
+
+                DetailSection("Guards") {
+                    InspectorRow("Stacked statements") {
+                        guardBadge(blocked: policy.blockStacked, onLabel: "Blocked", offLabel: "Allowed")
                     }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11))
-                    .foregroundColor(.accentColor)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
+                    InspectorRow("WHERE on mutations") {
+                        guardBadge(blocked: policy.requireWhere, onLabel: "Required", offLabel: "Optional")
+                    }
+                    InspectorRow("Filesystem / COPY") {
+                        guardBadge(blocked: !policy.allowFilesystem, onLabel: "Blocked", offLabel: "Allowed")
+                    }
+                    InspectorRow("Max rows") {
+                        Text(policy.maxRows.map { "\($0)" } ?? "Unlimited")
+                            .font(.system(size: 12, design: .monospaced))
+                    }
                 }
             }
+            .padding(18)
         }
+    }
+
+    private func guardBadge(blocked: Bool, onLabel: String, offLabel: String) -> some View {
+        Text(blocked ? onLabel : offLabel)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(blocked ? .white : .secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(blocked ? Color.red.opacity(0.75) : Color(NSColor.separatorColor))
+            .clipShape(.capsule)
     }
 
     private var dotColor: Color {
@@ -407,6 +452,309 @@ struct ConnectionDetailView: View {
         case .postgres: .green
         case .mysql: .orange
         case .sqlite: .blue
+        }
+    }
+}
+
+// MARK: - Queries tab
+
+private struct QueriesTab: View {
+    let conn: Connection
+    let store: ConnectionStore
+
+    @State private var entries: [QueryLogEntry] = []
+    @State private var filter: VerdictFilter = .all
+    @State private var expandedId: Int? = nil
+    @State private var isLoading = false
+
+    enum VerdictFilter: String, CaseIterable {
+        case all = "All"
+        case allowed = "Allowed"
+        case blocked = "Blocked"
+        case error = "Error"
+    }
+
+    private var filtered: [QueryLogEntry] {
+        guard filter != .all else { return entries }
+        return entries.filter { $0.verdict == filter.rawValue.lowercased() }
+    }
+
+    private var stats: (allowed: Int, blocked: Int, error: Int) {
+        let a = entries.filter { $0.verdict == "allowed" }.count
+        let b = entries.filter { $0.verdict == "blocked" }.count
+        let e = entries.filter { $0.verdict == "error" }.count
+        return (a, b, e)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            toolbar
+            Divider()
+            if isLoading {
+                Spacer()
+                ProgressView()
+                Spacer()
+            } else if filtered.isEmpty {
+                emptyState
+            } else {
+                logList
+            }
+        }
+        .onAppear { reload() }
+    }
+
+    // MARK: - Toolbar
+
+    private var toolbar: some View {
+        HStack(spacing: 12) {
+            // Stats pills
+            statPill(entries.count, label: "total", color: .secondary)
+            statPill(stats.allowed, label: "allowed", color: .green)
+            statPill(stats.blocked, label: "blocked", color: .red)
+            if stats.error > 0 {
+                statPill(stats.error, label: "error", color: .orange)
+            }
+
+            Spacer()
+
+            // Filter
+            HStack(spacing: 2) {
+                ForEach(VerdictFilter.allCases, id: \.self) { f in
+                    Button(f.rawValue) { filter = f }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: filter == f ? .semibold : .regular))
+                        .foregroundColor(filter == f ? .accentColor : .secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(filter == f ? Color.accentColor.opacity(0.1) : .clear)
+                        .clipShape(.capsule)
+                }
+            }
+
+            Button {
+                reload()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.secondary)
+            .help("Refresh")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+    }
+
+    private func statPill(_ count: Int, label: String, color: Color) -> some View {
+        HStack(spacing: 3) {
+            Text("\(count)")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(color == .secondary ? .primary : color)
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - Empty state
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "list.bullet.rectangle")
+                .font(.system(size: 28))
+                .foregroundColor(.secondary.opacity(0.4))
+            Text(filter == .all ? "No queries yet" : "No \(filter.rawValue.lowercased()) queries")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+            Text("Queries run by agents through this connection will appear here.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary.opacity(0.7))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 280)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Log list
+
+    private var logList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0, pinnedViews: []) {
+                ForEach(filtered) { entry in
+                    LogEntryRow(
+                        entry: entry,
+                        isExpanded: expandedId == entry.id,
+                        onToggle: {
+                            expandedId = expandedId == entry.id ? nil : entry.id
+                        }
+                    )
+                    Divider().padding(.leading, 14)
+                }
+            }
+        }
+    }
+
+    private func reload() {
+        isLoading = true
+        entries = store.recentLog(connectionId: conn.id, limit: 200)
+        isLoading = false
+    }
+}
+
+// MARK: - Log entry row
+
+private struct LogEntryRow: View {
+    let entry: QueryLogEntry
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top, spacing: 10) {
+                    // Verdict indicator bar
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(verdictColor)
+                        .frame(width: 3)
+                        .frame(minHeight: 36)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        // Top row: badge + SQL preview
+                        HStack(spacing: 8) {
+                            VerdictBadge(verdict: entry.verdict)
+
+                            if let cats = entry.categories, !cats.isEmpty {
+                                Text(cats)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+
+                            Spacer()
+
+                            Text(relativeTime(entry.createdAt))
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        // SQL
+                        Text(entry.sql)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundColor(.primary)
+                            .lineLimit(isExpanded ? nil : 1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        // Expanded: reason + full timestamp
+                        if isExpanded {
+                            if let reason = entry.reason, !reason.isEmpty {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "exclamationmark.circle.fill")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(verdictColor)
+                                    Text(reason)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.top, 2)
+                            }
+                            Text(entry.createdAt)
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary.opacity(0.7))
+                                .padding(.top, 1)
+                        }
+                    }
+                    .padding(.vertical, 10)
+                    .padding(.trailing, 14)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .background(isExpanded ? Color.accentColor.opacity(0.04) : .clear)
+        .contentShape(Rectangle())
+        .animation(.easeInOut(duration: 0.12), value: isExpanded)
+    }
+
+    private var verdictColor: Color {
+        switch entry.verdict {
+        case "allowed": return .green
+        case "blocked": return .red
+        default:        return .orange
+        }
+    }
+
+    // "2 min ago" / "just now" / falls back to raw string for older entries
+    private func relativeTime(_ raw: String) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        guard let date = fmt.date(from: raw) else { return raw }
+        let secs = Int(-date.timeIntervalSinceNow)
+        if secs < 10  { return "just now" }
+        if secs < 60  { return "\(secs)s ago" }
+        if secs < 3600 { return "\(secs / 60)m ago" }
+        if secs < 86400 { return "\(secs / 3600)h ago" }
+        return "\(secs / 86400)d ago"
+    }
+}
+
+// MARK: - Verdict badge
+
+private struct VerdictBadge: View {
+    let verdict: String
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 9, weight: .bold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color)
+            .clipShape(.capsule)
+    }
+
+    private var label: String {
+        switch verdict {
+        case "allowed": return "OK"
+        case "blocked": return "BLOCKED"
+        default:        return "ERROR"
+        }
+    }
+
+    private var color: Color {
+        switch verdict {
+        case "allowed": return .green
+        case "blocked": return .red
+        default:        return .orange
+        }
+    }
+}
+
+// MARK: - Flow row (wrapping category chips)
+
+private struct FlowRow: View {
+    let items: [(label: String, active: Bool)]
+
+    init(_ items: [(String, Bool)]) {
+        self.items = items.map { (label: $0.0, active: $0.1) }
+    }
+
+    var body: some View {
+        // Simple wrap using a fixed-width approach for macOS
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                ForEach(items, id: \.label) { item in
+                    Text(item.label)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(item.active ? .white : .secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(item.active ? Color.accentColor.opacity(0.8) : Color(NSColor.separatorColor).opacity(0.5))
+                        .clipShape(.capsule)
+                        .opacity(item.active ? 1 : 0.6)
+                }
+            }
         }
     }
 }
@@ -463,55 +811,6 @@ struct DetailSection<Content: View>: View {
                 content
             }
             .cardSurface()
-        }
-    }
-}
-
-struct QueryLogRow: View {
-    let entry: QueryLogEntry
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            // Verdict badge
-            Text(entry.verdict.uppercased())
-                .font(.system(size: 9, weight: .bold))
-                .foregroundColor(.white)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(verdictColor)
-                .clipShape(.rect(cornerRadius: 3))
-                .frame(width: 54, alignment: .leading)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.sql)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .lineLimit(2)
-
-                HStack(spacing: 8) {
-                    if let reason = entry.reason {
-                        Text(reason)
-                            .font(.system(size: 10))
-                            .foregroundColor(.red)
-                            .lineLimit(1)
-                    }
-                    Text(entry.createdAt)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-    }
-
-    private var verdictColor: Color {
-        switch entry.verdict {
-        case "allowed": return .green
-        case "blocked": return .red
-        default:        return .orange
         }
     }
 }

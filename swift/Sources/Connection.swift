@@ -87,8 +87,8 @@ enum QueryPreset: String, CaseIterable, Codable, Identifiable {
 
     var description: String {
         switch self {
-        case .readOnly:     "SELECT and EXPLAIN only. Recommended for production."
-        case .readWrite:    "Read + INSERT/UPDATE/DELETE. Requires WHERE on mutations."
+        case .readOnly:     "SELECT, DESCRIBE, EXPLAIN, SHOW. Recommended for production."
+        case .readWrite:    "SELECT, DESCRIBE + INSERT/UPDATE/DELETE. Requires WHERE on mutations."
         case .migrations:   "Full DDL access. CREATE, ALTER, DROP, stored procedures."
         case .unrestricted: "No restrictions. All statement types, filesystem ops allowed."
         case .custom:       "Custom combination of allowed statement types and guards."
@@ -113,7 +113,7 @@ enum StatementCategory: String, CaseIterable, Codable, Identifiable {
     var label: String {
         switch self {
         case .select:      "SELECT"
-        case .inspect:     "EXPLAIN / SHOW / DESCRIBE"
+        case .inspect:     "DESCRIBE / EXPLAIN / SHOW / PRAGMA"
         case .insert:      "INSERT"
         case .update:      "UPDATE"
         case .delete:      "DELETE"
