@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import type { Driver } from "./index.js";
+import type { Driver, RelationshipInfo } from "./index.js";
 
 export function createSqliteDriver(filename: string): Driver {
   const db = new Database(filename);
@@ -42,6 +42,30 @@ export function createSqliteDriver(filename: string): Driver {
       const stmt = db.query(`SELECT * FROM "${quoted}" LIMIT ?`);
       const rows = stmt.all(limit);
       return { rows };
+    },
+
+    async listRelationships(table) {
+      const tables = table ? [table] : (db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[]).map(r => r.name);
+      const results: RelationshipInfo[] = [];
+      for (const t of tables) {
+        const rows = db.query(`PRAGMA foreign_key_list("${t}")`).all() as {
+          from: string;
+          to: string;
+          table: string;
+          id: number;
+          seq: number;
+        }[];
+        for (const r of rows) {
+          results.push({
+            from_table: t,
+            from_column: r.from,
+            to_table: r.table,
+            to_column: r.to,
+            constraint_name: `fk_${t}_${r.id}`,
+          });
+        }
+      }
+      return results;
     },
 
     async listSchemas() {

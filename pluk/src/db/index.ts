@@ -13,12 +13,21 @@ export interface ColumnInfo {
   nullable: boolean;
 }
 
+export interface RelationshipInfo {
+  from_table: string;
+  from_column: string;
+  to_table: string;
+  to_column: string;
+  constraint_name?: string;
+}
+
 export interface Driver {
   query(sql: string, params?: unknown[]): Promise<QueryResult>;
   explain(sql: string): Promise<QueryResult>;
   listTables(): Promise<string[]>;
   describeTable(table: string): Promise<ColumnInfo[]>;
   sampleTable(table: string, limit: number): Promise<QueryResult>;
+  listRelationships(table?: string): Promise<RelationshipInfo[]>;
   listSchemas(): Promise<string[]>;
   testConnection(): Promise<void>;
   close(): Promise<void>;

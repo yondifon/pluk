@@ -59,6 +59,37 @@ export function createMysqlDriver(
       };
     },
 
+    async listRelationships(table) {
+      let sql = `
+        SELECT
+          kcu.table_name AS from_table,
+          kcu.column_name AS from_column,
+          kcu.referenced_table_name AS to_table,
+          kcu.referenced_column_name AS to_column,
+          kcu.constraint_name AS constraint_name
+        FROM information_schema.key_column_usage kcu
+        JOIN information_schema.table_constraints tc
+          ON kcu.constraint_name = tc.constraint_name
+          AND kcu.table_schema = tc.table_schema
+        WHERE tc.constraint_type = 'FOREIGN KEY'
+          AND kcu.table_schema = DATABASE()
+      `;
+      const params: string[] = [];
+      if (table) {
+        sql += " AND kcu.table_name = ?";
+        params.push(table);
+      }
+      sql += " ORDER BY kcu.table_name, kcu.ordinal_position";
+      const [rows] = await pool.query(sql, params);
+      return (rows as Record<string, string>[]).map((r) => ({
+        from_table: r.from_table ?? "",
+        from_column: r.from_column ?? "",
+        to_table: r.to_table ?? "",
+        to_column: r.to_column ?? "",
+        constraint_name: r.constraint_name ?? "",
+      }));
+    },
+
     async listSchemas() {
       const [rows] = await pool.query("SHOW DATABASES");
       return (rows as Record<string, string>[]).map((r) => Object.values(r)[0] ?? "");

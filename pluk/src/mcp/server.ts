@@ -240,6 +240,25 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
     }
   );
 
+  server.tool(
+    "list_relationships",
+    "List foreign key relationships between tables",
+    { table: z.string().optional().describe("Filter to a specific table (optional)") },
+    async ({ table }) => {
+      const sid = sessionIdRef.value;
+      try {
+        return await withToolTimeout((async () => {
+          const driver = await getDriver(sid, conn);
+          const relationships = await driver.listRelationships(table);
+          return { content: [{ type: "text", text: JSON.stringify(relationships, null, 2) }] };
+        })(), "list_relationships");
+      } catch (err) {
+        evictDriver(sid);
+        return { content: [{ type: "text", text: `Error: ${(err as Error).message}` }], isError: true };
+      }
+    }
+  );
+
   server.tool("list_schemas", "List all schemas or databases", async () => {
     const sid = sessionIdRef.value;
     try {

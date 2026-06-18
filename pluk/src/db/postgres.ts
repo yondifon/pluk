@@ -62,6 +62,40 @@ export function createPostgresDriver(
       return { rows: result.rows, fields: result.fields.map((f) => f.name) };
     },
 
+    async listRelationships(table) {
+      let sql = `
+        SELECT
+          tc.table_name AS from_table,
+          kcu.column_name AS from_column,
+          ccu.table_name AS to_table,
+          ccu.column_name AS to_column,
+          tc.constraint_name AS constraint_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON tc.constraint_name = kcu.constraint_name
+          AND tc.table_schema = kcu.table_schema
+        JOIN information_schema.constraint_column_usage ccu
+          ON ccu.constraint_name = tc.constraint_name
+          AND ccu.table_schema = tc.table_schema
+        WHERE tc.constraint_type = 'FOREIGN KEY'
+          AND tc.table_schema = 'public'
+      `;
+      const params: string[] = [];
+      if (table) {
+        sql += " AND tc.table_name = $1";
+        params.push(table);
+      }
+      sql += " ORDER BY tc.table_name, kcu.ordinal_position";
+      const result = await pool.query(sql, params);
+      return result.rows.map((r) => ({
+        from_table: r.from_table as string,
+        from_column: r.from_column as string,
+        to_table: r.to_table as string,
+        to_column: r.to_column as string,
+        constraint_name: r.constraint_name as string,
+      }));
+    },
+
     async listSchemas() {
       const result = await pool.query(
         "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name"
