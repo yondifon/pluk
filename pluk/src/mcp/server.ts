@@ -9,6 +9,7 @@ import { createDriver, type Driver } from "../db/index.js";
 import { parsePolicy, evaluate, capRows, dialectFor, policyDescription, parsePostgresCost } from "./policy.js";
 import { createLogEntry, updateLogEntry, logQuery } from "../store/queryLog.js";
 import { listSavedQueries, getSavedQuery } from "../store/savedQueries.js";
+import { listMaskedColumns, maskRow } from "../store/maskedColumns.js";
 
 // ── Driver pool ──────────────────────────────────────────────────────────────
 // One driver per MCP session. Closed after IDLE_MS of inactivity.
@@ -100,6 +101,7 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
   const server = new McpServer({ name: conn.name, version: "1.0.0" });
 
   const readOnlyMode = policy.allowed.length === 2 && policy.allowed.includes("select") && policy.allowed.includes("inspect");
+  const maskedColumns = listMaskedColumns(conn.id);
 
   server.prompt(
     "summarize_schema",
@@ -206,9 +208,11 @@ ${sql}` } },
         );
 
         const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
-        updateLogEntry(logId, "allowed", undefined, result);
+        const maskedRows = maskedColumns.length > 0 ? rows.map(r => maskRow(r as Record<string, unknown>, maskedColumns)) : rows;
+        const maskedResult = { ...result, rows: maskedRows };
+        updateLogEntry(logId, "allowed", undefined, maskedResult);
 
-        let text = JSON.stringify({ ...result, rows }, null, 2);
+        let text = JSON.stringify(maskedResult, null, 2);
         if (truncated) {
           text += `\n\n[Row limit: showing first ${limit} of ${result.rows.length} rows. Add a LIMIT clause to see all results.]`;
         }
@@ -254,7 +258,8 @@ ${sql}` } },
           const effectiveLimit = policy.maxRows === null ? limit : Math.min(limit, policy.maxRows);
           const result = await driver.sampleTable(table, effectiveLimit);
           const { rows, truncated } = capRows(result.rows, policy.maxRows);
-          let text = JSON.stringify({ fields: result.fields ?? [], rows }, null, 2);
+          const maskedRows = maskedColumns.length > 0 ? rows.map(r => maskRow(r as Record<string, unknown>, maskedColumns)) : rows;
+          let text = JSON.stringify({ fields: result.fields ?? [], rows: maskedRows }, null, 2);
           if (truncated) {
             text += `\n\n[Row limit: showing first ${policy.maxRows} of ${result.rows.length} rows.]`;
           }
@@ -385,6 +390,62 @@ ${sql}` } },
   });
 
   server.tool(
+    "export_query",
+    "Run a SQL query and save results to a local CSV or JSON file",
+    {
+      sql: z.string().describe("SQL query to execute"),
+      format: z.enum(["csv", "json"]).default("csv").describe("Export file format"),
+    },
+    async ({ sql, format }) => {
+      const verdict = evaluate(sql, policy, dialect);
+      if (!verdict.ok) {
+        logQuery(conn.id, conn.name, sql, "blocked", verdict.categories, verdict.reason ?? undefined);
+        return { content: [{ type: "text", text: `Blocked: ${verdict.reason}` }], isError: true };
+      }
+
+      const sid = sessionIdRef.value;
+      const logId = createLogEntry(conn.id, conn.name, sql, "pending", verdict.categories);
+      const queryAc = new AbortController();
+      queryAborts.set(logId, queryAc);
+      const sessionSignal = sessionAborts.get(sid)?.signal;
+      if (sessionSignal) {
+        if (sessionSignal.aborted) queryAc.abort();
+        else sessionSignal.addEventListener("abort", () => queryAc.abort(), { once: true });
+      }
+
+      try {
+        const result = await withToolTimeout(
+          withCancellable((async () => {
+            const driver = await getDriver(sid, conn);
+            const useReadOnly = readOnlyMode && conn.type === "postgres";
+            return useReadOnly ? driver.queryReadOnly(sql) : driver.query(sql);
+          })(), queryAc.signal),
+          "export_query"
+        );
+
+        const { rows } = capRows(result.rows, policy.maxRows);
+        const maskedRows = maskedColumns.length > 0 ? rows.map(r => maskRow(r as Record<string, unknown>, maskedColumns)) : rows;
+        updateLogEntry(logId, "allowed", undefined, { rows: maskedRows, fields: result.fields });
+
+        const fields = result.fields ?? (maskedRows[0] ? Object.keys(maskedRows[0] as object) : []);
+        const payload = format === "csv" ? toCsv(maskedRows, fields) : JSON.stringify({ fields, rows: maskedRows }, null, 2);
+        const filePath = makeExportPath(conn.name, format);
+        await Bun.write(filePath, payload);
+
+        return { content: [{ type: "text", text: `Exported ${maskedRows.length} rows to ${filePath}` }] };
+      } catch (err) {
+        const msg = (err as Error).message;
+        const isCancelled = msg.includes("cancelled");
+        updateLogEntry(logId, isCancelled ? "cancelled" : "error", msg);
+        if (!isCancelled) evictDriver(sid);
+        return { content: [{ type: "text", text: `${isCancelled ? "Cancelled" : "Error"}: ${msg}` }], isError: true };
+      } finally {
+        queryAborts.delete(logId);
+      }
+    }
+  );
+
+  server.tool(
     "run_saved_query",
     "Run a saved query by name",
     { name: z.string().describe("Name of the saved query") },
@@ -432,9 +493,11 @@ ${sql}` } },
         const result = await withToolTimeout(withCancellable(work, queryAc.signal), "run_saved_query");
 
         const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
-        updateLogEntry(logId, "allowed", undefined, result);
+        const maskedRows = maskedColumns.length > 0 ? rows.map(r => maskRow(r as Record<string, unknown>, maskedColumns)) : rows;
+        const maskedResult = { ...result, rows: maskedRows };
+        updateLogEntry(logId, "allowed", undefined, maskedResult);
 
-        let text = JSON.stringify({ ...result, rows }, null, 2);
+        let text = JSON.stringify(maskedResult, null, 2);
         if (truncated) {
           text += `\n\n[Row limit: showing first ${limit} of ${result.rows.length} rows. Add a LIMIT clause to see all results.]`;
         }

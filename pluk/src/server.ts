@@ -1,5 +1,6 @@
 import { getConnectionByToken, getConnectionById } from "./store/connections.js";
 import { listSavedQueries, createSavedQuery, deleteSavedQuery } from "./store/savedQueries.js";
+import { listMaskedColumns, addMaskedColumn, removeMaskedColumn } from "./store/maskedColumns.js";
 import { handleMcpRequest, cancelQuery } from "./mcp/server.js";
 import { createDriver } from "./db/index.js";
 
@@ -63,6 +64,35 @@ const server = Bun.serve({
 
       if (req.method === "DELETE" && savedName) {
         const ok = deleteSavedQuery(connectionId, savedName);
+        return Response.json({ ok });
+      }
+
+      return new Response("Method not allowed", { status: 405 });
+    }
+
+    // Masked columns REST endpoints (consumed by the Swift UI later)
+    const maskMatch = path.match(/^\/api\/connections\/([^/]+)\/masked_columns(?:\/([^/]+))?$/);
+    if (maskMatch) {
+      const connectionId = maskMatch[1]!;
+      const columnName = maskMatch[2];
+      const conn = getConnectionById(connectionId);
+      if (!conn) return Response.json({ ok: false, error: "Not found" }, { status: 404 });
+
+      if (req.method === "GET") {
+        return Response.json({ ok: true, columns: listMaskedColumns(connectionId) });
+      }
+
+      if (req.method === "POST") {
+        const body = await req.json() as { column_name?: string };
+        if (!body.column_name) {
+          return Response.json({ ok: false, error: "column_name required" }, { status: 400 });
+        }
+        const c = addMaskedColumn(connectionId, body.column_name);
+        return Response.json({ ok: true, column: c });
+      }
+
+      if (req.method === "DELETE" && columnName) {
+        const ok = removeMaskedColumn(connectionId, columnName);
         return Response.json({ ok });
       }
 
