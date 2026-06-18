@@ -45,6 +45,7 @@ export interface Driver {
   searchSchema(term: string): Promise<SchemaSearchResult[]>;
   tableStats(table: string): Promise<TableStats>;
   listSchemas(): Promise<string[]>;
+  getFullSchema(): Promise<string>;
   testConnection(): Promise<void>;
   close(): Promise<void>;
 }

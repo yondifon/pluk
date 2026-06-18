@@ -160,6 +160,76 @@ export function createPostgresDriver(
       return result.rows.map((r) => r.schema_name as string);
     },
 
+    async getFullSchema() {
+      const columns = await pool.query(
+        `SELECT table_name, column_name, data_type, is_nullable, ordinal_position
+         FROM information_schema.columns
+         WHERE table_schema = 'public'
+         ORDER BY table_name, ordinal_position`
+      );
+      const keys = await pool.query(
+        `SELECT kcu.table_name, kcu.column_name, tc.constraint_type
+         FROM information_schema.table_constraints tc
+         JOIN information_schema.key_column_usage kcu
+           ON tc.constraint_name = kcu.constraint_name
+           AND tc.table_schema = kcu.table_schema
+         WHERE tc.table_schema = 'public'
+           AND tc.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')`
+      );
+      const fks = await pool.query(
+        `SELECT
+           tc.table_name AS from_table,
+           kcu.column_name AS from_column,
+           ccu.table_name AS to_table,
+           ccu.column_name AS to_column
+         FROM information_schema.table_constraints tc
+         JOIN information_schema.key_column_usage kcu
+           ON tc.constraint_name = kcu.constraint_name
+           AND tc.table_schema = kcu.table_schema
+         JOIN information_schema.constraint_column_usage ccu
+           ON ccu.constraint_name = tc.constraint_name
+           AND ccu.table_schema = tc.table_schema
+         WHERE tc.constraint_type = 'FOREIGN KEY'
+           AND tc.table_schema = 'public'`
+      );
+
+      const tables = new Map<string, { column: string; type: string; nullable: boolean; pk: boolean }[]>();
+      for (const r of columns.rows) {
+        const t = r.table_name as string;
+        if (!tables.has(t)) tables.set(t, []);
+        tables.get(t)!.push({
+          column: r.column_name as string,
+          type: r.data_type as string,
+          nullable: r.is_nullable === "YES",
+          pk: false,
+        });
+      }
+      for (const r of keys.rows) {
+        const t = tables.get(r.table_name as string);
+        if (!t) continue;
+        const col = t.find((c) => c.column === r.column_name);
+        if (col && r.constraint_type === "PRIMARY KEY") col.pk = true;
+      }
+
+      const lines: string[] = [];
+      for (const [table, cols] of tables) {
+        lines.push(`TABLE ${table} (`);
+        for (const c of cols) {
+          const pk = c.pk ? " PRIMARY KEY" : "";
+          const nullability = c.nullable ? "NULL" : "NOT NULL";
+          lines.push(`  ${c.column} ${c.type} ${nullability}${pk}`);
+        }
+        lines.push(")");
+        for (const fk of fks.rows) {
+          if (fk.from_table === table) {
+            lines.push(`FK ${table}.${fk.from_column} -> ${fk.to_table}.${fk.to_column}`);
+          }
+        }
+        lines.push("");
+      }
+      return lines.join("\n").trim();
+    },
+
     async testConnection() {
       const client = await pool.connect();
       client.release();

@@ -153,6 +153,73 @@ export function createMysqlDriver(
       return (rows as Record<string, string>[]).map((r) => Object.values(r)[0] ?? "");
     },
 
+    async getFullSchema() {
+      const [columns] = await pool.query(
+        `SELECT table_name, column_name, data_type, is_nullable, ordinal_position
+         FROM information_schema.columns
+         WHERE table_schema = DATABASE()
+         ORDER BY table_name, ordinal_position`
+      );
+      const [keys] = await pool.query(
+        `SELECT kcu.table_name, kcu.column_name, tc.constraint_type
+         FROM information_schema.table_constraints tc
+         JOIN information_schema.key_column_usage kcu
+           ON tc.constraint_name = kcu.constraint_name
+           AND tc.table_schema = kcu.table_schema
+         WHERE tc.table_schema = DATABASE()
+           AND tc.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')`
+      );
+      const [fks] = await pool.query(
+        `SELECT
+           kcu.table_name AS from_table,
+           kcu.column_name AS from_column,
+           kcu.referenced_table_name AS to_table,
+           kcu.referenced_column_name AS to_column
+         FROM information_schema.key_column_usage kcu
+         JOIN information_schema.table_constraints tc
+           ON kcu.constraint_name = tc.constraint_name
+           AND kcu.table_schema = tc.table_schema
+         WHERE tc.constraint_type = 'FOREIGN KEY'
+           AND kcu.table_schema = DATABASE()`
+      );
+
+      const tables = new Map<string, { column: string; type: string; nullable: boolean; pk: boolean }[]>();
+      for (const r of columns as Record<string, string | number>[]) {
+        const t = r.table_name as string;
+        if (!tables.has(t)) tables.set(t, []);
+        tables.get(t)!.push({
+          column: r.column_name as string,
+          type: r.data_type as string,
+          nullable: r.is_nullable === "YES",
+          pk: false,
+        });
+      }
+      for (const r of keys as Record<string, string>[]) {
+        const t = tables.get(r.table_name ?? "");
+        if (!t) continue;
+        const col = t.find((c) => c.column === r.column_name);
+        if (col && r.constraint_type === "PRIMARY KEY") col.pk = true;
+      }
+
+      const lines: string[] = [];
+      for (const [table, cols] of tables) {
+        lines.push(`TABLE ${table} (`);
+        for (const c of cols) {
+          const pk = c.pk ? " PRIMARY KEY" : "";
+          const nullability = c.nullable ? "NULL" : "NOT NULL";
+          lines.push(`  ${c.column} ${c.type} ${nullability}${pk}`);
+        }
+        lines.push(")");
+        for (const fk of fks as Record<string, string>[]) {
+          if (fk.from_table === table) {
+            lines.push(`FK ${table}.${fk.from_column} -> ${fk.to_table}.${fk.to_column}`);
+          }
+        }
+        lines.push("");
+      }
+      return lines.join("\n").trim();
+    },
+
     async testConnection() {
       const c = await pool.getConnection();
       c.release();

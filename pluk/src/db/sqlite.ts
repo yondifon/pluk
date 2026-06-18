@@ -114,6 +114,36 @@ export function createSqliteDriver(filename: string): Driver {
       return ["main"];
     },
 
+    async getFullSchema() {
+      const tables = (db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[]).map(r => r.name);
+      const lines: string[] = [];
+      for (const t of tables) {
+        const cols = db.query(`PRAGMA table_info("${t}")`).all() as {
+          name: string;
+          type: string;
+          notnull: number;
+          pk: number;
+        }[];
+        const fks = db.query(`PRAGMA foreign_key_list("${t}")`).all() as {
+          from: string;
+          to: string;
+          table: string;
+        }[];
+        lines.push(`TABLE ${t} (`);
+        for (const c of cols) {
+          const pk = c.pk ? " PRIMARY KEY" : "";
+          const nullability = c.notnull === 0 ? "NULL" : "NOT NULL";
+          lines.push(`  ${c.name} ${c.type} ${nullability}${pk}`);
+        }
+        lines.push(")");
+        for (const fk of fks) {
+          lines.push(`FK ${t}.${fk.from} -> ${fk.table}.${fk.to}`);
+        }
+        lines.push("");
+      }
+      return lines.join("\n").trim();
+    },
+
     async testConnection() {
       db.query("SELECT 1").get();
     },
