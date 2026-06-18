@@ -42,6 +42,15 @@ export function createMysqlDriver(
       }));
     },
 
+    async sampleTable(table, limit) {
+      const quoted = table.replace(/`/g, "``");
+      const [rows, fields] = await pool.query(`SELECT * FROM \`${quoted}\` LIMIT ?`, [limit]);
+      return {
+        rows: rows as unknown[],
+        fields: Array.isArray(fields) ? fields.map((f: mysql.FieldPacket) => f.name ?? "") : undefined,
+      };
+    },
+
     async listSchemas() {
       const [rows] = await pool.query("SHOW DATABASES");
       return (rows as Record<string, string>[]).map((r) => Object.values(r)[0] ?? "");

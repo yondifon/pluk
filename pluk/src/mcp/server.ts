@@ -167,6 +167,34 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
   });
 
   server.tool(
+    "sample_table",
+    "Preview rows from a table without writing SQL",
+    {
+      table: z.string().describe("Table name"),
+      limit: z.number().int().min(1).max(1000).default(20).describe("Max rows to preview"),
+    },
+    async ({ table, limit }) => {
+      const sid = sessionIdRef.value;
+      try {
+        return await withToolTimeout((async () => {
+          const driver = await getDriver(sid, conn);
+          const effectiveLimit = policy.maxRows === null ? limit : Math.min(limit, policy.maxRows);
+          const result = await driver.sampleTable(table, effectiveLimit);
+          const { rows, truncated } = capRows(result.rows, policy.maxRows);
+          let text = JSON.stringify({ fields: result.fields ?? [], rows }, null, 2);
+          if (truncated) {
+            text += `\n\n[Row limit: showing first ${policy.maxRows} of ${result.rows.length} rows.]`;
+          }
+          return { content: [{ type: "text", text }] };
+        })(), "sample_table");
+      } catch (err) {
+        evictDriver(sid);
+        return { content: [{ type: "text", text: `Error: ${(err as Error).message}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
     "describe_table",
     "Get column definitions for a table",
     { table: z.string().describe("Table name") },

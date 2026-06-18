@@ -31,6 +31,13 @@ export function createSqliteDriver(filename: string): Driver {
       }));
     },
 
+    async sampleTable(table, limit) {
+      const quoted = table.replace(/"/g, '""');
+      const stmt = db.query(`SELECT * FROM "${quoted}" LIMIT ?`);
+      const rows = stmt.all(limit);
+      return { rows };
+    },
+
     async listSchemas() {
       return ["main"];
     },

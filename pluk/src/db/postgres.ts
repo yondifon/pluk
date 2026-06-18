@@ -51,6 +51,12 @@ export function createPostgresDriver(
       }));
     },
 
+    async sampleTable(table, limit) {
+      const quoted = table.replace(/"/g, '""');
+      const result = await pool.query(`SELECT * FROM "${quoted}" LIMIT $1`, [limit]);
+      return { rows: result.rows, fields: result.fields.map((f) => f.name) };
+    },
+
     async listSchemas() {
       const result = await pool.query(
         "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name"

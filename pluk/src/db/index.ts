@@ -17,6 +17,7 @@ export interface Driver {
   query(sql: string, params?: unknown[]): Promise<QueryResult>;
   listTables(): Promise<string[]>;
   describeTable(table: string): Promise<ColumnInfo[]>;
+  sampleTable(table: string, limit: number): Promise<QueryResult>;
   listSchemas(): Promise<string[]>;
   testConnection(): Promise<void>;
   close(): Promise<void>;
