@@ -15,6 +15,7 @@ export interface ColumnInfo {
 
 export interface Driver {
   query(sql: string, params?: unknown[]): Promise<QueryResult>;
+  explain(sql: string): Promise<QueryResult>;
   listTables(): Promise<string[]>;
   describeTable(table: string): Promise<ColumnInfo[]>;
   sampleTable(table: string, limit: number): Promise<QueryResult>;

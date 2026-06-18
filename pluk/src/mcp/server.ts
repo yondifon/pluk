@@ -195,6 +195,33 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
   );
 
   server.tool(
+    "explain_query",
+    "Show query execution plan without running the query",
+    {
+      sql: z.string().describe("SQL query to explain"),
+    },
+    async ({ sql }) => {
+      const verdict = evaluate(sql, policy, dialect);
+      if (!verdict.ok) {
+        logQuery(conn.id, conn.name, sql, "blocked", verdict.categories, verdict.reason ?? undefined);
+        return { content: [{ type: "text", text: `Blocked: ${verdict.reason}` }], isError: true };
+      }
+
+      const sid = sessionIdRef.value;
+      try {
+        return await withToolTimeout((async () => {
+          const driver = await getDriver(sid, conn);
+          const result = await driver.explain(sql);
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        })(), "explain_query");
+      } catch (err) {
+        evictDriver(sid);
+        return { content: [{ type: "text", text: `Error: ${(err as Error).message}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
     "describe_table",
     "Get column definitions for a table",
     { table: z.string().describe("Table name") },

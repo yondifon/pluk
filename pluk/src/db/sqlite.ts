@@ -11,6 +11,12 @@ export function createSqliteDriver(filename: string): Driver {
       return { rows };
     },
 
+    async explain(sql) {
+      const stmt = db.query("EXPLAIN QUERY PLAN " + sql);
+      const rows = stmt.all();
+      return { rows };
+    },
+
     async listTables() {
       const rows = db
         .query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")

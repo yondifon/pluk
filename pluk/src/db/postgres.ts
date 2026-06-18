@@ -29,6 +29,11 @@ export function createPostgresDriver(
       return { rows: result.rows, fields: result.fields.map((f) => f.name) };
     },
 
+    async explain(sql) {
+      const result = await pool.query("EXPLAIN (FORMAT JSON) " + sql);
+      return { rows: result.rows, fields: result.fields.map((f) => f.name) };
+    },
+
     async listTables() {
       const result = await pool.query(
         "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"

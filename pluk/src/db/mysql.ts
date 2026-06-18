@@ -28,6 +28,14 @@ export function createMysqlDriver(
       };
     },
 
+    async explain(sql) {
+      const [rows, fields] = await pool.query("EXPLAIN " + sql);
+      return {
+        rows: rows as unknown[],
+        fields: Array.isArray(fields) ? fields.map((f: mysql.FieldPacket) => f.name ?? "") : undefined,
+      };
+    },
+
     async listTables() {
       const [rows] = await pool.query("SHOW TABLES");
       return (rows as Record<string, string>[]).map((r) => Object.values(r)[0] ?? "");
