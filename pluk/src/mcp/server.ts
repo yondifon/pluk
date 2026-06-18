@@ -101,6 +101,58 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
 
   const readOnlyMode = policy.allowed.length === 2 && policy.allowed.includes("select") && policy.allowed.includes("inspect");
 
+  server.prompt(
+    "summarize_schema",
+    "Generate a concise summary of the database schema and relationships",
+    async () => ({
+      messages: [
+        { role: "user", content: { type: "text", text: "Read the full schema resource, then list the main tables, their purpose, and how they relate to each other." } },
+      ],
+    })
+  );
+
+  server.prompt(
+    "investigate_slow_query",
+    "Analyze a slow query using EXPLAIN and table stats",
+    { sql: z.string().describe("SQL query to investigate") },
+    async ({ sql }) => ({
+      messages: [
+        { role: "user", content: { type: "text", text: `Investigate why this query is slow. Use explain_query and table_stats, then suggest indexes or rewrites.
+
+${sql}` } },
+      ],
+    })
+  );
+
+  server.prompt(
+    "find_unused_indexes",
+    "Find indexes that may be unused or redundant",
+    async () => ({
+      messages: [
+        { role: "user", content: { type: "text", text: "List all tables and their indexes. Flag any indexes that look redundant or likely unused based on column patterns." } },
+      ],
+    })
+  );
+
+  server.resource(
+    "schema",
+    "schema://full",
+    { mimeType: "text/plain", description: "Full database schema: tables, columns, primary keys, foreign keys" },
+    async () => {
+      const sid = sessionIdRef.value;
+      try {
+        return await withToolTimeout((async () => {
+          const driver = await getDriver(sid, conn);
+          const text = await driver.getFullSchema();
+          return { contents: [{ uri: "schema://full", mimeType: "text/plain", text }] };
+        })(), "schema_resource");
+      } catch (err) {
+        evictDriver(sid);
+        return { contents: [{ uri: "schema://full", mimeType: "text/plain", text: `Error: ${(err as Error).message}` }] };
+      }
+    }
+  );
+
   server.tool(
     "query",
     `Run a SQL query against the database. ${policyDesc}`,
