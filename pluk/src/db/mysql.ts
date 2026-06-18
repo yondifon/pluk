@@ -1,6 +1,7 @@
 import mysql from "mysql2/promise";
 import type { Driver } from "./index.js";
 import type { Connection } from "../store/connections.js";
+import { recordExecutedSql } from "./sqlLog.js";
 
 export function createMysqlDriver(
   conn: Connection,
@@ -18,6 +19,23 @@ export function createMysqlDriver(
     ...(conn.socket_path ? { socketPath: conn.socket_path } : {}),
     ...(ssl ? { ssl: ssl as mysql.SslOptions } : {}),
   });
+
+  // Tag every statement this pool runs with the active source context (no-op
+  // outside one), so introspection/utility SQL lands in the query log too.
+  const rawQuery = pool.query.bind(pool) as (...a: unknown[]) => Promise<[unknown, unknown]>;
+  (pool as { query: (...a: unknown[]) => Promise<[unknown, unknown]> }).query =
+    async (sql: unknown, params?: unknown) => {
+      const sqlText = typeof sql === "string" ? sql : ((sql as { sql?: string })?.sql ?? "");
+      try {
+        const res = await rawQuery(sql, params);
+        const rows = Array.isArray(res) ? res[0] : res;
+        recordExecutedSql(sqlText, Array.isArray(rows) ? rows.length : null);
+        return res;
+      } catch (e) {
+        recordExecutedSql(sqlText, null, (e as Error).message);
+        throw e;
+      }
+    };
 
   return {
     async query(sql, params = []) {

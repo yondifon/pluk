@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import type { Driver } from "./index.js";
 import type { Connection } from "../store/connections.js";
+import { recordExecutedSql } from "./sqlLog.js";
 
 export function createPostgresDriver(
   conn: Connection,
@@ -22,6 +23,22 @@ export function createPostgresDriver(
     ...(conn.socket_path ? { host: conn.socket_path } : {}),
     ...(ssl ? { ssl } : {}),
   });
+
+  // Tag every statement this pool runs with the active source context (no-op
+  // outside one), so introspection/utility SQL lands in the query log too.
+  const rawQuery = pool.query.bind(pool);
+  (pool as { query: (...a: unknown[]) => Promise<{ rowCount?: number | null; rows?: unknown[] }> }).query =
+    async (text: unknown, params?: unknown) => {
+      const sql = typeof text === "string" ? text : ((text as { text?: string })?.text ?? "");
+      try {
+        const res = await (rawQuery as (...a: unknown[]) => Promise<{ rowCount?: number | null; rows?: unknown[] }>)(text, params);
+        recordExecutedSql(sql, res.rowCount ?? res.rows?.length ?? null);
+        return res;
+      } catch (e) {
+        recordExecutedSql(sql, null, (e as Error).message);
+        throw e;
+      }
+    };
 
   return {
     async query(sql, params = []) {
@@ -78,7 +95,7 @@ export function createPostgresDriver(
       const pattern = `%${term.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
       const result = await pool.query(
         `
-        SELECT 'table' AS kind, table_name AS table, NULL::text AS column, NULL::text AS type
+        SELECT 'table' AS kind, table_name AS "table", NULL::text AS "column", NULL::text AS type
         FROM information_schema.tables
         WHERE table_schema = 'public' AND table_name ILIKE $1
         UNION ALL
@@ -88,7 +105,7 @@ export function createPostgresDriver(
           ON c.table_schema = t.table_schema AND c.table_name = t.table_name
         WHERE c.table_schema = 'public'
           AND (c.column_name ILIKE $1 OR c.table_name ILIKE $1)
-        ORDER BY table, kind, column
+        ORDER BY "table", kind, "column"
         `,
         [pattern]
       );

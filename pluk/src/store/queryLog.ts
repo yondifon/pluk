@@ -26,6 +26,7 @@ db.run(`
 for (const sql of [
   "ALTER TABLE query_log ADD COLUMN result_json TEXT",
   "ALTER TABLE query_log ADD COLUMN row_count INTEGER",
+  "ALTER TABLE query_log ADD COLUMN source TEXT", // originating tool / operation
 ]) {
   try { db.run(sql); } catch { /* column exists */ }
 }
@@ -91,17 +92,42 @@ export function createLogEntry(
   verdict: Verdict,
   categories: string,
   reason?: string,
+  source?: string,
 ): number {
   try {
     db.query(
-      `INSERT INTO query_log (connection_id, connection_name, sql, verdict, reason, categories)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(connectionId, connectionName, sql, verdict, reason ?? null, categories);
+      `INSERT INTO query_log (connection_id, connection_name, sql, verdict, reason, categories, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(connectionId, connectionName, sql, verdict, reason ?? null, categories, source ?? null);
     const row = db.query("SELECT last_insert_rowid() as id").get() as { id: number };
     purgeOldLogs();
     return row.id;
   } catch {
     return -1;
+  }
+}
+
+/**
+ * Log a single statement actually sent to the database, tagged with its source
+ * tool. Used by the driver layer to record every introspection/utility query so
+ * the audit log reflects all SQL — not just the user-facing `query` tool.
+ */
+export function logExecutedStatement(
+  connectionId: string,
+  connectionName: string,
+  sql: string,
+  source: string,
+  rowCount: number | null,
+  error?: string,
+): void {
+  try {
+    db.query(
+      `INSERT INTO query_log (connection_id, connection_name, sql, verdict, reason, categories, row_count, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(connectionId, connectionName, sql, error ? "error" : "allowed", error ?? null, null, rowCount, source);
+    purgeOldLogs();
+  } catch {
+    // Non-fatal
   }
 }
 
@@ -132,7 +158,8 @@ export function logQuery(
   categories: string,
   reason?: string,
   result?: { rows: unknown[]; fields?: string[] },
+  source?: string,
 ): void {
-  const id = createLogEntry(connectionId, connectionName, sql, verdict, categories, reason);
+  const id = createLogEntry(connectionId, connectionName, sql, verdict, categories, reason, source);
   if (result && id >= 0) updateLogEntry(id, verdict, reason, result);
 }

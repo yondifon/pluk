@@ -21,13 +21,24 @@ const IDLE_MS = 5 * 60 * 1000; // 5 minutes
 // listener), not the PG handshake through the tunnel. This catches the gap.
 const TOOL_TIMEOUT_MS = 30_000; // 30 seconds
 
-function withToolTimeout<T>(work: Promise<T>, label: string): Promise<T> {
+// Connection/tunnel setup gets its own, larger budget than a single query.
+// An SSH proxy (e.g. Cloudflare Access) can require interactive browser auth on
+// first use, which easily exceeds the 30s query timeout. Direct connections stay
+// tight so a dead host still surfaces fast.
+const CONNECT_TIMEOUT_SSH_MS = 180_000; // 3 minutes — room for interactive proxy auth
+const CONNECT_TIMEOUT_DIRECT_MS = 30_000;
+
+function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     work,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`Timed out after 30s (${label})`)), TOOL_TIMEOUT_MS)
+      setTimeout(() => reject(new Error(`Timed out after ${Math.round(ms / 1000)}s (${label})`)), ms)
     ),
   ]);
+}
+
+function withToolTimeout<T>(work: Promise<T>, label: string): Promise<T> {
+  return withTimeout(work, TOOL_TIMEOUT_MS, label);
 }
 
 function withCancellable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -41,7 +52,9 @@ function withCancellable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 interface DriverEntry {
-  driver: Driver;
+  // In-flight promise, not the resolved driver: concurrent tool calls during
+  // setup must share one connection/tunnel instead of each spawning their own.
+  driver: Promise<Driver>;
   idleTimer: ReturnType<typeof setTimeout>;
 }
 
@@ -60,7 +73,7 @@ export function cancelQuery(logId: number): boolean {
   return true;
 }
 
-async function getDriver(sessionId: string, conn: Connection): Promise<Driver> {
+function getDriver(sessionId: string, conn: Connection): Promise<Driver> {
   const existing = driverPool.get(sessionId);
   if (existing) {
     // Reset idle timer on use
@@ -69,9 +82,24 @@ async function getDriver(sessionId: string, conn: Connection): Promise<Driver> {
     return existing.driver;
   }
 
-  const driver = await createDriver(conn);
+  // Register the in-flight promise synchronously so any tool call that arrives
+  // while the tunnel/connection is still coming up awaits this same setup
+  // instead of starting a second one (which, with an SSH proxy, meant a second
+  // interactive auth prompt racing the timeout).
+  const connectTimeout = conn.use_ssh ? CONNECT_TIMEOUT_SSH_MS : CONNECT_TIMEOUT_DIRECT_MS;
+  const driver = withTimeout(createDriver(conn), connectTimeout, "connect");
   const idleTimer = setTimeout(() => evictDriver(sessionId), IDLE_MS);
-  driverPool.set(sessionId, { driver, idleTimer });
+  const entry: DriverEntry = { driver, idleTimer };
+  driverPool.set(sessionId, entry);
+
+  // If setup fails, drop the entry so the next call retries from scratch.
+  driver.catch(() => {
+    if (driverPool.get(sessionId) === entry) {
+      clearTimeout(idleTimer);
+      driverPool.delete(sessionId);
+    }
+  });
+
   return driver;
 }
 
@@ -79,7 +107,9 @@ function evictDriver(sessionId: string): void {
   const entry = driverPool.get(sessionId);
   if (!entry) return;
   driverPool.delete(sessionId);
-  entry.driver.close().catch(() => {}); // best-effort close
+  clearTimeout(entry.idleTimer);
+  // best-effort close once setup settles; ignore a failed/aborted setup
+  entry.driver.then((d) => d.close()).catch(() => {});
 }
 
 // ── MCP session registry ─────────────────────────────────────────────────────
@@ -143,8 +173,8 @@ ${sql}` } },
     async () => {
       const sid = sessionIdRef.value;
       try {
+        const driver = await getDriver(sid, conn);
         return await withToolTimeout((async () => {
-          const driver = await getDriver(sid, conn);
           const text = await driver.getFullSchema();
           return { contents: [{ uri: "schema://full", mimeType: "text/plain", text }] };
         })(), "schema_resource");
@@ -170,7 +200,7 @@ ${sql}` } },
       const sid = sessionIdRef.value;
 
       // Create pending log entry before executing so it's visible immediately
-      const logId = createLogEntry(conn.id, conn.name, sql, "pending", verdict.categories);
+      const logId = createLogEntry(conn.id, conn.name, sql, "pending", verdict.categories, undefined, "query");
 
       // Per-query abort controller; also tripped by a session-wide abort.
       const queryAc = new AbortController();
@@ -232,8 +262,8 @@ ${sql}` } },
   server.tool("list_tables", "List all tables in the database", async () => {
     const sid = sessionIdRef.value;
     try {
+      const driver = await getDriver(sid, conn);
       return await withToolTimeout((async () => {
-        const driver = await getDriver(sid, conn);
         const tables = await driver.listTables();
         return { content: [{ type: "text", text: tables.join("\n") }] };
       })(), "list_tables");
@@ -253,8 +283,8 @@ ${sql}` } },
     async ({ table, limit }) => {
       const sid = sessionIdRef.value;
       try {
+        const driver = await getDriver(sid, conn);
         return await withToolTimeout((async () => {
-          const driver = await getDriver(sid, conn);
           const effectiveLimit = policy.maxRows === null ? limit : Math.min(limit, policy.maxRows);
           const result = await driver.sampleTable(table, effectiveLimit);
           const { rows, truncated } = capRows(result.rows, policy.maxRows);
@@ -287,8 +317,8 @@ ${sql}` } },
 
       const sid = sessionIdRef.value;
       try {
+        const driver = await getDriver(sid, conn);
         return await withToolTimeout((async () => {
-          const driver = await getDriver(sid, conn);
           const result = await driver.explain(sql);
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         })(), "explain_query");
@@ -306,8 +336,8 @@ ${sql}` } },
     async ({ table }) => {
       const sid = sessionIdRef.value;
       try {
+        const driver = await getDriver(sid, conn);
         return await withToolTimeout((async () => {
-          const driver = await getDriver(sid, conn);
           const columns = await driver.describeTable(table);
           return { content: [{ type: "text", text: JSON.stringify(columns, null, 2) }] };
         })(), "describe_table");
@@ -325,8 +355,8 @@ ${sql}` } },
     async ({ table }) => {
       const sid = sessionIdRef.value;
       try {
+        const driver = await getDriver(sid, conn);
         return await withToolTimeout((async () => {
-          const driver = await getDriver(sid, conn);
           const relationships = await driver.listRelationships(table);
           return { content: [{ type: "text", text: JSON.stringify(relationships, null, 2) }] };
         })(), "list_relationships");
@@ -344,8 +374,8 @@ ${sql}` } },
     async ({ term }) => {
       const sid = sessionIdRef.value;
       try {
+        const driver = await getDriver(sid, conn);
         return await withToolTimeout((async () => {
-          const driver = await getDriver(sid, conn);
           const matches = await driver.searchSchema(term);
           return { content: [{ type: "text", text: JSON.stringify(matches, null, 2) }] };
         })(), "search_schema");
@@ -363,8 +393,8 @@ ${sql}` } },
     async ({ table }) => {
       const sid = sessionIdRef.value;
       try {
+        const driver = await getDriver(sid, conn);
         return await withToolTimeout((async () => {
-          const driver = await getDriver(sid, conn);
           const stats = await driver.tableStats(table);
           return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
         })(), "table_stats");
@@ -378,8 +408,8 @@ ${sql}` } },
   server.tool("list_schemas", "List all schemas or databases", async () => {
     const sid = sessionIdRef.value;
     try {
+      const driver = await getDriver(sid, conn);
       return await withToolTimeout((async () => {
-        const driver = await getDriver(sid, conn);
         const schemas = await driver.listSchemas();
         return { content: [{ type: "text", text: schemas.join("\n") }] };
       })(), "list_schemas");
@@ -404,7 +434,7 @@ ${sql}` } },
       }
 
       const sid = sessionIdRef.value;
-      const logId = createLogEntry(conn.id, conn.name, sql, "pending", verdict.categories);
+      const logId = createLogEntry(conn.id, conn.name, sql, "pending", verdict.categories, undefined, "export_query");
       const queryAc = new AbortController();
       queryAborts.set(logId, queryAc);
       const sessionSignal = sessionAborts.get(sid)?.signal;
@@ -414,12 +444,10 @@ ${sql}` } },
       }
 
       try {
+        const driver = await getDriver(sid, conn);
+        const useReadOnly = readOnlyMode && conn.type === "postgres";
         const result = await withToolTimeout(
-          withCancellable((async () => {
-            const driver = await getDriver(sid, conn);
-            const useReadOnly = readOnlyMode && conn.type === "postgres";
-            return useReadOnly ? driver.queryReadOnly(sql) : driver.query(sql);
-          })(), queryAc.signal),
+          withCancellable(useReadOnly ? driver.queryReadOnly(sql) : driver.query(sql), queryAc.signal),
           "export_query"
         );
 
@@ -462,7 +490,7 @@ ${sql}` } },
       }
 
       const sid = sessionIdRef.value;
-      const logId = createLogEntry(conn.id, conn.name, saved.sql, "pending", verdict.categories);
+      const logId = createLogEntry(conn.id, conn.name, saved.sql, "pending", verdict.categories, undefined, "run_saved_query");
       const queryAc = new AbortController();
       queryAborts.set(logId, queryAc);
       const sessionSignal = sessionAborts.get(sid)?.signal;

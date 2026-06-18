@@ -1,8 +1,18 @@
 import { Database } from "bun:sqlite";
 import type { Driver, RelationshipInfo } from "./index.js";
+import { recordExecutedSql } from "./sqlLog.js";
 
 export function createSqliteDriver(filename: string): Driver {
   const db = new Database(filename);
+
+  // Tag every statement this db runs with the active source context (no-op
+  // outside one). SQLite prepares synchronously and executes at
+  // .all()/.get()/.run(), so we log at prepare time without a row count.
+  const rawDbQuery = db.query.bind(db);
+  (db as unknown as { query: (sql: string) => ReturnType<typeof rawDbQuery> }).query = (sql: string) => {
+    recordExecutedSql(sql, null);
+    return rawDbQuery(sql);
+  };
 
   return {
     async query(sql) {

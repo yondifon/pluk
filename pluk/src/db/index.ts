@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 import type { Connection } from "../store/connections.js";
 import { openSSHTunnel } from "./ssh.js";
+import { runWithSqlLog } from "./sqlLog.js";
 
 export interface QueryResult {
   rows: unknown[];
@@ -102,11 +103,33 @@ export async function createDriver(conn: Connection): Promise<Driver> {
     throw err;
   }
 
+  driver = instrumentDriver(driver, conn);
+
   if (!tunnel) return driver;
 
   // Wrap close() to also shut down the SSH tunnel
   const baseClose = driver.close.bind(driver);
   driver.close = async () => { await baseClose(); tunnel!.close(); };
+  return driver;
+}
+
+// Tag introspection/utility methods with a source so the driver layer logs the
+// SQL they send (the user-facing query/queryReadOnly paths log richly elsewhere,
+// so they're intentionally left un-instrumented to avoid duplicate entries).
+function instrumentDriver(driver: Driver, conn: Connection): Driver {
+  const wrap = <A extends unknown[], R>(source: string, fn: (...args: A) => Promise<R>) =>
+    (...args: A): Promise<R> =>
+      runWithSqlLog({ connId: conn.id, connName: conn.name, source }, () => fn(...args));
+
+  driver.explain = wrap("explain_query", driver.explain.bind(driver));
+  driver.listTables = wrap("list_tables", driver.listTables.bind(driver));
+  driver.describeTable = wrap("describe_table", driver.describeTable.bind(driver));
+  driver.sampleTable = wrap("sample_table", driver.sampleTable.bind(driver));
+  driver.listRelationships = wrap("list_relationships", driver.listRelationships.bind(driver));
+  driver.searchSchema = wrap("search_schema", driver.searchSchema.bind(driver));
+  driver.tableStats = wrap("table_stats", driver.tableStats.bind(driver));
+  driver.listSchemas = wrap("list_schemas", driver.listSchemas.bind(driver));
+  driver.getFullSchema = wrap("schema_resource", driver.getFullSchema.bind(driver));
   return driver;
 }
 
