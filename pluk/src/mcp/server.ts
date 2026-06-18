@@ -8,6 +8,7 @@ import type { Connection } from "../store/connections.js";
 import { createDriver, type Driver } from "../db/index.js";
 import { parsePolicy, evaluate, capRows, dialectFor, policyDescription, parsePostgresCost } from "./policy.js";
 import { createLogEntry, updateLogEntry, logQuery } from "../store/queryLog.js";
+import { listSavedQueries, getSavedQuery } from "../store/savedQueries.js";
 
 // ── Driver pool ──────────────────────────────────────────────────────────────
 // One driver per MCP session. Closed after IDLE_MS of inactivity.
@@ -332,21 +333,23 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
   });
 
   server.tool(
-    "export_query",
-    "Run a SQL query and save results to a local CSV or JSON file",
-    {
-      sql: z.string().describe("SQL query to execute"),
-      format: z.enum(["csv", "json"]).default("csv").describe("Export file format"),
-    },
-    async ({ sql, format }) => {
-      const verdict = evaluate(sql, policy, dialect);
+    "run_saved_query",
+    "Run a saved query by name",
+    { name: z.string().describe("Name of the saved query") },
+    async ({ name }) => {
+      const saved = getSavedQuery(conn.id, name);
+      if (!saved) {
+        return { content: [{ type: "text", text: `Saved query "${name}" not found.` }], isError: true };
+      }
+
+      const verdict = evaluate(saved.sql, policy, dialect);
       if (!verdict.ok) {
-        logQuery(conn.id, conn.name, sql, "blocked", verdict.categories, verdict.reason ?? undefined);
+        logQuery(conn.id, conn.name, saved.sql, "blocked", verdict.categories, verdict.reason ?? undefined);
         return { content: [{ type: "text", text: `Blocked: ${verdict.reason}` }], isError: true };
       }
 
       const sid = sessionIdRef.value;
-      const logId = createLogEntry(conn.id, conn.name, sql, "pending", verdict.categories);
+      const logId = createLogEntry(conn.id, conn.name, saved.sql, "pending", verdict.categories);
       const queryAc = new AbortController();
       queryAborts.set(logId, queryAc);
       const sessionSignal = sessionAborts.get(sid)?.signal;
@@ -356,24 +359,34 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
       }
 
       try {
-        const result = await withToolTimeout(
-          withCancellable((async () => {
-            const driver = await getDriver(sid, conn);
-            const useReadOnly = readOnlyMode && conn.type === "postgres";
-            return useReadOnly ? driver.queryReadOnly(sql) : driver.query(sql);
-          })(), queryAc.signal),
-          "export_query"
-        );
+        const driver = await getDriver(sid, conn);
 
-        const { rows } = capRows(result.rows, policy.maxRows);
-        updateLogEntry(logId, "allowed", undefined, { rows, fields: result.fields });
+        if ((policy.maxEstimatedRows !== null || policy.maxEstimatedCost !== null) && conn.type === "postgres") {
+          const explain = await driver.explain(saved.sql);
+          const plan = Array.isArray(explain.rows[0]) ? explain.rows[0][0] : explain.rows[0];
+          const estimate = parsePostgresCost(plan);
+          if (
+            (policy.maxEstimatedRows !== null && estimate.rows !== null && estimate.rows > policy.maxEstimatedRows) ||
+            (policy.maxEstimatedCost !== null && estimate.cost !== null && estimate.cost > policy.maxEstimatedCost)
+          ) {
+            const reason = `Query cost gate exceeded (estimated rows: ${estimate.rows ?? "?"}, cost: ${estimate.cost ?? "?"}).`;
+            updateLogEntry(logId, "blocked", reason);
+            return { content: [{ type: "text", text: `Blocked: ${reason}` }], isError: true };
+          }
+        }
 
-        const fields = result.fields ?? (rows[0] ? Object.keys(rows[0] as object) : []);
-        const payload = format === "csv" ? toCsv(rows, fields) : JSON.stringify({ fields, rows }, null, 2);
-        const filePath = makeExportPath(conn.name, format);
-        await Bun.write(filePath, payload);
+        const useReadOnly = readOnlyMode && conn.type === "postgres";
+        const work = useReadOnly ? driver.queryReadOnly(saved.sql) : driver.query(saved.sql);
+        const result = await withToolTimeout(withCancellable(work, queryAc.signal), "run_saved_query");
 
-        return { content: [{ type: "text", text: `Exported ${rows.length} rows to ${filePath}` }] };
+        const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
+        updateLogEntry(logId, "allowed", undefined, result);
+
+        let text = JSON.stringify({ ...result, rows }, null, 2);
+        if (truncated) {
+          text += `\n\n[Row limit: showing first ${limit} of ${result.rows.length} rows. Add a LIMIT clause to see all results.]`;
+        }
+        return { content: [{ type: "text", text }] };
       } catch (err) {
         const msg = (err as Error).message;
         const isCancelled = msg.includes("cancelled");
@@ -382,6 +395,19 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
         return { content: [{ type: "text", text: `${isCancelled ? "Cancelled" : "Error"}: ${msg}` }], isError: true };
       } finally {
         queryAborts.delete(logId);
+      }
+    }
+  );
+
+  server.tool(
+    "list_saved_queries",
+    "List saved queries for this connection",
+    async () => {
+      try {
+        const queries = listSavedQueries(conn.id);
+        return { content: [{ type: "text", text: JSON.stringify(queries, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${(err as Error).message}` }], isError: true };
       }
     }
   );

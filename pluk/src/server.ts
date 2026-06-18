@@ -1,4 +1,5 @@
 import { getConnectionByToken, getConnectionById } from "./store/connections.js";
+import { listSavedQueries, createSavedQuery, deleteSavedQuery } from "./store/savedQueries.js";
 import { handleMcpRequest, cancelQuery } from "./mcp/server.js";
 import { createDriver } from "./db/index.js";
 
@@ -37,6 +38,35 @@ const server = Bun.serve({
     if (cancelId && req.method === "POST") {
       const ok = cancelQuery(Number(cancelId));
       return Response.json({ ok });
+    }
+
+    // Saved queries REST endpoints (consumed by the Swift UI later)
+    const savedMatch = path.match(/^\/api\/connections\/([^/]+)\/saved_queries(?:\/([^/]+))?$/);
+    if (savedMatch) {
+      const connectionId = savedMatch[1]!;
+      const savedName = savedMatch[2];
+      const conn = getConnectionById(connectionId);
+      if (!conn) return Response.json({ ok: false, error: "Not found" }, { status: 404 });
+
+      if (req.method === "GET") {
+        return Response.json({ ok: true, queries: listSavedQueries(connectionId) });
+      }
+
+      if (req.method === "POST") {
+        const body = await req.json() as { name?: string; sql?: string };
+        if (!body.name || !body.sql) {
+          return Response.json({ ok: false, error: "name and sql required" }, { status: 400 });
+        }
+        const q = createSavedQuery({ connection_id: connectionId, name: body.name, sql: body.sql });
+        return Response.json({ ok: true, query: q });
+      }
+
+      if (req.method === "DELETE" && savedName) {
+        const ok = deleteSavedQuery(connectionId, savedName);
+        return Response.json({ ok });
+      }
+
+      return new Response("Method not allowed", { status: 405 });
     }
 
     // /mcp/:token — MCP streamable HTTP endpoint for AI agents
