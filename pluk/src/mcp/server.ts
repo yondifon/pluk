@@ -1,6 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
+import { mkdirSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import type { Connection } from "../store/connections.js";
 import { createDriver, type Driver } from "../db/index.js";
 import { parsePolicy, evaluate, capRows, dialectFor, policyDescription } from "./policy.js";
@@ -314,7 +317,89 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
     }
   });
 
+  server.tool(
+    "export_query",
+    "Run a SQL query and save results to a local CSV or JSON file",
+    {
+      sql: z.string().describe("SQL query to execute"),
+      format: z.enum(["csv", "json"]).default("csv").describe("Export file format"),
+    },
+    async ({ sql, format }) => {
+      const verdict = evaluate(sql, policy, dialect);
+      if (!verdict.ok) {
+        logQuery(conn.id, conn.name, sql, "blocked", verdict.categories, verdict.reason ?? undefined);
+        return { content: [{ type: "text", text: `Blocked: ${verdict.reason}` }], isError: true };
+      }
+
+      const sid = sessionIdRef.value;
+      const logId = createLogEntry(conn.id, conn.name, sql, "pending", verdict.categories);
+      const queryAc = new AbortController();
+      queryAborts.set(logId, queryAc);
+      const sessionSignal = sessionAborts.get(sid)?.signal;
+      if (sessionSignal) {
+        if (sessionSignal.aborted) queryAc.abort();
+        else sessionSignal.addEventListener("abort", () => queryAc.abort(), { once: true });
+      }
+
+      try {
+        const result = await withToolTimeout(
+          withCancellable((async () => {
+            const driver = await getDriver(sid, conn);
+            const useReadOnly = readOnlyMode && conn.type === "postgres";
+            return useReadOnly ? driver.queryReadOnly(sql) : driver.query(sql);
+          })(), queryAc.signal),
+          "export_query"
+        );
+
+        const { rows } = capRows(result.rows, policy.maxRows);
+        updateLogEntry(logId, "allowed", undefined, { rows, fields: result.fields });
+
+        const fields = result.fields ?? (rows[0] ? Object.keys(rows[0] as object) : []);
+        const payload = format === "csv" ? toCsv(rows, fields) : JSON.stringify({ fields, rows }, null, 2);
+        const filePath = makeExportPath(conn.name, format);
+        await Bun.write(filePath, payload);
+
+        return { content: [{ type: "text", text: `Exported ${rows.length} rows to ${filePath}` }] };
+      } catch (err) {
+        const msg = (err as Error).message;
+        const isCancelled = msg.includes("cancelled");
+        updateLogEntry(logId, isCancelled ? "cancelled" : "error", msg);
+        if (!isCancelled) evictDriver(sid);
+        return { content: [{ type: "text", text: `${isCancelled ? "Cancelled" : "Error"}: ${msg}` }], isError: true };
+      } finally {
+        queryAborts.delete(logId);
+      }
+    }
+  );
+
   return server;
+}
+
+const EXPORT_DIR = join(homedir(), ".pluk", "exports");
+
+function sanitizeFilename(input: string): string {
+  return input.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+}
+
+function toCsv(rows: unknown[], fields: string[]): string {
+  if (rows.length === 0) return fields.join(",") + "\n";
+  const escape = (v: unknown) => {
+    const s = v === null || v === undefined ? "" : String(v);
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  const lines = [fields.join(",")];
+  for (const row of rows) {
+    const r = row as Record<string, unknown>;
+    lines.push(fields.map((f) => escape(r[f])).join(","));
+  }
+  return lines.join("\n") + "\n";
+}
+
+function makeExportPath(connName: string, format: string): string {
+  mkdirSync(EXPORT_DIR, { recursive: true });
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  return join(EXPORT_DIR, `${sanitizeFilename(connName)}_${ts}.${format}`);
 }
 
 // ── Public handler ───────────────────────────────────────────────────────────
