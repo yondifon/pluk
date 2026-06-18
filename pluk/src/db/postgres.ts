@@ -29,6 +29,18 @@ export function createPostgresDriver(
       return { rows: result.rows, fields: result.fields.map((f) => f.name) };
     },
 
+    async queryReadOnly(sql, params = []) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN READ ONLY");
+        const result = await client.query(sql, params as unknown[]);
+        return { rows: result.rows, fields: result.fields.map((f) => f.name) };
+      } finally {
+        await client.query("ROLLBACK").catch(() => {});
+        client.release();
+      }
+    },
+
     async explain(sql) {
       const result = await pool.query("EXPLAIN (FORMAT JSON) " + sql);
       return { rows: result.rows, fields: result.fields.map((f) => f.name) };

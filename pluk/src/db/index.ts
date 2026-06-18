@@ -37,6 +37,7 @@ export interface TableStats {
 
 export interface Driver {
   query(sql: string, params?: unknown[]): Promise<QueryResult>;
+  queryReadOnly(sql: string, params?: unknown[]): Promise<QueryResult>;
   explain(sql: string): Promise<QueryResult>;
   listTables(): Promise<string[]>;
   describeTable(table: string): Promise<ColumnInfo[]>;

@@ -28,6 +28,14 @@ export function createMysqlDriver(
       };
     },
 
+    async queryReadOnly(sql, params = []) {
+      const [rows, fields] = await pool.query(sql, params);
+      return {
+        rows: rows as unknown[],
+        fields: Array.isArray(fields) ? fields.map((f: mysql.FieldPacket) => f.name ?? "") : undefined,
+      };
+    },
+
     async explain(sql) {
       const [rows, fields] = await pool.query("EXPLAIN " + sql);
       return {

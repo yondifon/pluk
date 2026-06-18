@@ -95,6 +95,8 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
 
   const server = new McpServer({ name: conn.name, version: "1.0.0" });
 
+  const readOnlyMode = policy.allowed.length === 2 && policy.allowed.includes("select") && policy.allowed.includes("inspect");
+
   server.tool(
     "query",
     `Run a SQL query against the database. ${policyDesc}`,
@@ -124,7 +126,8 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
       try {
         const work = (async () => {
           const driver = await getDriver(sid, conn);
-          return driver.query(sql);
+          const useReadOnly = readOnlyMode && conn.type === "postgres";
+          return useReadOnly ? driver.queryReadOnly(sql) : driver.query(sql);
         })();
 
         const result = await withToolTimeout(

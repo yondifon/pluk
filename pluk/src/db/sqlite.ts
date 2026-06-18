@@ -11,6 +11,12 @@ export function createSqliteDriver(filename: string): Driver {
       return { rows };
     },
 
+    async queryReadOnly(sql) {
+      const stmt = db.query(sql);
+      const rows = stmt.all();
+      return { rows };
+    },
+
     async explain(sql) {
       const stmt = db.query("EXPLAIN QUERY PLAN " + sql);
       const rows = stmt.all();
