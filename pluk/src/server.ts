@@ -8,6 +8,10 @@ const PORT = Number(process.env.PORT ?? 4242);
 
 const server = Bun.serve({
   port: PORT,
+  // Loopback only: the REST/MCP surface is unauthenticated beyond the per-conn
+  // token, and the product promise is that nothing leaves the laptop. Without
+  // this, Bun.serve defaults to 0.0.0.0 and exposes it to the whole LAN.
+  hostname: "127.0.0.1",
   idleTimeout: 255,
   async fetch(req) {
     const url = new URL(req.url);
@@ -45,7 +49,7 @@ const server = Bun.serve({
     const savedMatch = path.match(/^\/api\/connections\/([^/]+)\/saved_queries(?:\/([^/]+))?$/);
     if (savedMatch) {
       const connectionId = savedMatch[1]!;
-      const savedName = savedMatch[2];
+      const savedName = savedMatch[2] ? decodeURIComponent(savedMatch[2]) : undefined;
       const conn = getConnectionById(connectionId);
       if (!conn) return Response.json({ ok: false, error: "Not found" }, { status: 404 });
 
@@ -74,7 +78,7 @@ const server = Bun.serve({
     const maskMatch = path.match(/^\/api\/connections\/([^/]+)\/masked_columns(?:\/([^/]+))?$/);
     if (maskMatch) {
       const connectionId = maskMatch[1]!;
-      const columnName = maskMatch[2];
+      const columnName = maskMatch[2] ? decodeURIComponent(maskMatch[2]) : undefined;
       const conn = getConnectionById(connectionId);
       if (!conn) return Response.json({ ok: false, error: "Not found" }, { status: 404 });
 
