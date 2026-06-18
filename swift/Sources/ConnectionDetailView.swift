@@ -465,7 +465,8 @@ private struct QueriesTab: View {
     @State private var entries: [QueryLogEntry] = []
     @State private var filter: VerdictFilter = .all
     @State private var expandedId: Int? = nil
-    @State private var isLoading = false
+    @State private var showRetentionPicker = false
+    @State private var pollTimer: Timer? = nil
 
     enum VerdictFilter: String, CaseIterable {
         case all = "All"
@@ -473,6 +474,8 @@ private struct QueriesTab: View {
         case blocked = "Blocked"
         case error = "Error"
     }
+
+    private var hasPending: Bool { entries.contains { $0.verdict == "pending" } }
 
     private var filtered: [QueryLogEntry] {
         guard filter != .all else { return entries }
@@ -490,29 +493,48 @@ private struct QueriesTab: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            if isLoading {
-                Spacer()
-                ProgressView()
-                Spacer()
-            } else if filtered.isEmpty {
+            if filtered.isEmpty {
                 emptyState
             } else {
                 logList
             }
         }
-        .onAppear { reload() }
+        .onAppear {
+            reload()
+            startPollingIfNeeded()
+        }
+        .onDisappear {
+            stopPolling()
+        }
+        .onChange(of: hasPending) { _, pending in
+            pending ? startPollingIfNeeded() : stopPolling()
+        }
+    }
+
+    private func startPollingIfNeeded() {
+        guard hasPending, pollTimer == nil else { return }
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
+            reload()
+        }
+    }
+
+    private func stopPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
     }
 
     // MARK: - Toolbar
 
     private var toolbar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             // Stats pills
             statPill(entries.count, label: "total", color: .secondary)
-            statPill(stats.allowed, label: "allowed", color: .green)
-            statPill(stats.blocked, label: "blocked", color: .red)
+            statPill(stats.allowed, label: "ok", color: .green)
+            if stats.blocked > 0 {
+                statPill(stats.blocked, label: "blocked", color: .red)
+            }
             if stats.error > 0 {
-                statPill(stats.error, label: "error", color: .orange)
+                statPill(stats.error, label: "err", color: .orange)
             }
 
             Spacer()
@@ -531,6 +553,37 @@ private struct QueriesTab: View {
                 }
             }
 
+            Divider().frame(height: 14)
+
+            // Retention
+            Menu {
+                let options = [7, 14, 30, 60, 90, 0]
+                ForEach(options, id: \.self) { days in
+                    Button(days == 0 ? "Keep forever" : "Keep \(days) days") {
+                        store.logRetentionDays = days
+                        store.purgeOldLogs()
+                        reload()
+                    }
+                }
+                Divider()
+                Button("Clear all logs for this connection", role: .destructive) {
+                    store.clearAllLogs(connectionId: conn.id)
+                    reload()
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 10))
+                    let days = store.logRetentionDays
+                    Text(days == 0 ? "Forever" : "\(days)d")
+                        .font(.system(size: 11))
+                }
+                .foregroundColor(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Log retention — how long to keep query history")
+
             Button {
                 reload()
             } label: {
@@ -541,7 +594,7 @@ private struct QueriesTab: View {
             .foregroundColor(.secondary)
             .help("Refresh")
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 18)
         .padding(.vertical, 9)
     }
 
@@ -581,23 +634,32 @@ private struct QueriesTab: View {
         ScrollView {
             LazyVStack(spacing: 0, pinnedViews: []) {
                 ForEach(filtered) { entry in
+                    let expanded = expandedId == entry.id
                     LogEntryRow(
                         entry: entry,
-                        isExpanded: expandedId == entry.id,
-                        onToggle: {
-                            expandedId = expandedId == entry.id ? nil : entry.id
-                        }
+                        isExpanded: expanded,
+                        onToggle: { expandedId = expanded ? nil : entry.id },
+                        onStop: { stopQuery(entry) }
                     )
-                    Divider().padding(.leading, 14)
+                    Divider().padding(.leading, 18)
                 }
             }
         }
     }
 
     private func reload() {
-        isLoading = true
-        entries = store.recentLog(connectionId: conn.id, limit: 200)
-        isLoading = false
+        entries = store.recentLog(connectionId: conn.id)
+    }
+
+    private func stopQuery(_ entry: QueryLogEntry) {
+        Task {
+            let url = URL(string: "http://localhost:4242/api/log/\(entry.id)/cancel")!
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 5
+            _ = try? await URLSession.shared.data(for: req)
+            await MainActor.run { reload() }
+        }
     }
 }
 
@@ -607,6 +669,22 @@ private struct LogEntryRow: View {
     let entry: QueryLogEntry
     let isExpanded: Bool
     let onToggle: () -> Void
+    let onStop: () -> Void
+
+    @State private var copiedSQL = false
+    @State private var copiedResult = false
+
+    // The agent-visible response: result rows when present, else the verdict reason.
+    private var responseText: String? {
+        if let json = entry.resultJson, !json.isEmpty { return json }
+        if let reason = entry.reason, !reason.isEmpty { return reason }
+        return nil
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
 
     var body: some View {
         Button(action: onToggle) {
@@ -632,6 +710,16 @@ private struct LogEntryRow: View {
 
                             Spacer()
 
+                            if entry.verdict == "pending" {
+                                Button(action: onStop) {
+                                    Label("Stop", systemImage: "stop.fill")
+                                        .font(.system(size: 10, weight: .medium))
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundColor(.red)
+                                .help("Cancel this running query")
+                            }
+
                             Text(relativeTime(entry.createdAt))
                                 .font(.system(size: 10))
                                 .foregroundColor(.secondary)
@@ -646,7 +734,7 @@ private struct LogEntryRow: View {
                             .truncationMode(.tail)
                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                        // Expanded: reason + full timestamp
+                        // Expanded: reason + result preview + full timestamp
                         if isExpanded {
                             if let reason = entry.reason, !reason.isEmpty {
                                 HStack(spacing: 4) {
@@ -659,15 +747,38 @@ private struct LogEntryRow: View {
                                 }
                                 .padding(.top, 2)
                             }
-                            Text(entry.createdAt)
+
+                            // Result preview mini-table
+                            if let json = entry.resultJson {
+                                ResultPreview(json: json, rowCount: entry.rowCount)
+                                    .padding(.top, 6)
+                            }
+
+                            Text(localTime(entry.createdAt))
                                 .font(.system(size: 10))
                                 .foregroundColor(.secondary.opacity(0.7))
                                 .padding(.top, 1)
+
+                            // Copy actions for the query and its response
+                            HStack(spacing: 6) {
+                                copyButton(copiedSQL ? "Copied!" : "Copy SQL", copied: copiedSQL) {
+                                    copy(entry.sql)
+                                    flash($copiedSQL)
+                                }
+                                if let response = responseText {
+                                    copyButton(copiedResult ? "Copied!" : "Copy response", copied: copiedResult) {
+                                        copy(response)
+                                        flash($copiedResult)
+                                    }
+                                }
+                            }
+                            .padding(.top, 6)
                         }
                     }
                     .padding(.vertical, 10)
-                    .padding(.trailing, 14)
+                    .padding(.trailing, 18)
                 }
+                .padding(.leading, 18)
             }
         }
         .buttonStyle(.plain)
@@ -676,11 +787,31 @@ private struct LogEntryRow: View {
         .animation(.easeInOut(duration: 0.12), value: isExpanded)
     }
 
+    private func copyButton(_ title: String, copied: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 10, weight: .medium))
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.mini)
+        .tint(copied ? .green : nil)
+    }
+
+    private func flash(_ flag: Binding<Bool>) {
+        flag.wrappedValue = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.5))
+            flag.wrappedValue = false
+        }
+    }
+
     private var verdictColor: Color {
         switch entry.verdict {
-        case "allowed": return .green
-        case "blocked": return .red
-        default:        return .orange
+        case "allowed":   return .green
+        case "blocked":   return .red
+        case "cancelled": return Color(nsColor: .systemPurple)
+        case "pending":   return .secondary
+        default:          return .orange
         }
     }
 
@@ -689,6 +820,7 @@ private struct LogEntryRow: View {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
         fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = TimeZone(identifier: "UTC")  // SQLite datetime('now') is UTC
         guard let date = fmt.date(from: raw) else { return raw }
         let secs = Int(-date.timeIntervalSinceNow)
         if secs < 10  { return "just now" }
@@ -696,6 +828,20 @@ private struct LogEntryRow: View {
         if secs < 3600 { return "\(secs / 60)m ago" }
         if secs < 86400 { return "\(secs / 3600)h ago" }
         return "\(secs / 86400)d ago"
+    }
+
+    // Full UTC timestamp -> local time string
+    private func localTime(_ raw: String) -> String {
+        let inFmt = DateFormatter()
+        inFmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        inFmt.locale = Locale(identifier: "en_US_POSIX")
+        inFmt.timeZone = TimeZone(identifier: "UTC")
+        guard let date = inFmt.date(from: raw) else { return raw }
+        let outFmt = DateFormatter()
+        outFmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        outFmt.locale = Locale(identifier: "en_US_POSIX")
+        outFmt.timeZone = .current
+        return outFmt.string(from: date)
     }
 }
 
@@ -705,28 +851,124 @@ private struct VerdictBadge: View {
     let verdict: String
 
     var body: some View {
-        Text(label)
-            .font(.system(size: 9, weight: .bold))
-            .foregroundColor(.white)
+        if verdict == "pending" {
+            HStack(spacing: 4) {
+                ProgressView().scaleEffect(0.55).frame(width: 10, height: 10)
+                Text("RUNNING")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.secondary)
+            }
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(color)
+            .background(Color.secondary.opacity(0.1))
             .clipShape(.capsule)
+        } else {
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(color)
+                .clipShape(.capsule)
+        }
     }
 
     private var label: String {
         switch verdict {
-        case "allowed": return "OK"
-        case "blocked": return "BLOCKED"
-        default:        return "ERROR"
+        case "allowed":   return "OK"
+        case "blocked":   return "BLOCKED"
+        case "cancelled": return "CANCELLED"
+        default:          return "ERROR"
         }
     }
 
     private var color: Color {
         switch verdict {
-        case "allowed": return .green
-        case "blocked": return .red
-        default:        return .orange
+        case "allowed":   return .green
+        case "blocked":   return .red
+        case "cancelled": return Color(nsColor: .systemPurple)
+        default:          return .orange
+        }
+    }
+}
+
+// MARK: - Result preview (mini-table for expanded log entries)
+
+private struct ResultPreview: View {
+    let json: String
+    let rowCount: Int?
+
+    private struct ParsedResult {
+        let fields: [String]
+        let rows: [[String]]
+    }
+
+    private var parsed: ParsedResult? {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let fields = obj["fields"] as? [String],
+              let rows = obj["rows"] as? [[String: Any]] else { return nil }
+        let rowStrings = rows.prefix(5).map { row in
+            fields.map { key in
+                guard let val = row[key] else { return "NULL" }
+                if val is NSNull { return "NULL" }
+                return "\(val)"
+            }
+        }
+        return ParsedResult(fields: fields, rows: rowStrings)
+    }
+
+    var body: some View {
+        if let p = parsed, !p.fields.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                // Header row
+                HStack(spacing: 0) {
+                    ForEach(p.fields.prefix(6), id: \.self) { field in
+                        Text(field)
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color.secondary.opacity(0.08))
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous).path(in: CGRect(x: 0, y: 0, width: 9999, height: 999)))
+
+                // Data rows
+                ForEach(Array(p.rows.enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: 0) {
+                        ForEach(Array(row.prefix(6).enumerated()), id: \.offset) { _, cell in
+                            Text(cell)
+                                .font(.system(size: 9.5, design: .monospaced))
+                                .foregroundColor(.primary.opacity(0.75))
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                        }
+                    }
+                    Divider().opacity(0.5)
+                }
+
+                // Footer: row counts
+                let total = rowCount ?? p.rows.count
+                let showing = min(p.rows.count, 5)
+                if total > showing {
+                    Text("\(showing) of \(total) rows")
+                        .font(.system(size: 9.5))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.top, 3)
+                }
+            }
+            .background(Color.secondary.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+            )
         }
     }
 }

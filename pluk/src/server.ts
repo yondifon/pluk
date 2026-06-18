@@ -1,5 +1,5 @@
 import { getConnectionByToken, getConnectionById } from "./store/connections.js";
-import { handleMcpRequest } from "./mcp/server.js";
+import { handleMcpRequest, cancelQuery } from "./mcp/server.js";
 import { createDriver } from "./db/index.js";
 
 const PORT = Number(process.env.PORT ?? 4242);
@@ -32,6 +32,13 @@ const server = Bun.serve({
       }
     }
 
+    // POST /api/log/:id/cancel — cancel an in-flight query, called by the Swift UI
+    const cancelId = path.match(/^\/api\/log\/(\d+)\/cancel$/)?.[1];
+    if (cancelId && req.method === "POST") {
+      const ok = cancelQuery(Number(cancelId));
+      return Response.json({ ok });
+    }
+
     // /mcp/:token — MCP streamable HTTP endpoint for AI agents
     const token = path.match(/^\/mcp\/([^/]+)/)?.[1];
     if (token) {
@@ -39,6 +46,8 @@ const server = Bun.serve({
       if (!conn) return new Response("Connection not found", { status: 404 });
       return handleMcpRequest(conn, req);
     }
+
+    if (path === "/health") return new Response("ok");
 
     return new Response("Not found", { status: 404 });
   },

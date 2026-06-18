@@ -12,6 +12,8 @@ struct QueryLogEntry: Identifiable {
     let verdict: String       // allowed | blocked | error
     let reason: String?
     let categories: String?
+    let resultJson: String?   // JSON snapshot of result rows
+    let rowCount: Int?        // total rows before cap
     let createdAt: String
 }
 
@@ -27,6 +29,7 @@ final class ConnectionStore {
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         sqlite3_open("\(dir)/pluk.db", &db)
         migrate()
+        purgeOldLogs()
         load()
     }
 
@@ -63,7 +66,16 @@ final class ConnectionStore {
             verdict TEXT NOT NULL,
             reason TEXT,
             categories TEXT,
+            result_json TEXT,
+            row_count INTEGER,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """)
+
+        exec("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         )
         """)
 
@@ -80,8 +92,42 @@ final class ConnectionStore {
             "ALTER TABLE connections ADD COLUMN environment TEXT DEFAULT 'development'",
             "ALTER TABLE connections ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE connections ADD COLUMN query_policy TEXT",
+            "ALTER TABLE query_log ADD COLUMN result_json TEXT",
+            "ALTER TABLE query_log ADD COLUMN row_count INTEGER",
         ]
         for sql in alters { exec(sql) } // silently ignores if column exists
+    }
+
+    // MARK: - Settings
+
+    func getSetting(_ key: String, default defaultValue: String) -> String {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT value FROM settings WHERE key = ?", -1, &stmt, nil) == SQLITE_OK else { return defaultValue }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, key)
+        guard sqlite3_step(stmt) == SQLITE_ROW,
+              let p = sqlite3_column_text(stmt, 0) else { return defaultValue }
+        return String(cString: p)
+    }
+
+    func setSetting(_ key: String, value: String) {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, key)
+        bindText(stmt, 2, value)
+        sqlite3_step(stmt)
+    }
+
+    var logRetentionDays: Int {
+        get { Int(getSetting("log_retention_days", default: "30")) ?? 30 }
+        set { setSetting("log_retention_days", value: String(newValue)) }
+    }
+
+    func purgeOldLogs() {
+        let days = logRetentionDays
+        guard days > 0 else { return }
+        exec("DELETE FROM query_log WHERE created_at < datetime('now', '-\(days) days')")
     }
 
     // MARK: - CRUD
@@ -149,10 +195,11 @@ final class ConnectionStore {
 
     // MARK: - Query log
 
-    func recentLog(connectionId: String, limit: Int = 50) -> [QueryLogEntry] {
+    func recentLog(connectionId: String, limit: Int = 200) -> [QueryLogEntry] {
         var stmt: OpaquePointer?
         let sql = """
-        SELECT id, connection_id, connection_name, sql, verdict, reason, categories, created_at
+        SELECT id, connection_id, connection_name, sql, verdict, reason, categories,
+               result_json, row_count, created_at
         FROM query_log
         WHERE connection_id = ?
         ORDER BY id DESC
@@ -169,7 +216,10 @@ final class ConnectionStore {
                 guard let p = sqlite3_column_text(stmt, i) else { return nil }
                 return String(cString: p)
             }
-            guard let createdAt = str(7) else { continue }
+            func optInt(_ i: Int32) -> Int? {
+                sqlite3_column_type(stmt, i) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, i))
+            }
+            guard let createdAt = str(9) else { continue }
             result.append(QueryLogEntry(
                 id: Int(sqlite3_column_int(stmt, 0)),
                 connectionId: str(1) ?? "",
@@ -178,10 +228,20 @@ final class ConnectionStore {
                 verdict: str(4) ?? "",
                 reason: str(5),
                 categories: str(6),
+                resultJson: str(7),
+                rowCount: optInt(8),
                 createdAt: createdAt
             ))
         }
         return result
+    }
+
+    func clearAllLogs(connectionId: String) {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "DELETE FROM query_log WHERE connection_id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, connectionId)
+        sqlite3_step(stmt)
     }
 
     // MARK: - Bind helpers (INSERT)

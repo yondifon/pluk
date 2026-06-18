@@ -63,7 +63,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.delegate = self
         window.setFrameAutosaveName("PlukMainWindow")
         window.center()
-        window.contentViewController = NSHostingController(rootView: ContentView(store: store))
+        window.contentViewController = NSHostingController(rootView: ContentView(store: store, serverManager: serverManager))
     }
 
     @objc private func toggleWindow() {

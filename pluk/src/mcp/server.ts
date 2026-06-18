@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { Connection } from "../store/connections.js";
 import { createDriver, type Driver } from "../db/index.js";
 import { parsePolicy, evaluate, capRows, dialectFor, policyDescription } from "./policy.js";
-import { logQuery } from "../store/queryLog.js";
+import { createLogEntry, updateLogEntry, logQuery } from "../store/queryLog.js";
 
 // ── Driver pool ──────────────────────────────────────────────────────────────
 // One driver per MCP session. Closed after IDLE_MS of inactivity.
@@ -25,12 +25,35 @@ function withToolTimeout<T>(work: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
+function withCancellable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error("Query cancelled"));
+  return Promise.race([
+    work,
+    new Promise<T>((_, reject) => {
+      signal.addEventListener("abort", () => reject(new Error("Query cancelled")), { once: true });
+    }),
+  ]);
+}
+
 interface DriverEntry {
   driver: Driver;
   idleTimer: ReturnType<typeof setTimeout>;
 }
 
 const driverPool = new Map<string, DriverEntry>();
+const sessionAborts = new Map<string, AbortController>();
+
+// Per-query abort controllers, keyed by log entry id, so the UI can cancel a
+// single in-flight query (POST /api/log/:id/cancel) without tearing down the session.
+const queryAborts = new Map<number, AbortController>();
+
+/** Abort a single in-flight query by its log id. Returns false if not running. */
+export function cancelQuery(logId: number): boolean {
+  const ac = queryAborts.get(logId);
+  if (!ac) return false;
+  ac.abort();
+  return true;
+}
 
 async function getDriver(sessionId: string, conn: Connection): Promise<Driver> {
   const existing = driverPool.get(sessionId);
@@ -85,25 +108,46 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
       }
 
       const sid = sessionIdRef.value;
+
+      // Create pending log entry before executing so it's visible immediately
+      const logId = createLogEntry(conn.id, conn.name, sql, "pending", verdict.categories);
+
+      // Per-query abort controller; also tripped by a session-wide abort.
+      const queryAc = new AbortController();
+      queryAborts.set(logId, queryAc);
+      const sessionSignal = sessionAborts.get(sid)?.signal;
+      if (sessionSignal) {
+        if (sessionSignal.aborted) queryAc.abort();
+        else sessionSignal.addEventListener("abort", () => queryAc.abort(), { once: true });
+      }
+
       try {
-        return await withToolTimeout((async () => {
+        const work = (async () => {
           const driver = await getDriver(sid, conn);
-          const result = await driver.query(sql);
-          const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
-          const capped = { ...result, rows };
+          return driver.query(sql);
+        })();
 
-          logQuery(conn.id, conn.name, sql, "allowed", verdict.categories);
+        const result = await withToolTimeout(
+          withCancellable(work, queryAc.signal),
+          "query"
+        );
 
-          let text = JSON.stringify(capped, null, 2);
-          if (truncated) {
-            text += `\n\n[Row limit: showing first ${limit} of ${result.rows.length} rows. Add a LIMIT clause to see all results.]`;
-          }
-          return { content: [{ type: "text", text }] };
-        })(), "query");
+        const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
+        updateLogEntry(logId, "allowed", undefined, result);
+
+        let text = JSON.stringify({ ...result, rows }, null, 2);
+        if (truncated) {
+          text += `\n\n[Row limit: showing first ${limit} of ${result.rows.length} rows. Add a LIMIT clause to see all results.]`;
+        }
+        return { content: [{ type: "text", text }] };
       } catch (err) {
-        logQuery(conn.id, conn.name, sql, "error", verdict.categories, (err as Error).message);
-        evictDriver(sid);
-        return { content: [{ type: "text", text: `Error: ${(err as Error).message}` }], isError: true };
+        const msg = (err as Error).message;
+        const isCancelled = msg.includes("cancelled");
+        updateLogEntry(logId, isCancelled ? "cancelled" : "error", msg);
+        if (!isCancelled) evictDriver(sid);
+        return { content: [{ type: "text", text: `${isCancelled ? "Cancelled" : "Error"}: ${msg}` }], isError: true };
+      } finally {
+        queryAborts.delete(logId);
       }
     }
   );
@@ -179,10 +223,15 @@ export async function handleMcpRequest(conn: Connection, req: Request): Promise<
     onsessioninitialized: (sid) => {
       sessionIdRef.value = sid;
       sessions.set(sid, session);
+      sessionAborts.set(sid, new AbortController());
     },
     onsessionclosed: (sid) => {
       sessions.delete(sid);
-      evictDriver(sid);  // close pooled driver when MCP session ends
+      // Signal cancellation to any in-flight tool calls before closing driver
+      const ac = sessionAborts.get(sid);
+      ac?.abort();
+      sessionAborts.delete(sid);
+      evictDriver(sid);
     },
   });
 

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     var store: ConnectionStore
+    var serverManager: ServerManager
     @State private var selectedID: String?
     @State private var sheet: ActiveSheet?
 
@@ -31,6 +32,11 @@ struct ContentView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 720, minHeight: 520)
+        .safeAreaInset(edge: .bottom) {
+            if serverManager.status != .running {
+                ServerStatusBanner(serverManager: serverManager)
+            }
+        }
         .sheet(item: $sheet) { active in
             connectionSheet(active)
         }
@@ -48,18 +54,6 @@ struct ContentView: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom) {
-            Button(action: { sheet = .add }) {
-                Label("New Connection", systemImage: "plus")
-                    .font(.system(size: 12))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(.secondary)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(.bar)
-        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: { sheet = .add }) {
@@ -190,6 +184,42 @@ struct EnvTag: View {
                 .tracking(0.4)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+// MARK: - Server status banner
+
+private struct ServerStatusBanner: View {
+    let serverManager: ServerManager
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if serverManager.status == .starting {
+                ProgressView().scaleEffect(0.7).frame(width: 12, height: 12)
+                Text("Server starting…")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            } else {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(.orange)
+                Text("Server not running")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            if serverManager.status == .stopped {
+                Button("Restart") { serverManager.start() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .animation(.easeInOut(duration: 0.2), value: serverManager.status == .stopped)
     }
 }
 

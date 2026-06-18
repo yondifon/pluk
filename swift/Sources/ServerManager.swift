@@ -1,6 +1,12 @@
 import Foundation
+import Observation
 
+@Observable
+@MainActor
 final class ServerManager {
+    enum Status: Equatable { case starting, running, stopped }
+    private(set) var status: Status = .stopped
+
     private var process: Process?
 
     func start() {
@@ -8,6 +14,7 @@ final class ServerManager {
 
         guard let server = resolveServer() else {
             print("[pluk] Could not locate server binary")
+            status = .stopped
             return
         }
 
@@ -19,22 +26,47 @@ final class ServerManager {
         do {
             try p.run()
             process = p
+            status = .starting
             print("[pluk] MCP server started (pid \(p.processIdentifier))")
+            checkUntilReady()
         } catch {
             print("[pluk] Failed to start server: \(error)")
+            status = .stopped
         }
     }
 
     func stop() {
         guard let p = process, p.isRunning else { return }
-        p.terminate()                     // SIGTERM → Bun drains
-        // Wait up to 3 s for clean exit before force-killing
+        p.terminate()
         let deadline = Date().addingTimeInterval(3)
         while p.isRunning && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.05)
         }
-        if p.isRunning { p.interrupt() }  // SIGINT fallback
+        if p.isRunning { p.interrupt() }
         process = nil
+        status = .stopped
+    }
+
+    // MARK: - Health check
+
+    private func checkUntilReady() {
+        Task { @MainActor in
+            for _ in 0..<20 {
+                try? await Task.sleep(for: .milliseconds(500))
+                if await isReachable() {
+                    status = .running
+                    return
+                }
+            }
+            status = .stopped
+        }
+    }
+
+    private func isReachable() async -> Bool {
+        guard let url = URL(string: "http://localhost:4242/health") else { return false }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 1
+        return (try? await URLSession.shared.data(for: req)) != nil
     }
 
     // MARK: - Server resolution
@@ -42,7 +74,6 @@ final class ServerManager {
     private typealias ServerSpec = (executable: String, args: [String])
 
     private func resolveServer() -> ServerSpec? {
-        // Production: standalone binary compiled with `bun build --compile`, bundled in .app
         if let resources = Bundle.main.resourcePath {
             let binary = (resources as NSString).appendingPathComponent("pluk-server")
             if FileManager.default.fileExists(atPath: binary) {
@@ -50,7 +81,6 @@ final class ServerManager {
             }
         }
 
-        // Development: bun run server.ts (resolved relative to source tree)
         guard let bun = findBun(), let serverTS = findServerTS() else { return nil }
         return (bun, ["run", serverTS])
     }

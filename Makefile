@@ -19,6 +19,7 @@ server:
 	@# fails gracefully without it — no node_modules mutation needed.
 	cd pluk && bun build --compile --external cpu-features src/server.ts --outfile ../$(DIST)/pluk-server
 	@chmod +x $(DIST)/pluk-server
+	@codesign --force --sign - $(DIST)/pluk-server
 
 swift-build:
 	@printf "→ building Swift app\n"
