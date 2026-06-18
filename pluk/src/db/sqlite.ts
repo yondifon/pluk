@@ -92,6 +92,24 @@ export function createSqliteDriver(filename: string): Driver {
       return results;
     },
 
+    async tableStats(table) {
+      const quoted = table.replace(/"/g, '""');
+      const indexes = (db.query(`PRAGMA index_list("${quoted}")`).all() as {
+        name: string;
+        unique: number;
+        origin: string;
+      }[]).map((r) => {
+        const cols = (db.query(`PRAGMA index_info("${r.name}")`).all() as { name: string }[]).map(c => c.name);
+        return { name: r.name, columns: cols, unique: r.unique === 1 };
+      });
+      return {
+        table,
+        estimatedRows: null,
+        sizeBytes: null,
+        indexes,
+      };
+    },
+
     async listSchemas() {
       return ["main"];
     },

@@ -122,6 +122,37 @@ export function createPostgresDriver(
       }));
     },
 
+    async tableStats(table) {
+      const rel = await pool.query(
+        `SELECT c.reltuples AS estimated_rows, pg_total_relation_size(c.oid) AS size_bytes
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public' AND c.relname = $1`,
+        [table]
+      );
+      const indexRes = await pool.query(
+        `SELECT indexname, indexdef
+         FROM pg_indexes
+         WHERE schemaname = 'public' AND tablename = $1
+         ORDER BY indexname`,
+        [table]
+      );
+      const indexes = (indexRes.rows as { indexname: string; indexdef: string }[]).map((r) => {
+        const match = r.indexdef.match(/\(([^)]+)\)/);
+        return {
+          name: r.indexname,
+          columns: match ? match[1]!.split(",").map(c => c.trim()) : [],
+          unique: /UNIQUE/i.test(r.indexdef),
+        };
+      });
+      return {
+        table,
+        estimatedRows: rel.rows[0] ? Math.round(rel.rows[0].estimated_rows as number) : null,
+        sizeBytes: rel.rows[0] ? (rel.rows[0].size_bytes as number) : null,
+        indexes,
+      };
+    },
+
     async listSchemas() {
       const result = await pool.query(
         "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name"

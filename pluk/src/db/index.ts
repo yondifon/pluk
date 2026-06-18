@@ -28,6 +28,13 @@ export interface SchemaSearchResult {
   type?: string;
 }
 
+export interface TableStats {
+  table: string;
+  estimatedRows: number | null;
+  sizeBytes: number | null;
+  indexes: { name: string; columns: string[]; unique: boolean }[];
+}
+
 export interface Driver {
   query(sql: string, params?: unknown[]): Promise<QueryResult>;
   explain(sql: string): Promise<QueryResult>;
@@ -36,6 +43,7 @@ export interface Driver {
   sampleTable(table: string, limit: number): Promise<QueryResult>;
   listRelationships(table?: string): Promise<RelationshipInfo[]>;
   searchSchema(term: string): Promise<SchemaSearchResult[]>;
+  tableStats(table: string): Promise<TableStats>;
   listSchemas(): Promise<string[]>;
   testConnection(): Promise<void>;
   close(): Promise<void>;

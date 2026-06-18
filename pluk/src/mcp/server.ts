@@ -278,6 +278,25 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
     }
   );
 
+  server.tool(
+    "table_stats",
+    "Get cheap table statistics (estimated rows, size, indexes)",
+    { table: z.string().describe("Table name") },
+    async ({ table }) => {
+      const sid = sessionIdRef.value;
+      try {
+        return await withToolTimeout((async () => {
+          const driver = await getDriver(sid, conn);
+          const stats = await driver.tableStats(table);
+          return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
+        })(), "table_stats");
+      } catch (err) {
+        evictDriver(sid);
+        return { content: [{ type: "text", text: `Error: ${(err as Error).message}` }], isError: true };
+      }
+    }
+  );
+
   server.tool("list_schemas", "List all schemas or databases", async () => {
     const sid = sessionIdRef.value;
     try {

@@ -116,6 +116,38 @@ export function createMysqlDriver(
       }));
     },
 
+    async tableStats(table) {
+      const [tableRows] = await pool.query(
+        `SELECT table_rows, data_length + index_length AS size_bytes
+         FROM information_schema.tables
+         WHERE table_schema = DATABASE() AND table_name = ?`,
+        [table]
+      );
+      const [indexRows] = await pool.query(
+        `SELECT index_name, column_name, non_unique
+         FROM information_schema.statistics
+         WHERE table_schema = DATABASE() AND table_name = ?
+         ORDER BY index_name, seq_in_index`,
+        [table]
+      );
+      const idxMap = new Map<string, { columns: string[]; unique: boolean }>();
+      for (const r of indexRows as { index_name: string; column_name: string; non_unique: number }[]) {
+        const existing = idxMap.get(r.index_name);
+        if (existing) {
+          existing.columns.push(r.column_name);
+        } else {
+          idxMap.set(r.index_name, { columns: [r.column_name], unique: r.non_unique === 0 });
+        }
+      }
+      const first = (tableRows as { table_rows: number; size_bytes: number }[])[0];
+      return {
+        table,
+        estimatedRows: first ? first.table_rows : null,
+        sizeBytes: first ? first.size_bytes : null,
+        indexes: Array.from(idxMap.entries()).map(([name, { columns, unique }]) => ({ name, columns, unique })),
+      };
+    },
+
     async listSchemas() {
       const [rows] = await pool.query("SHOW DATABASES");
       return (rows as Record<string, string>[]).map((r) => Object.values(r)[0] ?? "");
