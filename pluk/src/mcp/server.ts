@@ -87,7 +87,8 @@ function getDriver(sessionId: string, conn: Connection): Promise<Driver> {
   // instead of starting a second one (which, with an SSH proxy, meant a second
   // interactive auth prompt racing the timeout).
   const connectTimeout = conn.use_ssh ? CONNECT_TIMEOUT_SSH_MS : CONNECT_TIMEOUT_DIRECT_MS;
-  const driver = withTimeout(createDriver(conn), connectTimeout, "connect");
+  const created = createDriver(conn);
+  const driver = withTimeout(created, connectTimeout, "connect");
   const idleTimer = setTimeout(() => evictDriver(sessionId), IDLE_MS);
   const entry: DriverEntry = { driver, idleTimer };
   driverPool.set(sessionId, entry);
@@ -99,6 +100,13 @@ function getDriver(sessionId: string, conn: Connection): Promise<Driver> {
       driverPool.delete(sessionId);
     }
   });
+
+  // If the connect timeout fired (or the entry was otherwise evicted) but the
+  // underlying setup later succeeds, close the orphaned driver so its pool and
+  // SSH tunnel don't leak.
+  created.then((d) => {
+    if (driverPool.get(sessionId) !== entry) d.close().catch(() => {});
+  }).catch(() => {});
 
   return driver;
 }
