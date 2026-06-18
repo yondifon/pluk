@@ -6,6 +6,7 @@ import {
   capRows,
   PRESETS,
   defaultPolicyFor,
+  parsePostgresCost,
   type StatementCategory,
 } from "./policy.js";
 
@@ -338,5 +339,21 @@ describe("capRows", () => {
     expect(r.rows.length).toBe(10);
     expect(r.truncated).toBe(true);
     expect(r.limit).toBe(10);
+  });
+});
+
+// ── parsePostgresCost ─────────────────────────────────────────────────────────
+
+describe("parsePostgresCost", () => {
+  test("extracts rows and total cost", () => {
+    const estimate = parsePostgresCost([{ Plan: { "Plan Rows": 42, "Total Cost": 123.45 } }]);
+    expect(estimate.rows).toBe(42);
+    expect(estimate.cost).toBe(123.45);
+  });
+
+  test("returns nulls for missing plan", () => {
+    const estimate = parsePostgresCost([{}]);
+    expect(estimate.rows).toBeNull();
+    expect(estimate.cost).toBeNull();
   });
 });

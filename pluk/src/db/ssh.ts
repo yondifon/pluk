@@ -267,7 +267,12 @@ async function openOpenSSHTunnel(
   const childClosed = new Promise<void>((res) => child.on("close", () => res()));
 
   try {
-    await waitForPort(localPort);
+    // ProxyCommand auth (e.g. Cloudflare Access) can require an interactive
+    // browser confirm on first use — allow up to 60s for the port to come up.
+    // Short-circuit if the ssh/proxy process dies first so a genuinely broken
+    // proxy fails fast instead of waiting out the full window.
+    const childDied = childClosed.then(() => { throw new Error("ssh process exited before tunnel was ready"); });
+    await Promise.race([waitForPort(localPort, 60_000), childDied]);
   } catch (err) {
     child.kill();
     // Wait up to 1s for the child to flush all stderr before reading it

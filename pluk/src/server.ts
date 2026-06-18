@@ -1,4 +1,6 @@
 import { getConnectionByToken, getConnectionById } from "./store/connections.js";
+import { listSavedQueries, createSavedQuery, deleteSavedQuery } from "./store/savedQueries.js";
+import { listMaskedColumns, addMaskedColumn, removeMaskedColumn } from "./store/maskedColumns.js";
 import { handleMcpRequest, cancelQuery } from "./mcp/server.js";
 import { createDriver } from "./db/index.js";
 
@@ -6,6 +8,10 @@ const PORT = Number(process.env.PORT ?? 4242);
 
 const server = Bun.serve({
   port: PORT,
+  // Loopback only: the REST/MCP surface is unauthenticated beyond the per-conn
+  // token, and the product promise is that nothing leaves the laptop. Without
+  // this, Bun.serve defaults to 0.0.0.0 and exposes it to the whole LAN.
+  hostname: "127.0.0.1",
   idleTimeout: 255,
   async fetch(req) {
     const url = new URL(req.url);
@@ -37,6 +43,64 @@ const server = Bun.serve({
     if (cancelId && req.method === "POST") {
       const ok = cancelQuery(Number(cancelId));
       return Response.json({ ok });
+    }
+
+    // Saved queries REST endpoints (consumed by the Swift UI later)
+    const savedMatch = path.match(/^\/api\/connections\/([^/]+)\/saved_queries(?:\/([^/]+))?$/);
+    if (savedMatch) {
+      const connectionId = savedMatch[1]!;
+      const savedName = savedMatch[2] ? decodeURIComponent(savedMatch[2]) : undefined;
+      const conn = getConnectionById(connectionId);
+      if (!conn) return Response.json({ ok: false, error: "Not found" }, { status: 404 });
+
+      if (req.method === "GET") {
+        return Response.json({ ok: true, queries: listSavedQueries(connectionId) });
+      }
+
+      if (req.method === "POST") {
+        const body = await req.json() as { name?: string; sql?: string };
+        if (!body.name || !body.sql) {
+          return Response.json({ ok: false, error: "name and sql required" }, { status: 400 });
+        }
+        const q = createSavedQuery({ connection_id: connectionId, name: body.name, sql: body.sql });
+        return Response.json({ ok: true, query: q });
+      }
+
+      if (req.method === "DELETE" && savedName) {
+        const ok = deleteSavedQuery(connectionId, savedName);
+        return Response.json({ ok });
+      }
+
+      return new Response("Method not allowed", { status: 405 });
+    }
+
+    // Masked columns REST endpoints (consumed by the Swift UI later)
+    const maskMatch = path.match(/^\/api\/connections\/([^/]+)\/masked_columns(?:\/([^/]+))?$/);
+    if (maskMatch) {
+      const connectionId = maskMatch[1]!;
+      const columnName = maskMatch[2] ? decodeURIComponent(maskMatch[2]) : undefined;
+      const conn = getConnectionById(connectionId);
+      if (!conn) return Response.json({ ok: false, error: "Not found" }, { status: 404 });
+
+      if (req.method === "GET") {
+        return Response.json({ ok: true, columns: listMaskedColumns(connectionId) });
+      }
+
+      if (req.method === "POST") {
+        const body = await req.json() as { column_name?: string };
+        if (!body.column_name) {
+          return Response.json({ ok: false, error: "column_name required" }, { status: 400 });
+        }
+        const c = addMaskedColumn(connectionId, body.column_name);
+        return Response.json({ ok: true, column: c });
+      }
+
+      if (req.method === "DELETE" && columnName) {
+        const ok = removeMaskedColumn(connectionId, columnName);
+        return Response.json({ ok });
+      }
+
+      return new Response("Method not allowed", { status: 405 });
     }
 
     // /mcp/:token — MCP streamable HTTP endpoint for AI agents
