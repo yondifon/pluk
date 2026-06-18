@@ -44,6 +44,30 @@ export function createSqliteDriver(filename: string): Driver {
       return { rows };
     },
 
+    async searchSchema(term) {
+      const pattern = `%${term.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+      const results: { kind: "table" | "column"; table: string; column?: string; type?: string }[] = [];
+      const tables = (db.query("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE ? ESCAPE '\\' ORDER BY name").all(pattern) as { name: string }[]).map(r => r.name);
+      for (const t of tables) {
+        results.push({ kind: "table", table: t });
+      }
+      const allTables = (db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[]).map(r => r.name);
+      for (const t of allTables) {
+        const cols = db.query(`PRAGMA table_info("${t}")`).all() as {
+          name: string;
+          type: string;
+        }[];
+        for (const c of cols) {
+          const like = db.query("SELECT ? LIKE ? ESCAPE '\\' AS matches").get(c.name, pattern) as { matches: number };
+          if (like.matches) {
+            results.push({ kind: "column", table: t, column: c.name, type: c.type });
+          }
+        }
+      }
+      results.sort((a, b) => a.table.localeCompare(b.table) || a.kind.localeCompare(b.kind) || (a.column ?? "").localeCompare(b.column ?? ""));
+      return results;
+    },
+
     async listRelationships(table) {
       const tables = table ? [table] : (db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[]).map(r => r.name);
       const results: RelationshipInfo[] = [];

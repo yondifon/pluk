@@ -59,6 +59,32 @@ export function createMysqlDriver(
       };
     },
 
+    async searchSchema(term) {
+      const pattern = `%${term.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+      const [rows] = await pool.query(
+        `
+        SELECT 'table' AS kind, table_name AS \`table\`, NULL AS \`column\`, NULL AS type
+        FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name LIKE ?
+        UNION ALL
+        SELECT 'column', c.table_name, c.column_name, c.data_type
+        FROM information_schema.columns c
+        JOIN information_schema.tables t
+          ON c.table_schema = t.table_schema AND c.table_name = t.table_name
+        WHERE c.table_schema = DATABASE()
+          AND (c.column_name LIKE ? OR c.table_name LIKE ?)
+        ORDER BY \`table\`, kind, \`column\`
+        `,
+        [pattern, pattern, pattern]
+      );
+      return (rows as Record<string, string>[]).map((r) => ({
+        kind: r.kind as "table" | "column",
+        table: r.table ?? "",
+        column: r.column ?? undefined,
+        type: r.type ?? undefined,
+      }));
+    },
+
     async listRelationships(table) {
       let sql = `
         SELECT

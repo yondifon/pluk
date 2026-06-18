@@ -62,6 +62,32 @@ export function createPostgresDriver(
       return { rows: result.rows, fields: result.fields.map((f) => f.name) };
     },
 
+    async searchSchema(term) {
+      const pattern = `%${term.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+      const result = await pool.query(
+        `
+        SELECT 'table' AS kind, table_name AS table, NULL::text AS column, NULL::text AS type
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name ILIKE $1
+        UNION ALL
+        SELECT 'column', c.table_name, c.column_name, c.data_type
+        FROM information_schema.columns c
+        JOIN information_schema.tables t
+          ON c.table_schema = t.table_schema AND c.table_name = t.table_name
+        WHERE c.table_schema = 'public'
+          AND (c.column_name ILIKE $1 OR c.table_name ILIKE $1)
+        ORDER BY table, kind, column
+        `,
+        [pattern]
+      );
+      return result.rows.map((r) => ({
+        kind: r.kind as "table" | "column",
+        table: r.table as string,
+        column: r.column as string | undefined,
+        type: r.type as string | undefined,
+      }));
+    },
+
     async listRelationships(table) {
       let sql = `
         SELECT

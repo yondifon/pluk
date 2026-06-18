@@ -259,6 +259,25 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
     }
   );
 
+  server.tool(
+    "search_schema",
+    "Find tables or columns matching a term",
+    { term: z.string().describe("Search term (substring match on table or column names)") },
+    async ({ term }) => {
+      const sid = sessionIdRef.value;
+      try {
+        return await withToolTimeout((async () => {
+          const driver = await getDriver(sid, conn);
+          const matches = await driver.searchSchema(term);
+          return { content: [{ type: "text", text: JSON.stringify(matches, null, 2) }] };
+        })(), "search_schema");
+      } catch (err) {
+        evictDriver(sid);
+        return { content: [{ type: "text", text: `Error: ${(err as Error).message}` }], isError: true };
+      }
+    }
+  );
+
   server.tool("list_schemas", "List all schemas or databases", async () => {
     const sid = sessionIdRef.value;
     try {

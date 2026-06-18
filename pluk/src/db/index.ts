@@ -21,6 +21,13 @@ export interface RelationshipInfo {
   constraint_name?: string;
 }
 
+export interface SchemaSearchResult {
+  kind: "table" | "column";
+  table: string;
+  column?: string;
+  type?: string;
+}
+
 export interface Driver {
   query(sql: string, params?: unknown[]): Promise<QueryResult>;
   explain(sql: string): Promise<QueryResult>;
@@ -28,6 +35,7 @@ export interface Driver {
   describeTable(table: string): Promise<ColumnInfo[]>;
   sampleTable(table: string, limit: number): Promise<QueryResult>;
   listRelationships(table?: string): Promise<RelationshipInfo[]>;
+  searchSchema(term: string): Promise<SchemaSearchResult[]>;
   listSchemas(): Promise<string[]>;
   testConnection(): Promise<void>;
   close(): Promise<void>;
