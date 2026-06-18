@@ -55,6 +55,8 @@ export interface QueryPolicy {
   requireWhere: boolean;
   allowFilesystem: boolean;
   maxRows: number | null;
+  maxEstimatedRows: number | null;
+  maxEstimatedCost: number | null;
 }
 
 export const PRESETS: Record<Exclude<PresetName, "custom">, QueryPolicy> = {
@@ -65,6 +67,8 @@ export const PRESETS: Record<Exclude<PresetName, "custom">, QueryPolicy> = {
     requireWhere: false,
     allowFilesystem: false,
     maxRows: 1000,
+    maxEstimatedRows: null,
+    maxEstimatedCost: null,
   },
   "read-write": {
     preset: "read-write",
@@ -73,6 +77,8 @@ export const PRESETS: Record<Exclude<PresetName, "custom">, QueryPolicy> = {
     requireWhere: true,
     allowFilesystem: false,
     maxRows: 1000,
+    maxEstimatedRows: null,
+    maxEstimatedCost: null,
   },
   "migrations": {
     preset: "migrations",
@@ -86,6 +92,8 @@ export const PRESETS: Record<Exclude<PresetName, "custom">, QueryPolicy> = {
     requireWhere: true,
     allowFilesystem: false,
     maxRows: null,
+    maxEstimatedRows: null,
+    maxEstimatedCost: null,
   },
   "unrestricted": {
     preset: "unrestricted",
@@ -94,6 +102,8 @@ export const PRESETS: Record<Exclude<PresetName, "custom">, QueryPolicy> = {
     requireWhere: false,
     allowFilesystem: true,
     maxRows: null,
+    maxEstimatedRows: null,
+    maxEstimatedCost: null,
   },
 };
 
@@ -112,15 +122,18 @@ export function parsePolicy(raw: string | null | undefined, legacyReadOnly: numb
     try {
       const p = JSON.parse(raw) as Partial<QueryPolicy>;
       // Validate and fill defaults
-      const preset = (PRESETS[p.preset as Exclude<PresetName, "custom">] || null) ? p.preset! : "custom";
-      return {
-        preset,
-        allowed: Array.isArray(p.allowed) ? p.allowed.filter(c => ALL_CATEGORIES.includes(c)) : [],
-        blockStacked: p.blockStacked ?? true,
-        requireWhere: p.requireWhere ?? false,
-        allowFilesystem: p.allowFilesystem ?? false,
-        maxRows: typeof p.maxRows === "number" ? p.maxRows : p.maxRows === null ? null : null,
-      };
+    const preset = (PRESETS[p.preset as Exclude<PresetName, "custom">] || null) ? p.preset! : "custom";
+    const toNumberOrNull = (v: unknown) => typeof v === "number" ? v : v === null ? null : null;
+    return {
+      preset,
+      allowed: Array.isArray(p.allowed) ? p.allowed.filter(c => ALL_CATEGORIES.includes(c)) : [],
+      blockStacked: p.blockStacked ?? true,
+      requireWhere: p.requireWhere ?? false,
+      allowFilesystem: p.allowFilesystem ?? false,
+      maxRows: toNumberOrNull(p.maxRows),
+      maxEstimatedRows: toNumberOrNull(p.maxEstimatedRows),
+      maxEstimatedCost: toNumberOrNull(p.maxEstimatedCost),
+    };
     } catch {
       // fall through to legacy
     }
@@ -130,7 +143,7 @@ export function parsePolicy(raw: string | null | undefined, legacyReadOnly: numb
   if (legacyReadOnly) {
     return { ...PRESETS["read-only"] };
   }
-  return { ...PRESETS["unrestricted"] };
+  return { ...PRESETS["unrestricted"], maxEstimatedRows: null, maxEstimatedCost: null };
 }
 
 // ── Dialect mapping ──────────────────────────────────────────────────────────
@@ -441,5 +454,31 @@ export function policyDescription(policy: QueryPolicy): string {
   if (policy.requireWhere) guards.push("WHERE required on UPDATE/DELETE");
   if (!policy.allowFilesystem) guards.push("no filesystem/COPY ops");
   if (policy.maxRows !== null) guards.push(`max ${policy.maxRows} rows returned`);
+  if (policy.maxEstimatedRows !== null) guards.push(`max ${policy.maxEstimatedRows} estimated rows`);
+  if (policy.maxEstimatedCost !== null) guards.push(`max ${policy.maxEstimatedCost} estimated cost`);
   return `Allowed: ${caps}.${guards.length ? " Guards: " + guards.join("; ") + "." : ""}`;
+}
+
+export interface CostEstimate {
+  rows: number | null;
+  cost: number | null;
+}
+
+/**
+ * Parse the cheapest top-level plan cost and row estimate from a PostgreSQL
+ * EXPLAIN (FORMAT JSON) result. Returns nulls when values are missing.
+ */
+export function parsePostgresCost(planJson: unknown): CostEstimate {
+  const plans = Array.isArray(planJson) ? planJson : [planJson];
+  for (const root of plans) {
+    const plan = (root as Record<string, unknown>)?.["Plan"];
+    if (plan && typeof plan === "object") {
+      const p = plan as Record<string, unknown>;
+      return {
+        rows: typeof p["Plan Rows"] === "number" ? p["Plan Rows"] : null,
+        cost: typeof p["Total Cost"] === "number" ? p["Total Cost"] : null,
+      };
+    }
+  }
+  return { rows: null, cost: null };
 }

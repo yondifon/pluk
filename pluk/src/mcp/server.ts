@@ -6,7 +6,7 @@ import { homedir } from "os";
 import { join } from "path";
 import type { Connection } from "../store/connections.js";
 import { createDriver, type Driver } from "../db/index.js";
-import { parsePolicy, evaluate, capRows, dialectFor, policyDescription } from "./policy.js";
+import { parsePolicy, evaluate, capRows, dialectFor, policyDescription, parsePostgresCost } from "./policy.js";
 import { createLogEntry, updateLogEntry, logQuery } from "../store/queryLog.js";
 
 // ── Driver pool ──────────────────────────────────────────────────────────────
@@ -127,11 +127,25 @@ function buildMcpServer(conn: Connection, sessionIdRef: { value: string }): McpS
       }
 
       try {
-        const work = (async () => {
-          const driver = await getDriver(sid, conn);
-          const useReadOnly = readOnlyMode && conn.type === "postgres";
-          return useReadOnly ? driver.queryReadOnly(sql) : driver.query(sql);
-        })();
+        const costGateEnabled = policy.maxEstimatedRows !== null || policy.maxEstimatedCost !== null;
+        const driver = await getDriver(sid, conn);
+
+        if (costGateEnabled && conn.type === "postgres") {
+          const explain = await driver.explain(sql);
+          const plan = Array.isArray(explain.rows[0]) ? explain.rows[0][0] : explain.rows[0];
+          const estimate = parsePostgresCost(plan);
+          if (
+            (policy.maxEstimatedRows !== null && estimate.rows !== null && estimate.rows > policy.maxEstimatedRows) ||
+            (policy.maxEstimatedCost !== null && estimate.cost !== null && estimate.cost > policy.maxEstimatedCost)
+          ) {
+            const reason = `Query cost gate exceeded (estimated rows: ${estimate.rows ?? "?"}, cost: ${estimate.cost ?? "?"}).`;
+            updateLogEntry(logId, "blocked", reason);
+            return { content: [{ type: "text", text: `Blocked: ${reason}` }], isError: true };
+          }
+        }
+
+        const useReadOnly = readOnlyMode && conn.type === "postgres";
+        const work = useReadOnly ? driver.queryReadOnly(sql) : driver.query(sql);
 
         const result = await withToolTimeout(
           withCancellable(work, queryAc.signal),
