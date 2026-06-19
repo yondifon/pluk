@@ -1,17 +1,19 @@
 # Pluk
 
-Pluk turns your saved database connections into local [MCP](https://modelcontextprotocol.io) endpoints, so AI tools can query your databases safely from your own machine. Nothing leaves your laptop: the server runs on `localhost`, connections are stored locally, and a policy engine keeps agents read-heavy and out of trouble.
+Pluk turns the services you already use — databases, [Linear](https://linear.app), and more — into local [MCP](https://modelcontextprotocol.io) endpoints, so AI tools can use them safely from your own machine. Nothing leaves your laptop: the server runs on `localhost`, integrations are stored locally, and a per-integration policy engine keeps agents in bounds.
 
-It ships as a macOS menu bar app with an embedded server. You manage connections in the UI, copy one MCP URL per database, and paste it into your AI client.
+Each service is a pluggable **adapter**. Pluk ships with database adapters (Postgres / MySQL / SQLite) and a Linear adapter; adding another is one module — no changes to the app, server, or UI.
+
+It ships as a macOS menu bar app with an embedded server. You add an integration in the UI, copy its MCP URL, and paste it into your AI client.
 
 ## How it works
 
 Pluk has two parts that the `Makefile` builds and bundles together:
 
-- **`swift/`** — a native macOS menu bar app (SwiftUI, macOS 14+). It manages connections, shows query logs, and supervises the server process.
-- **`pluk/`** — a [Bun](https://bun.sh) + TypeScript server. It speaks MCP over streamable HTTP on `http://localhost:4242`, connects to Postgres / MySQL / SQLite, handles SSH tunneling, and enforces the query policy.
+- **`swift/`** — a native macOS menu bar app (SwiftUI, macOS 14+). It manages integrations, shows activity logs, and supervises the server process. The add/edit form renders itself from the server's adapter catalog, so new adapters appear automatically.
+- **`pluk/`** — a [Bun](https://bun.sh) + TypeScript server. It speaks MCP over streamable HTTP on `http://localhost:4242`, resolves each integration to its adapter (databases over SSH/SSL, Linear over its GraphQL API, …), and enforces that integration's policy.
 
-The app launches the server, which exposes each saved connection at `http://localhost:4242/mcp/<token>`.
+The app launches the server, which exposes each saved integration at `http://localhost:4242/mcp/<token>`.
 
 ## Prerequisites
 
@@ -68,9 +70,9 @@ Set `APPLE_IDENTITY` to code-sign the bundle: `make bundle APPLE_IDENTITY="Devel
 
 ## Use it
 
-1. Open Pluk from the menu bar and add a database connection (host, port, credentials, optional SSH host and read-only flag).
-2. Test the connection from the detail view.
-3. Copy the connection's MCP URL — one URL per database, so each agent only sees the connection you intend.
+1. Open Pluk from the menu bar and add an integration. Pick a type — a database (host, port, credentials, optional SSH and read-only flag) or Linear (API key) — and the form shows just that adapter's settings.
+2. Test the integration from the detail view.
+3. Copy its MCP URL — one URL per integration, so each agent only sees what you intend.
 4. Add it to your MCP client. Example (`opencode.jsonc`):
 
    ```jsonc
@@ -87,9 +89,12 @@ Set `APPLE_IDENTITY` to code-sign the bundle: `make bundle APPLE_IDENTITY="Devel
    }
    ```
 
-### Query safety
+### Policy & safety
 
-Treat production connections as read-heavy inspection tools. Tell your agents to prefer `SELECT`, add explicit `LIMIT` clauses, avoid broad scans and writes, and ask before running expensive queries. For high-risk databases, enable **read-only mode** on the connection — Pluk blocks common write statements when it's on. Postgres connections also use short connect/query timeouts so failed tunnels don't hang the UI.
+Every integration carries its own policy, and all access is recorded in a local activity log.
+
+- **Databases** — a SQL policy engine classifies each statement. Treat production as read-heavy: prefer `SELECT`, add explicit `LIMIT`s, avoid broad scans and writes. Enable **read-only mode** and Pluk blocks write statements; Postgres also uses short connect/query timeouts so failed tunnels don't hang the UI.
+- **Linear** (and other API adapters) — a coarse read/write policy. Read-only blocks mutating actions (create issue, comment); read & write allows them.
 
 ### SSH and Cloudflare Access
 
@@ -121,7 +126,8 @@ Contributions are welcome. The fastest loop:
    ```
 
 3. Hack on the relevant side:
-   - **Server / MCP / policy / drivers** → `pluk/src/` (see `pluk/src/mcp/policy.ts` and `pluk/src/db/`)
+   - **Adapters** (add a new service) → `pluk/src/adapters/` — implement the `Adapter` contract (`types.ts`) and register it in `adapters/index.ts`. The DB family lives in `adapters/sql/`, Linear in `adapters/linear/`. Declaring `configFields` is enough for the macOS form to render it; nothing else needs editing.
+   - **Server / MCP / policy** → `pluk/src/` (SQL policy in `mcp/policy.ts`, action policy in `mcp/actionPolicy.ts`, drivers in `pluk/src/db/`)
    - **App / UI** → `swift/Sources/`
 
 4. Verify your change end to end with `make dev`.
