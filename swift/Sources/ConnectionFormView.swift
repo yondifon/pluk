@@ -4,25 +4,67 @@ import UniformTypeIdentifiers
 
 struct ConnectionFormView: View {
     let editingConn: Connection?
+    let adapters: [AdapterManifest]
     let onSave: (ConnectionDraft) -> Void
     let onCancel: () -> Void
 
     @State private var draft: ConnectionDraft
+    @State private var manifest: AdapterManifest?
+    @State private var picking: Bool
 
-    init(editingConn: Connection?, onSave: @escaping (ConnectionDraft) -> Void, onCancel: @escaping () -> Void) {
+    init(editingConn: Connection?, adapters: [AdapterManifest], onSave: @escaping (ConnectionDraft) -> Void, onCancel: @escaping () -> Void) {
         self.editingConn = editingConn
+        self.adapters = adapters
         self.onSave = onSave
         self.onCancel = onCancel
         _draft = State(initialValue: editingConn.map(ConnectionDraft.init) ?? ConnectionDraft())
+        _picking = State(initialValue: editingConn == nil)   // new → choose a type first
     }
 
     var body: some View {
         VStack(spacing: 0) {
             formHeader
             Divider()
-            ScrollView { formBody.padding(.horizontal, 18).padding(.vertical, 14) }
+            Group {
+                if adapters.isEmpty {
+                    loadingView
+                } else if picking {
+                    ScrollView { typeChooser.padding(.horizontal, 18).padding(.vertical, 14) }
+                } else {
+                    ScrollView { formBody.padding(.horizontal, 18).padding(.vertical, 14) }
+                }
+            }
             Divider()
             formFooter
+        }
+        .glassPanelBackground()
+        .onAppear(perform: resolveInitialManifest)
+    }
+
+    // MARK: - Manifest resolution
+
+    // Editing: resolve the existing adapter immediately. New: leave manifest nil
+    // until the user picks a type in the chooser.
+    private func resolveInitialManifest() {
+        guard manifest == nil, !adapters.isEmpty, let conn = editingConn else { return }
+        if let match = adapters.first(where: { $0.id == conn.type }) {
+            select(match, resetConfig: false)
+        }
+    }
+
+    private func select(_ m: AdapterManifest, resetConfig: Bool) {
+        manifest = m
+        draft.type = m.id
+        draft.fields = m.configFields
+        draft.policyKind = m.policyKind
+        if resetConfig {
+            var seeded: [String: String] = [:]
+            for f in m.configFields where f.defaultValue != nil { seeded[f.key] = f.defaultValue }
+            draft.config = seeded
+        } else {
+            for f in m.configFields where f.defaultValue != nil && (draft.config[f.key] ?? "").isEmpty {
+                draft.config[f.key] = f.defaultValue
+            }
         }
     }
 
@@ -31,9 +73,9 @@ struct ConnectionFormView: View {
     private var formHeader: some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
-                Text(editingConn != nil ? "Edit Connection" : "New Connection")
+                Text(editingConn != nil ? "Edit Integration" : "New Integration")
                     .font(.system(size: 15, weight: .semibold))
-                Text(draft.name.isEmpty ? "Connection settings" : draft.name)
+                Text(draft.name.isEmpty ? "Integration settings" : draft.name)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
@@ -49,168 +91,202 @@ struct ConnectionFormView: View {
             }
             .pickerStyle(.menu)
             .frame(width: 130)
-            .help("Environment — sets default query policy for new connections")
+            .help("Environment — sets a safe default policy for new integrations")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
     }
 
-    // MARK: - Body sections
+    // MARK: - Body
 
-    private var formBody: some View {
+    private var loadingView: some View {
+        VStack(spacing: 8) {
+            ProgressView()
+            Text("Loading adapters…").font(.system(size: 12)).foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 200)
+    }
+
+    // MARK: - Type chooser (shown when adding a new integration)
+
+    private var typeChooser: some View {
         VStack(alignment: .leading, spacing: 16) {
-
-            // ── General ───────────────────────────────────────────────
-            section("General") {
-                row("Name") {
-                    TextField("My Prod DB", text: $draft.name).textFieldStyle(.roundedBorder)
-                }
-                row("Type") {
-                    Picker("", selection: Binding(
-                        get: { draft.type },
-                        set: { draft.setType($0) }
-                    )) {
-                        ForEach(ConnectionType.allCases) { t in Text(t.label).tag(t) }
-                    }
-                    .pickerStyle(.segmented)
-                }
-            }
-
-            // ── Connection ────────────────────────────────────────────
-            if draft.type == .sqlite {
-                section("File") {
-                    row("Path") {
-                        HStack {
-                            TextField("/path/to/db.sqlite", text: $draft.filename)
-                                .textFieldStyle(.roundedBorder)
-                            browseButton(title: "Choose…", types: ["db", "sqlite", "sqlite3"]) { draft.filename = $0 }
-                        }
-                    }
-                }
-            } else {
-                section("Connection") {
-                    HStack(alignment: .top, spacing: 12) {
-                        row("Host") {
-                            TextField("localhost", text: $draft.host).textFieldStyle(.roundedBorder)
-                        }
-                        row("Port") {
-                            TextField("5432", text: $draft.port)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 72)
-                        }
-                    }
-                    row("User") {
-                        TextField("postgres", text: $draft.user).textFieldStyle(.roundedBorder)
-                    }
-                    row("Password") {
-                        SecureField("••••••••", text: $draft.password).textFieldStyle(.roundedBorder)
-                    }
-                    row("Database") {
-                        TextField("mydb", text: $draft.database).textFieldStyle(.roundedBorder)
-                    }
-                    row("Socket") {
-                        TextField("Leave empty for TCP (optional)", text: $draft.socketPath)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                }
-
-                // ── SSH Tunnel ────────────────────────────────────────
-                section("SSH Tunnel", toggle: $draft.useSSH) {
-                    if draft.useSSH {
-                        HStack(alignment: .top, spacing: 12) {
-                            row("SSH Host") {
-                                TextField("jump.example.com", text: $draft.sshHost)
-                                    .textFieldStyle(.roundedBorder)
+            ForEach(groupedAdapters, id: \.category) { category, items in
+                section(prettyCategory(category)) {
+                    ForEach(items) { adapter in
+                        Button { choose(adapter) } label: {
+                            HStack(spacing: 10) {
+                                TypeBadge(type: adapter.id)
+                                Text(adapter.label).font(.system(size: 13))
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.tertiary)
                             }
-                            row("Port") {
-                                TextField("22", text: $draft.sshPort)
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: 72)
-                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 9)
+                            .contentShape(Rectangle())
+                            .overlay(alignment: .bottom) { Divider().padding(.leading, 44) }
                         }
-                        row("SSH User") {
-                            TextField("ubuntu", text: $draft.sshUser).textFieldStyle(.roundedBorder)
-                        }
-                        row("Auth") {
-                            Picker("", selection: $draft.sshAuthType) {
-                                ForEach(SSHAuthType.allCases, id: \.self) { t in
-                                    Text(t.label).tag(t)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                        }
-                        if draft.sshAuthType == .key {
-                            row("Private Key") {
-                                HStack {
-                                    TextField("~/.ssh/id_rsa", text: $draft.sshKeyPath)
-                                        .textFieldStyle(.roundedBorder)
-                                    browseButton(title: "Choose…", types: []) { draft.sshKeyPath = $0 }
-                                }
-                            }
-                            row("Passphrase") {
-                                SecureField("Leave empty if key has no passphrase", text: $draft.sshPassword)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-                        } else if draft.sshAuthType == .password {
-                            row("SSH Password") {
-                                SecureField("••••••••", text: $draft.sshPassword)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-                        }
-                    }
-                }
-
-                // ── SSL / TLS ────────────────────────────────────────
-                section("SSL / TLS", toggle: $draft.useSSL) {
-                    if draft.useSSL {
-                        row("Mode") {
-                            Picker("", selection: $draft.sslMode) {
-                                ForEach(SSLMode.allCases, id: \.self) { m in
-                                    Text(m.label).tag(m)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .frame(maxWidth: 180, alignment: .leading)
-                        }
-                        if draft.sslMode != .disable && draft.sslMode != .require {
-                            row("CA Cert") {
-                                HStack {
-                                    TextField("ca.pem", text: $draft.sslCAPath)
-                                        .textFieldStyle(.roundedBorder)
-                                    browseButton(title: "Choose…", types: ["pem", "crt", "cert"]) { draft.sslCAPath = $0 }
-                                }
-                            }
-                        }
-                        row("Client Cert") {
-                            HStack {
-                                TextField("client-cert.pem (optional)", text: $draft.sslCertPath)
-                                    .textFieldStyle(.roundedBorder)
-                                browseButton(title: "Choose…", types: ["pem", "crt", "cert"]) { draft.sslCertPath = $0 }
-                            }
-                        }
-                        row("Client Key") {
-                            HStack {
-                                TextField("client-key.pem (optional)", text: $draft.sslKeyPath)
-                                    .textFieldStyle(.roundedBorder)
-                                browseButton(title: "Choose…", types: ["pem", "key"]) { draft.sslKeyPath = $0 }
-                            }
-                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
-
-            // ── Query Policy ──────────────────────────────────────────
-            queryPolicySection
         }
     }
 
-    // MARK: - Query policy section
+    private var groupedAdapters: [(category: String, items: [AdapterManifest])] {
+        var order: [String] = []
+        var byCategory: [String: [AdapterManifest]] = [:]
+        for a in adapters {
+            if byCategory[a.category] == nil { order.append(a.category) }
+            byCategory[a.category, default: []].append(a)
+        }
+        return order.map { ($0, byCategory[$0] ?? []) }
+    }
+
+    private func prettyCategory(_ c: String) -> String {
+        c.replacingOccurrences(of: "-", with: " ").capitalized
+    }
+
+    private func choose(_ adapter: AdapterManifest) {
+        select(adapter, resetConfig: true)
+        picking = false
+    }
+
+    // MARK: - Field form (shown after a type is chosen)
+
+    @ViewBuilder
+    private var formBody: some View {
+        GlassGroup(spacing: 16) {
+        VStack(alignment: .leading, spacing: 16) {
+            section("General") {
+                row("Name") {
+                    TextField(namePlaceholder, text: $draft.name).textFieldStyle(.plain)
+                }
+                row("Type") {
+                    TypeBadge(type: draft.type)
+                    Text(manifest?.label ?? draft.type.capitalized).font(.system(size: 12))
+                    Spacer()
+                    Button("Change") { picking = true }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
+
+            if let manifest {
+                ForEach(manifest.groupedFields, id: \.group) { group, fields in
+                    let shown = fields.filter(visible)
+                    if !shown.isEmpty {
+                        section(group) {
+                            ForEach(shown) { field in fieldRow(field) }
+                        }
+                    }
+                }
+
+                if manifest.isSQL {
+                    queryPolicySection
+                } else {
+                    actionPolicySection
+                }
+            }
+        }
+        }
+    }
+
+    private var namePlaceholder: String {
+        switch manifest?.category {
+        case "database": "My Prod DB"
+        case "issue-tracker": "My Linear Workspace"
+        default: "My \(manifest?.label ?? "Service")"
+        }
+    }
+
+    // MARK: - Dynamic field rendering
+
+    @ViewBuilder
+    private func fieldRow(_ f: ConfigFieldDef) -> some View {
+        switch f.type {
+        case "toggle":
+            row(f.label) {
+                Toggle("", isOn: boolBinding(f.key)).toggleStyle(.switch).controlSize(.small)
+                Spacer(minLength: 0)
+            }
+        case "password":
+            row(f.label) {
+                SecureField(f.placeholder ?? "••••••••", text: textBinding(f.key)).textFieldStyle(.plain)
+            }
+        case "select":
+            row(f.label) {
+                Picker("", selection: textBinding(f.key)) {
+                    ForEach(f.options ?? [], id: \.value) { opt in Text(opt.label).tag(opt.value) }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: 200, alignment: .leading)
+            }
+        case "file":
+            row(f.label) {
+                HStack {
+                    TextField(f.placeholder ?? "", text: textBinding(f.key)).textFieldStyle(.plain)
+                    browseButton(title: "Choose…", types: f.fileTypes ?? []) { draft.config[f.key] = $0 }
+                }
+            }
+        case "number":
+            row(f.label) {
+                TextField(f.placeholder ?? "", text: textBinding(f.key))
+                    .textFieldStyle(.plain)
+                    .frame(width: 90)
+                Spacer(minLength: 0)
+            }
+        default: // text
+            row(f.label) {
+                TextField(f.placeholder ?? "", text: textBinding(f.key)).textFieldStyle(.plain)
+            }
+        }
+    }
+
+    private func visible(_ f: ConfigFieldDef) -> Bool {
+        guard let s = f.showIf else { return true }
+        return (draft.config[s.key] ?? "") == s.equals
+    }
+
+    private func textBinding(_ key: String) -> Binding<String> {
+        Binding(get: { draft.config[key] ?? "" }, set: { draft.config[key] = $0 })
+    }
+
+    private func boolBinding(_ key: String) -> Binding<Bool> {
+        Binding(get: { draft.config[key] == "true" }, set: { draft.config[key] = $0 ? "true" : "false" })
+    }
+
+    // MARK: - Action policy section (non-SQL adapters)
+
+    private var actionPolicySection: some View {
+        section("Permissions") {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("", selection: $draft.allowWrite) {
+                    Text("Read-only").tag(false)
+                    Text("Read & write").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+
+                Text(draft.allowWrite
+                     ? "Agent can read and create/modify (e.g. create issues, comment)."
+                     : "Agent can only read. Write actions are blocked.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
+            }
+        }
+    }
+
+    // MARK: - Query policy section (SQL adapters)
 
     private var queryPolicySection: some View {
         section("Query Policy") {
             VStack(alignment: .leading, spacing: 12) {
-
-                // Preset picker
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text("Preset")
@@ -250,7 +326,6 @@ struct ConnectionFormView: View {
 
                 Divider()
 
-                // Category toggles grouped by Read / Write / Schema / Admin
                 let groups: [(String, [StatementCategory])] = [
                     ("Read",   [.select, .inspect]),
                     ("Write",  [.insert, .update, .delete, .merge]),
@@ -283,7 +358,6 @@ struct ConnectionFormView: View {
 
                 Divider()
 
-                // Guards
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Guards")
                         .font(.system(size: 10, weight: .semibold))
@@ -325,7 +399,7 @@ struct ConnectionFormView: View {
                                 get: { draft.queryPolicy.maxRows ?? 1000 },
                                 set: { draft.queryPolicy.maxRows = max(1, $0) }
                             ), format: .number)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.plain)
                             .frame(width: 80)
                             Text("rows")
                                 .font(.system(size: 12))
@@ -346,7 +420,7 @@ struct ConnectionFormView: View {
     // Admin categories depend on driver type (SQLite has no GRANT)
     private var statementAdminCategories: [StatementCategory] {
         var cats: [StatementCategory] = [.transaction, .session, .procedure, .maintenance]
-        if draft.type != .sqlite { cats.append(.grant) }
+        if draft.type != "sqlite" { cats.append(.grant) }
         return cats
     }
 
@@ -362,12 +436,22 @@ struct ConnectionFormView: View {
         HStack {
             Spacer()
             Button("Cancel", action: onCancel).buttonStyle(.bordered)
-            Button(editingConn != nil ? "Save" : "Add") { onSave(draft) }
-                .buttonStyle(.borderedProminent)
-                .disabled(draft.name.trimmingCharacters(in: .whitespaces).isEmpty)
+            if !picking {
+                Button(editingConn != nil ? "Save" : "Add") { onSave(draft) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSave)
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
+    }
+
+    private var canSave: Bool {
+        if draft.name.trimmingCharacters(in: .whitespaces).isEmpty { return false }
+        for f in draft.fields where (f.required == true) && visible(f) {
+            if (draft.config[f.key] ?? "").isEmpty { return false }
+        }
+        return true
     }
 
     // MARK: - Layout helpers
@@ -379,24 +463,6 @@ struct ConnectionFormView: View {
                 .foregroundColor(.secondary)
                 .textCase(.uppercase)
                 .padding(.bottom, 6)
-            VStack(spacing: 0) {
-                content()
-            }
-            .cardSurface()
-        }
-    }
-
-    private func section<C: View>(_ title: String, toggle: Binding<Bool>, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
-                    .textCase(.uppercase)
-                Spacer()
-                Toggle("", isOn: toggle).toggleStyle(.switch).controlSize(.mini)
-            }
-            .padding(.bottom, 6)
             VStack(spacing: 0) {
                 content()
             }

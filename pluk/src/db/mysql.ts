@@ -1,10 +1,9 @@
 import mysql from "mysql2/promise";
-import type { Driver } from "./index.js";
-import type { Connection } from "../store/connections.js";
+import type { Driver, SqlConfig } from "./index.js";
 import { recordExecutedSql } from "./sqlLog.js";
 
 export function createMysqlDriver(
-  conn: Connection,
+  cfg: SqlConfig,
   host: string,
   port: number,
   ssl: Record<string, unknown> | false
@@ -12,11 +11,11 @@ export function createMysqlDriver(
   const pool = mysql.createPool({
     host,
     port,
-    user: conn.user,
-    password: conn.password,
-    database: conn.database,
+    user: cfg.user,
+    password: cfg.password,
+    database: cfg.database,
     connectTimeout: 8000,
-    ...(conn.socket_path ? { socketPath: conn.socket_path } : {}),
+    ...(cfg.socket_path ? { socketPath: cfg.socket_path } : {}),
     ...(ssl ? { ssl: ssl as mysql.SslOptions } : {}),
   });
 

@@ -240,30 +240,8 @@ struct QueryPolicy: Codable, Equatable {
 struct Connection: Identifiable, Equatable {
     let id: String
     var name: String
-    var type: ConnectionType
-    // Basic
-    var host: String?
-    var port: Int?
-    var user: String?
-    var password: String?
-    var database: String?
-    var filename: String?
-    var socketPath: String?
-    // SSH
-    var useSSH: Bool
-    var sshHost: String?
-    var sshPort: Int?
-    var sshUser: String?
-    var sshAuthType: SSHAuthType
-    var sshKeyPath: String?
-    var sshPassword: String?
-    // SSL
-    var useSSL: Bool
-    var sslMode: SSLMode
-    var sslCAPath: String?
-    var sslCertPath: String?
-    var sslKeyPath: String?
-    // Meta
+    var type: String                  // adapter id (postgres/mysql/sqlite/linear/…)
+    var config: [String: String]      // service-specific, mirrors the TS config blob
     var environment: Environment
     var readOnly: Bool
     var queryPolicy: QueryPolicy
@@ -272,76 +250,58 @@ struct Connection: Identifiable, Equatable {
 
     var mcpURL: String { "http://localhost:4242/mcp/\(token)" }
 
+    /// MCP client key: slugified name + environment, so agents can tell e.g.
+    /// `marketing-db-local` from `marketing-db-production` at a glance.
     var mcpKey: String {
-        name.lowercased()
-            .components(separatedBy: .whitespacesAndNewlines)
+        let slug = name.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
             .joined(separator: "-")
+        return "\(slug)-\(environment.rawValue)"
     }
+
+    /// Resolves to a known DB type, or nil for non-database adapters.
+    var connectionType: ConnectionType? { ConnectionType(rawValue: type) }
+
+    var typeLabel: String { connectionType?.label ?? type.capitalized }
 }
 
 struct ConnectionDraft {
-    // Basic
     var name: String = ""
-    var type: ConnectionType = .postgres
-    var host: String = "localhost"
-    var port: String = "5432"
-    var user: String = ""
-    var password: String = ""
-    var database: String = ""
-    var filename: String = ""
-    var socketPath: String = ""
-    // SSH
-    var useSSH: Bool = false
-    var sshHost: String = ""
-    var sshPort: String = "22"
-    var sshUser: String = ""
-    var sshAuthType: SSHAuthType = .agent
-    var sshKeyPath: String = ""
-    var sshPassword: String = ""
-    // SSL
-    var useSSL: Bool = false
-    var sslMode: SSLMode = .require
-    var sslCAPath: String = ""
-    var sslCertPath: String = ""
-    var sslKeyPath: String = ""
-    // Meta
+    var type: String = "postgres"
+    var config: [String: String] = [:]
     var environment: Environment = .development
-    var readOnly: Bool = false
     var queryPolicy: QueryPolicy = .make(.readWrite)
+    var policyKind: String = "sql"     // "sql" | "action"
+    /// For action-policy adapters (Linear, …): whether writes are allowed.
+    var allowWrite: Bool = true
+
+    /// Field definitions for the selected adapter — set by the form from the
+    /// catalog. Drives both rendering and type-correct JSON serialization.
+    var fields: [ConfigFieldDef] = []
 
     init() {}
 
     init(from conn: Connection) {
         name = conn.name
         type = conn.type
-        host = conn.host ?? "localhost"
-        port = conn.port.map(String.init) ?? String(conn.type.defaultPort)
-        user = conn.user ?? ""
-        password = conn.password ?? ""
-        database = conn.database ?? ""
-        filename = conn.filename ?? ""
-        socketPath = conn.socketPath ?? ""
-        useSSH = conn.useSSH
-        sshHost = conn.sshHost ?? ""
-        sshPort = conn.sshPort.map(String.init) ?? "22"
-        sshUser = conn.sshUser ?? ""
-        sshAuthType = conn.sshAuthType
-        sshKeyPath = conn.sshKeyPath ?? ""
-        sshPassword = conn.sshPassword ?? ""
-        useSSL = conn.useSSL
-        sslMode = conn.sslMode
-        sslCAPath = conn.sslCAPath ?? ""
-        sslCertPath = conn.sslCertPath ?? ""
-        sslKeyPath = conn.sslKeyPath ?? ""
+        config = conn.config
         environment = conn.environment
-        readOnly = conn.readOnly
         queryPolicy = conn.queryPolicy
+        allowWrite = !conn.readOnly
     }
 
-    mutating func setType(_ newType: ConnectionType) {
+    func value(_ key: String) -> String { config[key] ?? "" }
+
+    /// Switch adapter type and seed defaults for the new adapter's fields.
+    mutating func setType(_ newType: String, fields newFields: [ConfigFieldDef]) {
         type = newType
-        port = newType == .sqlite ? "" : String(newType.defaultPort)
+        fields = newFields
+        var seeded: [String: String] = [:]
+        for f in newFields where f.defaultValue != nil {
+            seeded[f.key] = f.defaultValue
+        }
+        config = seeded
     }
 
     mutating func setEnvironment(_ newEnv: Environment) {

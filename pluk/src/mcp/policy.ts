@@ -6,7 +6,6 @@
  * which statement categories are allowed and which structural guards apply.
  */
 import { Parser } from "node-sql-parser";
-import type { Connection } from "../store/connections.js";
 
 const parser = new Parser();
 
@@ -150,7 +149,7 @@ export function parsePolicy(raw: string | null | undefined, legacyReadOnly: numb
 
 type Dialect = "PostgreSQL" | "MySQL" | "SQLite";
 
-export function dialectFor(type: Connection["type"]): Dialect {
+export function dialectFor(type: string): Dialect {
   switch (type) {
     case "postgres": return "PostgreSQL";
     case "mysql":    return "MySQL";

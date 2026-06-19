@@ -1,6 +1,13 @@
 # pluk
 
-pluk exposes saved database connections as local MCP endpoints for AI tools.
+pluk exposes your services — databases, Linear, and more — as local MCP endpoints for AI tools. Each service is a pluggable adapter; every saved integration gets its own MCP URL.
+
+## Adapters
+
+An adapter (`src/adapters/`) declares its config fields, a connectivity test, and the MCP tools it serves. Register it in `src/adapters/index.ts` and it shows up everywhere — including the macOS form, which renders from `GET /api/adapters`. Built in today:
+
+- **Databases** (`adapters/sql/`) — Postgres, MySQL, SQLite. SQL statement-policy engine, SSH tunneling, SSL.
+- **Linear** (`adapters/linear/`) — issues, teams, comments over the GraphQL API. Read/write action policy.
 
 ## Run
 
@@ -11,26 +18,26 @@ bun run server
 
 The server listens on `http://localhost:4242`.
 
-Each connection gets its own MCP URL:
+Each integration gets its own MCP URL:
 
 ```text
 http://localhost:4242/mcp/<token>
 ```
 
-## Query Safety
+## Policy & Safety
 
-Production connections should be treated as read-heavy inspection tools.
+Every integration carries its own policy, enforced on each tool call and recorded in a local activity log.
 
-Tell AI agents to:
+**Databases** — treat production as read-heavy inspection. Tell AI agents to:
 
 - prefer `SELECT` queries only
 - add explicit `LIMIT` clauses
 - avoid broad scans, migrations, locks, and writes
 - ask before running expensive queries
 
-For high-risk DBs, enable read-only mode in the connection settings. pluk blocks common write statements when read-only mode is on.
+For high-risk DBs, enable read-only mode in the integration settings — pluk blocks common write statements when it's on. PostgreSQL also uses short connect/query timeouts so failed tunnels and slow statements do not hang the UI.
 
-PostgreSQL connections also use short connect/query timeouts so failed tunnels and slow statements do not hang the UI.
+**Linear** (and other API adapters) — a read/write action policy. Read-only blocks mutating actions (create issue, comment); read & write allows them.
 
 ## SSH And Cloudflare Access
 
@@ -46,4 +53,4 @@ Host app4-ssh-infra.example.com
 
 ## MCP Clients
 
-Use the config snippet shown in the macOS menu bar app. Keep one MCP URL per database so the agent only sees the intended connection.
+Use the config snippet shown in the macOS menu bar app. Keep one MCP URL per integration so the agent only sees the service you intend.

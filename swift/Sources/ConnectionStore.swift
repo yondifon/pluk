@@ -36,19 +36,15 @@ final class ConnectionStore {
     // MARK: - Schema
 
     private func migrate() {
+        // Shared contract with the TS server (store/integrations.ts). Everything
+        // service-specific lives in the `config` JSON blob; only the fields every
+        // adapter shares are first-class columns.
         exec("""
-        CREATE TABLE IF NOT EXISTS connections (
+        CREATE TABLE IF NOT EXISTS integrations (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             type TEXT NOT NULL,
-            host TEXT, port INTEGER, "user" TEXT, password TEXT, database TEXT,
-            filename TEXT, socket_path TEXT,
-            use_ssh INTEGER NOT NULL DEFAULT 0,
-            ssh_host TEXT, ssh_port INTEGER DEFAULT 22, ssh_user TEXT,
-            ssh_auth_type TEXT DEFAULT 'agent', ssh_key_path TEXT, ssh_password TEXT,
-            use_ssl INTEGER NOT NULL DEFAULT 0,
-            ssl_mode TEXT DEFAULT 'require',
-            ssl_ca_path TEXT, ssl_cert_path TEXT, ssl_key_path TEXT,
+            config TEXT NOT NULL DEFAULT '{}',
             environment TEXT DEFAULT 'development',
             read_only INTEGER NOT NULL DEFAULT 0,
             query_policy TEXT,
@@ -80,18 +76,6 @@ final class ConnectionStore {
         """)
 
         let alters = [
-            "ALTER TABLE connections ADD COLUMN socket_path TEXT",
-            "ALTER TABLE connections ADD COLUMN use_ssh INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE connections ADD COLUMN ssh_auth_type TEXT DEFAULT 'agent'",
-            "ALTER TABLE connections ADD COLUMN ssh_password TEXT",
-            "ALTER TABLE connections ADD COLUMN use_ssl INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE connections ADD COLUMN ssl_mode TEXT DEFAULT 'require'",
-            "ALTER TABLE connections ADD COLUMN ssl_ca_path TEXT",
-            "ALTER TABLE connections ADD COLUMN ssl_cert_path TEXT",
-            "ALTER TABLE connections ADD COLUMN ssl_key_path TEXT",
-            "ALTER TABLE connections ADD COLUMN environment TEXT DEFAULT 'development'",
-            "ALTER TABLE connections ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE connections ADD COLUMN query_policy TEXT",
             "ALTER TABLE query_log ADD COLUMN result_json TEXT",
             "ALTER TABLE query_log ADD COLUMN row_count INTEGER",
         ]
@@ -135,11 +119,8 @@ final class ConnectionStore {
     func load() {
         var stmt: OpaquePointer?
         let sql = """
-        SELECT id,name,type,host,port,"user",password,database,filename,socket_path,
-               use_ssh,ssh_host,ssh_port,ssh_user,ssh_auth_type,ssh_key_path,ssh_password,
-               use_ssl,ssl_mode,ssl_ca_path,ssl_cert_path,ssl_key_path,
-               environment,read_only,query_policy,token,created_at
-        FROM connections ORDER BY created_at DESC
+        SELECT id,name,type,config,environment,read_only,query_policy,token,created_at
+        FROM integrations ORDER BY created_at DESC
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
@@ -152,41 +133,46 @@ final class ConnectionStore {
         let id = String(UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "").prefix(16))
         let token = "pluk_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
         let sql = """
-        INSERT INTO connections
-          (id,name,type,host,port,"user",password,database,filename,socket_path,
-           use_ssh,ssh_host,ssh_port,ssh_user,ssh_auth_type,ssh_key_path,ssh_password,
-           use_ssl,ssl_mode,ssl_ca_path,ssl_cert_path,ssl_key_path,
-           environment,read_only,query_policy,token)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO integrations (id,name,type,config,environment,read_only,query_policy,token)
+        VALUES (?,?,?,?,?,?,?,?)
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
-        bindInsert(stmt, draft, id: id, token: token)
+        bindText(stmt, 1, id)
+        bindText(stmt, 2, draft.name)
+        bindText(stmt, 3, draft.type)
+        bindText(stmt, 4, configJSON(from: draft))
+        bindText(stmt, 5, draft.environment.rawValue)
+        bindInt(stmt, 6, readOnlyFlag(draft))
+        bindNullableText(stmt, 7, policyJSON(draft))
+        bindText(stmt, 8, token)
         sqlite3_step(stmt)
         load()
     }
 
     func update(_ conn: Connection, draft: ConnectionDraft) {
         let sql = """
-        UPDATE connections SET
-          name=?,type=?,host=?,port=?,"user"=?,password=?,database=?,filename=?,socket_path=?,
-          use_ssh=?,ssh_host=?,ssh_port=?,ssh_user=?,ssh_auth_type=?,ssh_key_path=?,ssh_password=?,
-          use_ssl=?,ssl_mode=?,ssl_ca_path=?,ssl_cert_path=?,ssl_key_path=?,
-          environment=?,read_only=?,query_policy=?
+        UPDATE integrations SET name=?,type=?,config=?,environment=?,read_only=?,query_policy=?
         WHERE id=?
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
-        bindUpdate(stmt, draft, id: conn.id)
+        bindText(stmt, 1, draft.name)
+        bindText(stmt, 2, draft.type)
+        bindText(stmt, 3, configJSON(from: draft))
+        bindText(stmt, 4, draft.environment.rawValue)
+        bindInt(stmt, 5, readOnlyFlag(draft))
+        bindNullableText(stmt, 6, policyJSON(draft))
+        bindText(stmt, 7, conn.id)
         sqlite3_step(stmt)
         load()
     }
 
     func delete(_ conn: Connection) {
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "DELETE FROM connections WHERE id=?", -1, &stmt, nil) == SQLITE_OK else { return }
+        guard sqlite3_prepare_v2(db, "DELETE FROM integrations WHERE id=?", -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, conn.id)
         sqlite3_step(stmt)
@@ -244,65 +230,63 @@ final class ConnectionStore {
         sqlite3_step(stmt)
     }
 
-    // MARK: - Bind helpers (INSERT)
+    // MARK: - Adapter catalog
 
-    private func bindInsert(_ stmt: OpaquePointer?, _ draft: ConnectionDraft, id: String, token: String) {
-        let isNet = draft.type.supportsNetwork
-        bindText(stmt, 1, id)
-        bindText(stmt, 2, draft.name)
-        bindText(stmt, 3, draft.type.rawValue)
-        bindNullableText(stmt, 4, isNet ? draft.host : nil)
-        bindInt(stmt, 5, isNet ? Int(draft.port) : nil)
-        bindNullableText(stmt, 6, isNet ? draft.user : nil)
-        bindNullableText(stmt, 7, isNet ? (draft.password.isEmpty ? nil : draft.password) : nil)
-        bindNullableText(stmt, 8, isNet ? draft.database : nil)
-        bindNullableText(stmt, 9, draft.type == .sqlite ? draft.filename : nil)
-        bindNullableText(stmt, 10, draft.socketPath.isEmpty ? nil : draft.socketPath)
-        bindInt(stmt, 11, draft.useSSH ? 1 : 0)
-        bindNullableText(stmt, 12, draft.sshHost.isEmpty ? nil : draft.sshHost)
-        bindInt(stmt, 13, Int(draft.sshPort) ?? 22)
-        bindNullableText(stmt, 14, draft.sshUser.isEmpty ? nil : draft.sshUser)
-        bindText(stmt, 15, draft.sshAuthType.rawValue)
-        bindNullableText(stmt, 16, draft.sshKeyPath.isEmpty ? nil : draft.sshKeyPath)
-        bindNullableText(stmt, 17, draft.sshPassword.isEmpty ? nil : draft.sshPassword)
-        bindInt(stmt, 18, draft.useSSL ? 1 : 0)
-        bindText(stmt, 19, draft.sslMode.rawValue)
-        bindNullableText(stmt, 20, draft.sslCAPath.isEmpty ? nil : draft.sslCAPath)
-        bindNullableText(stmt, 21, draft.sslCertPath.isEmpty ? nil : draft.sslCertPath)
-        bindNullableText(stmt, 22, draft.sslKeyPath.isEmpty ? nil : draft.sslKeyPath)
-        bindText(stmt, 23, draft.environment.rawValue)
-        bindInt(stmt, 24, draft.queryPolicy.preset == .readOnly ? 1 : 0)
-        bindNullableText(stmt, 25, draft.queryPolicy.toJSON())
-        bindText(stmt, 26, token)
+    var adapters: [AdapterManifest] = []
+
+    func loadAdapters() async {
+        for _ in 0..<12 {
+            if let list = await fetchAdapters() { adapters = list; return }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
     }
 
-    private func bindUpdate(_ stmt: OpaquePointer?, _ draft: ConnectionDraft, id: String) {
-        let isNet = draft.type.supportsNetwork
-        bindText(stmt, 1, draft.name)
-        bindText(stmt, 2, draft.type.rawValue)
-        bindNullableText(stmt, 3, isNet ? draft.host : nil)
-        bindInt(stmt, 4, isNet ? Int(draft.port) : nil)
-        bindNullableText(stmt, 5, isNet ? draft.user : nil)
-        bindNullableText(stmt, 6, isNet ? (draft.password.isEmpty ? nil : draft.password) : nil)
-        bindNullableText(stmt, 7, isNet ? draft.database : nil)
-        bindNullableText(stmt, 8, draft.type == .sqlite ? draft.filename : nil)
-        bindNullableText(stmt, 9, draft.socketPath.isEmpty ? nil : draft.socketPath)
-        bindInt(stmt, 10, draft.useSSH ? 1 : 0)
-        bindNullableText(stmt, 11, draft.sshHost.isEmpty ? nil : draft.sshHost)
-        bindInt(stmt, 12, Int(draft.sshPort) ?? 22)
-        bindNullableText(stmt, 13, draft.sshUser.isEmpty ? nil : draft.sshUser)
-        bindText(stmt, 14, draft.sshAuthType.rawValue)
-        bindNullableText(stmt, 15, draft.sshKeyPath.isEmpty ? nil : draft.sshKeyPath)
-        bindNullableText(stmt, 16, draft.sshPassword.isEmpty ? nil : draft.sshPassword)
-        bindInt(stmt, 17, draft.useSSL ? 1 : 0)
-        bindText(stmt, 18, draft.sslMode.rawValue)
-        bindNullableText(stmt, 19, draft.sslCAPath.isEmpty ? nil : draft.sslCAPath)
-        bindNullableText(stmt, 20, draft.sslCertPath.isEmpty ? nil : draft.sslCertPath)
-        bindNullableText(stmt, 21, draft.sslKeyPath.isEmpty ? nil : draft.sslKeyPath)
-        bindText(stmt, 22, draft.environment.rawValue)
-        bindInt(stmt, 23, draft.queryPolicy.preset == .readOnly ? 1 : 0)
-        bindNullableText(stmt, 24, draft.queryPolicy.toJSON())
-        bindText(stmt, 25, id)
+    private func fetchAdapters() async -> [AdapterManifest]? {
+        guard let url = URL(string: "http://localhost:4242/api/adapters") else { return nil }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            return try JSONDecoder().decode(AdapterCatalogResponse.self, from: data).adapters
+        } catch {
+            return nil
+        }
+    }
+
+    // MARK: - Policy encoding
+
+    private func readOnlyFlag(_ d: ConnectionDraft) -> Int {
+        if d.policyKind == "action" { return d.allowWrite ? 0 : 1 }
+        return d.queryPolicy.preset == .readOnly ? 1 : 0
+    }
+
+    private func policyJSON(_ d: ConnectionDraft) -> String? {
+        if d.policyKind == "action" {
+            let actions = d.allowWrite ? ["read", "write"] : ["read"]
+            let obj: [String: Any] = ["actions": actions]
+            guard let data = try? JSONSerialization.data(withJSONObject: obj) else { return nil }
+            return String(data: data, encoding: .utf8)
+        }
+        return d.queryPolicy.toJSON()
+    }
+
+    // MARK: - Config blob (pack)
+
+    // Serialize the draft's config dict to JSON, coercing values to the types the
+    // adapter declared (number → Int, toggle → Bool) so the TS side reads them
+    // correctly. Empty values are omitted to keep the blob minimal.
+    private func configJSON(from d: ConnectionDraft) -> String {
+        let typeByKey = Dictionary(d.fields.map { ($0.key, $0.type) }, uniquingKeysWith: { a, _ in a })
+        var c: [String: Any] = [:]
+        for (key, value) in d.config {
+            if value.isEmpty { continue }
+            switch typeByKey[key] {
+            case "number": if let i = Int(value) { c[key] = i }
+            case "toggle": if value == "true" { c[key] = true }
+            default: c[key] = value
+            }
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: c),
+              let json = String(data: data, encoding: .utf8) else { return "{}" }
+        return json
     }
 
     // MARK: - Row parsing
@@ -313,34 +297,37 @@ final class ConnectionStore {
             guard let p = sqlite3_column_text(stmt, i) else { return nil }
             return String(cString: p)
         }
-        func int(_ i: Int32) -> Int? {
-            sqlite3_column_type(stmt, i) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, i))
-        }
         func bool(_ i: Int32) -> Bool { sqlite3_column_int(stmt, i) != 0 }
 
-        guard let id = str(0), let name = str(1), let typeRaw = str(2),
-              let type = ConnectionType(rawValue: typeRaw),
-              let token = str(25), let createdAt = str(26) else { return nil }
+        // Columns: 0 id,1 name,2 type,3 config,4 environment,5 read_only,6 query_policy,7 token,8 created_at
+        guard let id = str(0), let name = str(1), let type = str(2),
+              let token = str(7), let createdAt = str(8) else { return nil }
 
-        let environment = Environment(rawValue: str(22) ?? "development") ?? .development
-        let readOnly = bool(23)
-        let queryPolicyJSON = str(24)
+        // Config blob → string dict (values may be string/number/bool in JSON).
+        let cfgAny = (try? JSONSerialization.jsonObject(with: Data((str(3) ?? "{}").utf8))) as? [String: Any] ?? [:]
+        var config: [String: String] = [:]
+        for (k, v) in cfgAny {
+            switch v {
+            case let s as String: config[k] = s
+            case let b as Bool: config[k] = b ? "true" : "false"
+            case let i as Int: config[k] = String(i)
+            case let d as Double: config[k] = String(Int(d))
+            default: config[k] = "\(v)"
+            }
+        }
 
-        // Parse stored policy, falling back to legacy read_only flag
+        let environment = Environment(rawValue: str(4) ?? "development") ?? .development
+        let readOnly = bool(5)
+        let queryPolicyJSON = str(6)
+
+        // Parse stored SQL policy, falling back to the read_only flag. (Action
+        // adapters store {actions:[…]}, which won't parse here — the read_only
+        // flag carries their read/write intent.)
         let queryPolicy = QueryPolicy.fromJSON(queryPolicyJSON)
             ?? (readOnly ? .make(.readOnly) : .default(for: environment))
 
         return Connection(
-            id: id, name: name, type: type,
-            host: str(3), port: int(4), user: str(5), password: str(6),
-            database: str(7), filename: str(8), socketPath: str(9),
-            useSSH: bool(10),
-            sshHost: str(11), sshPort: int(12), sshUser: str(13),
-            sshAuthType: SSHAuthType(rawValue: str(14) ?? "agent") ?? .agent,
-            sshKeyPath: str(15), sshPassword: str(16),
-            useSSL: bool(17),
-            sslMode: SSLMode(rawValue: str(18) ?? "require") ?? .require,
-            sslCAPath: str(19), sslCertPath: str(20), sslKeyPath: str(21),
+            id: id, name: name, type: type, config: config,
             environment: environment,
             readOnly: readOnly,
             queryPolicy: queryPolicy,

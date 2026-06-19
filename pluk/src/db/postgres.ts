@@ -1,10 +1,9 @@
 import { Pool } from "pg";
-import type { Driver } from "./index.js";
-import type { Connection } from "../store/connections.js";
+import type { Driver, SqlConfig } from "./index.js";
 import { recordExecutedSql } from "./sqlLog.js";
 
 export function createPostgresDriver(
-  conn: Connection,
+  cfg: SqlConfig,
   host: string,
   port: number,
   ssl: Record<string, unknown> | false
@@ -12,16 +11,20 @@ export function createPostgresDriver(
   const pool = new Pool({
     host,
     port,
-    user: conn.user,
-    password: conn.password,
-    database: conn.database,
+    user: cfg.user,
+    password: cfg.password,
+    database: cfg.database,
     connectionTimeoutMillis: 8000,
     // NB: statement_timeout is sent in the libpq startup packet, which poolers like
     // PgBouncer (transaction mode, common behind Cloudflare tunnels) reject with
     // "unsupported startup parameter". query_timeout is client-side, so it's safe.
     query_timeout: 20000,
-    ...(conn.socket_path ? { host: conn.socket_path } : {}),
-    ...(ssl ? { ssl } : {}),
+    ...(cfg.socket_path ? { host: cfg.socket_path } : {}),
+    // Over TLS, negotiate SCRAM channel binding (SCRAM-SHA-256-PLUS) when the
+    // server offers it. node-pg leaves this off by default and falls back to a
+    // bare gs2 "n" flag, which PgBouncer rejects with 08P01 ("SASL authentication
+    // failed") — even though libpq clients (psql, TablePlus) connect fine.
+    ...(ssl ? { ssl, enableChannelBinding: true } : {}),
   });
 
   // Tag every statement this pool runs with the active source context (no-op

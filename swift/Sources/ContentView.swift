@@ -31,6 +31,7 @@ struct ContentView: View {
                 .frame(minWidth: 440, minHeight: 480)
         }
         .navigationSplitViewStyle(.balanced)
+        .glassWindowBackground()
         .frame(minWidth: 720, minHeight: 520)
         .safeAreaInset(edge: .bottom) {
             if serverManager.status != .running {
@@ -40,13 +41,14 @@ struct ContentView: View {
         .sheet(item: $sheet) { active in
             connectionSheet(active)
         }
+        .task { await store.loadAdapters() }
     }
 
     // MARK: - Sidebar
 
     private var sidebar: some View {
         List(selection: $selectedID) {
-            Section("Connections") {
+            Section("Integrations") {
                 ForEach(store.connections) { conn in
                     ConnectionRow(conn: conn)
                         .tag(conn.id)
@@ -57,9 +59,9 @@ struct ContentView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: { sheet = .add }) {
-                    Label("New Connection", systemImage: "plus")
+                    Label("New Integration", systemImage: "plus")
                 }
-                .help("Add a new connection")
+                .help("Add a new integration")
             }
         }
     }
@@ -89,7 +91,7 @@ struct ContentView: View {
             return nil
         }()
 
-        ConnectionFormView(editingConn: editing) { draft in
+        ConnectionFormView(editingConn: editing, adapters: store.adapters) { draft in
             if let editing {
                 store.update(editing, draft: draft)
                 selectedID = editing.id
@@ -131,12 +133,13 @@ struct ConnectionRow: View {
     }
 }
 
-// Square badge: DB type at a glance. Muted tinted fill, no loud color.
+// Square badge: adapter type at a glance. Muted tinted fill, no loud color.
 struct TypeBadge: View {
-    let type: ConnectionType
+    let type: String
     @SwiftUI.Environment(\.backgroundProminence) private var prominence
 
     private var selected: Bool { prominence == .increased }
+    private var dbType: ConnectionType? { ConnectionType(rawValue: type) }
 
     var body: some View {
         Text(abbrev)
@@ -147,22 +150,24 @@ struct TypeBadge: View {
                 (selected ? Color.white.opacity(0.22) : color.opacity(0.14)),
                 in: RoundedRectangle(cornerRadius: 6, style: .continuous)
             )
-            .help(type.label)
+            .help(dbType?.label ?? type.capitalized)
     }
 
     private var abbrev: String {
-        switch type {
+        switch dbType {
         case .postgres: "PG"
         case .mysql: "MY"
         case .sqlite: "LT"
+        case nil: String(type.prefix(2)).uppercased()
         }
     }
 
     private var color: Color {
-        switch type {
+        switch dbType {
         case .postgres: Color(red: 0.30, green: 0.46, blue: 0.66) // muted postgres blue
         case .mysql: Color(red: 0.78, green: 0.55, blue: 0.20)    // muted mysql amber
         case .sqlite: Color(red: 0.45, green: 0.50, blue: 0.56)   // slate
+        case nil: Color(red: 0.40, green: 0.42, blue: 0.50)       // neutral for non-DB adapters
         }
     }
 }
@@ -238,11 +243,11 @@ struct EmptyStateView: View {
                 .font(.system(size: 52, weight: .ultraLight))
                 .tracking(-1)
 
-            Text("Plug any database into any AI agent")
+            Text("Plug any service into your AI agents — databases, Linear, and more")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
 
-            Button("Add connection", action: onAdd)
+            Button("Add integration", action: onAdd)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .padding(.top, 4)

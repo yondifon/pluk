@@ -83,13 +83,13 @@ enum MCPClient: String, CaseIterable, Identifiable {
 
 private enum DetailTab: String, CaseIterable {
     case overview = "Overview"
-    case queries  = "Queries"
+    case logs     = "Logs"
     case policy   = "Policy"
 
     var icon: String {
         switch self {
         case .overview: "link"
-        case .queries:  "list.bullet.rectangle"
+        case .logs:     "list.bullet.rectangle"
         case .policy:   "shield"
         }
     }
@@ -120,7 +120,7 @@ struct ConnectionDetailView: View {
             tabContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color(NSColor.windowBackgroundColor))
+        .background(.clear)
     }
 
     // MARK: - Header
@@ -135,7 +135,7 @@ struct ConnectionDetailView: View {
                     Text(conn.name)
                         .font(.system(size: 15, weight: .semibold))
                 }
-                Text("\(conn.type.label) · \(conn.environment.label)")
+                Text("\(conn.typeLabel) · \(conn.environment.label)")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
@@ -183,7 +183,7 @@ struct ConnectionDetailView: View {
             Spacer()
         }
         .padding(.horizontal, 4)
-        .background(Color(NSColor.windowBackgroundColor))
+        .background(.clear)
     }
 
     // MARK: - Tab content
@@ -192,7 +192,7 @@ struct ConnectionDetailView: View {
     private var tabContent: some View {
         switch selectedTab {
         case .overview: overviewTab
-        case .queries:  QueriesTab(conn: conn, store: store)
+        case .logs:     LogsTab(conn: conn, store: store)
         case .policy:   policyTab
         }
     }
@@ -300,17 +300,34 @@ struct ConnectionDetailView: View {
     // MARK: - Connection details
 
     private var connectionDetailsSection: some View {
-        DetailSection("Connection") {
-            if conn.type == .sqlite {
-                InspectorRow("File", value: conn.filename ?? "-")
+        DetailSection("Configuration") {
+            if conn.type == "sqlite" {
+                InspectorRow("File", value: conn.config["filename"] ?? "-")
+            } else if conn.connectionType != nil {
+                InspectorRow("Host", value: conn.config["host"] ?? "-")
+                InspectorRow("Port", value: conn.config["port"] ?? "-")
+                InspectorRow("User", value: conn.config["user"] ?? "-")
+                InspectorRow("Database", value: conn.config["database"] ?? "-")
+                InspectorRow("SSH", value: conn.config["use_ssh"] == "true" ? (conn.config["ssh_host"] ?? "-") : "Off")
+                InspectorRow("SSL", value: conn.config["use_ssl"] == "true" ? (conn.config["ssl_mode"] ?? "On") : "Off")
             } else {
-                InspectorRow("Host", value: conn.host ?? "-")
-                InspectorRow("Port", value: conn.port.map(String.init) ?? "-")
-                InspectorRow("User", value: conn.user ?? "-")
-                InspectorRow("Database", value: conn.database ?? "-")
-                InspectorRow("SSH", value: conn.useSSH ? (conn.sshHost ?? "-") : "Off")
-                InspectorRow("SSL", value: conn.useSSL ? conn.sslMode.label : "Off")
+                // Non-database adapter: show its config, masking secret-looking values.
+                ForEach(genericConfigRows, id: \.0) { key, value in
+                    InspectorRow(key, value: value)
+                }
             }
+        }
+    }
+
+    private var genericConfigRows: [(String, String)] {
+        let secretKeys = Set(
+            (store.adapters.first { $0.id == conn.type }?.configFields ?? [])
+                .filter { $0.secret == true }
+                .map(\.key)
+        )
+        return conn.config.sorted { $0.key < $1.key }.map { key, value in
+            let pretty = key.replacingOccurrences(of: "_", with: " ").capitalized
+            return (pretty, secretKeys.contains(key) ? "••••••" : value)
         }
     }
 
@@ -358,7 +375,7 @@ struct ConnectionDetailView: View {
         testStatus = .testing
         Task {
             do {
-                let url = URL(string: "http://localhost:4242/api/connections/\(conn.id)/test")!
+                let url = URL(string: "http://localhost:4242/api/integrations/\(conn.id)/test")!
                 var req = URLRequest(url: url)
                 req.httpMethod = "POST"
                 req.timeoutInterval = 12
@@ -382,7 +399,49 @@ struct ConnectionDetailView: View {
 
     // MARK: - Policy tab
 
+    // Action-policy adapters (Linear, …) don't have SQL statements — show their
+    // read/write permissions instead of statement categories + SQL guards.
+    private var isActionPolicy: Bool {
+        if let kind = store.adapters.first(where: { $0.id == conn.type })?.policyKind {
+            return kind == "action"
+        }
+        return conn.connectionType == nil
+    }
+
+    @ViewBuilder
     private var policyTab: some View {
+        if isActionPolicy { actionPolicyTab } else { sqlPolicyTab }
+    }
+
+    private var actionPolicyTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                DetailSection("Permissions") {
+                    InspectorRow("Mode", value: conn.readOnly ? "Read-only" : "Read & write")
+                    InspectorRow("Description", value: conn.readOnly
+                                 ? "Agent can only read."
+                                 : "Agent can read and create/modify.")
+                }
+                DetailSection("Allowed Actions") {
+                    InspectorRow("Read") { actionBadge(allowed: true) }
+                    InspectorRow("Write") { actionBadge(allowed: !conn.readOnly) }
+                }
+            }
+            .padding(18)
+        }
+    }
+
+    private func actionBadge(allowed: Bool) -> some View {
+        Text(allowed ? "Allowed" : "Blocked")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(allowed ? .white : .secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(allowed ? Color.green.opacity(0.7) : Color(NSColor.separatorColor))
+            .clipShape(.capsule)
+    }
+
+    private var sqlPolicyTab: some View {
         let policy = conn.queryPolicy
         return ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -448,17 +507,18 @@ struct ConnectionDetailView: View {
     }
 
     private var dotColor: Color {
-        switch conn.type {
+        switch conn.connectionType {
         case .postgres: .green
         case .mysql: .orange
         case .sqlite: .blue
+        case nil: .gray
         }
     }
 }
 
-// MARK: - Queries tab
+// MARK: - Logs tab
 
-private struct QueriesTab: View {
+private struct LogsTab: View {
     let conn: Connection
     let store: ConnectionStore
 
@@ -566,7 +626,7 @@ private struct QueriesTab: View {
                     }
                 }
                 Divider()
-                Button("Clear all logs for this connection", role: .destructive) {
+                Button("Clear all logs for this integration", role: .destructive) {
                     store.clearAllLogs(connectionId: conn.id)
                     reload()
                 }
@@ -582,7 +642,7 @@ private struct QueriesTab: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("Log retention — how long to keep query history")
+            .help("Log retention — how long to keep activity history")
 
             Button {
                 reload()
@@ -616,10 +676,10 @@ private struct QueriesTab: View {
             Image(systemName: "list.bullet.rectangle")
                 .font(.system(size: 28))
                 .foregroundColor(.secondary.opacity(0.4))
-            Text(filter == .all ? "No queries yet" : "No \(filter.rawValue.lowercased()) queries")
+            Text(filter == .all ? "No activity yet" : "No \(filter.rawValue.lowercased()) activity")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
-            Text("Queries run by agents through this connection will appear here.")
+            Text("Activity from agents using this integration will appear here.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary.opacity(0.7))
                 .multilineTextAlignment(.center)
@@ -761,7 +821,7 @@ private struct LogEntryRow: View {
 
                             // Copy actions for the query and its response
                             HStack(spacing: 6) {
-                                copyButton(copiedSQL ? "Copied!" : "Copy SQL", copied: copiedSQL) {
+                                copyButton(copiedSQL ? "Copied!" : "Copy", copied: copiedSQL) {
                                     copy(entry.sql)
                                     flash($copiedSQL)
                                 }
@@ -1010,12 +1070,13 @@ extension View {
         if #available(macOS 26.0, *) {
             self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
         } else {
+            // Frosted-glass approximation: material over the window's vibrancy
+            // plus a hairline edge for the glass-rim highlight.
             self
-                .background(Color(NSColor.controlBackgroundColor))
-                .clipShape(.rect(cornerRadius: cornerRadius))
+                .background(.ultraThinMaterial, in: .rect(cornerRadius: cornerRadius))
                 .overlay(
                     RoundedRectangle(cornerRadius: cornerRadius)
-                        .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+                        .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
                 )
         }
     }
