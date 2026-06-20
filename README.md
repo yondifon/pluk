@@ -15,6 +15,14 @@ Pluk has two parts that the `Makefile` builds and bundles together:
 
 The app launches the server, which exposes each saved integration at `http://localhost:4242/mcp/<token>`.
 
+## Documentation
+
+Concept docs live in [`docs/`](./docs/):
+
+- [Integrations](./docs/integrations.md) — what an integration is, its lifecycle, policy, and MCP URL.
+- [Integration types](./docs/integration-types.md) — every service type and the tools it exposes.
+- [Groups](./docs/groups.md) — bundle several integrations behind one URL.
+
 ## Prerequisites
 
 - **macOS 14** or later
