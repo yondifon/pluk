@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Pluk — centered toggle switch gating a left-to-right channel -->
+  <!-- Ink tile, paper channel + pill, accent knob in "on" position -->
+
+  <!-- app-icon tile -->
+  <rect x="0" y="0" width="512" height="512" rx="90" fill="#161616"/>
+
+  <g id="icon">
+    <!-- channel enters left + exits right -->
+    <rect x="40" y="232" width="432" height="48" rx="24" fill="#FAFAF7"/>
+    <!-- knockout: channel reads as entering/exiting the pill -->
+    <rect x="148" y="206" width="216" height="100" rx="50" fill="#161616"/>
+
+    <!-- toggle pill: hero, dead center -->
+    <rect x="148" y="206" width="216" height="100" rx="50" fill="#FAFAF7"/>
+    <!-- inner on-track in ink -->
+    <rect x="164" y="222" width="184" height="68" rx="34" fill="#161616"/>
+
+    <!-- knob pushed to "on" (right), accent -->
+    <circle cx="314" cy="256" r="32" fill="#E0A23B"/>
+  </g>
+</svg>

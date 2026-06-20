@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Pluk — pure symbol: centered toggle switch gating a left-to-right channel -->
+  <!-- No tile. Ink glyph + accent knob on transparent. -->
+
+  <g id="icon">
+    <!-- channel enters left + exits right, tucked behind the pill -->
+    <rect x="40" y="232" width="432" height="48" rx="24" fill="#161616"/>
+
+    <!-- toggle pill: hero, dead center -->
+    <rect x="148" y="200" width="216" height="112" rx="56" fill="#161616"/>
+
+    <!-- knob pushed to "on" (right), accent -->
+    <circle cx="312" cy="256" r="40" fill="#E0A23B"/>
+  </g>
+</svg>

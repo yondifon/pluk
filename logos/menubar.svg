@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">
+  <!-- Pluk menu bar template icon — compact toggle, fills the bar height -->
+  <!-- Monochrome silhouette, knob as cut-out hole. Ship as a template image. -->
+  <mask id="knob">
+    <rect x="0" y="0" width="200" height="120" fill="white"/>
+    <!-- knob hole, pushed to "on" (right) -->
+    <circle cx="135" cy="60" r="27" fill="black"/>
+  </mask>
+  <g id="icon" fill="#000000" mask="url(#knob)">
+    <!-- short channel nubs entering left + exiting right -->
+    <rect x="0" y="47" width="40" height="26" rx="13"/>
+    <rect x="160" y="47" width="40" height="26" rx="13"/>
+    <!-- toggle pill, dead center -->
+    <rect x="25" y="18" width="150" height="84" rx="42"/>
+  </g>
+</svg>
