@@ -9,6 +9,7 @@ export const sshAdapter: Adapter = {
   label: "SSH",
   category: "infrastructure",
   policyKind: "action",
+  agentHint: "Run list_allowed_commands before remote changes.",
   configFields: sshFields,
   async testConnection(integration: Integration): Promise<void> {
     await testCommand(integration);

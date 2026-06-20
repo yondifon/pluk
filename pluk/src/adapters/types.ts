@@ -33,6 +33,7 @@ export interface Adapter {
   label: string;
   category: string;                      // "database" | "issue-tracker" | …
   policyKind: PolicyKind;
+  agentHint: string;                      // shown in the UI beside the MCP URL
   configFields: ConfigField[];
   /** Verify the config can reach the service. Throws on failure. */
   testConnection(integration: Integration): Promise<void>;

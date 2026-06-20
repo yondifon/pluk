@@ -82,6 +82,7 @@ struct AdapterManifest: Codable, Identifiable, Hashable {
     let label: String
     let category: String
     let policyKind: String       // "sql" | "action"
+    let agentHint: String?
     let configFields: [ConfigFieldDef]
 
     var isSQL: Bool { policyKind == "sql" }

@@ -121,9 +121,10 @@ struct GroupDetailView: View {
                 Text(configSnippet)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(.primary)
+                    .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                    .padding(10)
+                    .codeBlockSurface()
 
                 Button(snippetCopied ? "Copied!" : "Copy") {
                     copy(configSnippet) { snippetCopied = $0 }
@@ -133,7 +134,8 @@ struct GroupDetailView: View {
                 .tint(snippetCopied ? .green : nil)
                 .animation(.easeInOut(duration: 0.15), value: snippetCopied)
             }
-            .background(Color(NSColor.textBackgroundColor))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
         }
     }
 

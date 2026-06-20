@@ -86,6 +86,7 @@ struct GroupFormView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 14)
         }
+        .glassPanelBackground()
         .frame(width: 480, height: 580)
     }
 

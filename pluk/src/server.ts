@@ -29,6 +29,7 @@ const server = Bun.serve({
         label: a.label,
         category: a.category,
         policyKind: a.policyKind,
+        agentHint: a.agentHint,
         configFields: a.configFields,
       }));
       return Response.json({ adapters });

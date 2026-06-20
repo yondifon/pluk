@@ -9,6 +9,7 @@ export const sentryAdapter: Adapter = {
   label: "Sentry",
   category: "observability",
   policyKind: "action",
+  agentHint: "Start with list_issues, then use latest_event for stack traces.",
   configFields: sentryFields,
   async testConnection(integration: Integration): Promise<void> {
     const cfg = sentryConfig(integration);

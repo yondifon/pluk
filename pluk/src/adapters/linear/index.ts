@@ -9,6 +9,7 @@ export const linearAdapter: Adapter = {
   label: "Linear",
   category: "issue-tracker",
   policyKind: "action",
+  agentHint: "Start with list_issues or search_issues before writing.",
   configFields: linearFields,
   async testConnection(integration: Integration): Promise<void> {
     const apiKey = String(integration.config.api_key ?? "");

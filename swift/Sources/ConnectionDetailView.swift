@@ -230,8 +230,14 @@ struct ConnectionDetailView: View {
                     copyURLButton
                 }
             }
-            InspectorRow("Agent hint", value: "Use SELECT with LIMIT for production data.")
+            if let hint = agentHint {
+                InspectorRow("Agent hint", value: hint)
+            }
         }
+    }
+
+    private var agentHint: String? {
+        store.adapters.first { $0.id == conn.type }?.agentHint
     }
 
     private var copyURLButton: some View {
@@ -279,9 +285,10 @@ struct ConnectionDetailView: View {
                 Text(configSnippet)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(.primary)
+                    .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                    .padding(10)
+                    .codeBlockSurface()
 
                 Button(snippetCopied ? "Copied!" : "Copy") {
                     NSPasteboard.general.clearContents()
@@ -297,7 +304,8 @@ struct ConnectionDetailView: View {
                 .tint(snippetCopied ? .green : nil)
                 .animation(.easeInOut(duration: 0.15), value: snippetCopied)
             }
-            .background(Color(NSColor.textBackgroundColor))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
         }
     }
 
@@ -1027,12 +1035,7 @@ private struct ResultPreview: View {
                         .padding(.top, 3)
                 }
             }
-            .background(Color.secondary.opacity(0.05))
-            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-            )
+            .codeBlockSurface(cornerRadius: 5)
         }
     }
 }
@@ -1083,6 +1086,21 @@ extension View {
                         .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
                 )
         }
+    }
+
+    /// Inset surface for code / data blocks (config snippets, result tables) —
+    /// a subtle translucent fill + hairline so they read as a distinct block over
+    /// the card without the opaque slab a solid window color would paint.
+    func codeBlockSurface(cornerRadius: CGFloat = 6) -> some View {
+        self
+            .background(
+                Color.secondary.opacity(0.05),
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+            )
     }
 }
 

@@ -8,6 +8,8 @@
     <string>com.pluk.app</string>
     <key>CFBundleName</key>
     <string>Pluk</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleDisplayName</key>
     <string>Pluk</string>
     <key>CFBundleVersion</key>

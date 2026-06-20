@@ -59,11 +59,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         guard let button = statusItem.button else { return }
 
-        button.image = NSImage(systemSymbolName: "cable.connector", accessibilityDescription: "pluk")
+        button.image = Self.menuBarIcon()
         button.imagePosition = .imageLeft
         button.target = self
         button.action = #selector(toggleWindow)
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+    }
+
+    /// Menu bar mark — template PDF tinted by the system (black in light bar, white in dark).
+    /// Loads from the bundled Resources (release: Bundle.main, dev: Bundle.module),
+    /// falling back to an SF Symbol if the resource is missing.
+    private static func menuBarIcon() -> NSImage? {
+        let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png")
+            ?? Bundle.module.url(forResource: "MenuBarIcon", withExtension: "png")
+        guard let url, let image = NSImage(contentsOf: url) else {
+            return NSImage(systemSymbolName: "cable.connector", accessibilityDescription: "pluk")
+        }
+        image.size = NSSize(width: 30, height: 18)
+        image.isTemplate = true
+        return image
     }
 
     private func setupWindow() {
