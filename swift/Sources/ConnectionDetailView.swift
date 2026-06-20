@@ -127,7 +127,8 @@ struct ConnectionDetailView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 11) {
+            TypeBadge(type: conn.type, size: 32)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
                     Circle()
@@ -281,31 +282,31 @@ struct ConnectionDetailView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
 
-            HStack(alignment: .top, spacing: 8) {
-                Text(configSnippet)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .codeBlockSurface()
-
-                Button(snippetCopied ? "Copied!" : "Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(configSnippet, forType: .string)
-                    snippetCopied = true
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(1.5))
-                        snippetCopied = false
+            Text(configSnippet)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.primary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .codeBlockSurface()
+                .overlay(alignment: .topTrailing) {
+                    Button(snippetCopied ? "Copied!" : "Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(configSnippet, forType: .string)
+                        snippetCopied = true
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(1.5))
+                            snippetCopied = false
+                        }
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(snippetCopied ? .green : nil)
+                    .animation(.easeInOut(duration: 0.15), value: snippetCopied)
+                    .padding(8)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(snippetCopied ? .green : nil)
-                .animation(.easeInOut(duration: 0.15), value: snippetCopied)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
         }
     }
 

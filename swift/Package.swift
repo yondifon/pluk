@@ -11,7 +11,10 @@ let package = Package(
         .executableTarget(
             name: "Pluk",
             path: "Sources",
-            resources: [.copy("Resources/MenuBarIcon.png")]
+            resources: [
+                .copy("Resources/MenuBarIcon.png"),
+                .copy("Resources/AdapterLogos"),
+            ]
         )
     ]
 )

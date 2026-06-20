@@ -219,39 +219,100 @@ struct ConnectionRow: View {
 // Square badge: adapter type at a glance. Muted tinted fill, no loud color.
 struct TypeBadge: View {
     let type: String
+    var size: CGFloat = 24
     @SwiftUI.Environment(\.backgroundProminence) private var prominence
 
     private var selected: Bool { prominence == .increased }
-    private var dbType: ConnectionType? { ConnectionType(rawValue: type) }
 
     var body: some View {
-        Text(abbrev)
-            .font(.system(size: 9, weight: .semibold, design: .rounded))
-            .foregroundColor(selected ? .white : color)
-            .frame(width: 24, height: 24)
+        AdapterGlyph(type: type, color: AdapterStyle.color(for: type), selected: selected)
+            .frame(width: size, height: size)
             .background(
-                (selected ? Color.white.opacity(0.22) : color.opacity(0.14)),
-                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                (selected ? Color.white.opacity(0.22) : AdapterStyle.color(for: type).opacity(0.14)),
+                in: RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
             )
-            .help(dbType?.label ?? type.capitalized)
+            .help(ConnectionType(rawValue: type)?.label ?? type.capitalized)
     }
+}
 
-    private var abbrev: String {
-        switch dbType {
-        case .postgres: "PG"
-        case .mysql: "MY"
-        case .sqlite: "LT"
-        case nil: String(type.prefix(2)).uppercased()
+// Brand mark for an adapter: bundled brand logo where we have one (Linear, Sentry,
+// Postgres, SQLite), an SF Symbol for symbol-only adapters (SSH), else a 2-letter
+// abbreviation. Glyph is tinted to match the muted badge — white when selected.
+struct AdapterGlyph: View {
+    let type: String
+    let color: Color
+    let selected: Bool
+
+    var body: some View {
+        if let logo = AdapterStyle.logo(for: type) {
+            Image(nsImage: logo)
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .padding(4)
+                .foregroundStyle(selected ? .white : color)
+        } else if let symbol = AdapterStyle.symbol(for: type) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(selected ? .white : color)
+        } else {
+            Text(AdapterStyle.abbrev(for: type))
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundColor(selected ? .white : color)
+        }
+    }
+}
+
+// Per-adapter visual treatment: brand tint, bundled logo, SF Symbol fallback.
+enum AdapterStyle {
+    static func color(for type: String) -> Color {
+        switch type {
+        case "postgres": Color(red: 0.30, green: 0.46, blue: 0.66) // muted postgres blue
+        case "mysql":    Color(red: 0.78, green: 0.55, blue: 0.20) // muted mysql amber
+        case "sqlite":   Color(red: 0.45, green: 0.50, blue: 0.56) // slate
+        case "linear":   Color(red: 0.37, green: 0.42, blue: 0.82) // Linear indigo #5E6AD2
+        case "sentry":   Color(red: 0.49, green: 0.42, blue: 0.78) // Sentry purple
+        case "ssh":      Color(red: 0.27, green: 0.55, blue: 0.45) // terminal teal
+        default:         Color(red: 0.40, green: 0.42, blue: 0.50) // neutral
         }
     }
 
-    private var color: Color {
-        switch dbType {
-        case .postgres: Color(red: 0.30, green: 0.46, blue: 0.66) // muted postgres blue
-        case .mysql: Color(red: 0.78, green: 0.55, blue: 0.20)    // muted mysql amber
-        case .sqlite: Color(red: 0.45, green: 0.50, blue: 0.56)   // slate
-        case nil: Color(red: 0.40, green: 0.42, blue: 0.50)       // neutral for non-DB adapters
+    static func symbol(for type: String) -> String? {
+        switch type {
+        case "ssh": "terminal"
+        default: nil
         }
+    }
+
+    static func abbrev(for type: String) -> String {
+        switch type {
+        case "postgres": "PG"
+        case "mysql": "MY"
+        case "sqlite": "LT"
+        default: String(type.prefix(2)).uppercased()
+        }
+    }
+
+    // Release copies logos into the app's Resources dir (Bundle.main); dev serves them
+    // from the SwiftPM resource bundle. Resolve by URL — never `Bundle.module`, whose
+    // accessor fatalErrors when the bundle is absent (i.e. in the packaged app).
+    private static let logoBundle: Bundle = {
+        if let url = Bundle.main.url(forResource: "Pluk_Pluk", withExtension: "bundle"),
+           let bundle = Bundle(url: url) {
+            return bundle
+        }
+        return Bundle.main
+    }()
+
+    // Bundled brand logos are white alpha masks rendered as template images.
+    private static var logoCache: [String: NSImage?] = [:]
+    static func logo(for type: String) -> NSImage? {
+        if let hit = logoCache[type] { return hit }
+        let img = logoBundle
+            .url(forResource: type, withExtension: "png", subdirectory: "AdapterLogos")
+            .flatMap { NSImage(contentsOf: $0) }
+        logoCache[type] = img
+        return img
     }
 }
 

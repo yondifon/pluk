@@ -36,6 +36,7 @@ bundle: server swift-build
 	chmod +x $(DIST)/$(APP).app/Contents/Resources/pluk-server; \
 	cp swift/AppIcon.icns $(DIST)/$(APP).app/Contents/Resources/AppIcon.icns; \
 	cp swift/Sources/Resources/MenuBarIcon.png $(DIST)/$(APP).app/Contents/Resources/MenuBarIcon.png; \
+	cp -R swift/Sources/Resources/AdapterLogos $(DIST)/$(APP).app/Contents/Resources/AdapterLogos; \
 	sed "s/{{VERSION}}/$$v/g" swift/Info.plist.template \
 		> $(DIST)/$(APP).app/Contents/Info.plist
 ifdef APPLE_IDENTITY

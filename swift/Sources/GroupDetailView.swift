@@ -117,25 +117,25 @@ struct GroupDetailView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
 
-            HStack(alignment: .top, spacing: 8) {
-                Text(configSnippet)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .codeBlockSurface()
-
-                Button(snippetCopied ? "Copied!" : "Copy") {
-                    copy(configSnippet) { snippetCopied = $0 }
+            Text(configSnippet)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.primary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .codeBlockSurface()
+                .overlay(alignment: .topTrailing) {
+                    Button(snippetCopied ? "Copied!" : "Copy") {
+                        copy(configSnippet) { snippetCopied = $0 }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(snippetCopied ? .green : nil)
+                    .animation(.easeInOut(duration: 0.15), value: snippetCopied)
+                    .padding(8)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(snippetCopied ? .green : nil)
-                .animation(.easeInOut(duration: 0.15), value: snippetCopied)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
         }
     }
 
