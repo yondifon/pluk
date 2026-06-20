@@ -102,6 +102,7 @@ struct ConnectionDetailView: View {
     let store: ConnectionStore
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let onDuplicate: () -> Void
 
     @State private var selectedTab: DetailTab = .overview
     @State private var urlCopied = false
@@ -141,6 +142,9 @@ struct ConnectionDetailView: View {
             }
             Spacer()
             Button("Edit", action: onEdit)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            Button("Duplicate", action: onDuplicate)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             Button(role: .destructive, action: onDelete) {

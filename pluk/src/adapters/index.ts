@@ -1,6 +1,8 @@
 import type { Adapter } from "./types.js";
 import { sqlAdapters } from "./sql/index.js";
 import { linearAdapter } from "./linear/index.js";
+import { sentryAdapter } from "./sentry/index.js";
+import { sshAdapter } from "./ssh/index.js";
 
 // The adapter registry. To add a service: build an Adapter module and register
 // it here. Nothing else (store, MCP transport, REST layer, UI) needs editing.
@@ -14,7 +16,7 @@ function register(adapters: Adapter[]): void {
 }
 
 register(sqlAdapters);
-register([linearAdapter]);
+register([linearAdapter, sentryAdapter, sshAdapter]);
 
 export function getAdapter(type: string): Adapter | undefined {
   return registry.get(type);

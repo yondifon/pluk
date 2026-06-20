@@ -312,3 +312,47 @@ struct ConnectionDraft {
         }
     }
 }
+
+// ── Group ───────────────────────────────────────────────────────────────────
+// A group fronts several integrations behind one MCP endpoint. The server
+// aggregates every member's tools under one server, namespaced by member.
+
+// A group member: an integration plus optional config overrides scoped to this
+// group (e.g. a Linear member with a per-group `team_key`). Overrides are kept as
+// strings; the server coerces them to each field's declared type.
+struct GroupMember: Identifiable, Equatable {
+    let id: String
+    var overrides: [String: String]
+
+    init(id: String, overrides: [String: String] = [:]) {
+        self.id = id
+        self.overrides = overrides
+    }
+}
+
+struct ConnectionGroup: Identifiable, Equatable {
+    let id: String
+    var name: String
+    /// Optional: a group may span environments (prod + staging + local), so it
+    /// need not be tied to one. `nil` means unscoped/mixed.
+    var environment: Environment?
+    var members: [GroupMember]
+    var token: String
+    var createdAt: String
+
+    var memberIds: [String] { members.map(\.id) }
+    func member(_ id: String) -> GroupMember? { members.first { $0.id == id } }
+
+    var mcpURL: String { "http://localhost:4242/mcp/\(token)" }
+
+    /// MCP client key: slugified name, suffixed with the environment only when the
+    /// group is scoped to one (so a mixed group reads `db-prod`, not `db-prod-`).
+    var mcpKey: String {
+        let slug = name.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: "-")
+        guard let environment else { return slug }
+        return "\(slug)-\(environment.rawValue)"
+    }
+}

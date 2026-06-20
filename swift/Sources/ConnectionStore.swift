@@ -21,6 +21,7 @@ struct QueryLogEntry: Identifiable {
 @MainActor
 final class ConnectionStore {
     var connections: [Connection] = []
+    var groups: [ConnectionGroup] = []
 
     @ObservationIgnored private var db: OpaquePointer?
 
@@ -72,6 +73,19 @@ final class ConnectionStore {
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        )
+        """)
+
+        // Shared contract with the TS server (store/groups.ts). A group fronts
+        // several integrations (member_ids JSON) behind one MCP token/endpoint.
+        exec("""
+        CREATE TABLE IF NOT EXISTS groups (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            environment TEXT DEFAULT 'production',
+            member_ids TEXT NOT NULL DEFAULT '[]',
+            token TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
         """)
 
@@ -127,6 +141,108 @@ final class ConnectionStore {
         var result: [Connection] = []
         while sqlite3_step(stmt) == SQLITE_ROW { if let c = parse(stmt) { result.append(c) } }
         connections = result
+        loadGroups()
+    }
+
+    // MARK: - Groups
+
+    func loadGroups() {
+        var stmt: OpaquePointer?
+        let sql = "SELECT id,name,environment,member_ids,token,created_at FROM groups ORDER BY created_at DESC"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        var result: [ConnectionGroup] = []
+        while sqlite3_step(stmt) == SQLITE_ROW { if let g = parseGroup(stmt) { result.append(g) } }
+        groups = result
+    }
+
+    @discardableResult
+    func createGroup(name: String = "New Group") -> String {
+        let id = String(UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "").prefix(16))
+        let token = "pluk_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+        let sql = "INSERT INTO groups (id,name,environment,member_ids,token) VALUES (?,?,?,?,?)"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return id }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id)
+        bindText(stmt, 2, name)
+        sqlite3_bind_null(stmt, 3) // env unscoped by default; a group may span environments
+        bindText(stmt, 4, "[]")
+        bindText(stmt, 5, token)
+        sqlite3_step(stmt)
+        loadGroups()
+        return id
+    }
+
+    func updateGroup(_ group: ConnectionGroup) {
+        let membersJSON = serializeMembers(group.members)
+        let sql = "UPDATE groups SET name=?,environment=?,member_ids=? WHERE id=?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, group.name)
+        bindNullableText(stmt, 2, group.environment?.rawValue)
+        bindText(stmt, 3, membersJSON)
+        bindText(stmt, 4, group.id)
+        sqlite3_step(stmt)
+        loadGroups()
+        reloadServer(id: group.id) // overrides/members changed → rebuild this group's sessions
+    }
+
+    func deleteGroup(_ group: ConnectionGroup) {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "DELETE FROM groups WHERE id=?", -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, group.id)
+        sqlite3_step(stmt)
+        loadGroups()
+        reloadServer(id: group.id) // group gone → drop its sessions
+    }
+
+    private func parseGroup(_ stmt: OpaquePointer?) -> ConnectionGroup? {
+        guard let stmt else { return nil }
+        func str(_ i: Int32) -> String? {
+            guard let p = sqlite3_column_text(stmt, i) else { return nil }
+            return String(cString: p)
+        }
+        // Columns: 0 id,1 name,2 environment,3 member_ids,4 token,5 created_at
+        guard let id = str(0), let name = str(1), let token = str(4), let createdAt = str(5) else { return nil }
+        let environment = str(2).flatMap { Environment(rawValue: $0) } // nil = unscoped/mixed
+        let members = parseMembers(str(3) ?? "[]")
+        return ConnectionGroup(id: id, name: name, environment: environment, members: members, token: token, createdAt: createdAt)
+    }
+
+    // member_ids holds a JSON array; accepts the legacy form (id strings) and the
+    // current form ({ id, overrides }), so old rows keep working.
+    private func parseMembers(_ raw: String) -> [GroupMember] {
+        guard let arr = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [Any] else { return [] }
+        return arr.compactMap { el in
+            if let id = el as? String { return GroupMember(id: id) }
+            guard let obj = el as? [String: Any], let id = obj["id"] as? String else { return nil }
+            var overrides: [String: String] = [:]
+            if let ov = obj["overrides"] as? [String: Any] {
+                for (k, v) in ov { overrides[k] = stringify(v) }
+            }
+            return GroupMember(id: id, overrides: overrides)
+        }
+    }
+
+    private func serializeMembers(_ members: [GroupMember]) -> String {
+        let arr: [[String: Any]] = members.map { m in
+            m.overrides.isEmpty ? ["id": m.id] : ["id": m.id, "overrides": m.overrides]
+        }
+        return (try? JSONSerialization.data(withJSONObject: arr))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+    }
+
+    private func stringify(_ v: Any) -> String {
+        switch v {
+        case let s as String: return s
+        case let b as Bool: return b ? "true" : "false"
+        case let i as Int: return String(i)
+        case let d as Double: return String(Int(d))
+        default: return "\(v)"
+        }
     }
 
     func create(_ draft: ConnectionDraft) {
@@ -168,6 +284,30 @@ final class ConnectionStore {
         bindText(stmt, 7, conn.id)
         sqlite3_step(stmt)
         load()
+    }
+
+    /// Clone a connection: copies its config/policy verbatim (config JSON is
+    /// copied at the SQL level so typed values survive), with a fresh id+token
+    /// and a " copy" suffix. Returns the new connection's id.
+    @discardableResult
+    func duplicate(_ conn: Connection) -> String {
+        let id = String(UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "").prefix(16))
+        let token = "pluk_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+        let sql = """
+        INSERT INTO integrations (id,name,type,config,environment,read_only,query_policy,token)
+        SELECT ?,?,type,config,environment,read_only,query_policy,?
+        FROM integrations WHERE id=?
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return id }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id)
+        bindText(stmt, 2, conn.name + " copy")
+        bindText(stmt, 3, token)
+        bindText(stmt, 4, conn.id)
+        sqlite3_step(stmt)
+        load()
+        return id
     }
 
     func delete(_ conn: Connection) {
@@ -238,6 +378,20 @@ final class ConnectionStore {
         for _ in 0..<12 {
             if let list = await fetchAdapters() { adapters = list; return }
             try? await Task.sleep(for: .milliseconds(500))
+        }
+    }
+
+    /// Ask the server to drop the live MCP sessions for one integration/group (by
+    /// id) so config/override edits take effect on the next agent request. Other
+    /// integrations' and groups' sessions are left untouched.
+    func reloadServer(id: String) {
+        Task {
+            guard var comps = URLComponents(string: "http://localhost:4242/api/reload") else { return }
+            comps.queryItems = [URLQueryItem(name: "id", value: id)]
+            guard let url = comps.url else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            _ = try? await URLSession.shared.data(for: req)
         }
     }
 

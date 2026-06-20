@@ -15,6 +15,13 @@ export function createPostgresDriver(
     password: cfg.password,
     database: cfg.database,
     connectionTimeoutMillis: 8000,
+    // Keep pooled sockets warm and bound their lifetime. Over a long-lived SSH
+    // tunnel an idle connection's forwarded channel can die silently; TCP
+    // keepalive surfaces that fast (default idleTimeoutMillis already recycles
+    // idle clients after 10s), and maxLifetimeSeconds caps connection age so a
+    // long session never keeps reusing one stale socket.
+    keepAlive: true,
+    maxLifetimeSeconds: 1800,
     // NB: statement_timeout is sent in the libpq startup packet, which poolers like
     // PgBouncer (transaction mode, common behind Cloudflare tunnels) reject with
     // "unsupported startup parameter". query_timeout is client-side, so it's safe.
@@ -263,8 +270,7 @@ export function createPostgresDriver(
     },
 
     async testConnection() {
-      const client = await pool.connect();
-      client.release();
+      await pool.query("SELECT 1");
     },
 
     async close() {

@@ -18,16 +18,23 @@ import {
   clearQueryAbort,
 } from "../../mcp/pool.js";
 import { logError } from "../../log.js";
+import type { ToolHost } from "../../mcp/namespace.js";
 
 // MCP server for the SQL database adapter family (Postgres, MySQL, SQLite).
 // Tools, resources, and prompts for query + schema introspection, all gated by
 // the per-integration query policy and recorded in the activity log.
 export function buildSqlServer(conn: Integration, sessionIdRef: { value: string }): McpServer {
+  const server = new McpServer({ name: conn.name, version: "1.0.0" });
+  registerSqlServer(server, conn, sessionIdRef);
+  return server;
+}
+
+// Register the SQL surface onto a host (a bare McpServer for a single endpoint,
+// or a namespaced host when aggregated into a group).
+export function registerSqlServer(server: ToolHost, conn: Integration, sessionIdRef: { value: string }): void {
   const policy = parsePolicy(conn.query_policy, conn.read_only);
   const dialect = dialectFor(conn.type);
   const policyDesc = policyDescription(policy);
-
-  const server = new McpServer({ name: conn.name, version: "1.0.0" });
 
   const readOnlyMode = policy.allowed.length === 2 && policy.allowed.includes("select") && policy.allowed.includes("inspect");
   const maskedColumns = listMaskedColumns(conn.id);
@@ -44,7 +51,7 @@ export function buildSqlServer(conn: Integration, sessionIdRef: { value: string 
         return { content: [{ type: "text", text: await fn(driver) }] };
       })(), label);
     } catch (err) {
-      evictDriver(sid);
+      evictDriver(sid, conn.id);
       logError(`tool ${label} failed`, err, { integration: conn.name, type: conn.type });
       return { content: [{ type: "text", text: `Error: ${(err as Error).message}` }], isError: true };
     }
@@ -96,7 +103,7 @@ ${sql}` } },
           return { contents: [{ uri: "schema://full", mimeType: "text/plain", text }] };
         })(), "schema_resource");
       } catch (err) {
-        evictDriver(sid);
+        evictDriver(sid, conn.id);
         return { contents: [{ uri: "schema://full", mimeType: "text/plain", text: `Error: ${(err as Error).message}` }] };
       }
     }
@@ -163,7 +170,7 @@ ${sql}` } },
         const isCancelled = msg.includes("cancelled");
         updateLogEntry(logId, isCancelled ? "cancelled" : "error", msg);
         if (!isCancelled) {
-          evictDriver(sid);
+          evictDriver(sid, conn.id);
           logError("query tool failed", err, { integration: conn.name, type: conn.type });
         }
         return { content: [{ type: "text", text: `${isCancelled ? "Cancelled" : "Error"}: ${msg}` }], isError: true };
@@ -290,7 +297,7 @@ ${sql}` } },
         const isCancelled = msg.includes("cancelled");
         updateLogEntry(logId, isCancelled ? "cancelled" : "error", msg);
         if (!isCancelled) {
-          evictDriver(sid);
+          evictDriver(sid, conn.id);
           logError("query tool failed", err, { integration: conn.name, type: conn.type });
         }
         return { content: [{ type: "text", text: `${isCancelled ? "Cancelled" : "Error"}: ${msg}` }], isError: true };
@@ -356,7 +363,7 @@ ${sql}` } },
         const isCancelled = msg.includes("cancelled");
         updateLogEntry(logId, isCancelled ? "cancelled" : "error", msg);
         if (!isCancelled) {
-          evictDriver(sid);
+          evictDriver(sid, conn.id);
           logError("query tool failed", err, { integration: conn.name, type: conn.type });
         }
         return { content: [{ type: "text", text: `${isCancelled ? "Cancelled" : "Error"}: ${msg}` }], isError: true };
@@ -378,8 +385,6 @@ ${sql}` } },
       }
     }
   );
-
-  return server;
 }
 
 // ── Export helpers ─────────────────────────────────────────────────────────

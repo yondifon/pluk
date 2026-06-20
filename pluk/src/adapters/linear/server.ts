@@ -5,15 +5,22 @@ import { parseActionPolicy, actionAllowed, actionPolicyDescription, type ActionC
 import { createLogEntry, updateLogEntry, logQuery } from "../../store/queryLog.js";
 import { linearGraphQL } from "./client.js";
 import { logError } from "../../log.js";
+import type { ToolHost } from "../../mcp/namespace.js";
 
 // MCP server for the Linear adapter. Tools are gated by the integration's action
 // policy (read/write) and recorded in the shared activity log.
-export function buildLinearServer(conn: Integration, _sessionIdRef: { value: string }): McpServer {
+export function buildLinearServer(conn: Integration, sessionIdRef: { value: string }): McpServer {
+  const server = new McpServer({ name: conn.name, version: "1.0.0" });
+  registerLinearServer(server, conn, sessionIdRef);
+  return server;
+}
+
+// Register the Linear surface onto a host (a bare McpServer for a single
+// endpoint, or a namespaced host when aggregated into a group).
+export function registerLinearServer(server: ToolHost, conn: Integration, _sessionIdRef: { value: string }): void {
   const apiKey = String(conn.config.api_key ?? "");
   const defaultTeam = conn.config.team_key ? String(conn.config.team_key) : undefined;
   const policy = parseActionPolicy(conn.query_policy, conn.read_only);
-
-  const server = new McpServer({ name: conn.name, version: "1.0.0" });
 
   type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 
@@ -149,6 +156,4 @@ export function buildLinearServer(conn: Integration, _sessionIdRef: { value: str
         return data.commentCreate;
       }),
   );
-
-  return server;
 }

@@ -1,7 +1,9 @@
 import { getIntegrationByToken, getIntegrationById } from "./store/integrations.js";
+import { getGroupByToken } from "./store/groups.js";
 import { listSavedQueries, createSavedQuery, deleteSavedQuery } from "./store/savedQueries.js";
 import { listMaskedColumns, addMaskedColumn, removeMaskedColumn } from "./store/maskedColumns.js";
-import { handleMcpRequest } from "./mcp/server.js";
+import { handleMcpRequest, resetSessions } from "./mcp/server.js";
+import { buildGroupServer } from "./mcp/group.js";
 import { cancelQuery } from "./mcp/pool.js";
 import { getAdapter, listAdapters } from "./adapters/index.js";
 import { logInfo, logError, LOG_PATH } from "./log.js";
@@ -55,6 +57,17 @@ const server = Bun.serve({
         });
         return Response.json({ ok: false, error: formatTestError(err as Error) });
       }
+    }
+
+    // POST /api/reload?id=<integration|group id> — drop live MCP sessions so
+    // config/override edits in the UI take effect on the next agent request
+    // (sessions bake in config at build time). Scoped to the given owner id when
+    // provided, so editing one group/integration doesn't disturb the others.
+    if (path === "/api/reload" && req.method === "POST") {
+      const id = url.searchParams.get("id") ?? undefined;
+      const count = await resetSessions(id);
+      logInfo("reloaded MCP sessions", { count, id: id ?? "all" });
+      return Response.json({ ok: true, count });
     }
 
     // POST /api/log/:id/cancel — cancel an in-flight query, called by the Swift UI
@@ -122,12 +135,21 @@ const server = Bun.serve({
       return new Response("Method not allowed", { status: 405 });
     }
 
-    // /mcp/:token — MCP streamable HTTP endpoint for AI agents
+    // /mcp/:token — MCP streamable HTTP endpoint for AI agents. A token resolves
+    // to a single integration or a group (one endpoint fronting many).
     const token = path.match(/^\/mcp\/([^/]+)/)?.[1];
     if (token) {
       const conn = getIntegrationByToken(token);
-      if (!conn) return new Response("Integration not found", { status: 404 });
-      return handleMcpRequest(conn, req);
+      if (conn) {
+        const adapter = getAdapter(conn.type);
+        if (!adapter) return new Response(`No adapter for type: ${conn.type}`, { status: 400 });
+        return handleMcpRequest(req, conn.id, (ref) => adapter.buildServer(conn, ref));
+      }
+
+      const group = getGroupByToken(token);
+      if (group) return handleMcpRequest(req, group.id, (ref) => buildGroupServer(group, ref));
+
+      return new Response("Integration not found", { status: 404 });
     }
 
     if (path === "/health") return new Response("ok");

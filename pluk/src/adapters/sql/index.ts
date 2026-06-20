@@ -1,7 +1,7 @@
 import type { Adapter } from "../types.js";
 import type { Integration } from "../../store/integrations.js";
 import { createDriver } from "../../db/index.js";
-import { buildSqlServer } from "./server.js";
+import { buildSqlServer, registerSqlServer } from "./server.js";
 import { networkSqlFields, sqliteFields } from "./fields.js";
 
 // Opening a driver and immediately closing it is the connectivity test for the
@@ -23,6 +23,7 @@ export const postgresAdapter: Adapter = {
   configFields: networkSqlFields(5432),
   testConnection: testSql,
   buildServer: buildSqlServer,
+  register: registerSqlServer,
 };
 
 export const mysqlAdapter: Adapter = {
@@ -33,6 +34,7 @@ export const mysqlAdapter: Adapter = {
   configFields: networkSqlFields(3306),
   testConnection: testSql,
   buildServer: buildSqlServer,
+  register: registerSqlServer,
 };
 
 export const sqliteAdapter: Adapter = {
@@ -43,6 +45,7 @@ export const sqliteAdapter: Adapter = {
   configFields: sqliteFields,
   testConnection: testSql,
   buildServer: buildSqlServer,
+  register: registerSqlServer,
 };
 
 export const sqlAdapters: Adapter[] = [postgresAdapter, mysqlAdapter, sqliteAdapter];

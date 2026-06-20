@@ -5,6 +5,14 @@ import { Duplex } from "stream";
 import { readFileSync, existsSync } from "fs";
 import { homedir, userInfo } from "os";
 import type { ConnectConfig } from "ssh2";
+import {
+  expandHome,
+  parseSSHConfig,
+  expandProxyCommand,
+  spawnProxySocket,
+  resolveAgentSocket,
+  type SSHConfigEntry,
+} from "../ssh/config.js";
 
 export interface SSHTunnelConfig {
   host: string;
@@ -22,180 +30,16 @@ export interface Tunnel {
   close: () => void;
 }
 
+// SSH handshake budget. Long enough for interactive agent/proxy auth (1Password
+// confirm or Cloudflare browser approval), but still bounded.
+const HANDSHAKE_TIMEOUT_MS = 180_000;
+const FAST_RETRY_WINDOW_MS = 10_000;
+
+class TunnelReadinessTimeout extends Error {}
+
 // ── SSH config helpers ────────────────────────────────────────────────────────
-
-function expandHome(p: string): string {
-  return p.startsWith("~/") ? `${homedir()}/${p.slice(2)}` : p;
-}
-
-interface SSHConfigEntry {
-  hostName?: string;
-  identityFile?: string;
-  identityAgent?: string;
-  proxyCommand?: string;
-  user?: string;
-  port?: number;
-}
-
-function parseSSHConfig(targetHost: string): SSHConfigEntry {
-  const configPath = `${homedir()}/.ssh/config`;
-  if (!existsSync(configPath)) return {};
-
-  const lines = readFileSync(configPath, "utf8").split("\n");
-  const result: SSHConfigEntry = {};
-  let inMatchingBlock = true;
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-
-    const parts = splitCommand(line);
-    const key = parts[0];
-    const val = parts.slice(1).join(" ");
-
-    if (key?.toLowerCase() === "host") {
-      inMatchingBlock = val.split(/\s+/).some((p) => matchSSHPattern(p, targetHost));
-      continue;
-    }
-
-    if (!inMatchingBlock) continue;
-
-    switch (key?.toLowerCase()) {
-      case "hostname":
-        if (!result.hostName) result.hostName = val;
-        break;
-      case "identityfile":
-        if (!result.identityFile) result.identityFile = expandHome(val);
-        break;
-      case "identityagent":
-        if (!result.identityAgent) result.identityAgent = expandHome(val);
-        break;
-      case "proxycommand":
-        if (!result.proxyCommand && val.toLowerCase() !== "none") result.proxyCommand = val;
-        break;
-      case "user":
-        if (!result.user) result.user = val;
-        break;
-      case "port":
-        if (!result.port) result.port = parseInt(val, 10);
-        break;
-    }
-  }
-
-  return result;
-}
-
-function matchSSHPattern(pattern: string, host: string): boolean {
-  if (pattern === "*") return true;
-  const re = new RegExp(
-    "^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$",
-    "i"
-  );
-  return re.test(host);
-}
-
-// Expand %h %p %r substitutions in a ProxyCommand template.
-function expandProxyCommand(template: string, host: string, port: number, user: string): string {
-  return template
-    .replace(/%h/g, host)
-    .replace(/%p/g, String(port))
-    .replace(/%r/g, user)
-    .replace(/%u/g, user);
-}
-
-function splitCommand(command: string): string[] {
-  const args: string[] = [];
-  let current = "";
-  let quote: "'" | "\"" | null = null;
-  let escaping = false;
-
-  for (const char of command) {
-    if (escaping) {
-      current += char;
-      escaping = false;
-      continue;
-    }
-
-    if (char === "\\") {
-      escaping = true;
-      continue;
-    }
-
-    if (quote) {
-      if (char === quote) quote = null;
-      else current += char;
-      continue;
-    }
-
-    if (char === "'" || char === "\"") {
-      quote = char;
-      continue;
-    }
-
-    if (/\s/.test(char)) {
-      if (current) {
-        args.push(current);
-        current = "";
-      }
-      continue;
-    }
-
-    current += char;
-  }
-
-  if (escaping) current += "\\";
-  if (current) args.push(current);
-  return args;
-}
-
-// Spawn a ProxyCommand and return a Duplex stream backed by its stdin/stdout.
-function spawnProxySocket(command: string): Duplex {
-  const [prog, ...args] = splitCommand(command);
-  if (!prog) throw new Error("ProxyCommand is empty");
-
-  const child = spawn(prog, args, {
-    stdio: ["pipe", "pipe", "inherit"],
-    env: process.env,
-  });
-
-  const sock = new Duplex({
-    read() {
-      child.stdout!.resume();
-    },
-    write(chunk, _enc, cb) {
-      child.stdin!.write(chunk, cb);
-    },
-    final(cb) {
-      child.stdin!.end(cb);
-    },
-    destroy(err, cb) {
-      if (!child.killed) child.kill();
-      cb(err);
-    },
-  });
-
-  child.stdout!.on("data", (data: Buffer) => {
-    if (!sock.push(data)) child.stdout!.pause();
-  });
-  child.stdout!.on("error", (err) => sock.destroy(err));
-  child.stdin!.on("error", (err) => sock.destroy(err));
-  child.stdout!.on("end", () => sock.push(null));
-  child.on("error", (err) => sock.destroy(err));
-  child.on("close", (code) => {
-    if (!sock.destroyed) {
-      if (code !== 0) sock.destroy(new Error(`ProxyCommand exited with code ${code}`));
-      else sock.push(null);
-    }
-  });
-
-  return sock;
-}
-
-function resolveAgentSocket(host: string): string | undefined {
-  const fromConfig = parseSSHConfig(host).identityAgent;
-  if (fromConfig) return fromConfig;
-  return process.env.SSH_AUTH_SOCK;
-}
+// (parseSSHConfig, ProxyCommand, agent resolution) live in ../ssh/config.js,
+// shared with the SSH command adapter.
 
 function reserveLocalPort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -221,7 +65,11 @@ function waitForPort(port: number, timeoutMs = 15_000): Promise<void> {
       });
       socket.once("error", (err) => {
         socket.destroy();
-        if (Date.now() - started > timeoutMs) reject(err);
+        if (Date.now() - started > timeoutMs) {
+          reject(new TunnelReadinessTimeout(
+            `SSH tunnel did not become ready within ${Math.round(timeoutMs / 1000)}s: ${err.message}`
+          ));
+        }
         else setTimeout(tryConnect, 200);
       });
     };
@@ -233,7 +81,9 @@ function waitForPort(port: number, timeoutMs = 15_000): Promise<void> {
 async function openOpenSSHTunnel(
   config: SSHTunnelConfig,
   sshConfig: SSHConfigEntry,
-  username: string
+  username: string,
+  readinessTimeoutMs: number,
+  onFatal?: () => void
 ): Promise<Tunnel> {
   const localPort = await reserveLocalPort();
   const args = [
@@ -268,11 +118,10 @@ async function openOpenSSHTunnel(
 
   try {
     // ProxyCommand auth (e.g. Cloudflare Access) can require an interactive
-    // browser confirm on first use — allow up to 60s for the port to come up.
-    // Short-circuit if the ssh/proxy process dies first so a genuinely broken
-    // proxy fails fast instead of waiting out the full window.
+    // browser confirm on first use. Short-circuit if ssh dies first, but don't
+    // kill a live auth prompt before the shared SSH setup deadline.
     const childDied = childClosed.then(() => { throw new Error("ssh process exited before tunnel was ready"); });
-    await Promise.race([waitForPort(localPort, 60_000), childDied]);
+    await Promise.race([waitForPort(localPort, readinessTimeoutMs), childDied]);
   } catch (err) {
     child.kill();
     // Wait up to 1s for the child to flush all stderr before reading it
@@ -280,38 +129,55 @@ async function openOpenSSHTunnel(
     const stderr = Buffer.concat(stderrChunks).toString().trim();
     // Filter out SSH's unhelpful "closed by UNKNOWN" noise; surface proxy errors first
     const lines = stderr.split(/\r?\n/).filter(l => l && !/closed by UNKNOWN/i.test(l));
-    throw new Error(lines.join("\n") || (err as Error).message);
+    const message = lines.join("\n") || (err as Error).message;
+    if (err instanceof TunnelReadinessTimeout) throw new TunnelReadinessTimeout(message);
+    throw new Error(message);
   }
 
   console.log(`[pluk] tunnel ready on localhost:${localPort}`);
 
+  // Self-heal: if the ssh process dies after the tunnel is up (server idle
+  // disconnect, dropped NAT mapping, network loss), notify so the driver is
+  // rebuilt instead of leaving a dead local listener that hangs every query.
+  let intentional = false;
+  childClosed.then(() => { if (!intentional) onFatal?.(); });
+
   return {
     localPort,
-    close: () => child.kill(),
+    close: () => { intentional = true; child.kill(); },
   };
 }
 
 // ── Tunnel ────────────────────────────────────────────────────────────────────
 
-export async function openSSHTunnel(config: SSHTunnelConfig): Promise<Tunnel> {
+export async function openSSHTunnel(
+  config: SSHTunnelConfig,
+  onFatal?: () => void
+): Promise<Tunnel> {
   const sshConfig = parseSSHConfig(config.host);
   const username = config.user || sshConfig.user || userInfo().username;
 
   if (sshConfig.proxyCommand) {
     // Cloudflare Access and other proxy tunnels can fail transiently on DNS or auth — retry
     let lastErr: Error | undefined;
+    const deadline = Date.now() + HANDSHAKE_TIMEOUT_MS;
     for (let attempt = 1; attempt <= 3; attempt++) {
+      const started = Date.now();
+      const remaining = deadline - started;
+      if (remaining <= 0) break;
       try {
-        return await openOpenSSHTunnel(config, sshConfig, username);
+        return await openOpenSSHTunnel(config, sshConfig, username, remaining, onFatal);
       } catch (err) {
         lastErr = err as Error;
-        if (attempt < 3) {
+        const failedFast = Date.now() - started < FAST_RETRY_WINDOW_MS;
+        if (attempt < 3 && failedFast && !(lastErr instanceof TunnelReadinessTimeout)) {
           console.warn(`[pluk] OpenSSH tunnel attempt ${attempt} failed: ${lastErr.message}. Retrying in 2s…`);
           await new Promise((r) => setTimeout(r, 2000));
         }
+        else break;
       }
     }
-    throw lastErr!;
+    throw lastErr ?? new Error("SSH tunnel did not become ready before connect deadline");
   }
 
   return new Promise((resolve, reject) => {
@@ -360,11 +226,19 @@ export async function openSSHTunnel(config: SSHTunnelConfig): Promise<Tunnel> {
         sshClient.removeAllListeners("error");
         sshClient.on("error", (err) => {
           console.error("[pluk] SSH tunnel error:", err.message);
+        });
+        // Self-heal: a dropped SSH connection (keepalive timeout, server idle
+        // disconnect, network loss) emits 'close'. Tear the local listener down
+        // and notify so the driver is rebuilt — otherwise the listener lingers
+        // and every later query hangs against a dead tunnel.
+        let intentional = false;
+        sshClient.on("close", () => {
           forwardServer.close();
+          if (!intentional) onFatal?.();
         });
         resolve({
           localPort,
-          close: () => { forwardServer.close(); proxySock?.destroy(); sshClient.end(); },
+          close: () => { intentional = true; forwardServer.close(); proxySock?.destroy(); sshClient.end(); },
         });
       });
 
@@ -377,6 +251,16 @@ export async function openSSHTunnel(config: SSHTunnelConfig): Promise<Tunnel> {
       host,
       port: sshConfig.port ?? config.port,
       username,
+      // ssh2's readyTimeout defaults to 20s. Agent auth (e.g. 1Password SSH
+      // agent) blocks on an interactive confirm prompt during the handshake; a
+      // user who takes longer than 20s to approve hits ssh2's own timeout even
+      // though the pool grants SSH setup a far larger budget. Align with that
+      // budget so the prompt — not the library — sets the deadline.
+      readyTimeout: HANDSHAKE_TIMEOUT_MS,
+      // Match the OpenSSH path's ServerAliveInterval=30/CountMax=3 so an idle
+      // tunnel is kept alive and a dead peer is detected.
+      keepaliveInterval: 30_000,
+      keepaliveCountMax: 3,
     };
 
     // Route through ProxyCommand if configured (e.g. Cloudflare Access).

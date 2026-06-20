@@ -2,7 +2,7 @@ import type { Adapter } from "../types.js";
 import type { Integration } from "../../store/integrations.js";
 import { linearGraphQL } from "./client.js";
 import { linearFields } from "./fields.js";
-import { buildLinearServer } from "./server.js";
+import { buildLinearServer, registerLinearServer } from "./server.js";
 
 export const linearAdapter: Adapter = {
   id: "linear",
@@ -15,4 +15,5 @@ export const linearAdapter: Adapter = {
     await linearGraphQL<{ viewer: { id: string } }>(apiKey, `{ viewer { id name } }`);
   },
   buildServer: buildLinearServer,
+  register: registerLinearServer,
 };

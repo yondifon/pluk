@@ -9,17 +9,23 @@ struct ContentView: View {
     enum ActiveSheet: Identifiable {
         case add
         case edit(Connection)
+        case editGroup(ConnectionGroup)
 
         var id: String {
             switch self {
             case .add: "add"
             case .edit(let conn): conn.id
+            case .editGroup(let group): "group:\(group.id)"
             }
         }
     }
 
     var selected: Connection? {
         store.connections.first { $0.id == selectedID }
+    }
+
+    var selectedGroup: ConnectionGroup? {
+        store.groups.first { $0.id == selectedID }
     }
 
     var body: some View {
@@ -48,20 +54,45 @@ struct ContentView: View {
 
     private var sidebar: some View {
         List(selection: $selectedID) {
+            if !store.groups.isEmpty {
+                Section("Groups") {
+                    ForEach(store.groups) { group in
+                        GroupRow(group: group)
+                            .tag(group.id)
+                            .contextMenu {
+                                Button("Delete", role: .destructive) {
+                                    store.deleteGroup(group)
+                                    if selectedID == group.id { selectedID = nil }
+                                }
+                            }
+                    }
+                }
+            }
+
             Section("Integrations") {
                 ForEach(store.connections) { conn in
                     ConnectionRow(conn: conn)
                         .tag(conn.id)
+                        .contextMenu {
+                            Button("Duplicate") { selectedID = store.duplicate(conn) }
+                            Button("Delete", role: .destructive) {
+                                store.delete(conn)
+                                if selectedID == conn.id { selectedID = nil }
+                            }
+                        }
                 }
             }
         }
         .listStyle(.sidebar)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button(action: { sheet = .add }) {
-                    Label("New Integration", systemImage: "plus")
+                Menu {
+                    Button("New Integration") { sheet = .add }
+                    Button("New Group") { selectedID = store.createGroup() }
+                } label: {
+                    Label("New", systemImage: "plus")
                 }
-                .help("Add a new integration")
+                .help("Add an integration or group")
             }
         }
     }
@@ -70,13 +101,27 @@ struct ContentView: View {
 
     @ViewBuilder
     private var detailPanel: some View {
-        if let conn = selected {
+        if let group = selectedGroup {
+            GroupDetailView(group: group, store: store) {
+                sheet = .editGroup(group)
+            } onDelete: {
+                store.deleteGroup(group)
+                selectedID = nil
+            }
+            .id(group.id)
+        } else if let conn = selected {
             ConnectionDetailView(conn: conn, store: store) {
                 sheet = .edit(conn)
             } onDelete: {
                 store.delete(conn)
                 selectedID = nil
+            } onDuplicate: {
+                selectedID = store.duplicate(conn)
             }
+            // Rebuild the whole detail subtree when the selected project changes
+            // so per-project @State (active tab, loaded logs) resets instead of
+            // lingering from the previously selected connection.
+            .id(conn.id)
         } else {
             EmptyStateView { sheet = .add }
         }
@@ -86,6 +131,21 @@ struct ContentView: View {
 
     @ViewBuilder
     private func connectionSheet(_ active: ActiveSheet) -> some View {
+        if case .editGroup(let group) = active {
+            GroupFormView(group: group, connections: store.connections, adapters: store.adapters) { updated in
+                store.updateGroup(updated)
+                selectedID = updated.id
+                sheet = nil
+            } onCancel: {
+                sheet = nil
+            }
+        } else {
+            connectionForm(active)
+        }
+    }
+
+    @ViewBuilder
+    private func connectionForm(_ active: ActiveSheet) -> some View {
         let editing: Connection? = {
             if case .edit(let conn) = active { return conn }
             return nil
@@ -108,6 +168,29 @@ struct ContentView: View {
 }
 
 // MARK: - Sidebar row
+
+struct GroupRow: View {
+    let group: ConnectionGroup
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "square.stack.3d.up.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(group.name)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+                Text("\(group.memberIds.count) integration\(group.memberIds.count == 1 ? "" : "s")")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 3)
+    }
+}
 
 struct ConnectionRow: View {
     let conn: Connection

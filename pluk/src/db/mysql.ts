@@ -15,6 +15,14 @@ export function createMysqlDriver(
     password: cfg.password,
     database: cfg.database,
     connectTimeout: 8000,
+    // Keep pooled sockets warm and recycle idle ones. Over a long-lived SSH
+    // tunnel an idle connection's forwarded channel can die silently; TCP
+    // keepalive surfaces that as an error (fast retry) instead of a hung query,
+    // and idleTimeout discards likely-stale connections before reuse.
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10_000,
+    idleTimeout: 60_000,
+    maxIdle: 4,
     ...(cfg.socket_path ? { socketPath: cfg.socket_path } : {}),
     ...(ssl ? { ssl: ssl as mysql.SslOptions } : {}),
   });
@@ -246,8 +254,7 @@ export function createMysqlDriver(
     },
 
     async testConnection() {
-      const c = await pool.getConnection();
-      c.release();
+      await pool.query("SELECT 1");
     },
 
     async close() {

@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Integration } from "../store/integrations.js";
+import type { ToolHost } from "../mcp/namespace.js";
 
 /**
  * The adapter contract. One module per service (a DB family, Linear, Sentry, …)
@@ -35,6 +36,12 @@ export interface Adapter {
   configFields: ConfigField[];
   /** Verify the config can reach the service. Throws on failure. */
   testConnection(integration: Integration): Promise<void>;
-  /** Build the MCP server (tools/resources/prompts) for one session. */
+  /** Build a standalone MCP server (tools/resources/prompts) for one session. */
   buildServer(integration: Integration, sessionIdRef: { value: string }): McpServer;
+  /**
+   * Register this integration's tools/resources/prompts onto a shared host. Used
+   * by group endpoints to aggregate several integrations under one server; pass a
+   * namespaced host to avoid name collisions across members.
+   */
+  register(host: ToolHost, integration: Integration, sessionIdRef: { value: string }): void;
 }
