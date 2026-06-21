@@ -14,6 +14,9 @@ struct GroupFormView: View {
     @State private var environment: Environment?
     @State private var included: Set<String>
     @State private var overrides: [String: [String: String]]  // connId → field → value
+    @FocusState private var nameFocused: Bool
+
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     init(
         group: ConnectionGroup,
@@ -46,7 +49,10 @@ struct GroupFormView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     field("Name") {
-                        TextField("Group name", text: $name).textFieldStyle(.roundedBorder)
+                        TextField("Group name", text: $name)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($nameFocused)
+                            .onSubmit { if !trimmedName.isEmpty { save() } }
                     }
                     field("Environment") {
                         Picker("", selection: $environment) {
@@ -58,7 +64,13 @@ struct GroupFormView: View {
                     }
                     field("Integrations") {
                         if connections.isEmpty {
-                            Text("No integrations yet.").font(.system(size: 12)).foregroundColor(.secondary)
+                            Text("No integrations yet.")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .cardSurface()
                         } else {
                             VStack(spacing: 0) {
                                 ForEach(connections) { conn in
@@ -82,12 +94,14 @@ struct GroupFormView: View {
                 Button("Save", action: save)
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
+                    .disabled(trimmedName.isEmpty)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 14)
         }
         .glassPanelBackground()
         .frame(width: 480, height: 580)
+        .onAppear { DispatchQueue.main.async { nameFocused = true } }
     }
 
     @ViewBuilder
@@ -104,7 +118,7 @@ struct GroupFormView: View {
                         .font(.system(size: 14))
                         .foregroundStyle(on ? Color.accentColor : Color.secondary)
                     TypeBadge(type: conn.type)
-                    Text(conn.name).font(.system(size: 13))
+                    Text(conn.name).font(.system(size: 13)).lineLimit(1)
                     EnvTag(environment: conn.environment)
                     Spacer()
                 }

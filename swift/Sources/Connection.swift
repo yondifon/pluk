@@ -248,7 +248,7 @@ struct Connection: Identifiable, Equatable {
     var token: String
     var createdAt: String
 
-    var mcpURL: String { "http://localhost:4242/mcp/\(token)" }
+    var mcpURL: String { PlukServer.mcpURL(token: token) }
 
     /// MCP client key: slugified name + environment, so agents can tell e.g.
     /// `marketing-db-local` from `marketing-db-production` at a glance.
@@ -343,7 +343,7 @@ struct ConnectionGroup: Identifiable, Equatable {
     var memberIds: [String] { members.map(\.id) }
     func member(_ id: String) -> GroupMember? { members.first { $0.id == id } }
 
-    var mcpURL: String { "http://localhost:4242/mcp/\(token)" }
+    var mcpURL: String { PlukServer.mcpURL(token: token) }
 
     /// MCP client key: slugified name, suffixed with the environment only when the
     /// group is scoped to one (so a mixed group reads `db-prod`, not `db-prod-`).

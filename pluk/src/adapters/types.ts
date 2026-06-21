@@ -25,8 +25,11 @@ export interface ConfigField {
   fileTypes?: string[];                  // for `file` picker (pem/key/sqlite…)
 }
 
-/** How the policy/audit layer interprets this adapter. */
-export type PolicyKind = "sql" | "action";
+/** How the policy/audit layer interprets this adapter.
+ *  - "sql":    statement-category policy (SELECT/INSERT/…) + SQL guards.
+ *  - "action": read/write action policy.
+ *  - "none":   no policy gate; every call is confirmed by the client instead. */
+export type PolicyKind = "sql" | "action" | "none";
 
 export interface Adapter {
   id: string;                            // matches Integration.type
@@ -37,6 +40,13 @@ export interface Adapter {
   configFields: ConfigField[];
   /** Verify the config can reach the service. Throws on failure. */
   testConnection(integration: Integration): Promise<void>;
+  /**
+   * Agent-facing guidance for this integration, built per session from live
+   * config + policy (see mcp/instructions.ts). Returned in the MCP `initialize`
+   * handshake by the standalone server, and embedded per member by group
+   * endpoints so the group's instructions reflect each member's real policy.
+   */
+  instructions(integration: Integration): string;
   /** Build a standalone MCP server (tools/resources/prompts) for one session. */
   buildServer(integration: Integration, sessionIdRef: { value: string }): McpServer;
   /**

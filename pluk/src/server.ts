@@ -1,6 +1,7 @@
 import { getIntegrationByToken, getIntegrationById } from "./store/integrations.js";
 import { getGroupByToken } from "./store/groups.js";
 import { listSavedQueries, createSavedQuery, deleteSavedQuery } from "./store/savedQueries.js";
+import { listSavedCommands, createSavedCommand, deleteSavedCommand } from "./store/savedCommands.js";
 import { listMaskedColumns, addMaskedColumn, removeMaskedColumn } from "./store/maskedColumns.js";
 import { handleMcpRequest, resetSessions } from "./mcp/server.js";
 import { buildGroupServer } from "./mcp/group.js";
@@ -9,6 +10,25 @@ import { getAdapter, listAdapters } from "./adapters/index.js";
 import { logInfo, logError, LOG_PATH } from "./log.js";
 
 const PORT = Number(process.env.PORT ?? 4242);
+
+// Parse a JSON request body, returning null on malformed/empty input so routes
+// can answer with a clean { ok: false } 400 instead of throwing a raw 500.
+async function readJsonBody<T>(req: Request): Promise<T | null> {
+  try {
+    return (await req.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+// Translate a duplicate-name UNIQUE violation into a 409 the UI can show;
+// rethrow anything else so genuine failures still surface as a 500.
+function conflictOrThrow(err: unknown, message: string): Response {
+  if (/UNIQUE constraint/i.test((err as Error).message)) {
+    return Response.json({ ok: false, error: message }, { status: 409 });
+  }
+  throw err;
+}
 
 const server = Bun.serve({
   port: PORT,
@@ -91,16 +111,60 @@ const server = Bun.serve({
       }
 
       if (req.method === "POST") {
-        const body = await req.json() as { name?: string; sql?: string };
-        if (!body.name || !body.sql) {
+        const body = await readJsonBody<{ name?: string; sql?: string }>(req);
+        if (!body) return Response.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
+        if (!body.name?.trim() || !body.sql?.trim()) {
           return Response.json({ ok: false, error: "name and sql required" }, { status: 400 });
         }
-        const q = createSavedQuery({ connection_id: connectionId, name: body.name, sql: body.sql });
-        return Response.json({ ok: true, query: q });
+        try {
+          const q = createSavedQuery({ connection_id: connectionId, name: body.name.trim(), sql: body.sql });
+          return Response.json({ ok: true, query: q });
+        } catch (err) {
+          return conflictOrThrow(err, "A saved query with that name already exists.");
+        }
       }
 
       if (req.method === "DELETE" && savedName) {
         const ok = deleteSavedQuery(connectionId, savedName);
+        return Response.json({ ok });
+      }
+
+      return new Response("Method not allowed", { status: 405 });
+    }
+
+    // Saved commands REST endpoints (SSH pre-selected commands; consumed by the Swift UI later)
+    const savedCmdMatch = path.match(/^\/api\/integrations\/([^/]+)\/saved_commands(?:\/([^/]+))?$/);
+    if (savedCmdMatch) {
+      const connectionId = savedCmdMatch[1]!;
+      const savedName = savedCmdMatch[2] ? decodeURIComponent(savedCmdMatch[2]) : undefined;
+      const conn = getIntegrationById(connectionId);
+      if (!conn) return Response.json({ ok: false, error: "Not found" }, { status: 404 });
+
+      if (req.method === "GET") {
+        return Response.json({ ok: true, commands: listSavedCommands(connectionId) });
+      }
+
+      if (req.method === "POST") {
+        const body = await readJsonBody<{ name?: string; command?: string; working_dir?: string }>(req);
+        if (!body) return Response.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
+        if (!body.name?.trim() || !body.command?.trim()) {
+          return Response.json({ ok: false, error: "name and command required" }, { status: 400 });
+        }
+        try {
+          const c = createSavedCommand({
+            connection_id: connectionId,
+            name: body.name.trim(),
+            command: body.command,
+            working_dir: body.working_dir?.trim() || null,
+          });
+          return Response.json({ ok: true, command: c });
+        } catch (err) {
+          return conflictOrThrow(err, "A saved command with that name already exists.");
+        }
+      }
+
+      if (req.method === "DELETE" && savedName) {
+        const ok = deleteSavedCommand(connectionId, savedName);
         return Response.json({ ok });
       }
 
@@ -120,11 +184,12 @@ const server = Bun.serve({
       }
 
       if (req.method === "POST") {
-        const body = await req.json() as { column_name?: string };
-        if (!body.column_name) {
+        const body = await readJsonBody<{ column_name?: string }>(req);
+        if (!body) return Response.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
+        if (!body.column_name?.trim()) {
           return Response.json({ ok: false, error: "column_name required" }, { status: 400 });
         }
-        const c = addMaskedColumn(connectionId, body.column_name);
+        const c = addMaskedColumn(connectionId, body.column_name.trim());
         return Response.json({ ok: true, column: c });
       }
 
@@ -192,6 +257,17 @@ function formatTestError(err: Error): string {
   // Timeouts (direct or post-tunnel)
   if (/timed out|connection timeout|timeout expired/i.test(msg)) {
     return "Timed out — the server didn't respond. Check the host/port, the SSH tunnel, and any firewall/VPC rules.";
+  }
+
+  // SSH (ssh2 driver) — auth, host key, and key parsing surface as raw strings.
+  if (/All configured authentication methods failed/i.test(msg)) {
+    return "SSH authentication failed — check the user and that your key or agent is set up for this host.";
+  }
+  if (/no usable private key|cannot parse privatekey|encrypted.*passphrase|bad passphrase/i.test(msg)) {
+    return "SSH key problem — the key couldn't be read or the passphrase is wrong. Check the key path and passphrase.";
+  }
+  if (/handshake|host key|hostkey/i.test(msg)) {
+    return `SSH host key error — the server's host key was rejected. Detail: ${msg}`;
   }
 
   // Unknown — surface the raw message and point at the log for the full trace.

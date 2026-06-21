@@ -5,16 +5,28 @@ import UniformTypeIdentifiers
 struct ConnectionFormView: View {
     let editingConn: Connection?
     let adapters: [AdapterManifest]
+    let adaptersLoadFailed: Bool
+    let onRetryAdapters: () -> Void
     let onSave: (ConnectionDraft) -> Void
     let onCancel: () -> Void
 
     @State private var draft: ConnectionDraft
     @State private var manifest: AdapterManifest?
     @State private var picking: Bool
+    @FocusState private var nameFocused: Bool
 
-    init(editingConn: Connection?, adapters: [AdapterManifest], onSave: @escaping (ConnectionDraft) -> Void, onCancel: @escaping () -> Void) {
+    init(
+        editingConn: Connection?,
+        adapters: [AdapterManifest],
+        adaptersLoadFailed: Bool = false,
+        onRetryAdapters: @escaping () -> Void = {},
+        onSave: @escaping (ConnectionDraft) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
         self.editingConn = editingConn
         self.adapters = adapters
+        self.adaptersLoadFailed = adaptersLoadFailed
+        self.onRetryAdapters = onRetryAdapters
         self.onSave = onSave
         self.onCancel = onCancel
         _draft = State(initialValue: editingConn.map(ConnectionDraft.init) ?? ConnectionDraft())
@@ -27,7 +39,7 @@ struct ConnectionFormView: View {
             Divider()
             Group {
                 if adapters.isEmpty {
-                    loadingView
+                    if adaptersLoadFailed { adapterErrorView } else { loadingView }
                 } else if picking {
                     ScrollView { typeChooser.padding(.horizontal, 18).padding(.vertical, 14) }
                 } else {
@@ -38,7 +50,17 @@ struct ConnectionFormView: View {
             formFooter
         }
         .glassPanelBackground()
-        .onAppear(perform: resolveInitialManifest)
+        .onAppear {
+            resolveInitialManifest()
+            if !picking { focusName() }
+        }
+        .onChange(of: picking) { _, isPicking in
+            if !isPicking { focusName() }
+        }
+    }
+
+    private func focusName() {
+        DispatchQueue.main.async { nameFocused = true }
     }
 
     // MARK: - Manifest resolution
@@ -107,12 +129,32 @@ struct ConnectionFormView: View {
         .frame(maxWidth: .infinity, minHeight: 200)
     }
 
+    private var adapterErrorView: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 24, weight: .light))
+                .foregroundStyle(.secondary)
+            Text("Couldn't load adapters")
+                .font(.system(size: 13, weight: .medium))
+            Text("The local pluk server isn't responding. Make sure it's running, then retry.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Retry", action: onRetryAdapters)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(.top, 2)
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, minHeight: 200)
+    }
+
     // MARK: - Type chooser (shown when adding a new integration)
 
     private var typeChooser: some View {
         VStack(alignment: .leading, spacing: 16) {
             ForEach(groupedAdapters, id: \.category) { category, items in
-                section(prettyCategory(category)) {
+                DetailSection(prettyCategory(category)) {
                     ForEach(items) { adapter in
                         Button { choose(adapter) } label: {
                             HStack(spacing: 10) {
@@ -160,9 +202,12 @@ struct ConnectionFormView: View {
     private var formBody: some View {
         GlassGroup(spacing: 16) {
         VStack(alignment: .leading, spacing: 16) {
-            section("General") {
+            DetailSection("General") {
                 row("Name") {
-                    TextField(namePlaceholder, text: $draft.name).textFieldStyle(.plain)
+                    TextField(namePlaceholder, text: $draft.name)
+                        .textFieldStyle(.plain)
+                        .focused($nameFocused)
+                        .onSubmit { if canSave { onSave(draft) } }
                 }
                 row("Type") {
                     TypeBadge(type: draft.type)
@@ -178,7 +223,7 @@ struct ConnectionFormView: View {
                 ForEach(manifest.groupedFields, id: \.group) { group, fields in
                     let shown = fields.filter(visible)
                     if !shown.isEmpty {
-                        section(group) {
+                        DetailSection(group) {
                             ForEach(shown) { field in fieldRow(field) }
                         }
                     }
@@ -186,8 +231,10 @@ struct ConnectionFormView: View {
 
                 if manifest.isSQL {
                     queryPolicySection
-                } else {
+                } else if manifest.isAction {
                     actionPolicySection
+                } else {
+                    confirmPolicySection
                 }
             }
         }
@@ -209,12 +256,12 @@ struct ConnectionFormView: View {
         switch f.type {
         case "toggle":
             row(f.label) {
-                Toggle("", isOn: boolBinding(f.key)).toggleStyle(.switch).controlSize(.small)
+                Toggle("", isOn: boolBinding(f.key)).toggleStyle(.checkbox)
                 Spacer(minLength: 0)
             }
         case "password":
             row(f.label) {
-                SecureField(f.placeholder ?? "••••••••", text: textBinding(f.key)).textFieldStyle(.plain)
+                SecureField(f.placeholder ?? "••••••", text: textBinding(f.key)).textFieldStyle(.plain)
             }
         case "select":
             row(f.label) {
@@ -261,31 +308,56 @@ struct ConnectionFormView: View {
     // MARK: - Action policy section (non-SQL adapters)
 
     private var actionPolicySection: some View {
-        section("Permissions") {
-            VStack(alignment: .leading, spacing: 8) {
-                Picker("", selection: $draft.allowWrite) {
-                    Text("Read-only").tag(false)
-                    Text("Read & write").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 10)
-                .padding(.top, 8)
+        DetailSection("Permissions") {
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Read", isOn: .constant(true))
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12))
+                    .disabled(true)
+                    .help("Read access is always allowed")
+                    .padding(.horizontal, 14)
+                    .padding(.top, 8)
+
+                Toggle("Write", isOn: $draft.allowWrite)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12))
+                    .help("Allow the agent to create or modify (e.g. create issues, comment)")
+                    .padding(.horizontal, 14)
 
                 Text(draft.allowWrite
                      ? "Agent can read and create/modify (e.g. create issues, comment)."
                      : "Agent can only read. Write actions are blocked.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 14)
                     .padding(.bottom, 8)
             }
+        }
+    }
+
+    // MARK: - Confirmation policy section (no-policy adapters, e.g. SSH)
+
+    private var confirmPolicySection: some View {
+        DetailSection("Policy") {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "hand.raised.fill")
+                    .foregroundColor(.secondary)
+                    .font(.system(size: 12))
+                Text("Commands run unrestricted as the connecting user. Every command must be confirmed in your agent client before it runs.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
         }
     }
 
     // MARK: - Query policy section (SQL adapters)
 
     private var queryPolicySection: some View {
-        section("Query Policy") {
+        DetailSection("Query Policy") {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
@@ -456,34 +528,10 @@ struct ConnectionFormView: View {
 
     // MARK: - Layout helpers
 
-    private func section<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.secondary)
-                .textCase(.uppercase)
-                .padding(.bottom, 6)
-            VStack(spacing: 0) {
-                content()
-            }
-            .cardSurface()
-        }
-    }
-
+    // Form rows are wider than the read-only inspector rows; reuse the shared
+    // template (Glass.swift) so the layout stays in one place.
     private func row<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            Text(label)
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-                .frame(width: 104, alignment: .leading)
-            content()
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .overlay(alignment: .bottom) {
-            Divider().padding(.leading, 124)
-        }
+        InspectorRow(label, labelWidth: 104, dividerInset: 124, content: content)
     }
 
     private func browseButton(title: String, types: [String], onPick: @escaping (String) -> Void) -> some View {

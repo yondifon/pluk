@@ -5,6 +5,34 @@ struct ContentView: View {
     var serverManager: ServerManager
     @State private var selectedID: String?
     @State private var sheet: ActiveSheet?
+    @State private var pendingDelete: PendingDelete?
+
+    // A delete awaiting confirmation. Every delete entry point (sidebar context
+    // menu, detail header button, for both integrations and groups) routes here
+    // so a destructive, irreversible action is never one stray click away.
+    enum PendingDelete: Identifiable {
+        case connection(Connection)
+        case group(ConnectionGroup)
+
+        var id: String {
+            switch self {
+            case .connection(let conn): conn.id
+            case .group(let group): "group:\(group.id)"
+            }
+        }
+        var name: String {
+            switch self {
+            case .connection(let conn): conn.name
+            case .group(let group): group.name
+            }
+        }
+        var noun: String {
+            switch self {
+            case .connection: "integration"
+            case .group: "group"
+            }
+        }
+    }
 
     enum ActiveSheet: Identifiable {
         case add
@@ -47,7 +75,28 @@ struct ContentView: View {
         .sheet(item: $sheet) { active in
             connectionSheet(active)
         }
+        .confirmationDialog(
+            pendingDelete.map { "Delete \($0.noun) “\($0.name)”?" } ?? "",
+            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+            presenting: pendingDelete
+        ) { item in
+            Button("Delete", role: .destructive) { performDelete(item) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This can't be undone.")
+        }
         .task { await store.loadAdapters() }
+    }
+
+    private func performDelete(_ item: PendingDelete) {
+        switch item {
+        case .connection(let conn):
+            store.delete(conn)
+            if selectedID == conn.id { selectedID = nil }
+        case .group(let group):
+            store.deleteGroup(group)
+            if selectedID == group.id { selectedID = nil }
+        }
     }
 
     // MARK: - Sidebar
@@ -61,8 +110,7 @@ struct ContentView: View {
                             .tag(group.id)
                             .contextMenu {
                                 Button("Delete", role: .destructive) {
-                                    store.deleteGroup(group)
-                                    if selectedID == group.id { selectedID = nil }
+                                    pendingDelete = .group(group)
                                 }
                             }
                     }
@@ -76,8 +124,7 @@ struct ContentView: View {
                         .contextMenu {
                             Button("Duplicate") { selectedID = store.duplicate(conn) }
                             Button("Delete", role: .destructive) {
-                                store.delete(conn)
-                                if selectedID == conn.id { selectedID = nil }
+                                pendingDelete = .connection(conn)
                             }
                         }
                 }
@@ -105,16 +152,14 @@ struct ContentView: View {
             GroupDetailView(group: group, store: store) {
                 sheet = .editGroup(group)
             } onDelete: {
-                store.deleteGroup(group)
-                selectedID = nil
+                pendingDelete = .group(group)
             }
             .id(group.id)
         } else if let conn = selected {
             ConnectionDetailView(conn: conn, store: store) {
                 sheet = .edit(conn)
             } onDelete: {
-                store.delete(conn)
-                selectedID = nil
+                pendingDelete = .connection(conn)
             } onDuplicate: {
                 selectedID = store.duplicate(conn)
             }
@@ -151,13 +196,17 @@ struct ContentView: View {
             return nil
         }()
 
-        ConnectionFormView(editingConn: editing, adapters: store.adapters) { draft in
+        ConnectionFormView(
+            editingConn: editing,
+            adapters: store.adapters,
+            adaptersLoadFailed: store.adaptersLoadFailed,
+            onRetryAdapters: { Task { await store.loadAdapters() } }
+        ) { draft in
             if let editing {
                 store.update(editing, draft: draft)
                 selectedID = editing.id
             } else {
-                store.create(draft)
-                selectedID = store.connections.first?.id // newest sorts to top
+                selectedID = store.create(draft)
             }
             sheet = nil
         } onCancel: {
@@ -333,6 +382,7 @@ struct EnvTag: View {
                 .tracking(0.4)
                 .foregroundStyle(.secondary)
         }
+        .help("\(environment.label) environment")
     }
 }
 
@@ -391,7 +441,7 @@ struct EmptyStateView: View {
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
 
-            Button("Add integration", action: onAdd)
+            Button("New Integration", action: onAdd)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .padding(.top, 4)

@@ -1,7 +1,7 @@
 import type { Adapter } from "../types.js";
 import type { Integration } from "../../store/integrations.js";
 import { createDriver } from "../../db/index.js";
-import { buildSqlServer, registerSqlServer } from "./server.js";
+import { buildSqlServer, registerSqlServer, sqlAgentHint, sqlInstructions } from "./server.js";
 import { networkSqlFields, sqliteFields } from "./fields.js";
 
 // Opening a driver and immediately closing it is the connectivity test for the
@@ -20,9 +20,10 @@ export const postgresAdapter: Adapter = {
   label: "PostgreSQL",
   category: "database",
   policyKind: "sql",
-  agentHint: "Use SELECT with LIMIT for production data.",
+  agentHint: sqlAgentHint("postgres"),
   configFields: networkSqlFields(5432),
   testConnection: testSql,
+  instructions: sqlInstructions,
   buildServer: buildSqlServer,
   register: registerSqlServer,
 };
@@ -32,9 +33,10 @@ export const mysqlAdapter: Adapter = {
   label: "MySQL",
   category: "database",
   policyKind: "sql",
-  agentHint: "Use SELECT with LIMIT for production data.",
+  agentHint: sqlAgentHint("mysql"),
   configFields: networkSqlFields(3306),
   testConnection: testSql,
+  instructions: sqlInstructions,
   buildServer: buildSqlServer,
   register: registerSqlServer,
 };
@@ -44,9 +46,10 @@ export const sqliteAdapter: Adapter = {
   label: "SQLite",
   category: "database",
   policyKind: "sql",
-  agentHint: "Use SELECT with LIMIT before wider queries.",
+  agentHint: sqlAgentHint("sqlite"),
   configFields: sqliteFields,
   testConnection: testSql,
+  instructions: sqlInstructions,
   buildServer: buildSqlServer,
   register: registerSqlServer,
 };

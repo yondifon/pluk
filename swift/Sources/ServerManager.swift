@@ -10,7 +10,7 @@ final class ServerManager {
     private var process: Process?
 
     func start() {
-        killOrphanOnPort(4242)
+        killOrphanOnPort(PlukServer.port)
 
         guard let server = resolveServer() else {
             print("[pluk] Could not locate server binary")
@@ -63,7 +63,7 @@ final class ServerManager {
     }
 
     private func isReachable() async -> Bool {
-        guard let url = URL(string: "http://localhost:4242/health") else { return false }
+        guard let url = URL(string: "\(PlukServer.baseURL)/health") else { return false }
         var req = URLRequest(url: url)
         req.timeoutInterval = 1
         return (try? await URLSession.shared.data(for: req)) != nil

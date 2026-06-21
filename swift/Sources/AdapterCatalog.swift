@@ -81,11 +81,13 @@ struct AdapterManifest: Codable, Identifiable, Hashable {
     let id: String
     let label: String
     let category: String
-    let policyKind: String       // "sql" | "action"
+    let policyKind: String       // "sql" | "action" | "none"
     let agentHint: String?
     let configFields: [ConfigFieldDef]
 
     var isSQL: Bool { policyKind == "sql" }
+    var isAction: Bool { policyKind == "action" }
+    var hasPolicy: Bool { policyKind != "none" }
 
     /// Fields grouped in declaration order, preserving first-seen group order.
     var groupedFields: [(group: String, fields: [ConfigFieldDef])] {

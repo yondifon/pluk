@@ -18,15 +18,50 @@ import {
   clearQueryAbort,
 } from "../../mcp/pool.js";
 import { logError } from "../../log.js";
+import { buildInstructions } from "../../mcp/instructions.js";
 import type { ToolHost } from "../../mcp/namespace.js";
 
 // MCP server for the SQL database adapter family (Postgres, MySQL, SQLite).
 // Tools, resources, and prompts for query + schema introspection, all gated by
 // the per-integration query policy and recorded in the activity log.
 export function buildSqlServer(conn: Integration, sessionIdRef: { value: string }): McpServer {
-  const server = new McpServer({ name: conn.name, version: "1.0.0" });
+  const server = new McpServer(
+    { name: conn.name, version: "1.0.0" },
+    { instructions: sqlInstructions(conn) },
+  );
   registerSqlServer(server, conn, sessionIdRef);
   return server;
+}
+
+// Human label for a SQL adapter id — single source for the manifest and the
+// agent-facing instructions so they never drift.
+export function sqlLabel(type: string): string {
+  switch (type) {
+    case "postgres": return "PostgreSQL";
+    case "mysql": return "MySQL";
+    case "sqlite": return "SQLite";
+    default: return type;
+  }
+}
+
+export function sqlAgentHint(type: string): string {
+  return type === "sqlite"
+    ? "Use SELECT with LIMIT before wider queries."
+    : "Use SELECT with LIMIT for production data.";
+}
+
+// Live, per-session guidance handed to connecting agents (see instructions.ts).
+// Reflects the current query policy, so a read-only DB and an unrestricted one
+// announce different constraints.
+export function sqlInstructions(conn: Integration): string {
+  const policy = parsePolicy(conn.query_policy, conn.read_only);
+  return buildInstructions(conn, {
+    kind: sqlLabel(conn.type),
+    access: "Query and inspect this database. Every statement is checked against the policy below and recorded in the activity log.",
+    policy: policyDescription(policy),
+    start: "Start with list_tables and describe_table to learn the schema, then read with SELECT … LIMIT.",
+    hint: sqlAgentHint(conn.type),
+  });
 }
 
 // Register the SQL surface onto a host (a bare McpServer for a single endpoint,

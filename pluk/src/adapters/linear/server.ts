@@ -5,14 +5,30 @@ import { parseActionPolicy, actionAllowed, actionPolicyDescription, type ActionC
 import { createLogEntry, updateLogEntry, logQuery } from "../../store/queryLog.js";
 import { linearGraphQL } from "./client.js";
 import { logError } from "../../log.js";
+import { buildInstructions } from "../../mcp/instructions.js";
 import type { ToolHost } from "../../mcp/namespace.js";
+
+export const LINEAR_AGENT_HINT = "Start with list_issues or search_issues before writing.";
 
 // MCP server for the Linear adapter. Tools are gated by the integration's action
 // policy (read/write) and recorded in the shared activity log.
 export function buildLinearServer(conn: Integration, sessionIdRef: { value: string }): McpServer {
-  const server = new McpServer({ name: conn.name, version: "1.0.0" });
+  const server = new McpServer(
+    { name: conn.name, version: "1.0.0" },
+    { instructions: linearInstructions(conn) },
+  );
   registerLinearServer(server, conn, sessionIdRef);
   return server;
+}
+
+export function linearInstructions(conn: Integration): string {
+  const policy = parseActionPolicy(conn.query_policy, conn.read_only);
+  return buildInstructions(conn, {
+    kind: "Linear",
+    access: "Read and search Linear issues; create or update them when write is permitted. Every action is policy-checked and recorded in the activity log.",
+    policy: actionPolicyDescription(policy),
+    hint: LINEAR_AGENT_HINT,
+  });
 }
 
 // Register the Linear surface onto a host (a bare McpServer for a single
@@ -40,11 +56,12 @@ export function registerLinearServer(server: ToolHost, conn: Integration, _sessi
     try {
       const data = await fn();
       const rows = Array.isArray(data) ? data : [data];
-      updateLogEntry(logId, "allowed", undefined, { rows });
-      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      const text = JSON.stringify(data, null, 2);
+      updateLogEntry(logId, "allowed", undefined, { rows }, text);
+      return { content: [{ type: "text", text }] };
     } catch (err) {
       const msg = (err as Error).message;
-      updateLogEntry(logId, "error", msg);
+      updateLogEntry(logId, "error", msg, undefined, `Error: ${msg}`);
       logError(`linear ${action} failed`, err, { integration: conn.name });
       return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
     }

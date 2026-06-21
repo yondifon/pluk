@@ -5,15 +5,31 @@ import { parseActionPolicy, actionAllowed, actionPolicyDescription, type ActionC
 import { createLogEntry, updateLogEntry, logQuery } from "../../store/queryLog.js";
 import { sentryConfig, sentryRequest } from "./client.js";
 import { logError } from "../../log.js";
+import { buildInstructions } from "../../mcp/instructions.js";
 import type { ToolHost } from "../../mcp/namespace.js";
+
+export const SENTRY_AGENT_HINT = "Start with list_issues, then use latest_event for stack traces.";
 
 // MCP server for the Sentry adapter. Read tools cover projects, issues, and the
 // latest event (stacktrace); the one write tool resolves/ignores an issue. All
 // gated by the integration's action policy and recorded in the activity log.
 export function buildSentryServer(conn: Integration, sessionIdRef: { value: string }): McpServer {
-  const server = new McpServer({ name: conn.name, version: "1.0.0" });
+  const server = new McpServer(
+    { name: conn.name, version: "1.0.0" },
+    { instructions: sentryInstructions(conn) },
+  );
   registerSentryServer(server, conn, sessionIdRef);
   return server;
+}
+
+export function sentryInstructions(conn: Integration): string {
+  const policy = parseActionPolicy(conn.query_policy, conn.read_only);
+  return buildInstructions(conn, {
+    kind: "Sentry",
+    access: "Read projects, issues, and event stack traces; resolve or ignore issues when write is permitted. Every action is policy-checked and recorded in the activity log.",
+    policy: actionPolicyDescription(policy),
+    hint: SENTRY_AGENT_HINT,
+  });
 }
 
 export function registerSentryServer(server: ToolHost, conn: Integration, _sessionIdRef: { value: string }): void {
@@ -37,11 +53,12 @@ export function registerSentryServer(server: ToolHost, conn: Integration, _sessi
     try {
       const data = await fn();
       const rows = Array.isArray(data) ? data : [data];
-      updateLogEntry(logId, "allowed", undefined, { rows });
-      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      const text = JSON.stringify(data, null, 2);
+      updateLogEntry(logId, "allowed", undefined, { rows }, text);
+      return { content: [{ type: "text", text }] };
     } catch (err) {
       const msg = (err as Error).message;
-      updateLogEntry(logId, "error", msg);
+      updateLogEntry(logId, "error", msg, undefined, `Error: ${msg}`);
       logError(`sentry ${action} failed`, err, { integration: conn.name });
       return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
     }

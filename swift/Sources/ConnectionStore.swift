@@ -14,6 +14,7 @@ struct QueryLogEntry: Identifiable {
     let categories: String?
     let resultJson: String?   // JSON snapshot of result rows
     let rowCount: Int?        // total rows before cap
+    let responseText: String? // raw agent-visible response text (capped server-side)
     let createdAt: String
 }
 
@@ -65,6 +66,7 @@ final class ConnectionStore {
             categories TEXT,
             result_json TEXT,
             row_count INTEGER,
+            response_text TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
         """)
@@ -92,6 +94,7 @@ final class ConnectionStore {
         let alters = [
             "ALTER TABLE query_log ADD COLUMN result_json TEXT",
             "ALTER TABLE query_log ADD COLUMN row_count INTEGER",
+            "ALTER TABLE query_log ADD COLUMN response_text TEXT",
         ]
         for sql in alters { exec(sql) } // silently ignores if column exists
     }
@@ -245,7 +248,8 @@ final class ConnectionStore {
         }
     }
 
-    func create(_ draft: ConnectionDraft) {
+    @discardableResult
+    func create(_ draft: ConnectionDraft) -> String {
         let id = String(UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "").prefix(16))
         let token = "pluk_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
         let sql = """
@@ -253,7 +257,7 @@ final class ConnectionStore {
         VALUES (?,?,?,?,?,?,?,?)
         """
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return id }
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, id)
         bindText(stmt, 2, draft.name)
@@ -265,6 +269,7 @@ final class ConnectionStore {
         bindText(stmt, 8, token)
         sqlite3_step(stmt)
         load()
+        return id
     }
 
     func update(_ conn: Connection, draft: ConnectionDraft) {
@@ -325,7 +330,7 @@ final class ConnectionStore {
         var stmt: OpaquePointer?
         let sql = """
         SELECT id, connection_id, connection_name, sql, verdict, reason, categories,
-               result_json, row_count, created_at
+               result_json, row_count, response_text, created_at
         FROM query_log
         WHERE connection_id = ?
         ORDER BY id DESC
@@ -345,7 +350,7 @@ final class ConnectionStore {
             func optInt(_ i: Int32) -> Int? {
                 sqlite3_column_type(stmt, i) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, i))
             }
-            guard let createdAt = str(9) else { continue }
+            guard let createdAt = str(10) else { continue }
             result.append(QueryLogEntry(
                 id: Int(sqlite3_column_int(stmt, 0)),
                 connectionId: str(1) ?? "",
@@ -356,6 +361,7 @@ final class ConnectionStore {
                 categories: str(6),
                 resultJson: str(7),
                 rowCount: optInt(8),
+                responseText: str(9),
                 createdAt: createdAt
             ))
         }
@@ -373,12 +379,17 @@ final class ConnectionStore {
     // MARK: - Adapter catalog
 
     var adapters: [AdapterManifest] = []
+    var adaptersLoadFailed = false
 
     func loadAdapters() async {
+        adaptersLoadFailed = false
         for _ in 0..<12 {
-            if let list = await fetchAdapters() { adapters = list; return }
+            if let list = await fetchAdapters() { adapters = list; adaptersLoadFailed = false; return }
             try? await Task.sleep(for: .milliseconds(500))
         }
+        // Exhausted retries with nothing to show — surface a retry affordance
+        // instead of leaving forms spinning on an empty catalog forever.
+        if adapters.isEmpty { adaptersLoadFailed = true }
     }
 
     /// Ask the server to drop the live MCP sessions for one integration/group (by
@@ -386,7 +397,7 @@ final class ConnectionStore {
     /// integrations' and groups' sessions are left untouched.
     func reloadServer(id: String) {
         Task {
-            guard var comps = URLComponents(string: "http://localhost:4242/api/reload") else { return }
+            guard var comps = URLComponents(string: PlukServer.api("reload")) else { return }
             comps.queryItems = [URLQueryItem(name: "id", value: id)]
             guard let url = comps.url else { return }
             var req = URLRequest(url: url)
@@ -396,7 +407,7 @@ final class ConnectionStore {
     }
 
     private func fetchAdapters() async -> [AdapterManifest]? {
-        guard let url = URL(string: "http://localhost:4242/api/adapters") else { return nil }
+        guard let url = URL(string: PlukServer.api("adapters")) else { return nil }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             return try JSONDecoder().decode(AdapterCatalogResponse.self, from: data).adapters
