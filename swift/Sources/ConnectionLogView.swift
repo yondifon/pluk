@@ -109,7 +109,7 @@ struct LogsTab: View {
                     .foregroundColor(.secondary)
                 TextField(scope.isGroup ? "Filter SQL, tool, integration…" : "Filter SQL or tool…", text: $search)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.dev(size: 11))
                 if !search.isEmpty {
                     Button { search = "" } label: {
                         Image(systemName: "xmark.circle.fill").font(.system(size: 10))
@@ -132,7 +132,7 @@ struct LogsTab: View {
                 ForEach(VerdictFilter.allCases, id: \.self) { f in
                     Button(f.rawValue) { filter = f }
                         .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: filter == f ? .semibold : .regular))
+                        .font(.dev(size: 11, weight: filter == f ? .semibold : .regular))
                         .foregroundColor(filter == f ? .accentColor : .secondary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -167,7 +167,7 @@ struct LogsTab: View {
                         .font(.system(size: 10))
                     let days = store.logRetentionDays
                     Text(days == 0 ? "Forever" : "\(days)d")
-                        .font(.system(size: 11))
+                        .font(.dev(size: 11))
                 }
                 .foregroundColor(.secondary)
             }
@@ -192,10 +192,10 @@ struct LogsTab: View {
     private func statPill(_ count: Int, label: String, color: Color) -> some View {
         HStack(spacing: 3) {
             Text("\(count)")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .font(.dev(size: 11, weight: .semibold))
                 .foregroundColor(color == .secondary ? .primary : color)
             Text(label)
-                .font(.system(size: 11))
+                .font(.dev(size: 11))
                 .foregroundColor(.secondary)
         }
     }
@@ -300,115 +300,132 @@ private struct LogEntryRow: View {
     }
 
     var body: some View {
-        Button(action: onToggle) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top, spacing: 10) {
-                    // Verdict indicator bar
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(verdictColor)
-                        .frame(width: 3)
-                        .frame(minHeight: 36)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 10) {
+                // Verdict indicator bar
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(verdictColor)
+                    .frame(width: 3)
+                    .frame(minHeight: 36)
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        // Top row: badge + member/tool chips + SQL preview
-                        HStack(spacing: 6) {
-                            VerdictBadge(verdict: entry.verdict)
+                VStack(alignment: .leading, spacing: 4) {
+                    // Top row: badge + member/tool chips + SQL preview
+                    HStack(spacing: 6) {
+                        VerdictBadge(verdict: entry.verdict)
 
-                            if showConnection {
-                                chip(entry.connectionName, system: "circle.grid.2x2", color: .accentColor)
-                            }
+                        if showConnection {
+                            chip(entry.connectionName, system: "circle.grid.2x2", color: .accentColor)
+                        }
 
-                            if let source = entry.source, !source.isEmpty {
-                                chip(source, system: "wrench.and.screwdriver", color: .secondary)
-                            }
+                        if let source = entry.source, !source.isEmpty {
+                            chip(source, system: "wrench.and.screwdriver", color: .secondary)
+                        }
 
-                            if let cats = entry.categories, !cats.isEmpty {
-                                Text(cats)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                            }
-
-                            Spacer()
-
-                            if entry.verdict == "pending" {
-                                Button(action: onStop) {
-                                    Label("Stop", systemImage: "stop.fill")
-                                        .font(.system(size: 10, weight: .medium))
-                                }
-                                .buttonStyle(.plain)
-                                .foregroundColor(.red)
-                                .help("Cancel this running query")
-                            }
-
-                            Text(relativeTime(entry.createdAt))
-                                .font(.system(size: 10))
+                        if let cats = entry.categories, !cats.isEmpty {
+                            Text(cats)
+                                .font(.dev(size: 10))
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
                         }
 
-                        // SQL
+                        Spacer()
+
+                        if entry.verdict == "pending" {
+                            Button(action: onStop) {
+                                Label("Stop", systemImage: "stop.fill")
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(.red)
+                            .help("Cancel this running query")
+                        }
+
+                        Text(relativeTime(entry.createdAt))
+                            .font(.dev(size: 10))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    // Query — a one-line preview when collapsed; a structured,
+                    // selectable code block when expanded (mirrors the response).
+                    if isExpanded {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("QUERY")
+                                .font(.dev(size: 9.5, weight: .semibold))
+                                .foregroundColor(.secondary)
+                                .tracking(0.4)
+                            Text(entry.sql)
+                                .font(.dev(size: 11.5))
+                                .foregroundColor(.primary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(8)
+                                .codeBlockSurface(cornerRadius: 5)
+                        }
+                    } else {
                         Text(entry.sql)
-                            .font(.system(size: 11.5, design: .monospaced))
+                            .font(.dev(size: 11.5))
                             .foregroundColor(.primary)
-                            .lineLimit(isExpanded ? nil : 1)
+                            .lineLimit(1)
                             .truncationMode(.tail)
                             .frame(maxWidth: .infinity, alignment: .leading)
-
-                        // Expanded: reason + result preview + full timestamp
-                        if isExpanded {
-                            if let reason = entry.reason, !reason.isEmpty {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "exclamationmark.circle.fill")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(verdictColor)
-                                    Text(reason)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.top, 2)
-                            }
-
-                            // Full response: raw tool output when stored, else the
-                            // structured result rows as a mini-table.
-                            if let raw = entry.responseText, !raw.isEmpty {
-                                ResponseTextBlock(text: raw) { showResponseSheet = true }
-                                    .padding(.top, 6)
-                            } else if let json = entry.resultJson {
-                                ResultPreview(json: json, rowCount: entry.rowCount)
-                                    .padding(.top, 6)
-                            }
-
-                            Text(localTime(entry.createdAt))
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary.opacity(0.7))
-                                .padding(.top, 1)
-
-                            // Copy actions for the query and its response
-                            HStack(spacing: 6) {
-                                copyButton(copiedSQL ? "Copied!" : "Copy", copied: copiedSQL) {
-                                    copy(entry.sql)
-                                    flash($copiedSQL)
-                                }
-                                if let response = fullResponse {
-                                    copyButton(copiedResult ? "Copied!" : "Copy response", copied: copiedResult) {
-                                        copy(response)
-                                        flash($copiedResult)
-                                    }
-                                }
-                            }
-                            .padding(.top, 6)
-                        }
                     }
-                    .padding(.vertical, 10)
-                    .padding(.trailing, 18)
+
+                    // Expanded: reason + result preview + full timestamp
+                    if isExpanded {
+                        if let reason = entry.reason, !reason.isEmpty {
+                            HStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.circle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(verdictColor)
+                                Text(reason)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.top, 2)
+                        }
+
+                        // Full response: raw tool output when stored, else the
+                        // structured result rows as a mini-table.
+                        if let raw = entry.responseText, !raw.isEmpty {
+                            ResponseTextBlock(text: raw) { showResponseSheet = true }
+                                .padding(.top, 6)
+                        } else if let json = entry.resultJson {
+                            ResultPreview(json: json, rowCount: entry.rowCount)
+                                .padding(.top, 6)
+                        }
+
+                        Text(localTime(entry.createdAt))
+                            .font(.dev(size: 10))
+                            .foregroundColor(.secondary.opacity(0.7))
+                            .padding(.top, 1)
+
+                        // Copy actions for the query and its response
+                        HStack(spacing: 6) {
+                            copyButton(copiedSQL ? "Copied!" : "Copy", copied: copiedSQL) {
+                                copy(entry.sql)
+                                flash($copiedSQL)
+                            }
+                            if let response = fullResponse {
+                                copyButton(copiedResult ? "Copied!" : "Copy response", copied: copiedResult) {
+                                    copy(response)
+                                    flash($copiedResult)
+                                }
+                            }
+                        }
+                        .padding(.top, 6)
+                    }
                 }
-                .padding(.leading, 18)
+                .padding(.vertical, 10)
+                .padding(.trailing, 18)
             }
+            .padding(.leading, 18)
         }
-        .buttonStyle(.plain)
-        .background(isExpanded ? Color.accentColor.opacity(0.04) : .clear)
         .contentShape(Rectangle())
+        .onTapGesture { onToggle() }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(.default) { onToggle() }
+        .background(isExpanded ? Color.accentColor.opacity(0.04) : .clear)
         .animation(.easeInOut(duration: 0.12), value: isExpanded)
         .sheet(isPresented: $showResponseSheet) {
             ResponseSheet(title: entry.sql, text: fullResponse ?? "")
@@ -429,7 +446,7 @@ private struct LogEntryRow: View {
     private func chip(_ text: String, system: String, color: Color) -> some View {
         HStack(spacing: 3) {
             Image(systemName: system).font(.system(size: 8))
-            Text(text).font(.system(size: 10, weight: .medium, design: .monospaced)).lineLimit(1)
+            Text(text).font(.dev(size: 10, weight: .medium)).lineLimit(1)
         }
         .foregroundColor(color)
         .padding(.horizontal, 6)
@@ -456,13 +473,25 @@ private struct LogEntryRow: View {
         }
     }
 
-    // "2 min ago" / "just now" / falls back to raw string for older entries
-    private func relativeTime(_ raw: String) -> String {
+    private static let utcFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
         fmt.locale = Locale(identifier: "en_US_POSIX")
         fmt.timeZone = TimeZone(identifier: "UTC")  // SQLite datetime('now') is UTC
-        guard let date = fmt.date(from: raw) else { return raw }
+        return fmt
+    }()
+
+    private static let localFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = .current
+        return fmt
+    }()
+
+    // "2 min ago" / "just now" / falls back to raw string for older entries
+    private func relativeTime(_ raw: String) -> String {
+        guard let date = Self.utcFormatter.date(from: raw) else { return raw }
         let secs = Int(-date.timeIntervalSinceNow)
         if secs < 10  { return "just now" }
         if secs < 60  { return "\(secs)s ago" }
@@ -473,16 +502,8 @@ private struct LogEntryRow: View {
 
     // Full UTC timestamp -> local time string
     private func localTime(_ raw: String) -> String {
-        let inFmt = DateFormatter()
-        inFmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        inFmt.locale = Locale(identifier: "en_US_POSIX")
-        inFmt.timeZone = TimeZone(identifier: "UTC")
-        guard let date = inFmt.date(from: raw) else { return raw }
-        let outFmt = DateFormatter()
-        outFmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        outFmt.locale = Locale(identifier: "en_US_POSIX")
-        outFmt.timeZone = .current
-        return outFmt.string(from: date)
+        guard let date = Self.utcFormatter.date(from: raw) else { return raw }
+        return Self.localFormatter.string(from: date)
     }
 }
 
@@ -496,7 +517,7 @@ private struct VerdictBadge: View {
             HStack(spacing: 4) {
                 ProgressView().scaleEffect(0.55).frame(width: 10, height: 10)
                 Text("RUNNING")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.dev(size: 9, weight: .bold))
                     .foregroundColor(.secondary)
             }
             .padding(.horizontal, 6)
@@ -505,7 +526,7 @@ private struct VerdictBadge: View {
             .clipShape(.capsule)
         } else {
             Text(label)
-                .font(.system(size: 9, weight: .bold))
+                .font(.dev(size: 9, weight: .bold))
                 .foregroundColor(.white)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
@@ -539,24 +560,41 @@ private struct ResultPreview: View {
     let json: String
     let rowCount: Int?
 
+    @State private var parsed: ParsedResult?
+
     private struct ParsedResult {
+        struct Cell: Identifiable {
+            let id: String
+            let text: String
+        }
+        struct Row: Identifiable {
+            let id: String
+            let cells: [Cell]
+        }
         let fields: [String]
-        let rows: [[String]]
+        let rows: [Row]
     }
 
-    private var parsed: ParsedResult? {
+    private func parse() -> ParsedResult? {
         guard let data = json.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let fields = obj["fields"] as? [String],
               let rows = obj["rows"] as? [[String: Any]] else { return nil }
-        let rowStrings = rows.prefix(5).map { row in
-            fields.map { key in
-                guard let val = row[key] else { return "NULL" }
-                if val is NSNull { return "NULL" }
-                return "\(val)"
+
+        let parsedRows: [ParsedResult.Row] = rows.prefix(5).enumerated().map { rowIndex, row in
+            let cells: [ParsedResult.Cell] = fields.enumerated().map { colIndex, key in
+                let text: String
+                if let val = row[key], !(val is NSNull) {
+                    text = "\(val)"
+                } else {
+                    text = "NULL"
+                }
+                return ParsedResult.Cell(id: "\(rowIndex)-\(colIndex)", text: text)
             }
+            let contentId = cells.map(\.text).joined(separator: "\u{001F}")
+            return ParsedResult.Row(id: "\(rowIndex)-\(contentId)", cells: cells)
         }
-        return ParsedResult(fields: fields, rows: rowStrings)
+        return ParsedResult(fields: fields, rows: parsedRows)
     }
 
     var body: some View {
@@ -566,7 +604,7 @@ private struct ResultPreview: View {
                 HStack(spacing: 0) {
                     ForEach(p.fields.prefix(6), id: \.self) { field in
                         Text(field)
-                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .font(.dev(size: 9.5, weight: .semibold))
                             .foregroundColor(.secondary)
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -575,14 +613,14 @@ private struct ResultPreview: View {
                             .background(Color.secondary.opacity(0.08))
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous).path(in: CGRect(x: 0, y: 0, width: 9999, height: 999)))
+                .clipShape(.rect(cornerRadius: 4, style: .continuous))
 
                 // Data rows
-                ForEach(Array(p.rows.enumerated()), id: \.offset) { _, row in
+                ForEach(p.rows) { row in
                     HStack(spacing: 0) {
-                        ForEach(Array(row.prefix(6).enumerated()), id: \.offset) { _, cell in
-                            Text(cell)
-                                .font(.system(size: 9.5, design: .monospaced))
+                        ForEach(row.cells.prefix(6)) { cell in
+                            Text(cell.text)
+                                .font(.dev(size: 9.5))
                                 .foregroundColor(.primary.opacity(0.75))
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -598,13 +636,14 @@ private struct ResultPreview: View {
                 let showing = min(p.rows.count, 5)
                 if total > showing {
                     Text("\(showing) of \(total) rows")
-                        .font(.system(size: 9.5))
+                        .font(.dev(size: 9.5))
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 6)
                         .padding(.top, 3)
                 }
             }
             .codeBlockSurface(cornerRadius: 5)
+            .task(id: json) { parsed = parse() }
         }
     }
 }
@@ -625,14 +664,14 @@ private struct ResponseTextBlock: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("RESPONSE")
-                    .font(.system(size: 9.5, weight: .semibold))
+                    .font(.dev(size: 9.5, weight: .semibold))
                     .foregroundColor(.secondary)
                     .tracking(0.4)
                 Spacer()
                 if isLong {
                     Button(action: onOpen) {
                         Label("Open", systemImage: "arrow.up.left.and.arrow.down.right")
-                            .font(.system(size: 9.5, weight: .medium))
+                            .font(.dev(size: 9.5, weight: .medium))
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.accentColor)
@@ -640,7 +679,7 @@ private struct ResponseTextBlock: View {
                 }
             }
             Text(text)
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(.dev(size: 10.5))
                 .foregroundColor(.primary.opacity(0.8))
                 .lineLimit(isLong ? Self.inlineLineCap : nil)
                 .truncationMode(.tail)
@@ -649,7 +688,7 @@ private struct ResponseTextBlock: View {
                 .codeBlockSurface(cornerRadius: 5)
             if isLong {
                 Text("\(lineCount) lines — Open to see the full response")
-                    .font(.system(size: 9))
+                    .font(.dev(size: 9))
                     .foregroundColor(.secondary)
             }
         }
@@ -669,7 +708,7 @@ private struct ResponseSheet: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Response").font(.system(size: 13, weight: .semibold))
                     Text(title)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.dev(size: 10))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -690,7 +729,7 @@ private struct ResponseSheet: View {
             Divider()
             ScrollView {
                 Text(text)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.dev(size: 12))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)

@@ -62,7 +62,7 @@ struct GroupDetailView: View {
                 Button { tab = t } label: {
                     HStack(spacing: 5) {
                         Image(systemName: t.icon).font(.system(size: 11))
-                        Text(t.rawValue).font(.system(size: 12, weight: .medium))
+                        Text(t.rawValue).font(.dev(size: 12, weight: .medium))
                     }
                     .foregroundColor(tab == t ? .accentColor : .secondary)
                     .padding(.horizontal, 14)
@@ -92,7 +92,7 @@ struct GroupDetailView: View {
                 Text(group.name)
                     .font(.system(size: 15, weight: .semibold))
                 Text(subtitle)
-                    .font(.system(size: 11))
+                    .font(.dev(size: 11))
                     .foregroundColor(.secondary)
             }
             Spacer()
@@ -115,7 +115,7 @@ struct GroupDetailView: View {
         DetailSection("MCP endpoint") {
             HStack(spacing: 10) {
                 Text(group.mcpURL)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.dev(size: 12))
                     .textSelection(.enabled)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -142,8 +142,9 @@ struct GroupDetailView: View {
         DetailSection("Config") {
             HStack {
                 Text("Client")
-                    .font(.system(size: 12))
+                    .font(.dev(size: 11, weight: .semibold))
                     .foregroundColor(.secondary)
+                    .textCase(.uppercase)
                     .frame(width: 86, alignment: .leading)
                 Spacer()
                 Picker("", selection: $selectedClient) {
@@ -158,7 +159,7 @@ struct GroupDetailView: View {
             .padding(.vertical, 7)
 
             Text(configSnippet)
-                .font(.system(size: 11, design: .monospaced))
+                .font(.dev(size: 11))
                 .foregroundColor(.primary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -200,14 +201,14 @@ struct GroupDetailView: View {
                                 EnvTag(environment: conn.environment)
                                 Spacer()
                                 Text("\(NamespaceFormat.slug(conn.name))__*")
-                                    .font(.system(size: 10, design: .monospaced))
+                                    .font(.dev(size: 10))
                                     .foregroundStyle(.tertiary)
                             }
                             if !overrides.isEmpty {
                                 Text(overrides.sorted { $0.key < $1.key }
                                         .map { "\($0.key) → \($0.value)" }
                                         .joined(separator: "   "))
-                                    .font(.system(size: 10, design: .monospaced))
+                                    .font(.dev(size: 10))
                                     .foregroundStyle(Color.accentColor)
                                     .padding(.leading, 32)
                             }
@@ -233,6 +234,17 @@ struct GroupDetailView: View {
         }
     }
 }
+
+#if DEBUG
+#Preview {
+    GroupDetailView(
+        group: .sample,
+        store: .preview,
+        onEdit: {},
+        onDelete: {}
+    )
+}
+#endif
 
 // Mirrors the server's namespace slug (mcp/namespace.ts) so the detail view can
 // show each member's tool prefix (e.g. `metrics_db__*`).

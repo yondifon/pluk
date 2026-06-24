@@ -246,7 +246,7 @@ struct GroupRow: View {
                     .font(.system(size: 13))
                     .lineLimit(1)
                 Text("\(group.memberIds.count) integration\(group.memberIds.count == 1 ? "" : "s")")
-                    .font(.system(size: 10))
+                    .font(.dev(size: 10))
                     .foregroundStyle(.tertiary)
             }
             Spacer()
@@ -328,7 +328,7 @@ struct AdapterGlyph: View {
                 .foregroundColor(selected ? .white : color)
         } else {
             Text(AdapterStyle.abbrev(for: type))
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .font(.dev(size: 9, weight: .semibold))
                 .foregroundColor(selected ? .white : color)
         }
     }
@@ -385,8 +385,24 @@ enum AdapterStyle {
         let img = logoBundle
             .url(forResource: type, withExtension: "png", subdirectory: "AdapterLogos")
             .flatMap { NSImage(contentsOf: $0) }
+            .map { downsample($0, to: 48) }
         logoCache[type] = img
         return img
+    }
+
+    private static func downsample(_ image: NSImage, to maxSize: CGFloat) -> NSImage {
+        let src = image.size
+        guard src.width > maxSize || src.height > maxSize else { return image }
+        let scale = min(maxSize / src.width, maxSize / src.height)
+        let dst = NSSize(width: src.width * scale, height: src.height * scale)
+        let resized = NSImage(size: dst)
+        resized.lockFocus()
+        image.draw(in: NSRect(origin: .zero, size: dst),
+                   from: NSRect(origin: .zero, size: src),
+                   operation: .copy, fraction: 1.0)
+        resized.unlockFocus()
+        resized.isTemplate = image.isTemplate
+        return resized
     }
 }
 
@@ -403,7 +419,7 @@ struct EnvTag: View {
                 .fill(selected ? Color.white : environment.color.opacity(0.85))
                 .frame(width: 5, height: 5)
             Text(environment.label.uppercased())
-                .font(.system(size: 9, weight: .medium))
+                .font(.dev(size: 9, weight: .medium))
                 .tracking(0.4)
                 .foregroundStyle(.secondary)
         }
@@ -421,14 +437,14 @@ private struct ServerStatusBanner: View {
             if serverManager.status == .starting {
                 ProgressView().scaleEffect(0.7).frame(width: 12, height: 12)
                 Text("Server starting…")
-                    .font(.system(size: 11))
+                    .font(.dev(size: 11))
                     .foregroundColor(.secondary)
             } else {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 11))
                     .foregroundColor(.orange)
                 Text("Server not running")
-                    .font(.system(size: 11))
+                    .font(.dev(size: 11))
                     .foregroundColor(.secondary)
             }
             Spacer()
@@ -470,3 +486,9 @@ struct EmptyStateView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
+#if DEBUG
+#Preview {
+    ContentView(store: .preview, serverManager: .preview)
+}
+#endif

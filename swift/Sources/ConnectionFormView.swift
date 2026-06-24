@@ -52,15 +52,7 @@ struct ConnectionFormView: View {
         .glassPanelBackground()
         .onAppear {
             resolveInitialManifest()
-            if !picking { focusName() }
         }
-        .onChange(of: picking) { _, isPicking in
-            if !isPicking { focusName() }
-        }
-    }
-
-    private func focusName() {
-        DispatchQueue.main.async { nameFocused = true }
     }
 
     // MARK: - Manifest resolution
@@ -207,11 +199,13 @@ struct ConnectionFormView: View {
                     TextField(namePlaceholder, text: $draft.name)
                         .textFieldStyle(.plain)
                         .focused($nameFocused)
+                        .defaultFocus($nameFocused, !picking)
                         .onSubmit { if canSave { onSave(draft) } }
                 }
                 row("Type") {
                     TypeBadge(type: draft.type)
-                    Text(manifest?.label ?? draft.type.capitalized).font(.system(size: 12))
+                    Text(manifest?.label ?? draft.type.capitalized)
+                        .font(.dev(size: 12))
                     Spacer()
                     Button("Change") { picking = true }
                         .buttonStyle(.bordered)
@@ -261,20 +255,29 @@ struct ConnectionFormView: View {
             }
         case "password":
             row(f.label) {
-                SecureField(f.placeholder ?? "••••••", text: textBinding(f.key)).textFieldStyle(.plain)
+                SecureField(f.placeholder ?? "••••••", text: textBinding(f.key))
+                    .textFieldStyle(.plain)
+                    .font(.dev(size: 12))
             }
         case "select":
             row(f.label) {
                 Picker("", selection: textBinding(f.key)) {
-                    ForEach(f.options ?? [], id: \.value) { opt in Text(opt.label).tag(opt.value) }
+                    ForEach(f.options ?? [], id: \.value) { opt in
+                        Text(opt.label)
+                            .font(.dev(size: 12))
+                            .tag(opt.value)
+                    }
                 }
                 .pickerStyle(.menu)
+                .font(.dev(size: 12))
                 .frame(maxWidth: 200, alignment: .leading)
             }
         case "file":
             row(f.label) {
                 HStack {
-                    TextField(f.placeholder ?? "", text: textBinding(f.key)).textFieldStyle(.plain)
+                    TextField(f.placeholder ?? "", text: textBinding(f.key))
+                        .textFieldStyle(.plain)
+                        .font(.dev(size: 12))
                     browseButton(title: "Choose…", types: f.fileTypes ?? []) { draft.config[f.key] = $0 }
                 }
             }
@@ -282,12 +285,15 @@ struct ConnectionFormView: View {
             row(f.label) {
                 TextField(f.placeholder ?? "", text: textBinding(f.key))
                     .textFieldStyle(.plain)
+                    .font(.dev(size: 12))
                     .frame(width: 90)
                 Spacer(minLength: 0)
             }
         default: // text
             row(f.label) {
-                TextField(f.placeholder ?? "", text: textBinding(f.key)).textFieldStyle(.plain)
+                TextField(f.placeholder ?? "", text: textBinding(f.key))
+                    .textFieldStyle(.plain)
+                    .font(.dev(size: 12))
             }
         }
     }
@@ -384,7 +390,8 @@ struct ConnectionFormView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text("Preset")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.dev(size: 11, weight: .semibold))
+                            .textCase(.uppercase)
                             .frame(width: 80, alignment: .leading)
                         Picker("", selection: Binding(
                             get: { draft.queryPolicy.preset },
@@ -430,7 +437,7 @@ struct ConnectionFormView: View {
                 ForEach(groups, id: \.0) { groupName, categories in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(groupName)
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.dev(size: 10, weight: .semibold))
                             .foregroundColor(.secondary)
                             .textCase(.uppercase)
                             .padding(.horizontal, 10)
@@ -591,3 +598,14 @@ private struct HiddenToolsNote: View {
         }
     }
 }
+
+#if DEBUG
+#Preview {
+    ConnectionFormView(
+        editingConn: .sample,
+        adapters: [.samplePostgres],
+        onSave: { _ in },
+        onCancel: {}
+    )
+}
+#endif

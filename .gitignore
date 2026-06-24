@@ -2,4 +2,7 @@
 *.swp
 *.swo
 
+.agents/
+skills-lock.json
+.claude/
 dist/*

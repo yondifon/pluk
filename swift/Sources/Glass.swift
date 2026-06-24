@@ -1,6 +1,27 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Developer-tool typography
+
+extension Font {
+    /// SF Mono at a given size/weight, mapped to scalable text styles so the
+    /// dense dev-tool UI still respects Dynamic Type. Used for config values,
+    /// code blocks, status text, labels, and any other surface that should read
+    /// like a developer tool rather than a consumer app.
+    static func dev(size: CGFloat, weight: Weight = .regular) -> Font {
+        let style: Font.TextStyle
+        switch size {
+        case ..<10:  style = .caption2
+        case ..<11:  style = .caption
+        case ..<12:  style = .footnote
+        case ..<13:  style = .callout
+        case ..<14:  style = .subheadline
+        default:     style = .body
+        }
+        return .system(style, design: .monospaced, weight: weight)
+    }
+}
+
 // Liquid Glass design helpers. Real glass (refraction, morphing, specular) is
 // macOS 26+; on earlier systems we approximate with vibrancy + frosted material
 // so the look degrades gracefully rather than going flat.
@@ -109,7 +130,7 @@ struct DetailSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.dev(size: 11, weight: .semibold))
                 .foregroundColor(.secondary)
                 .textCase(.uppercase)
                 .padding(.bottom, 6)
@@ -135,7 +156,7 @@ struct InspectorRow<Content: View>: View {
         self.labelWidth = 86
         self.dividerInset = 106
         self.content = Text(value)
-            .font(.system(size: 12, design: .monospaced))
+            .font(.dev(size: 12))
             .foregroundColor(.primary)
     }
 
@@ -149,8 +170,9 @@ struct InspectorRow<Content: View>: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             Text(label)
-                .font(.system(size: 12))
+                .font(.dev(size: 11, weight: .semibold))
                 .foregroundColor(.secondary)
+                .textCase(.uppercase)
                 .frame(width: labelWidth, alignment: .leading)
             content
             Spacer(minLength: 0)

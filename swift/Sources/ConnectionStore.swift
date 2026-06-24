@@ -54,6 +54,23 @@ final class ConnectionStore {
         load()
     }
 
+    #if DEBUG
+    /// Preview store with no DB access and sample data.
+    private init(preview: ()) {
+        self.db = nil
+    }
+
+    @MainActor
+    static var preview: ConnectionStore {
+        let store = ConnectionStore(preview: ())
+        store.connections = [.sample, .sampleGroupMember]
+        store.groups = [.sample]
+        store.adapters = [.samplePostgres, .sampleLinear]
+        store.health = [Connection.sample.id: .ok]
+        return store
+    }
+    #endif
+
     // MARK: - Schema
 
     private func migrate() {

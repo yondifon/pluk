@@ -141,12 +141,12 @@ struct ConnectionDetailView: View {
                 }
                 if health?.isError == true {
                     Text("Connection issue")
-                        .font(.system(size: 11))
+                        .font(.dev(size: 11))
                         .foregroundColor(.red)
                         .help(health?.error ?? "Connection failing")
                 } else {
                     Text("\(conn.typeLabel) · \(conn.environment.label)")
-                        .font(.system(size: 11))
+                        .font(.dev(size: 11))
                         .foregroundColor(.secondary)
                 }
             }
@@ -179,7 +179,7 @@ struct ConnectionDetailView: View {
                         Image(systemName: tab.icon)
                             .font(.system(size: 11))
                         Text(tab.rawValue)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.dev(size: 12, weight: .medium))
                     }
                     .foregroundColor(selectedTab == tab ? .accentColor : .secondary)
                     .padding(.horizontal, 14)
@@ -232,7 +232,7 @@ struct ConnectionDetailView: View {
             InspectorRow("URL") {
                 HStack(spacing: 8) {
                     Text(conn.mcpURL)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(.dev(size: 12))
                         .foregroundColor(.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -276,8 +276,9 @@ struct ConnectionDetailView: View {
         DetailSection("Config") {
             HStack {
                 Text("Client")
-                    .font(.system(size: 12))
+                    .font(.dev(size: 11, weight: .semibold))
                     .foregroundColor(.secondary)
+                    .textCase(.uppercase)
                     .frame(width: 86, alignment: .leading)
                 Spacer()
                 Picker("", selection: $selectedClient) {
@@ -292,7 +293,7 @@ struct ConnectionDetailView: View {
             .padding(.vertical, 7)
 
             Text(configSnippet)
-                .font(.system(size: 11, design: .monospaced))
+                .font(.dev(size: 11))
                 .foregroundColor(.primary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -373,20 +374,24 @@ struct ConnectionDetailView: View {
         case .testing:
             HStack(spacing: 6) {
                 ProgressView().scaleEffect(0.7)
-                Text("Testing…").foregroundColor(.secondary)
+                Text("Testing…")
+                    .font(.dev(size: 12))
+                    .foregroundColor(.secondary)
             }
 
         case .ok:
             Label("Connected", systemImage: "checkmark.circle.fill")
+                .font(.dev(size: 12, weight: .medium))
                 .foregroundColor(.green)
                 .onAppear { resetTestStatus(after: 3) }
 
         case .fail(let msg):
             VStack(alignment: .leading, spacing: 4) {
                 Label("Failed", systemImage: "xmark.circle.fill")
+                    .font(.dev(size: 12, weight: .medium))
                     .foregroundColor(.red)
                 Text(msg)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.dev(size: 11))
                     .foregroundColor(.secondary)
             }
             .onAppear { resetTestStatus(after: 6) }
@@ -480,7 +485,7 @@ struct ConnectionDetailView: View {
 
     private func actionBadge(allowed: Bool) -> some View {
         Text(allowed ? "Allowed" : "Blocked")
-            .font(.system(size: 11, weight: .medium))
+            .font(.dev(size: 11, weight: .medium))
             .foregroundColor(allowed ? .white : .secondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -507,7 +512,7 @@ struct ConnectionDetailView: View {
                     ForEach(groups, id: \.0) { groupName, cats in
                         HStack(alignment: .top) {
                             Text(groupName)
-                                .font(.system(size: 12))
+                                .font(.dev(size: 12))
                                 .foregroundColor(.secondary)
                                 .frame(width: 86, alignment: .leading)
                             FlowRow(cats.map { cat in
@@ -535,7 +540,7 @@ struct ConnectionDetailView: View {
                     }
                     InspectorRow("Max rows") {
                         Text(policy.maxRows.map { "\($0)" } ?? "Unlimited")
-                            .font(.system(size: 12, design: .monospaced))
+                            .font(.dev(size: 12))
                     }
                 }
             }
@@ -545,7 +550,7 @@ struct ConnectionDetailView: View {
 
     private func guardBadge(blocked: Bool, onLabel: String, offLabel: String) -> some View {
         Text(blocked ? onLabel : offLabel)
-            .font(.system(size: 11, weight: .medium))
+            .font(.dev(size: 11, weight: .medium))
             .foregroundColor(blocked ? .white : .secondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -578,7 +583,7 @@ private struct FlowRow: View {
             HStack(spacing: 4) {
                 ForEach(items, id: \.label) { item in
                     Text(item.label)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.dev(size: 10, weight: .medium))
                         .foregroundColor(item.active ? .white : .secondary)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
@@ -590,4 +595,16 @@ private struct FlowRow: View {
         }
     }
 }
+
+#if DEBUG
+#Preview {
+    ConnectionDetailView(
+        conn: .sample,
+        store: .preview,
+        onEdit: {},
+        onDelete: {},
+        onDuplicate: {}
+    )
+}
+#endif
 

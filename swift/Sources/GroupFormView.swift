@@ -50,8 +50,9 @@ struct GroupFormView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     field("Name") {
                         TextField("Group name", text: $name)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.plain)
                             .focused($nameFocused)
+                            .defaultFocus($nameFocused, true)
                             .onSubmit { if !trimmedName.isEmpty { save() } }
                     }
                     field("Environment") {
@@ -101,7 +102,6 @@ struct GroupFormView: View {
         }
         .glassPanelBackground()
         .frame(width: 480, height: 580)
-        .onAppear { DispatchQueue.main.async { nameFocused = true } }
     }
 
     @ViewBuilder
@@ -136,12 +136,12 @@ struct GroupFormView: View {
                     ForEach(fields) { f in
                         HStack(spacing: 8) {
                             Text(f.label)
-                                .font(.system(size: 11))
+                                .font(.dev(size: 11))
                                 .foregroundColor(.secondary)
                                 .frame(width: 110, alignment: .leading)
                             TextField(inheritPlaceholder(conn, f), text: binding(conn.id, f.key))
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 12))
+                                .textFieldStyle(.plain)
+                                .font(.dev(size: 12))
                         }
                     }
                 }
@@ -193,12 +193,27 @@ struct GroupFormView: View {
 
     @ViewBuilder
     private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .top, spacing: 12) {
             Text(label)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.dev(size: 11, weight: .semibold))
                 .foregroundColor(.secondary)
                 .textCase(.uppercase)
+                .frame(width: 90, alignment: .leading)
+                .padding(.top, 2)
             content()
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
+
+#if DEBUG
+#Preview {
+    GroupFormView(
+        group: .sample,
+        connections: [.sample, .sampleGroupMember],
+        adapters: [.samplePostgres, .sampleLinear],
+        onSave: { _ in },
+        onCancel: {}
+    )
+}
+#endif

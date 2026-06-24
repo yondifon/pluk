@@ -9,6 +9,14 @@ final class ServerManager {
 
     private var process: Process?
 
+    #if DEBUG
+    static var preview: ServerManager {
+        let manager = ServerManager()
+        manager.status = .running
+        return manager
+    }
+    #endif
+
     func start() {
         killOrphanOnPort(PlukServer.port)
 
