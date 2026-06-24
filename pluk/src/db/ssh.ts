@@ -37,6 +37,13 @@ const FAST_RETRY_WINDOW_MS = 10_000;
 
 class TunnelReadinessTimeout extends Error {}
 
+// Auth/agent failures are deterministic — a retry or a longer wait can't fix a
+// missing key, a locked agent, or a rejected pubkey. Detect them so the tunnel
+// fails fast and loud instead of burning the retry loop / handshake budget.
+function isAuthError(message: string): boolean {
+  return /permission denied|communication with agent failed|signing failed|publickey|no supported authentication|authentication failed|too many authentication failures/i.test(message);
+}
+
 // ── SSH config helpers ────────────────────────────────────────────────────────
 // (parseSSHConfig, ProxyCommand, agent resolution) live in ../ssh/config.js,
 // shared with the SSH command adapter.
@@ -101,6 +108,20 @@ async function openOpenSSHTunnel(
   if (username) args.push("-l", username);
   args.push("-p", String(sshConfig.port ?? config.port));
   if (config.authType === "key" && config.keyPath) args.push("-i", expandHome(config.keyPath));
+
+  // Point ssh at the resolved agent (IdentityAgent from ~/.ssh/config, e.g. the
+  // 1Password socket, else SSH_AUTH_SOCK) explicitly. A GUI-launched app inherits
+  // the empty macOS launchd agent in SSH_AUTH_SOCK; without this, ssh would query
+  // that keyless agent and fail with "communication with agent failed" instead of
+  // using the 1Password keys. -o overrides config/env, so the agent is deterministic.
+  if (config.authType === "agent") {
+    const agentSock = resolveAgentSocket(config.host);
+    // ssh parses the -o value with its own tokenizer, so a socket path with
+    // spaces (e.g. 1Password's "~/Library/Group Containers/…/agent.sock") must
+    // be quoted inside the option string or ssh errors "extra arguments".
+    if (agentSock) args.push("-o", `IdentityAgent="${agentSock}"`);
+  }
+
   args.push(config.host);
 
   console.log(`[pluk] OpenSSH tunnel: ssh ${args.join(" ")}`);
@@ -169,6 +190,8 @@ export async function openSSHTunnel(
         return await openOpenSSHTunnel(config, sshConfig, username, remaining, onFatal);
       } catch (err) {
         lastErr = err as Error;
+        // An auth/agent failure won't clear on retry — surface it now.
+        if (isAuthError(lastErr.message)) break;
         const failedFast = Date.now() - started < FAST_RETRY_WINDOW_MS;
         if (attempt < 3 && failedFast && !(lastErr instanceof TunnelReadinessTimeout)) {
           console.warn(`[pluk] OpenSSH tunnel attempt ${attempt} failed: ${lastErr.message}. Retrying in 2s…`);

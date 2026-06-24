@@ -1,4 +1,3 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { mkdirSync } from "fs";
 import { homedir } from "os";
@@ -6,7 +5,7 @@ import { join } from "path";
 import type { Integration } from "../../store/integrations.js";
 import type { Driver } from "../../db/index.js";
 import { parsePolicy, evaluate, capRows, dialectFor, policyDescription, parsePostgresCost } from "../../mcp/policy.js";
-import { createLogEntry, updateLogEntry, logQuery } from "../../store/queryLog.js";
+import { logQuery } from "../../store/queryLog.js";
 import { listSavedQueries, getSavedQuery } from "../../store/savedQueries.js";
 import { listMaskedColumns, maskRow } from "../../store/maskedColumns.js";
 import {
@@ -19,19 +18,8 @@ import {
 } from "../../mcp/pool.js";
 import { logError } from "../../log.js";
 import { buildInstructions } from "../../mcp/instructions.js";
+import { ok, err, runGated, type ToolResult, type LogSnapshot } from "../kit.js";
 import type { ToolHost } from "../../mcp/namespace.js";
-
-// MCP server for the SQL database adapter family (Postgres, MySQL, SQLite).
-// Tools, resources, and prompts for query + schema introspection, all gated by
-// the per-integration query policy and recorded in the activity log.
-export function buildSqlServer(conn: Integration, sessionIdRef: { value: string }): McpServer {
-  const server = new McpServer(
-    { name: conn.name, version: "1.0.0" },
-    { instructions: sqlInstructions(conn) },
-  );
-  registerSqlServer(server, conn, sessionIdRef);
-  return server;
-}
 
 // Human label for a SQL adapter id — single source for the manifest and the
 // agent-facing instructions so they never drift.
@@ -45,9 +33,10 @@ export function sqlLabel(type: string): string {
 }
 
 export function sqlAgentHint(type: string): string {
+  const db = type === "sqlite" ? "SQLite" : type === "mysql" ? "MySQL" : "PostgreSQL";
   return type === "sqlite"
-    ? "Use SELECT with LIMIT before wider queries."
-    : "Use SELECT with LIMIT for production data.";
+    ? `Use this to query and inspect a ${db} database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT before wider queries.`
+    : `Use this to query and inspect a ${db} database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT for production data.`;
 }
 
 // Live, per-session guidance handed to connecting agents (see instructions.ts).
@@ -74,22 +63,94 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
   const readOnlyMode = policy.allowed.length === 2 && policy.allowed.includes("select") && policy.allowed.includes("inspect");
   const maskedColumns = listMaskedColumns(conn.id);
 
-  type ToolText = { content: { type: "text"; text: string }[]; isError?: boolean };
-
   // Read-only introspection tools share one shape: acquire the pooled driver,
   // run under the tool timeout, evict on failure. `fn` produces the response text.
-  async function introspect(label: string, fn: (driver: Driver) => Promise<string>): Promise<ToolText> {
+  // Introspection statements are recorded by the driver layer, so there is no
+  // tool-level log entry here (only the gated query tools below create one).
+  async function introspect(label: string, fn: (driver: Driver) => Promise<string>): Promise<ToolResult> {
     const sid = sessionIdRef.value;
     try {
       const driver = await getDriver(sid, conn);
-      return await withToolTimeout((async (): Promise<ToolText> => {
-        return { content: [{ type: "text", text: await fn(driver) }] };
-      })(), label);
-    } catch (err) {
+      return await withToolTimeout((async (): Promise<ToolResult> => ok(await fn(driver)))(), label);
+    } catch (e) {
       evictDriver(sid, conn.id);
-      logError(`tool ${label} failed`, err, { integration: conn.name, type: conn.type });
-      return { content: [{ type: "text", text: `Error: ${(err as Error).message}` }], isError: true };
+      logError(`tool ${label} failed`, e, { integration: conn.name, type: conn.type });
+      return err(`Error: ${(e as Error).message}`);
     }
+  }
+
+  type QueryRows = { rows: unknown[]; fields?: string[] };
+
+  // The postgres cost gate: returns a block reason if the planner's estimate
+  // exceeds the policy's row/cost ceiling, else undefined. No-op off postgres or
+  // when no ceiling is set.
+  async function costBlock(driver: Driver, sql: string): Promise<string | undefined> {
+    const enabled = policy.maxEstimatedRows !== null || policy.maxEstimatedCost !== null;
+    if (!enabled || conn.type !== "postgres") return undefined;
+    const explain = await driver.explain(sql);
+    const plan = Array.isArray(explain.rows[0]) ? explain.rows[0][0] : explain.rows[0];
+    const estimate = parsePostgresCost(plan);
+    if (
+      (policy.maxEstimatedRows !== null && estimate.rows !== null && estimate.rows > policy.maxEstimatedRows) ||
+      (policy.maxEstimatedCost !== null && estimate.cost !== null && estimate.cost > policy.maxEstimatedCost)
+    ) {
+      return `Query cost gate exceeded (estimated rows: ${estimate.rows ?? "?"}, cost: ${estimate.cost ?? "?"}).`;
+    }
+    return undefined;
+  }
+
+  // Execute a policy-passed statement under the tool timeout + per-query abort.
+  // Postgres read-only mode uses a read-only transaction.
+  function runStatement<T extends QueryRows>(driver: Driver, sql: string, signal: AbortSignal, label: string): Promise<T> {
+    const useReadOnly = readOnlyMode && conn.type === "postgres";
+    const work = (useReadOnly ? driver.queryReadOnly(sql) : driver.query(sql)) as Promise<T>;
+    return withToolTimeout(withCancellable(work, signal), label);
+  }
+
+  // Apply the masked-column policy to a row set.
+  function mask(rows: unknown[]): unknown[] {
+    return maskedColumns.length > 0 ? rows.map((r) => maskRow(r as Record<string, unknown>, maskedColumns)) : rows;
+  }
+
+  // Shared SQL error handling for the gated query tools: aborted queries are
+  // "cancelled" (no driver eviction); everything else evicts + logs.
+  const queryGateOpts = {
+    classifyError: (msg: string) => (msg.includes("cancelled") ? "cancelled" : "error") as "cancelled" | "error",
+    onError: (e: unknown) => {
+      evictDriver(sessionIdRef.value, conn.id);
+      logError("query tool failed", e, { integration: conn.name, type: conn.type });
+    },
+  };
+
+  // Run a SQL statement through the policy gate + activity log, returning rows
+  // (masked + row-capped). Shared by `query` and `run_saved_query`.
+  function gatedQuery(sql: string, source: string): Promise<ToolResult> {
+    const verdict = evaluate(sql, policy, dialect);
+    return runGated(
+      conn,
+      { category: verdict.categories, action: source, detail: sql },
+      async (logId) => {
+        const sid = sessionIdRef.value;
+        const queryAc = registerQueryAbort(logId, sid);
+        try {
+          const driver = await getDriver(sid, conn);
+          const block = await costBlock(driver, sql);
+          if (block) return { blocked: block };
+
+          const result = await runStatement<QueryRows>(driver, sql, queryAc.signal, source);
+          const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
+          const maskedResult: LogSnapshot & QueryRows = { ...result, rows: mask(rows) };
+          let text = JSON.stringify(maskedResult, null, 2);
+          if (truncated) {
+            text += `\n\n[Row limit: showing first ${limit} of ${result.rows.length} rows. Add a LIMIT clause to see all results.]`;
+          }
+          return { text, result: maskedResult };
+        } finally {
+          clearQueryAbort(logId);
+        }
+      },
+      { precheck: () => (verdict.ok ? undefined : verdict.reason ?? "blocked"), ...queryGateOpts },
+    );
   }
 
   server.prompt(
@@ -148,71 +209,7 @@ ${sql}` } },
     "query",
     `Run a SQL query against the database. ${policyDesc}`,
     { sql: z.string().describe("SQL query to execute") },
-    async ({ sql }) => {
-      // Policy check (parse-driven)
-      const verdict = evaluate(sql, policy, dialect);
-      if (!verdict.ok) {
-        logQuery(conn.id, conn.name, sql, "blocked", verdict.categories, verdict.reason ?? undefined);
-        return { content: [{ type: "text", text: `Blocked: ${verdict.reason}` }], isError: true };
-      }
-
-      const sid = sessionIdRef.value;
-
-      // Create pending log entry before executing so it's visible immediately
-      const logId = createLogEntry(conn.id, conn.name, sql, "pending", verdict.categories, undefined, "query");
-
-      // Per-query abort controller; also tripped by a session-wide abort.
-      const queryAc = registerQueryAbort(logId, sid);
-
-      try {
-        const costGateEnabled = policy.maxEstimatedRows !== null || policy.maxEstimatedCost !== null;
-        const driver = await getDriver(sid, conn);
-
-        if (costGateEnabled && conn.type === "postgres") {
-          const explain = await driver.explain(sql);
-          const plan = Array.isArray(explain.rows[0]) ? explain.rows[0][0] : explain.rows[0];
-          const estimate = parsePostgresCost(plan);
-          if (
-            (policy.maxEstimatedRows !== null && estimate.rows !== null && estimate.rows > policy.maxEstimatedRows) ||
-            (policy.maxEstimatedCost !== null && estimate.cost !== null && estimate.cost > policy.maxEstimatedCost)
-          ) {
-            const reason = `Query cost gate exceeded (estimated rows: ${estimate.rows ?? "?"}, cost: ${estimate.cost ?? "?"}).`;
-            updateLogEntry(logId, "blocked", reason);
-            return { content: [{ type: "text", text: `Blocked: ${reason}` }], isError: true };
-          }
-        }
-
-        const useReadOnly = readOnlyMode && conn.type === "postgres";
-        const work = useReadOnly ? driver.queryReadOnly(sql) : driver.query(sql);
-
-        const result = await withToolTimeout(
-          withCancellable(work, queryAc.signal),
-          "query"
-        );
-
-        const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
-        const maskedRows = maskedColumns.length > 0 ? rows.map(r => maskRow(r as Record<string, unknown>, maskedColumns)) : rows;
-        const maskedResult = { ...result, rows: maskedRows };
-        updateLogEntry(logId, "allowed", undefined, maskedResult);
-
-        let text = JSON.stringify(maskedResult, null, 2);
-        if (truncated) {
-          text += `\n\n[Row limit: showing first ${limit} of ${result.rows.length} rows. Add a LIMIT clause to see all results.]`;
-        }
-        return { content: [{ type: "text", text }] };
-      } catch (err) {
-        const msg = (err as Error).message;
-        const isCancelled = msg.includes("cancelled");
-        updateLogEntry(logId, isCancelled ? "cancelled" : "error", msg);
-        if (!isCancelled) {
-          evictDriver(sid, conn.id);
-          logError("query tool failed", err, { integration: conn.name, type: conn.type });
-        }
-        return { content: [{ type: "text", text: `${isCancelled ? "Cancelled" : "Error"}: ${msg}` }], isError: true };
-      } finally {
-        clearQueryAbort(logId);
-      }
-    }
+    ({ sql }) => gatedQuery(sql, "query"),
   );
 
   server.tool("list_tables", "List all tables in the database", () =>
@@ -245,13 +242,15 @@ ${sql}` } },
     {
       sql: z.string().describe("SQL query to explain"),
     },
-    async ({ sql }) => {
+    ({ sql }) => {
+      // `explain` runs no policy-changing statement, so a passing query is logged
+      // by the driver layer (via introspect), not as a gated tool call. A blocked
+      // query is still recorded so the audit log shows the denial.
       const verdict = evaluate(sql, policy, dialect);
       if (!verdict.ok) {
         logQuery(conn.id, conn.name, sql, "blocked", verdict.categories, verdict.reason ?? undefined);
-        return { content: [{ type: "text", text: `Blocked: ${verdict.reason}` }], isError: true };
+        return Promise.resolve(err(`Blocked: ${verdict.reason}`));
       }
-
       return introspect("explain_query", async (driver) => JSON.stringify(await driver.explain(sql), null, 2));
     }
   );
@@ -298,47 +297,36 @@ ${sql}` } },
       sql: z.string().describe("SQL query to execute"),
       format: z.enum(["csv", "json"]).default("csv").describe("Export file format"),
     },
-    async ({ sql, format }) => {
+    ({ sql, format }) => {
       const verdict = evaluate(sql, policy, dialect);
-      if (!verdict.ok) {
-        logQuery(conn.id, conn.name, sql, "blocked", verdict.categories, verdict.reason ?? undefined);
-        return { content: [{ type: "text", text: `Blocked: ${verdict.reason}` }], isError: true };
-      }
+      return runGated(
+        conn,
+        { category: verdict.categories, action: "export_query", detail: sql },
+        async (logId) => {
+          const sid = sessionIdRef.value;
+          const queryAc = registerQueryAbort(logId, sid);
+          try {
+            const driver = await getDriver(sid, conn);
+            const result = await runStatement<QueryRows>(driver, sql, queryAc.signal, "export_query");
 
-      const sid = sessionIdRef.value;
-      const logId = createLogEntry(conn.id, conn.name, sql, "pending", verdict.categories, undefined, "export_query");
-      const queryAc = registerQueryAbort(logId, sid);
+            const { rows } = capRows(result.rows, policy.maxRows);
+            const maskedRows = mask(rows);
 
-      try {
-        const driver = await getDriver(sid, conn);
-        const useReadOnly = readOnlyMode && conn.type === "postgres";
-        const result = await withToolTimeout(
-          withCancellable(useReadOnly ? driver.queryReadOnly(sql) : driver.query(sql), queryAc.signal),
-          "export_query"
-        );
+            const fields = result.fields ?? (maskedRows[0] ? Object.keys(maskedRows[0] as object) : []);
+            const payload = format === "csv" ? toCsv(maskedRows, fields) : JSON.stringify({ fields, rows: maskedRows }, null, 2);
+            const filePath = makeExportPath(conn.name, format);
+            await Bun.write(filePath, payload);
 
-        const { rows } = capRows(result.rows, policy.maxRows);
-        const maskedRows = maskedColumns.length > 0 ? rows.map(r => maskRow(r as Record<string, unknown>, maskedColumns)) : rows;
-        updateLogEntry(logId, "allowed", undefined, { rows: maskedRows, fields: result.fields });
-
-        const fields = result.fields ?? (maskedRows[0] ? Object.keys(maskedRows[0] as object) : []);
-        const payload = format === "csv" ? toCsv(maskedRows, fields) : JSON.stringify({ fields, rows: maskedRows }, null, 2);
-        const filePath = makeExportPath(conn.name, format);
-        await Bun.write(filePath, payload);
-
-        return { content: [{ type: "text", text: `Exported ${maskedRows.length} rows to ${filePath}` }] };
-      } catch (err) {
-        const msg = (err as Error).message;
-        const isCancelled = msg.includes("cancelled");
-        updateLogEntry(logId, isCancelled ? "cancelled" : "error", msg);
-        if (!isCancelled) {
-          evictDriver(sid, conn.id);
-          logError("query tool failed", err, { integration: conn.name, type: conn.type });
-        }
-        return { content: [{ type: "text", text: `${isCancelled ? "Cancelled" : "Error"}: ${msg}` }], isError: true };
-      } finally {
-        clearQueryAbort(logId);
-      }
+            return {
+              text: `Exported ${maskedRows.length} rows to ${filePath}`,
+              result: { rows: maskedRows, fields: result.fields },
+            };
+          } finally {
+            clearQueryAbort(logId);
+          }
+        },
+        { precheck: () => (verdict.ok ? undefined : verdict.reason ?? "blocked"), ...queryGateOpts },
+      );
     }
   );
 
@@ -346,65 +334,10 @@ ${sql}` } },
     "run_saved_query",
     "Run a saved query by name",
     { name: z.string().describe("Name of the saved query") },
-    async ({ name }) => {
+    ({ name }) => {
       const saved = getSavedQuery(conn.id, name);
-      if (!saved) {
-        return { content: [{ type: "text", text: `Saved query "${name}" not found.` }], isError: true };
-      }
-
-      const verdict = evaluate(saved.sql, policy, dialect);
-      if (!verdict.ok) {
-        logQuery(conn.id, conn.name, saved.sql, "blocked", verdict.categories, verdict.reason ?? undefined);
-        return { content: [{ type: "text", text: `Blocked: ${verdict.reason}` }], isError: true };
-      }
-
-      const sid = sessionIdRef.value;
-      const logId = createLogEntry(conn.id, conn.name, saved.sql, "pending", verdict.categories, undefined, "run_saved_query");
-      const queryAc = registerQueryAbort(logId, sid);
-
-      try {
-        const driver = await getDriver(sid, conn);
-
-        if ((policy.maxEstimatedRows !== null || policy.maxEstimatedCost !== null) && conn.type === "postgres") {
-          const explain = await driver.explain(saved.sql);
-          const plan = Array.isArray(explain.rows[0]) ? explain.rows[0][0] : explain.rows[0];
-          const estimate = parsePostgresCost(plan);
-          if (
-            (policy.maxEstimatedRows !== null && estimate.rows !== null && estimate.rows > policy.maxEstimatedRows) ||
-            (policy.maxEstimatedCost !== null && estimate.cost !== null && estimate.cost > policy.maxEstimatedCost)
-          ) {
-            const reason = `Query cost gate exceeded (estimated rows: ${estimate.rows ?? "?"}, cost: ${estimate.cost ?? "?"}).`;
-            updateLogEntry(logId, "blocked", reason);
-            return { content: [{ type: "text", text: `Blocked: ${reason}` }], isError: true };
-          }
-        }
-
-        const useReadOnly = readOnlyMode && conn.type === "postgres";
-        const work = useReadOnly ? driver.queryReadOnly(saved.sql) : driver.query(saved.sql);
-        const result = await withToolTimeout(withCancellable(work, queryAc.signal), "run_saved_query");
-
-        const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
-        const maskedRows = maskedColumns.length > 0 ? rows.map(r => maskRow(r as Record<string, unknown>, maskedColumns)) : rows;
-        const maskedResult = { ...result, rows: maskedRows };
-        updateLogEntry(logId, "allowed", undefined, maskedResult);
-
-        let text = JSON.stringify(maskedResult, null, 2);
-        if (truncated) {
-          text += `\n\n[Row limit: showing first ${limit} of ${result.rows.length} rows. Add a LIMIT clause to see all results.]`;
-        }
-        return { content: [{ type: "text", text }] };
-      } catch (err) {
-        const msg = (err as Error).message;
-        const isCancelled = msg.includes("cancelled");
-        updateLogEntry(logId, isCancelled ? "cancelled" : "error", msg);
-        if (!isCancelled) {
-          evictDriver(sid, conn.id);
-          logError("query tool failed", err, { integration: conn.name, type: conn.type });
-        }
-        return { content: [{ type: "text", text: `${isCancelled ? "Cancelled" : "Error"}: ${msg}` }], isError: true };
-      } finally {
-        clearQueryAbort(logId);
-      }
+      if (!saved) return Promise.resolve(err(`Saved query "${name}" not found.`));
+      return gatedQuery(saved.sql, "run_saved_query");
     }
   );
 
@@ -413,10 +346,9 @@ ${sql}` } },
     "List saved queries for this connection",
     async () => {
       try {
-        const queries = listSavedQueries(conn.id);
-        return { content: [{ type: "text", text: JSON.stringify(queries, null, 2) }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `Error: ${(err as Error).message}` }], isError: true };
+        return ok(JSON.stringify(listSavedQueries(conn.id), null, 2));
+      } catch (e) {
+        return err(`Error: ${(e as Error).message}`);
       }
     }
   );

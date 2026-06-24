@@ -6,7 +6,9 @@ import { listMaskedColumns, addMaskedColumn, removeMaskedColumn } from "./store/
 import { handleMcpRequest, resetSessions } from "./mcp/server.js";
 import { buildGroupServer } from "./mcp/group.js";
 import { cancelQuery } from "./mcp/pool.js";
-import { getAdapter, listAdapters } from "./adapters/index.js";
+import { allHealth, recordHealth } from "./mcp/health.js";
+import { humanizeConnError } from "./mcp/errors.js";
+import { getAdapter, listAdapters, buildAdapterServer } from "./adapters/index.js";
 import { logInfo, logError, LOG_PATH } from "./log.js";
 
 const PORT = Number(process.env.PORT ?? 4242);
@@ -50,6 +52,7 @@ const server = Bun.serve({
         category: a.category,
         policyKind: a.policyKind,
         agentHint: a.agentHint,
+        actions: a.actions ?? [],
         configFields: a.configFields,
       }));
       return Response.json({ adapters });
@@ -65,6 +68,7 @@ const server = Bun.serve({
       try {
         await adapter.testConnection(integration);
         logInfo("connection test ok", { id: integration.id, name: integration.name, type: integration.type });
+        recordHealth(integration.id, "ok");
         return Response.json({ ok: true });
       } catch (err) {
         logError("connection test failed", err, {
@@ -76,7 +80,9 @@ const server = Bun.serve({
           use_ssh: integration.config.use_ssh ?? false,
           use_ssl: integration.config.use_ssl ?? false,
         });
-        return Response.json({ ok: false, error: formatTestError(err as Error) });
+        const reason = humanizeConnError(err);
+        recordHealth(integration.id, "error", reason);
+        return Response.json({ ok: false, error: reason });
       }
     }
 
@@ -209,7 +215,7 @@ const server = Bun.serve({
       if (conn) {
         const adapter = getAdapter(conn.type);
         if (!adapter) return new Response(`No adapter for type: ${conn.type}`, { status: 400 });
-        return handleMcpRequest(req, conn.id, (ref) => adapter.buildServer(conn, ref));
+        return handleMcpRequest(req, conn.id, (ref) => buildAdapterServer(adapter, conn, ref));
       }
 
       const group = getGroupByToken(token);
@@ -220,59 +226,16 @@ const server = Bun.serve({
 
     if (path === "/health") return new Response("ok");
 
+    // GET /api/health — per-connection health for the UI, so a failing
+    // connection shows red without the user manually testing it.
+    if (path === "/api/health" && req.method === "GET") {
+      return Response.json({ health: allHealth() });
+    }
+
     return new Response("Not found", { status: 404 });
   },
 });
 
-// Map low-level driver errors to a short, actionable message for the UI. Full
-// detail (code + stack) is always in the debug log; this is what the user sees.
-function formatTestError(err: Error): string {
-  const msg = err.message;
-  const code = (err as { code?: string }).code;
-
-  // Authentication — covers Postgres (28P01/28000) and PgBouncer, which reports
-  // a bad SCRAM password as a protocol violation ("SASL authentication failed").
-  if (code === "28P01" || code === "28000" || /password authentication failed|SASL authentication failed/i.test(msg)) {
-    return "Authentication failed — check the username and password.";
-  }
-
-  // Database / schema missing
-  if (code === "3D000" || /database .* does not exist/i.test(msg)) {
-    return "Database not found — check the database name.";
-  }
-
-  // Host unreachable / refused
-  if (code === "ECONNREFUSED" || /ECONNREFUSED/i.test(msg)) {
-    return "Connection refused — check the host and port, and that the server is reachable (through the SSH tunnel, if used).";
-  }
-  if (code === "ENOTFOUND" || /no such host|name or service not known/i.test(msg)) {
-    return `Host not found — check the host name. If using an SSH proxy (cloudflared), this is often transient — try again. Detail: ${msg}`;
-  }
-
-  // SSL / TLS
-  if (/self.signed|certificate|\bssl\b|\btls\b/i.test(msg)) {
-    return `SSL error — try a different SSL mode, or disable SSL if the server doesn't require it. Detail: ${msg}`;
-  }
-
-  // Timeouts (direct or post-tunnel)
-  if (/timed out|connection timeout|timeout expired/i.test(msg)) {
-    return "Timed out — the server didn't respond. Check the host/port, the SSH tunnel, and any firewall/VPC rules.";
-  }
-
-  // SSH (ssh2 driver) — auth, host key, and key parsing surface as raw strings.
-  if (/All configured authentication methods failed/i.test(msg)) {
-    return "SSH authentication failed — check the user and that your key or agent is set up for this host.";
-  }
-  if (/no usable private key|cannot parse privatekey|encrypted.*passphrase|bad passphrase/i.test(msg)) {
-    return "SSH key problem — the key couldn't be read or the passphrase is wrong. Check the key path and passphrase.";
-  }
-  if (/handshake|host key|hostkey/i.test(msg)) {
-    return `SSH host key error — the server's host key was rejected. Detail: ${msg}`;
-  }
-
-  // Unknown — surface the raw message and point at the log for the full trace.
-  return `${msg} (see Logs, or ~/.pluk/pluk.log, for details)`;
-}
 
 logInfo(`pluk MCP server on http://localhost:${PORT}`, { logFile: LOG_PATH });
 console.log(`MCP endpoint: http://localhost:${PORT}/mcp/<token>`);

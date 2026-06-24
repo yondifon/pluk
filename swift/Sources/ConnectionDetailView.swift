@@ -134,13 +134,21 @@ struct ConnectionDetailView: View {
                     Circle()
                         .fill(dotColor)
                         .frame(width: 8, height: 8)
-                        .accessibilityHidden(true) // decorative: color re-encodes the type shown as text below
+                        .help(health?.isError == true ? (health?.error ?? "Connection failing") : "")
+                        .accessibilityHidden(true) // color re-encodes the status shown as text below
                     Text(conn.name)
                         .font(.system(size: 15, weight: .semibold))
                 }
-                Text("\(conn.typeLabel) · \(conn.environment.label)")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
+                if health?.isError == true {
+                    Text("Connection issue")
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                        .help(health?.error ?? "Connection failing")
+                } else {
+                    Text("\(conn.typeLabel) · \(conn.environment.label)")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
             }
             Spacer()
             Button("Edit", action: onEdit)
@@ -398,6 +406,8 @@ struct ConnectionDetailView: View {
                 await MainActor.run {
                     testStatus = (json?["ok"] as? Bool == true) ? .ok : .fail(json?["error"] as? String ?? "Unknown error")
                 }
+                // The test wrote health server-side; pull it so the dot updates now.
+                await store.refreshHealth()
             } catch {
                 await MainActor.run { testStatus = .fail(error.localizedDescription) }
             }
@@ -457,7 +467,7 @@ struct ConnectionDetailView: View {
                     InspectorRow("Mode", value: conn.readOnly ? "Read-only" : "Read & write")
                     InspectorRow("Description", value: conn.readOnly
                                  ? "Agent can only read."
-                                 : "Agent can read and create/modify.")
+                                 : "Agent can read and modify data.")
                 }
                 DetailSection("Allowed Actions") {
                     InspectorRow("Read") { actionBadge(allowed: true) }
@@ -543,13 +553,13 @@ struct ConnectionDetailView: View {
             .clipShape(.capsule)
     }
 
+    private var health: ConnHealth? { store.health[conn.id] }
+
+    // Health, not type: red when failing, green when known-good, gray when
+    // untested this session — so the dot never falsely implies "connected".
     private var dotColor: Color {
-        switch conn.connectionType {
-        case .postgres: .green
-        case .mysql: .orange
-        case .sqlite: .blue
-        case nil: .gray
-        }
+        guard let health else { return .gray }
+        return health.isError ? .red : .green
     }
 }
 

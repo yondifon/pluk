@@ -77,17 +77,36 @@ struct ConfigFieldDef: Codable, Identifiable, Hashable {
     }
 }
 
+// One tool an action adapter exposes, with its policy category. Lets the form
+// describe — per adapter — what Write unlocks and what a read-only integration
+// hides from the agent.
+struct AdapterAction: Codable, Hashable {
+    let name: String
+    let category: String        // read | write | delete | admin
+}
+
 struct AdapterManifest: Codable, Identifiable, Hashable {
     let id: String
     let label: String
     let category: String
     let policyKind: String       // "sql" | "action" | "none"
     let agentHint: String?
+    var actions: [AdapterAction]?
     let configFields: [ConfigFieldDef]
 
     var isSQL: Bool { policyKind == "sql" }
     var isAction: Bool { policyKind == "action" }
     var hasPolicy: Bool { policyKind != "none" }
+
+    /// Tool names the Write permission unlocks (write + delete categories), in
+    /// declaration order. Hidden from the agent entirely in read-only mode.
+    var writeActionNames: [String] {
+        var names: [String] = []
+        for a in actions ?? [] where a.category == "write" || a.category == "delete" {
+            names.append(a.name)
+        }
+        return names
+    }
 
     /// Fields grouped in declaration order, preserving first-seen group order.
     var groupedFields: [(group: String, fields: [ConfigFieldDef])] {

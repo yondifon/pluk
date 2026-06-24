@@ -1,4 +1,3 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Integration } from "../store/integrations.js";
 import type { ToolHost } from "../mcp/namespace.js";
 
@@ -31,12 +30,25 @@ export interface ConfigField {
  *  - "none":   no policy gate; every call is confirmed by the client instead. */
 export type PolicyKind = "sql" | "action" | "none";
 
+/** Static metadata for one tool an action adapter exposes. Lets the UI describe,
+ *  per adapter, what each permission unlocks and what a read-only integration
+ *  hides — without a live connection. */
+export interface ActionMeta {
+  name: string;
+  category: string;       // "read" | "write" | "delete" | "admin"
+  description: string;
+}
+
 export interface Adapter {
   id: string;                            // matches Integration.type
   label: string;
   category: string;                      // "database" | "issue-tracker" | …
   policyKind: PolicyKind;
   agentHint: string;                      // shown in the UI beside the MCP URL
+  /** The tools this adapter exposes, with their policy category. Drives the UI's
+   *  per-adapter permission copy + the preview of what a read-only integration
+   *  hides. Empty/absent for adapters that don't enumerate statically (sql, ssh). */
+  actions?: ActionMeta[];
   configFields: ConfigField[];
   /** Verify the config can reach the service. Throws on failure. */
   testConnection(integration: Integration): Promise<void>;
@@ -47,8 +59,6 @@ export interface Adapter {
    * endpoints so the group's instructions reflect each member's real policy.
    */
   instructions(integration: Integration): string;
-  /** Build a standalone MCP server (tools/resources/prompts) for one session. */
-  buildServer(integration: Integration, sessionIdRef: { value: string }): McpServer;
   /**
    * Register this integration's tools/resources/prompts onto a shared host. Used
    * by group endpoints to aggregate several integrations under one server; pass a

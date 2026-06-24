@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var selectedID: String?
     @State private var sheet: ActiveSheet?
     @State private var pendingDelete: PendingDelete?
+    @State private var toastCenter = ToastCenter()
 
     // A delete awaiting confirmation. Every delete entry point (sidebar context
     // menu, detail header button, for both integrations and groups) routes here
@@ -67,6 +68,9 @@ struct ContentView: View {
         .navigationSplitViewStyle(.balanced)
         .glassWindowBackground()
         .frame(minWidth: 720, minHeight: 520)
+        .overlay(alignment: .top) {
+            ToastOverlay(center: toastCenter) { connId in store.test(connectionId: connId) }
+        }
         .safeAreaInset(edge: .bottom) {
             if serverManager.status != .running {
                 ServerStatusBanner(serverManager: serverManager)
@@ -86,6 +90,16 @@ struct ContentView: View {
             Text("This can't be undone.")
         }
         .task { await store.loadAdapters() }
+        .task {
+            store.toastCenter = toastCenter
+            ToastCenter.requestNotificationAccess()
+            // Poll connection health so failures (SSH/auth/tunnel) surface as a
+            // red dot + toast without the user manually testing each connection.
+            while !Task.isCancelled {
+                await store.refreshHealth()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
     }
 
     private func performDelete(_ item: PendingDelete) {
@@ -119,7 +133,7 @@ struct ContentView: View {
 
             Section("Integrations") {
                 ForEach(store.connections) { conn in
-                    ConnectionRow(conn: conn)
+                    ConnectionRow(conn: conn, health: store.health[conn.id])
                         .tag(conn.id)
                         .contextMenu {
                             Button("Duplicate") { selectedID = store.duplicate(conn) }
@@ -243,6 +257,7 @@ struct GroupRow: View {
 
 struct ConnectionRow: View {
     let conn: Connection
+    var health: ConnHealth?
 
     var body: some View {
         HStack(spacing: 9) {
@@ -254,6 +269,12 @@ struct ConnectionRow: View {
                 EnvTag(environment: conn.environment)
             }
             Spacer()
+            if health?.isError == true {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 7, height: 7)
+                    .help(health?.error ?? "Connection failing")
+            }
             if conn.readOnly {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 9))
@@ -285,8 +306,9 @@ struct TypeBadge: View {
 }
 
 // Brand mark for an adapter: bundled brand logo where we have one (Linear, Sentry,
-// Postgres, SQLite), an SF Symbol for symbol-only adapters (SSH), else a 2-letter
-// abbreviation. Glyph is tinted to match the muted badge — white when selected.
+// Postgres, SQLite, GitHub, Redis, Slack), an SF Symbol for symbol-only adapters
+// (SSH), else a 2-letter abbreviation. Glyph is tinted to match the muted badge —
+// white when selected.
 struct AdapterGlyph: View {
     let type: String
     let color: Color
@@ -322,6 +344,9 @@ enum AdapterStyle {
         case "linear":   Color(red: 0.37, green: 0.42, blue: 0.82) // Linear indigo #5E6AD2
         case "sentry":   Color(red: 0.49, green: 0.42, blue: 0.78) // Sentry purple
         case "ssh":      Color(red: 0.27, green: 0.55, blue: 0.45) // terminal teal
+        case "github":   Color(red: 0.22, green: 0.25, blue: 0.30) // GitHub near-black slate
+        case "redis":    Color(red: 0.78, green: 0.25, blue: 0.18) // muted Redis red #D82C20
+        case "slack":    Color(red: 0.46, green: 0.18, blue: 0.45) // Slack aubergine #4A154B
         default:         Color(red: 0.40, green: 0.42, blue: 0.50) // neutral
         }
     }
@@ -429,10 +454,6 @@ struct EmptyStateView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            Image(systemName: "cable.connector")
-                .font(.system(size: 38, weight: .light))
-                .foregroundStyle(.secondary)
-
             Text("pluk")
                 .font(.system(size: 52, weight: .ultraLight))
                 .tracking(-1)

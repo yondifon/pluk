@@ -1,5 +1,6 @@
 import { Client, utils as sshUtils } from "ssh2";
 import type { ConnectConfig } from "ssh2";
+import { createServer, type Server } from "net";
 import { Duplex } from "stream";
 import { readFileSync, existsSync } from "fs";
 import { homedir, userInfo } from "os";
@@ -208,9 +209,21 @@ function execOnce(client: Client, command: string, timeoutMs: number): Promise<E
 
 // ── Session-scoped connection cache ────────────────────────────────────────────
 
+// A live `ssh -L` local port forward: a local listener whose connections are
+// tunneled to remoteHost:remotePort through the session's SSH connection.
+interface Forward {
+  id: string;
+  remoteHost: string;
+  remotePort: number;
+  localPort: number;
+  server: Server;
+}
+
 interface Entry {
   client: Promise<Client>;
-  idleTimer: ReturnType<typeof setTimeout>;
+  // null while the connection is pinned open by one or more active forwards.
+  idleTimer: ReturnType<typeof setTimeout> | null;
+  forwards: Map<string, Forward>;
 }
 
 const pool = new Map<string, Entry>();
@@ -219,11 +232,23 @@ function key(sessionId: string, integrationId: string): string {
   return `${sessionId}::${integrationId}`;
 }
 
+// (Re)arm idle eviction. Active forwards pin the connection open — an idle
+// command stream shouldn't tear down a tunnel the user is still relying on.
+function armIdle(k: string): void {
+  const entry = pool.get(k);
+  if (!entry) return;
+  if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
+  if (entry.forwards.size > 0) return;
+  entry.idleTimer = setTimeout(() => evictByKey(k), IDLE_MS);
+}
+
 function evictByKey(k: string): void {
   const entry = pool.get(k);
   if (!entry) return;
   pool.delete(k);
-  clearTimeout(entry.idleTimer);
+  if (entry.idleTimer) clearTimeout(entry.idleTimer);
+  for (const fwd of entry.forwards.values()) fwd.server.close();
+  entry.forwards.clear();
   entry.client.then((c) => c.end()).catch(() => {});
 }
 
@@ -231,16 +256,16 @@ async function getClient(sessionId: string, conn: Integration): Promise<Client> 
   const k = key(sessionId, conn.id);
   const existing = pool.get(k);
   if (existing) {
-    clearTimeout(existing.idleTimer);
-    existing.idleTimer = setTimeout(() => evictByKey(k), IDLE_MS);
+    armIdle(k);
     return existing.client;
   }
   const client = connect(params(conn));
-  const entry: Entry = { client, idleTimer: setTimeout(() => evictByKey(k), IDLE_MS) };
+  const entry: Entry = { client, idleTimer: null, forwards: new Map() };
   pool.set(k, entry);
+  armIdle(k);
   // Rebuild on a dropped connection; drop the entry on a failed setup.
   client.then((c) => c.on("close", () => { if (pool.get(k) === entry) evictByKey(k); }))
-    .catch(() => { if (pool.get(k) === entry) { clearTimeout(entry.idleTimer); pool.delete(k); } });
+    .catch(() => { if (pool.get(k) === entry) { if (entry.idleTimer) clearTimeout(entry.idleTimer); pool.delete(k); } });
   return client;
 }
 
@@ -273,6 +298,110 @@ export function closeSessionClients(sessionId: string): void {
 
 // Tie SSH connection cleanup to the shared session lifecycle (close/reload).
 onSessionClose(closeSessionClients);
+
+// ── Local port forwarding (ssh -L) ─────────────────────────────────────────────
+
+export interface ForwardInfo {
+  id: string;
+  remoteHost: string;
+  remotePort: number;
+  localPort: number;
+}
+
+function forwardInfo(f: Forward): ForwardInfo {
+  return { id: f.id, remoteHost: f.remoteHost, remotePort: f.remotePort, localPort: f.localPort };
+}
+
+// Open a local TCP listener that tunnels each connection to remoteHost:remotePort
+// through the given SSH client — the in-process equivalent of `ssh -L`.
+function listenForward(client: Client, remoteHost: string, remotePort: number, localPort: number): Promise<Server> {
+  return new Promise((resolve, reject) => {
+    const server = createServer((socket) => {
+      // forwardOut takes a round-trip to open the channel. A client that speaks
+      // first (HTTP, Postgres, Redis) can send before it's ready — buffer those
+      // early bytes and replay them, or they're silently dropped.
+      const early: Buffer[] = [];
+      const collect = (d: Buffer) => early.push(d);
+      socket.on("data", collect);
+      client.forwardOut("127.0.0.1", 0, remoteHost, remotePort, (err, channel) => {
+        if (err) { socket.destroy(); return; }
+        socket.removeListener("data", collect);
+        for (const chunk of early) channel.write(chunk);
+        socket.pipe(channel);
+        channel.pipe(socket);
+        socket.on("close", () => channel.destroy());
+        channel.on("close", () => socket.destroy());
+        socket.on("error", () => channel.destroy());
+        channel.on("error", () => socket.destroy());
+      });
+    });
+    server.once("error", reject);
+    server.listen(localPort, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      server.on("error", () => {}); // ignore late per-listener errors
+      resolve(server);
+    });
+  });
+}
+
+/**
+ * Open an `ssh -L` local port forward over the session's cached SSH connection,
+ * so localhost:<localPort> on this machine reaches remoteHost:remotePort from the
+ * remote side. Idempotent per remote target; the forward lives until it is closed
+ * or the session ends. Omit `requestedLocalPort` to auto-assign a free port.
+ */
+export async function openForward(
+  sessionId: string,
+  conn: Integration,
+  remoteHost: string,
+  remotePort: number,
+  requestedLocalPort?: number,
+): Promise<ForwardInfo> {
+  const k = key(sessionId, conn.id);
+  const client = await getClient(sessionId, conn);
+  const entry = pool.get(k);
+  if (!entry) throw new Error("SSH connection closed before the forward could open.");
+
+  const id = `${remoteHost}:${remotePort}`;
+  const existing = entry.forwards.get(id);
+  if (existing) return forwardInfo(existing);
+
+  let server: Server;
+  try {
+    server = await listenForward(client, remoteHost, remotePort, requestedLocalPort ?? 0);
+  } catch (err) {
+    if ((err as { code?: string }).code === "EADDRINUSE") {
+      throw new Error(`Local port ${requestedLocalPort} is already in use. Pick another local_port or omit it to auto-assign.`);
+    }
+    throw err;
+  }
+
+  const addr = server.address();
+  const localPort = typeof addr === "object" && addr ? addr.port : (requestedLocalPort ?? 0);
+  const fwd: Forward = { id, remoteHost, remotePort, localPort, server };
+  entry.forwards.set(id, fwd);
+  armIdle(k); // pin the connection open while this forward is alive
+  return forwardInfo(fwd);
+}
+
+/** List the open local port forwards for this session's connection. */
+export function listForwards(sessionId: string, conn: Integration): ForwardInfo[] {
+  const entry = pool.get(key(sessionId, conn.id));
+  if (!entry) return [];
+  return [...entry.forwards.values()].map(forwardInfo);
+}
+
+/** Close one forward by id (`remoteHost:remotePort`). Returns false if unknown. */
+export function closeForward(sessionId: string, conn: Integration, id: string): boolean {
+  const k = key(sessionId, conn.id);
+  const entry = pool.get(k);
+  const fwd = entry?.forwards.get(id);
+  if (!entry || !fwd) return false;
+  fwd.server.close();
+  entry.forwards.delete(id);
+  armIdle(k); // resume idle eviction if that was the last forward
+  return true;
+}
 
 /** One-off connect + command for connection tests (no caching). */
 export async function testCommand(conn: Integration): Promise<void> {

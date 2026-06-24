@@ -21,7 +21,7 @@ final class ServerManager {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: server.executable)
         p.arguments = server.args
-        p.environment = ProcessInfo.processInfo.environment
+        p.environment = serverEnvironment()
 
         do {
             try p.run()
@@ -67,6 +67,46 @@ final class ServerManager {
         var req = URLRequest(url: url)
         req.timeoutInterval = 1
         return (try? await URLSession.shared.data(for: req)) != nil
+    }
+
+    // MARK: - Environment
+
+    /// The server spawns `ssh` for tunnels and may run a ProxyCommand binary
+    /// (e.g. cloudflared). A GUI-launched app inherits launchd's minimal `PATH`,
+    /// not the shell's, so a ProxyCommand or `bun` resolved by name can be
+    /// missing. Backfill `PATH` from the login shell. Existing values win, so a
+    /// terminal launch is never overridden.
+    ///
+    /// Note: we deliberately do NOT backfill `SSH_AUTH_SOCK`. The key agent is
+    /// resolved from `~/.ssh/config` (`IdentityAgent`, e.g. the 1Password socket)
+    /// in the server itself; the inherited `SSH_AUTH_SOCK` often points at the
+    /// keyless macOS launchd agent, so forwarding it would only mislead `ssh`.
+    private func serverEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        // launchd's PATH is a minimal subset, so prefer the login shell's PATH
+        // (which includes Homebrew etc.) rather than only backfilling when empty.
+        if let path = loginShellValue("PATH"), !path.isEmpty {
+            env["PATH"] = path
+        }
+        return env
+    }
+
+    /// Read a single variable from an interactive login shell, so user dotfiles
+    /// (which export e.g. `SSH_AUTH_SOCK`) are honored. Returns nil if unset.
+    private func loginShellValue(_ name: String) -> String? {
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: shell)
+        p.arguments = ["-lic", "printf %s \"$\(name)\""]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let value = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value?.isEmpty == false ? value : nil
     }
 
     // MARK: - Server resolution

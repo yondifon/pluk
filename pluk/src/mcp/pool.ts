@@ -1,5 +1,7 @@
 import type { Integration } from "../store/integrations.js";
 import { createDriver, type Driver } from "../db/index.js";
+import { recordHealth } from "./health.js";
+import { humanizeConnError } from "./errors.js";
 
 // ── Driver pool ──────────────────────────────────────────────────────────────
 // One driver per MCP session, closed after IDLE_MS of inactivity. This layer is
@@ -179,6 +181,14 @@ function createDriverEntry(key: string, integration: Integration): DriverEntry {
   created.then((d) => {
     if (driverPool.get(key) !== entry) d.close().catch(() => {});
   }).catch(() => {});
+
+  // Surface connect/tunnel/auth health to the UI. Uses the real setup promise
+  // (not the timeout-wrapped one) so a genuine failure is recorded with its
+  // actual message rather than the watchdog's "Timed out".
+  created.then(
+    () => recordHealth(integration.id, "ok"),
+    (e) => recordHealth(integration.id, "error", humanizeConnError(e)),
+  );
 
   return entry;
 }

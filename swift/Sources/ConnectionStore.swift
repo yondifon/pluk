@@ -18,11 +18,27 @@ struct QueryLogEntry: Identifiable {
     let createdAt: String
 }
 
+/// Last-observed health of a connection, mirrored from the server's
+/// `/api/health`. `nil` (absent) means untested this session.
+struct ConnHealth: Decodable {
+    let status: String        // "ok" | "error"
+    let error: String?
+    let at: Double            // epoch ms
+    var isError: Bool { status == "error" }
+}
+
 @Observable
 @MainActor
 final class ConnectionStore {
     var connections: [Connection] = []
     var groups: [ConnectionGroup] = []
+    /// Per-connection health keyed by integration id. Polled from the server so a
+    /// connection that fails for an agent (SSH/auth/tunnel) shows red without the
+    /// user manually testing it.
+    var health: [String: ConnHealth] = [:]
+
+    /// Set by the view layer so health transitions can raise toasts/notifications.
+    @ObservationIgnored var toastCenter: ToastCenter?
 
     @ObservationIgnored private var db: OpaquePointer?
 
@@ -403,6 +419,52 @@ final class ConnectionStore {
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
             _ = try? await URLSession.shared.data(for: req)
+        }
+    }
+
+    /// Poll per-connection health from the server. Records the manual-test result
+    /// and any agent-driven connect/tunnel/auth failure, so the UI can show red.
+    func refreshHealth() async {
+        guard let url = URL(string: PlukServer.api("health")) else { return }
+        struct Resp: Decodable { let health: [String: ConnHealth] }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let next = try JSONDecoder().decode(Resp.self, from: data).health
+            emitHealthTransitions(from: health, to: next)
+            health = next
+        } catch {
+            // Server down / not ready — leave the last snapshot in place.
+        }
+    }
+
+    /// Raise a toast only when a connection crosses a boundary — newly failing,
+    /// or recovered — so a steadily-broken connection doesn't notify every poll.
+    private func emitHealthTransitions(from old: [String: ConnHealth], to next: [String: ConnHealth]) {
+        guard let center = toastCenter else { return }
+        for (id, new) in next {
+            let was = old[id]
+            if new.isError, was?.isError != true {
+                let name = connections.first { $0.id == id }?.name ?? "Connection"
+                center.present(Toast(connectionId: id, title: name,
+                                     message: new.error ?? "Connection is failing.", kind: .error))
+            } else if !new.isError, was?.isError == true {
+                let name = connections.first { $0.id == id }?.name ?? "Connection"
+                center.present(Toast(connectionId: id, title: name,
+                                     message: "Reconnected.", kind: .success))
+            }
+        }
+    }
+
+    /// Test one connection (mirrors the detail view's Test) and refresh health.
+    /// Used by a toast's Retry action.
+    func test(connectionId: String) {
+        Task {
+            guard let url = URL(string: PlukServer.api("integrations/\(connectionId)/test")) else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 12
+            _ = try? await URLSession.shared.data(for: req)
+            await refreshHealth()
         }
     }
 

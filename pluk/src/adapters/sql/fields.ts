@@ -1,4 +1,5 @@
 import type { ConfigField } from "../types.js";
+import { sshAuthFields } from "../kit.js";
 
 // Shared config fields for the network SQL databases (Postgres, MySQL). The UI
 // renders these dynamically; `showIf` drives the SSH/SSL conditional sections.
@@ -16,17 +17,7 @@ export function networkSqlFields(defaultPort: number): ConfigField[] {
     { key: "ssh_host", label: "SSH Host", type: "text", group: "SSH Tunnel", showIf: { key: "use_ssh", equals: true } },
     { key: "ssh_port", label: "SSH Port", type: "number", group: "SSH Tunnel", default: 22, showIf: { key: "use_ssh", equals: true } },
     { key: "ssh_user", label: "SSH User", type: "text", group: "SSH Tunnel", showIf: { key: "use_ssh", equals: true } },
-    {
-      key: "ssh_auth_type", label: "Auth", type: "select", group: "SSH Tunnel", default: "agent",
-      options: [
-        { value: "agent", label: "Agent" },
-        { value: "key", label: "Private Key" },
-        { value: "password", label: "Password" },
-      ],
-      showIf: { key: "use_ssh", equals: true },
-    },
-    { key: "ssh_key_path", label: "Private Key", type: "file", group: "SSH Tunnel", showIf: { key: "ssh_auth_type", equals: "key" } },
-    { key: "ssh_password", label: "Passphrase / Password", type: "password", group: "SSH Tunnel", secret: true, showIf: { key: "use_ssh", equals: true } },
+    ...sshAuthFields({ prefix: "ssh_", group: "SSH Tunnel", showIf: { key: "use_ssh", equals: true } }),
 
     { key: "use_ssl", label: "SSL / TLS", type: "toggle", group: "SSL / TLS" },
     {

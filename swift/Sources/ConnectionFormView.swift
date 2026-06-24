@@ -307,6 +307,9 @@ struct ConnectionFormView: View {
 
     // MARK: - Action policy section (non-SQL adapters)
 
+    // Tools the Write permission unlocks for the selected adapter (write + delete).
+    private var writeActionNames: [String] { manifest?.writeActionNames ?? [] }
+
     private var actionPolicySection: some View {
         DetailSection("Permissions") {
             VStack(alignment: .leading, spacing: 6) {
@@ -321,18 +324,37 @@ struct ConnectionFormView: View {
                 Toggle("Write", isOn: $draft.allowWrite)
                     .toggleStyle(.checkbox)
                     .font(.system(size: 12))
-                    .help("Allow the agent to create or modify (e.g. create issues, comment)")
+                    .help(writeActionNames.isEmpty
+                          ? "Allow the agent to modify data"
+                          : "Allow the agent to run: \(writeActionNames.joined(separator: ", "))")
                     .padding(.horizontal, 14)
 
-                Text(draft.allowWrite
-                     ? "Agent can read and create/modify (e.g. create issues, comment)."
-                     : "Agent can only read. Write actions are blocked.")
+                Text(draft.allowWrite ? writeOnSummary : readOnlySummary)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .padding(.horizontal, 14)
                     .padding(.bottom, 8)
+
+                // Preview the tools that won't be exposed to the agent in read-only
+                // mode — these are filtered out of the MCP server entirely, not just
+                // blocked on call.
+                if !draft.allowWrite, !writeActionNames.isEmpty {
+                    HiddenToolsNote(names: writeActionNames)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 8)
+                }
             }
         }
+    }
+
+    private var writeOnSummary: String {
+        writeActionNames.isEmpty
+            ? "Agent can read and modify data."
+            : "Agent can read, plus modify via: \(writeActionNames.joined(separator: ", "))."
+    }
+
+    private var readOnlySummary: String {
+        "Agent can only read. Write actions are blocked."
     }
 
     // MARK: - Confirmation policy section (no-policy adapters, e.g. SSH)
@@ -549,5 +571,23 @@ struct ConnectionFormView: View {
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
+    }
+}
+
+// Read-only preview: the tools that are filtered out of the MCP server (not just
+// blocked) because the integration grants read only. Shows the agent never sees them.
+private struct HiddenToolsNote: View {
+    let names: [String]
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "eye.slash")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+            Text("Hidden from the agent: \(names.joined(separator: ", "))")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

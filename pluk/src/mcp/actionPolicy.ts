@@ -16,8 +16,10 @@ export interface ActionPolicy {
 /**
  * Derive an action policy from the integration's stored `query_policy` + the
  * `read_only` flag. Forward-compatible: an explicit `{ "actions": [...] }` blob
- * wins. Otherwise we fall back to the read_only flag — read-only ⇒ read only,
- * else read+write. `delete`/`admin` are never granted implicitly.
+ * wins (and is the only way to grant `admin`). Otherwise we fall back to the
+ * read_only flag: read-only ⇒ read only, else read+write+delete — the binary UI
+ * toggle means "may the agent modify state", which includes deleting (e.g. a
+ * Redis `del`). `admin` is never granted implicitly.
  */
 export function parseActionPolicy(raw: string | null | undefined, readOnly: number): ActionPolicy {
   if (raw) {
@@ -31,7 +33,7 @@ export function parseActionPolicy(raw: string | null | undefined, readOnly: numb
       // fall through to flag-based default
     }
   }
-  return { allowed: readOnly ? ["read"] : ["read", "write"] };
+  return { allowed: readOnly ? ["read"] : ["read", "write", "delete"] };
 }
 
 export function actionAllowed(policy: ActionPolicy, category: ActionCategory): boolean {

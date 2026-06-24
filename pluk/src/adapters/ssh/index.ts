@@ -2,7 +2,7 @@ import type { Adapter } from "../types.js";
 import type { Integration } from "../../store/integrations.js";
 import { sshFields } from "./fields.js";
 import { testCommand } from "./client.js";
-import { buildSshServer, registerSshServer, SSH_AGENT_HINT, sshInstructions } from "./server.js";
+import { registerSshServer, SSH_AGENT_HINT, sshInstructions } from "./server.js";
 
 export const sshAdapter: Adapter = {
   id: "ssh",
@@ -15,6 +15,5 @@ export const sshAdapter: Adapter = {
     await testCommand(integration);
   },
   instructions: sshInstructions,
-  buildServer: buildSshServer,
   register: registerSshServer,
 };
