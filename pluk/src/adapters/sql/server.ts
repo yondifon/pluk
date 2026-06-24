@@ -248,7 +248,7 @@ ${sql}` } },
       // query is still recorded so the audit log shows the denial.
       const verdict = evaluate(sql, policy, dialect);
       if (!verdict.ok) {
-        logQuery(conn.id, conn.name, sql, "blocked", verdict.categories, verdict.reason ?? undefined);
+        logQuery(conn.id, conn.name, sql, "blocked", verdict.categories, verdict.reason ?? undefined, undefined, undefined, undefined, conn.viaGroup);
         return Promise.resolve(err(`Blocked: ${verdict.reason}`));
       }
       return introspect("explain_query", async (driver) => JSON.stringify(await driver.explain(sql), null, 2));

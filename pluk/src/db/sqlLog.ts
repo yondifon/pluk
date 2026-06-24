@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { logExecutedStatement } from "../store/queryLog.js";
+import { logExecutedStatement, type LogGroup } from "../store/queryLog.js";
 
 // Carries the originating tool/operation through async driver calls so the
 // driver layer can tag every executed statement without threading a parameter
@@ -9,6 +9,7 @@ interface SqlLogContext {
   connId: string;
   connName: string;
   source: string;
+  group?: LogGroup; // set when the statement is run through a group endpoint
 }
 
 const als = new AsyncLocalStorage<SqlLogContext>();
@@ -21,5 +22,5 @@ export function runWithSqlLog<T>(ctx: SqlLogContext, fn: () => Promise<T>): Prom
 export function recordExecutedSql(sql: string, rowCount: number | null, error?: string): void {
   const ctx = als.getStore();
   if (!ctx) return;
-  logExecutedStatement(ctx.connId, ctx.connName, sql, ctx.source, rowCount, error);
+  logExecutedStatement(ctx.connId, ctx.connName, sql, ctx.source, rowCount, error, ctx.group);
 }

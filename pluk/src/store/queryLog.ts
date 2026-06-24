@@ -29,6 +29,8 @@ for (const sql of [
   "ALTER TABLE query_log ADD COLUMN row_count INTEGER",
   "ALTER TABLE query_log ADD COLUMN source TEXT", // originating tool / operation
   "ALTER TABLE query_log ADD COLUMN response_text TEXT", // raw response shown in the log viewer
+  "ALTER TABLE query_log ADD COLUMN group_id TEXT",   // set when the call came through a group endpoint
+  "ALTER TABLE query_log ADD COLUMN group_name TEXT", // group display name (for the group log view)
 ]) {
   try { db.run(sql); } catch { /* column exists */ }
 }
@@ -80,6 +82,11 @@ const LOG_RESPONSE_BYTES = 100_000; // max raw response text stored per entry
 
 export type Verdict = "pending" | "allowed" | "blocked" | "cancelled" | "error";
 
+/** The group a call was routed through, when a group endpoint fronted the member
+ *  integration. Recorded on the log row so the group view can show every member's
+ *  activity in one place. Absent for calls hitting an integration's own endpoint. */
+export type LogGroup = { id: string; name: string };
+
 function packResult(result?: { rows: unknown[]; fields?: string[] }): { resultJson: string | null; rowCount: number | null } {
   if (!result) return { resultJson: null, rowCount: null };
   const rowCount = result.rows.length;
@@ -105,12 +112,13 @@ export function createLogEntry(
   categories: string,
   reason?: string,
   source?: string,
+  group?: LogGroup,
 ): number {
   try {
     db.query(
-      `INSERT INTO query_log (connection_id, connection_name, sql, verdict, reason, categories, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(connectionId, connectionName, sql, verdict, reason ?? null, categories, source ?? null);
+      `INSERT INTO query_log (connection_id, connection_name, sql, verdict, reason, categories, source, group_id, group_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(connectionId, connectionName, sql, verdict, reason ?? null, categories, source ?? null, group?.id ?? null, group?.name ?? null);
     const row = db.query("SELECT last_insert_rowid() as id").get() as { id: number };
     purgeOldLogs();
     return row.id;
@@ -131,12 +139,13 @@ export function logExecutedStatement(
   source: string,
   rowCount: number | null,
   error?: string,
+  group?: LogGroup,
 ): void {
   try {
     db.query(
-      `INSERT INTO query_log (connection_id, connection_name, sql, verdict, reason, categories, row_count, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(connectionId, connectionName, sql, error ? "error" : "allowed", error ?? null, null, rowCount, source);
+      `INSERT INTO query_log (connection_id, connection_name, sql, verdict, reason, categories, row_count, source, group_id, group_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(connectionId, connectionName, sql, error ? "error" : "allowed", error ?? null, null, rowCount, source, group?.id ?? null, group?.name ?? null);
     purgeOldLogs();
   } catch {
     // Non-fatal
@@ -174,7 +183,8 @@ export function logQuery(
   result?: { rows: unknown[]; fields?: string[] },
   source?: string,
   responseText?: string,
+  group?: LogGroup,
 ): void {
-  const id = createLogEntry(connectionId, connectionName, sql, verdict, categories, reason, source);
+  const id = createLogEntry(connectionId, connectionName, sql, verdict, categories, reason, source, group);
   if (id >= 0 && (result || responseText)) updateLogEntry(id, verdict, reason, result, responseText);
 }

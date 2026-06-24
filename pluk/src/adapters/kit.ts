@@ -69,18 +69,18 @@ export interface GateOpts {
  * register a per-call abort against it.
  */
 export async function runGated(
-  conn: Pick<Integration, "id" | "name">,
+  conn: Pick<Integration, "id" | "name" | "viaGroup">,
   meta: GateMeta,
   run: (logId: number) => Promise<Outcome>,
   opts: GateOpts = {},
 ): Promise<ToolResult> {
   const block = opts.precheck?.();
   if (block !== undefined) {
-    logQuery(conn.id, conn.name, meta.detail, "blocked", meta.category, block, undefined, meta.action);
+    logQuery(conn.id, conn.name, meta.detail, "blocked", meta.category, block, undefined, meta.action, undefined, conn.viaGroup);
     return err(`Blocked: ${block}`);
   }
 
-  const logId = createLogEntry(conn.id, conn.name, meta.detail, "pending", meta.category, undefined, meta.action);
+  const logId = createLogEntry(conn.id, conn.name, meta.detail, "pending", meta.category, undefined, meta.action, conn.viaGroup);
   try {
     const outcome = await run(logId);
     if ("blocked" in outcome) {

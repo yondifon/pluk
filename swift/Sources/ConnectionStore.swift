@@ -12,9 +12,12 @@ struct QueryLogEntry: Identifiable {
     let verdict: String       // allowed | blocked | error
     let reason: String?
     let categories: String?
+    let source: String?       // originating tool / operation (e.g. "query", "list_tables")
     let resultJson: String?   // JSON snapshot of result rows
     let rowCount: Int?        // total rows before cap
     let responseText: String? // raw agent-visible response text (capped server-side)
+    let groupId: String?      // set when the call was routed through a group endpoint
+    let groupName: String?    // group display name
     let createdAt: String
 }
 
@@ -342,11 +345,19 @@ final class ConnectionStore {
 
     // MARK: - Query log
 
+    // Columns shared by every log query, kept in one place so the column indices
+    // used by `parseLogRows` stay in sync across the per-connection and per-group
+    // reads below.
+    private static let logColumns = """
+    id, connection_id, connection_name, sql, verdict, reason, categories,
+    source, result_json, row_count, response_text, group_id, group_name, created_at
+    """
+
+    /// Activity for a single integration (its own endpoint + any group routing).
     func recentLog(connectionId: String, limit: Int = 200) -> [QueryLogEntry] {
         var stmt: OpaquePointer?
         let sql = """
-        SELECT id, connection_id, connection_name, sql, verdict, reason, categories,
-               result_json, row_count, response_text, created_at
+        SELECT \(Self.logColumns)
         FROM query_log
         WHERE connection_id = ?
         ORDER BY id DESC
@@ -356,7 +367,28 @@ final class ConnectionStore {
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, connectionId)
         sqlite3_bind_int(stmt, 2, Int32(limit))
+        return parseLogRows(stmt)
+    }
 
+    /// Activity for every member integration that was called through this group's
+    /// endpoint — the group view's single, aggregated activity feed.
+    func recentLogForGroup(groupId: String, limit: Int = 400) -> [QueryLogEntry] {
+        var stmt: OpaquePointer?
+        let sql = """
+        SELECT \(Self.logColumns)
+        FROM query_log
+        WHERE group_id = ?
+        ORDER BY id DESC
+        LIMIT ?
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, groupId)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        return parseLogRows(stmt)
+    }
+
+    private func parseLogRows(_ stmt: OpaquePointer?) -> [QueryLogEntry] {
         var result: [QueryLogEntry] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             func str(_ i: Int32) -> String? {
@@ -366,7 +398,7 @@ final class ConnectionStore {
             func optInt(_ i: Int32) -> Int? {
                 sqlite3_column_type(stmt, i) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, i))
             }
-            guard let createdAt = str(10) else { continue }
+            guard let createdAt = str(13) else { continue }
             result.append(QueryLogEntry(
                 id: Int(sqlite3_column_int(stmt, 0)),
                 connectionId: str(1) ?? "",
@@ -375,9 +407,12 @@ final class ConnectionStore {
                 verdict: str(4) ?? "",
                 reason: str(5),
                 categories: str(6),
-                resultJson: str(7),
-                rowCount: optInt(8),
-                responseText: str(9),
+                source: str(7),
+                resultJson: str(8),
+                rowCount: optInt(9),
+                responseText: str(10),
+                groupId: str(11),
+                groupName: str(12),
                 createdAt: createdAt
             ))
         }
@@ -389,6 +424,14 @@ final class ConnectionStore {
         guard sqlite3_prepare_v2(db, "DELETE FROM query_log WHERE connection_id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, connectionId)
+        sqlite3_step(stmt)
+    }
+
+    func clearAllLogs(groupId: String) {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "DELETE FROM query_log WHERE group_id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, groupId)
         sqlite3_step(stmt)
     }
 

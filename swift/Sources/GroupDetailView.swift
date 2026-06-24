@@ -14,6 +14,13 @@ struct GroupDetailView: View {
     @State private var urlCopied = false
     @State private var snippetCopied = false
     @State private var selectedClient: MCPClient = .opencode
+    @State private var tab: GroupTab = .overview
+
+    enum GroupTab: String, CaseIterable {
+        case overview = "Overview"
+        case logs = "Logs"
+        var icon: String { self == .overview ? "square.stack.3d.up" : "list.bullet.rectangle" }
+    }
 
     private var members: [Connection] {
         group.memberIds.compactMap { id in store.connections.first { $0.id == id } }
@@ -28,16 +35,49 @@ struct GroupDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            tabBar
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    endpointSection
-                    configSnippetSection
-                    membersSection
+            switch tab {
+            case .overview:
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        endpointSection
+                        configSnippetSection
+                        membersSection
+                    }
+                    .padding(18)
                 }
-                .padding(18)
+            case .logs:
+                LogsTab(scope: .group(group), store: store)
             }
         }
+        .background(.clear)
+    }
+
+    // MARK: - Tab bar
+
+    private var tabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(GroupTab.allCases, id: \.self) { t in
+                Button { tab = t } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: t.icon).font(.system(size: 11))
+                        Text(t.rawValue).font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundColor(tab == t ? .accentColor : .secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .overlay(alignment: .bottom) {
+                        if tab == t {
+                            Rectangle().fill(Color.accentColor).frame(height: 2)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 4)
         .background(.clear)
     }
 

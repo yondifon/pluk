@@ -50,6 +50,8 @@ export function buildGroupServer(group: Group, sessionIdRef: { value: string }):
     used.set(ns, seen + 1);
     if (seen > 0) ns = `${ns}_${seen + 1}`;
     const scoped = applyOverrides(integration, overrides, adapter.configFields);
+    // Tag the member so its log rows record the group that fronted the call.
+    scoped.viaGroup = { id: group.id, name: group.name };
     return [{ ns, adapter, scoped }];
   });
 

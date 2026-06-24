@@ -206,7 +206,7 @@ struct ConnectionDetailView: View {
     private var tabContent: some View {
         switch selectedTab {
         case .overview: overviewTab
-        case .logs:     LogsTab(conn: conn, store: store)
+        case .logs:     LogsTab(scope: .connection(conn), store: store)
         case .policy:   policyTab
         }
     }

@@ -152,7 +152,7 @@ export async function createDriver(
 function instrumentDriver(driver: Driver, integration: Integration): Driver {
   const wrap = <A extends unknown[], R>(source: string, fn: (...args: A) => Promise<R>) =>
     (...args: A): Promise<R> =>
-      runWithSqlLog({ connId: integration.id, connName: integration.name, source }, () => fn(...args));
+      runWithSqlLog({ connId: integration.id, connName: integration.name, source, group: integration.viaGroup }, () => fn(...args));
 
   driver.explain = wrap("explain_query", driver.explain.bind(driver));
   driver.listTables = wrap("list_tables", driver.listTables.bind(driver));

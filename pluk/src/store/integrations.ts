@@ -39,6 +39,10 @@ export interface Integration {
   query_policy?: string | null;
   token: string;
   created_at: string;
+  /** Transient, not persisted: set only when this integration is registered as a
+   *  member of a group, so the gated runner can attribute its log rows to the
+   *  group endpoint that fronted the call. */
+  viaGroup?: { id: string; name: string };
 }
 
 interface IntegrationRow extends Omit<Integration, "config"> {

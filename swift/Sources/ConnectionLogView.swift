@@ -1,12 +1,22 @@
 import AppKit
 import SwiftUI
 
+// What a LogsTab is showing: a single integration's activity, or the aggregated
+// feed for every member called through a group endpoint.
+enum LogScope {
+    case connection(Connection)
+    case group(ConnectionGroup)
+
+    var isGroup: Bool { if case .group = self { return true }; return false }
+}
+
 struct LogsTab: View {
-    let conn: Connection
+    let scope: LogScope
     let store: ConnectionStore
 
     @State private var entries: [QueryLogEntry] = []
     @State private var filter: VerdictFilter = .all
+    @State private var search = ""
     @State private var expandedId: Int? = nil
     @State private var showRetentionPicker = false
     @State private var pollTimer: Timer? = nil
@@ -20,9 +30,21 @@ struct LogsTab: View {
 
     private var hasPending: Bool { entries.contains { $0.verdict == "pending" } }
 
+    // Free-text match across the fields an operator scans for: the SQL/command,
+    // the originating tool, and (in group mode) the member name.
+    private func matchesSearch(_ e: QueryLogEntry) -> Bool {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return true }
+        return e.sql.lowercased().contains(q)
+            || (e.source?.lowercased().contains(q) ?? false)
+            || e.connectionName.lowercased().contains(q)
+            || (e.categories?.lowercased().contains(q) ?? false)
+    }
+
     private var filtered: [QueryLogEntry] {
-        guard filter != .all else { return entries }
-        return entries.filter { $0.verdict == filter.rawValue.lowercased() }
+        entries.filter {
+            (filter == .all || $0.verdict == filter.rawValue.lowercased()) && matchesSearch($0)
+        }
     }
 
     private var stats: (allowed: Int, blocked: Int, error: Int) {
@@ -80,7 +102,30 @@ struct LogsTab: View {
                 statPill(stats.error, label: "err", color: .orange)
             }
 
-            Spacer()
+            // Search — scan SQL / tool / member
+            HStack(spacing: 5) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                TextField(scope.isGroup ? "Filter SQL, tool, integration…" : "Filter SQL or tool…", text: $search)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11, design: .monospaced))
+                if !search.isEmpty {
+                    Button { search = "" } label: {
+                        Image(systemName: "xmark.circle.fill").font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.secondary.opacity(0.08))
+            .clipShape(.capsule)
+            .frame(maxWidth: 260)
+            .padding(.horizontal, 6)
+
+            Spacer(minLength: 0)
 
             // Filter
             HStack(spacing: 2) {
@@ -109,8 +154,11 @@ struct LogsTab: View {
                     }
                 }
                 Divider()
-                Button("Clear all logs for this integration", role: .destructive) {
-                    store.clearAllLogs(connectionId: conn.id)
+                Button(scope.isGroup ? "Clear all logs for this group" : "Clear all logs for this integration", role: .destructive) {
+                    switch scope {
+                    case .connection(let c): store.clearAllLogs(connectionId: c.id)
+                    case .group(let g): store.clearAllLogs(groupId: g.id)
+                    }
                     reload()
                 }
             } label: {
@@ -159,16 +207,30 @@ struct LogsTab: View {
             Image(systemName: "list.bullet.rectangle")
                 .font(.system(size: 28))
                 .foregroundColor(.secondary.opacity(0.4))
-            Text(filter == .all ? "No activity yet" : "No \(filter.rawValue.lowercased()) activity")
+            Text(emptyTitle)
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
-            Text("Activity from agents using this integration will appear here.")
+            Text(emptySubtitle)
                 .font(.system(size: 11))
                 .foregroundColor(.secondary.opacity(0.7))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 280)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyTitle: String {
+        if !search.trimmingCharacters(in: .whitespaces).isEmpty { return "No matches" }
+        return filter == .all ? "No activity yet" : "No \(filter.rawValue.lowercased()) activity"
+    }
+
+    private var emptySubtitle: String {
+        if !search.trimmingCharacters(in: .whitespaces).isEmpty {
+            return "No log entries match “\(search)”."
+        }
+        return scope.isGroup
+            ? "Activity from agents using this group's endpoint will appear here, across every integration."
+            : "Activity from agents using this integration will appear here."
     }
 
     // MARK: - Log list
@@ -181,6 +243,7 @@ struct LogsTab: View {
                     LogEntryRow(
                         entry: entry,
                         isExpanded: expanded,
+                        showConnection: scope.isGroup,
                         onToggle: { expandedId = expanded ? nil : entry.id },
                         onStop: { stopQuery(entry) }
                     )
@@ -191,7 +254,10 @@ struct LogsTab: View {
     }
 
     private func reload() {
-        entries = store.recentLog(connectionId: conn.id)
+        switch scope {
+        case .connection(let c): entries = store.recentLog(connectionId: c.id)
+        case .group(let g): entries = store.recentLogForGroup(groupId: g.id)
+        }
     }
 
     private func stopQuery(_ entry: QueryLogEntry) {
@@ -211,6 +277,7 @@ struct LogsTab: View {
 private struct LogEntryRow: View {
     let entry: QueryLogEntry
     let isExpanded: Bool
+    let showConnection: Bool   // group view: label each row with its member integration
     let onToggle: () -> Void
     let onStop: () -> Void
 
@@ -243,9 +310,17 @@ private struct LogEntryRow: View {
                         .frame(minHeight: 36)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        // Top row: badge + SQL preview
-                        HStack(spacing: 8) {
+                        // Top row: badge + member/tool chips + SQL preview
+                        HStack(spacing: 6) {
                             VerdictBadge(verdict: entry.verdict)
+
+                            if showConnection {
+                                chip(entry.connectionName, system: "circle.grid.2x2", color: .accentColor)
+                            }
+
+                            if let source = entry.source, !source.isEmpty {
+                                chip(source, system: "wrench.and.screwdriver", color: .secondary)
+                            }
 
                             if let cats = entry.categories, !cats.isEmpty {
                                 Text(cats)
@@ -348,6 +423,19 @@ private struct LogEntryRow: View {
         .buttonStyle(.bordered)
         .controlSize(.mini)
         .tint(copied ? .green : nil)
+    }
+
+    // Compact monospace tag for the member integration / originating tool.
+    private func chip(_ text: String, system: String, color: Color) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: system).font(.system(size: 8))
+            Text(text).font(.system(size: 10, weight: .medium, design: .monospaced)).lineLimit(1)
+        }
+        .foregroundColor(color)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(color.opacity(0.1))
+        .clipShape(.capsule)
     }
 
     private func flash(_ flag: Binding<Bool>) {
