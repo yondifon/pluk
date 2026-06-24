@@ -560,8 +560,6 @@ private struct ResultPreview: View {
     let json: String
     let rowCount: Int?
 
-    @State private var parsed: ParsedResult?
-
     private struct ParsedResult {
         struct Cell: Identifiable {
             let id: String
@@ -575,7 +573,7 @@ private struct ResultPreview: View {
         let rows: [Row]
     }
 
-    private func parse() -> ParsedResult? {
+    private var parsed: ParsedResult? {
         guard let data = json.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let fields = obj["fields"] as? [String],
@@ -598,52 +596,53 @@ private struct ResultPreview: View {
     }
 
     var body: some View {
-        if let p = parsed, !p.fields.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                // Header row
-                HStack(spacing: 0) {
-                    ForEach(p.fields.prefix(6), id: \.self) { field in
-                        Text(field)
-                            .font(.dev(size: 9.5, weight: .semibold))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(Color.secondary.opacity(0.08))
-                    }
-                }
-                .clipShape(.rect(cornerRadius: 4, style: .continuous))
-
-                // Data rows
-                ForEach(p.rows) { row in
+        Group {
+            if let p = parsed, !p.fields.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Header row
                     HStack(spacing: 0) {
-                        ForEach(row.cells.prefix(6)) { cell in
-                            Text(cell.text)
-                                .font(.dev(size: 9.5))
-                                .foregroundColor(.primary.opacity(0.75))
+                        ForEach(p.fields.prefix(6), id: \.self) { field in
+                            Text(field)
+                                .font(.dev(size: 9.5, weight: .semibold))
+                                .foregroundColor(.secondary)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
+                                .padding(.vertical, 3)
+                                .background(Color.secondary.opacity(0.08))
                         }
                     }
-                    Divider().opacity(0.5)
-                }
+                    .clipShape(.rect(cornerRadius: 4, style: .continuous))
 
-                // Footer: row counts
-                let total = rowCount ?? p.rows.count
-                let showing = min(p.rows.count, 5)
-                if total > showing {
-                    Text("\(showing) of \(total) rows")
-                        .font(.dev(size: 9.5))
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.top, 3)
+                    // Data rows
+                    ForEach(p.rows) { row in
+                        HStack(spacing: 0) {
+                            ForEach(row.cells.prefix(6)) { cell in
+                                Text(cell.text)
+                                    .font(.dev(size: 9.5))
+                                    .foregroundColor(.primary.opacity(0.75))
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                            }
+                        }
+                        Divider().opacity(0.5)
+                    }
+
+                    // Footer: row counts
+                    let total = rowCount ?? p.rows.count
+                    let showing = min(p.rows.count, 5)
+                    if total > showing {
+                        Text("\(showing) of \(total) rows")
+                            .font(.dev(size: 9.5))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.top, 3)
+                    }
                 }
+                .codeBlockSurface(cornerRadius: 5)
             }
-            .codeBlockSurface(cornerRadius: 5)
-            .task(id: json) { parsed = parse() }
         }
     }
 }

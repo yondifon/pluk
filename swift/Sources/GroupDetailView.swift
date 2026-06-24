@@ -140,43 +140,38 @@ struct GroupDetailView: View {
 
     private var configSnippetSection: some View {
         DetailSection("Config") {
-            HStack {
+            HStack(spacing: 8) {
                 Text("Client")
                     .font(.dev(size: 11, weight: .semibold))
                     .foregroundColor(.secondary)
                     .textCase(.uppercase)
-                    .frame(width: 86, alignment: .leading)
-                Spacer()
                 Picker("", selection: $selectedClient) {
                     ForEach(MCPClient.allCases) { client in
                         Text(client.label).tag(client)
                     }
                 }
                 .pickerStyle(.menu)
-                .frame(width: 110)
+                .fixedSize()
+                Spacer()
+                Button(snippetCopied ? "Copied!" : "Copy") {
+                    copy(configSnippet) { snippetCopied = $0 }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(snippetCopied ? .green : nil)
+                .animation(.easeInOut(duration: 0.15), value: snippetCopied)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            Divider()
 
             Text(configSnippet)
                 .font(.dev(size: 11))
                 .foregroundColor(.primary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .codeBlockSurface()
-                .overlay(alignment: .topTrailing) {
-                    Button(snippetCopied ? "Copied!" : "Copy") {
-                        copy(configSnippet) { snippetCopied = $0 }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .tint(snippetCopied ? .green : nil)
-                    .animation(.easeInOut(duration: 0.15), value: snippetCopied)
-                    .padding(8)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(12)
         }
     }
 
