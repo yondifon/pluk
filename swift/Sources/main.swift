@@ -9,12 +9,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var store = ConnectionStore()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(.regular)
 
         setupMenu()
         setupStatusBar()
         setupWindow()
         serverManager.start()
+        showWindow()
+    }
+
+    // Regular dock app: clicking the dock icon with no visible window reshows it.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showWindow() }
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -105,10 +112,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if window.isVisible {
             window.orderOut(nil)
         } else {
-            window.center()
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
+            showWindow()
         }
+    }
+
+    private func showWindow() {
+        if !window.isVisible { window.center() }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 }
 

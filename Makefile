@@ -2,7 +2,7 @@ APP       := Pluk
 BUNDLE_ID := com.pluk.app
 DIST      := dist
 
-.PHONY: dev server swift-build bundle install zip release publish publish-minor publish-major clean
+.PHONY: dev deps server swift-build bundle install zip release publish publish-minor publish-major clean
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
@@ -11,7 +11,11 @@ dev:
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-server:
+deps:
+	@printf "→ installing pluk deps\n"
+	cd pluk && bun install
+
+server: deps
 	@printf "→ compiling server binary\n"
 	@mkdir -p $(DIST)
 	@# cpu-features ships a native .node addon bun can't bundle; mark it external so it's
