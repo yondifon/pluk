@@ -91,16 +91,19 @@ struct LogsTab: View {
     // MARK: - Toolbar
 
     private var toolbar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             // Stats pills
-            statPill(entries.count, label: "total", color: .secondary)
-            statPill(stats.allowed, label: "ok", color: .green)
-            if stats.blocked > 0 {
-                statPill(stats.blocked, label: "blocked", color: .red)
+            HStack(spacing: 10) {
+                statPill(entries.count, label: "total", color: .secondary)
+                statPill(stats.allowed, label: "ok", color: .green)
+                if stats.blocked > 0 {
+                    statPill(stats.blocked, label: "blocked", color: .red)
+                }
+                if stats.error > 0 {
+                    statPill(stats.error, label: "err", color: .orange)
+                }
             }
-            if stats.error > 0 {
-                statPill(stats.error, label: "err", color: .orange)
-            }
+            .fixedSize()
 
             // Search — scan SQL / tool / member
             HStack(spacing: 5) {
@@ -110,6 +113,7 @@ struct LogsTab: View {
                 TextField(scope.isGroup ? "Filter SQL, tool, integration…" : "Filter SQL or tool…", text: $search)
                     .textFieldStyle(.plain)
                     .font(.dev(size: 11))
+                    .lineLimit(1)
                 if !search.isEmpty {
                     Button { search = "" } label: {
                         Image(systemName: "xmark.circle.fill").font(.system(size: 10))
@@ -122,24 +126,32 @@ struct LogsTab: View {
             .padding(.vertical, 4)
             .background(Color.secondary.opacity(0.08))
             .clipShape(.capsule)
-            .frame(maxWidth: 260)
-            .padding(.horizontal, 6)
+            .frame(minWidth: 120, maxWidth: 240)
+            .layoutPriority(-1)
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
 
-            // Filter
+            // Verdict filter — segmented capsule track; labels never wrap
             HStack(spacing: 2) {
                 ForEach(VerdictFilter.allCases, id: \.self) { f in
-                    Button(f.rawValue) { filter = f }
-                        .buttonStyle(.plain)
-                        .font(.dev(size: 11, weight: filter == f ? .semibold : .regular))
-                        .foregroundColor(filter == f ? .accentColor : .secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(filter == f ? Color.accentColor.opacity(0.1) : .clear)
-                        .clipShape(.capsule)
+                    Button { filter = f } label: {
+                        Text(f.rawValue)
+                            .font(.dev(size: 11, weight: filter == f ? .semibold : .regular))
+                            .foregroundColor(filter == f ? .accentColor : .secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .background(filter == f ? Color.accentColor.opacity(0.12) : .clear)
+                            .clipShape(.capsule)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
+            .padding(2)
+            .background(Color.secondary.opacity(0.06))
+            .clipShape(.capsule)
+            .fixedSize()
 
             Divider().frame(height: 14)
 

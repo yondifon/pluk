@@ -99,13 +99,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
-        // Let the window's vibrancy show through, so Liquid Glass surfaces refract.
-        window.isOpaque = false
-        window.backgroundColor = .clear
+        window.isOpaque = true
+        window.backgroundColor = .windowBackgroundColor
         window.delegate = self
-        window.setFrameAutosaveName("PlukMainWindow")
-        window.center()
+        // Don't let the window shrink below the toolbar's intrinsic width, or its
+        // trailing actions clip off-screen with no way to scroll to them.
+        window.contentMinSize = NSSize(width: 720, height: 520)
         window.contentViewController = NSHostingController(rootView: ContentView(store: store, serverManager: serverManager))
+        // Restore the user's last size/position; center only on first-ever launch.
+        window.setFrameAutosaveName("PlukMainWindow")
+        if !window.setFrameUsingName("PlukMainWindow") {
+            window.center()
+        }
     }
 
     @objc private func toggleWindow() {
@@ -117,7 +122,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func showWindow() {
-        if !window.isVisible { window.center() }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
     }

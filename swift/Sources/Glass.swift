@@ -22,81 +22,43 @@ extension Font {
     }
 }
 
-// Liquid Glass design helpers. Real glass (refraction, morphing, specular) is
-// macOS 26+; on earlier systems we approximate with vibrancy + frosted material
-// so the look degrades gracefully rather than going flat.
-
-/// Behind-window vibrancy. Gives every glass/material surface real content to
-/// refract, which is what makes Liquid Glass read as glass instead of gray.
-struct VisualEffectView: NSViewRepresentable {
-    var material: NSVisualEffectView.Material = .underWindowBackground
-    var blending: NSVisualEffectView.BlendingMode = .behindWindow
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = material
-        view.blendingMode = blending
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {
-        view.material = material
-        view.blendingMode = blending
-    }
-}
-
-/// Groups nearby glass shapes so they blend/morph as one fluid surface (macOS 26);
-/// a no-op passthrough on earlier systems.
+/// Layout passthrough kept for call-site compatibility — no vibrancy/glass.
 struct GlassGroup<Content: View>: View {
-    var spacing: CGFloat
     @ViewBuilder var content: Content
 
     init(spacing: CGFloat = 10, @ViewBuilder content: () -> Content) {
-        self.spacing = spacing
         self.content = content()
     }
 
-    var body: some View {
-        if #available(macOS 26.0, *) {
-            GlassEffectContainer(spacing: spacing) { content }
-        } else {
-            content
-        }
-    }
+    var body: some View { content }
 }
 
 extension View {
-    /// Translucent app/window backing.
+    /// Solid default window backing (white in light mode).
     func glassWindowBackground() -> some View {
-        background(VisualEffectView(material: .underWindowBackground).ignoresSafeArea())
+        background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
     }
 
-    /// Translucent backing for sheets/panels — slightly more opaque so dense
-    /// content (forms, logs) stays legible over it.
+    /// Solid backing for sheets/panels.
     func glassPanelBackground() -> some View {
-        background(VisualEffectView(material: .menu).ignoresSafeArea())
+        background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
     }
 }
 
 // MARK: - Shared surfaces & rows
 
 extension View {
-    /// Liquid Glass card surface on macOS 26+, with a solid fallback for earlier systems.
-    @ViewBuilder
+    /// Solid card surface — a regular control-background fill with a hairline edge.
     func cardSurface(cornerRadius: CGFloat = 8) -> some View {
-        if #available(macOS 26.0, *) {
-            self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
-        } else {
-            // Frosted-glass approximation: material over the window's vibrancy
-            // plus a hairline edge for the glass-rim highlight.
-            self
-                .background(.ultraThinMaterial, in: .rect(cornerRadius: cornerRadius))
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
-                )
-        }
+        self
+            .background(
+                Color(nsColor: .controlBackgroundColor),
+                in: .rect(cornerRadius: cornerRadius)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+            )
     }
 
     /// Inset surface for code / data blocks (config snippets, result tables) —
