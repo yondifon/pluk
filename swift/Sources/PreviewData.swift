@@ -18,7 +18,9 @@ extension ConfigFieldDef {
         fileTypes: [String]? = nil,
         options: [FieldOption]? = nil,
         showIf: ShowIf? = nil,
-        defaultValue: String? = nil
+        defaultValue: String? = nil,
+        help: String? = nil,
+        danger: Bool? = nil
     ) {
         self.key = key
         self.label = label
@@ -31,6 +33,8 @@ extension ConfigFieldDef {
         self.options = options
         self.showIf = showIf
         self.defaultValue = defaultValue
+        self.help = help
+        self.danger = danger
     }
 }
 
@@ -49,7 +53,10 @@ extension Connection {
         ],
         environment: .production,
         readOnly: true,
-        queryPolicy: .default(for: .production),
+        toolConfig: [
+            "query": ToolState(enabled: true, settings: ["mode": "read-only"]),
+            "list_tables": ToolState(enabled: true),
+        ],
         token: "pluk_prod_pg_token",
         createdAt: "2024-01-15 09:00:00"
     )
@@ -64,7 +71,10 @@ extension Connection {
         ],
         environment: .production,
         readOnly: false,
-        queryPolicy: .make(.readWrite),
+        toolConfig: [
+            "search_issues": ToolState(enabled: true),
+            "create_issue": ToolState(enabled: true),
+        ],
         token: "pluk_linear_token",
         createdAt: "2024-02-10 14:30:00"
     )
@@ -88,7 +98,16 @@ extension AdapterManifest {
         category: "database",
         policyKind: "sql",
         agentHint: "Use this connection for read-only analytics queries.",
-        actions: nil,
+        tools: [
+            AdapterToolDef(name: "query", description: "Run a SQL query against the database.", category: "read", defaultEnabled: true, settings: [
+                ConfigFieldDef(key: "mode", label: "Statements", type: "select", options: [
+                    FieldOption(value: "read-only", label: "Read-only (SELECT)"),
+                    FieldOption(value: "mutations", label: "Mutations"),
+                    FieldOption(value: "destructive", label: "Destructive"),
+                ], defaultValue: "read-only"),
+            ]),
+            AdapterToolDef(name: "list_tables", description: "List all tables in the database.", category: "read", defaultEnabled: true, settings: nil),
+        ],
         configFields: [
             ConfigFieldDef(key: "host", label: "Host", type: "text", group: "Connection", required: true, placeholder: "localhost"),
             ConfigFieldDef(key: "port", label: "Port", type: "number", group: "Connection", required: true, placeholder: "5432"),
@@ -109,9 +128,9 @@ extension AdapterManifest {
         category: "issue-tracker",
         policyKind: "action",
         agentHint: "Manage issues and projects.",
-        actions: [
-            AdapterAction(name: "search_issues", category: "read"),
-            AdapterAction(name: "create_issue", category: "write"),
+        tools: [
+            AdapterToolDef(name: "search_issues", description: "Search issues by text.", category: "read", defaultEnabled: true, settings: nil),
+            AdapterToolDef(name: "create_issue", description: "Create a new issue.", category: "write", defaultEnabled: false, settings: nil),
         ],
         configFields: [
             ConfigFieldDef(key: "api_key", label: "API Key", type: "password", required: true, placeholder: "lin_api_…"),

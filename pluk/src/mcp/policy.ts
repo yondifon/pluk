@@ -106,6 +106,48 @@ export const PRESETS: Record<Exclude<PresetName, "custom">, QueryPolicy> = {
   },
 };
 
+// ── Per-tool settings → policy ───────────────────────────────────────────────
+//
+// The new model stores the SQL policy as the `query` tool's settings: a single
+// `mode` (read-only / mutations / destructive) plus structural guards. This maps
+// those settings to the engine's QueryPolicy; the rich category set is derived
+// from the mode so the UI stays a three-way choice instead of 15 checkboxes.
+
+export type SqlMode = "read-only" | "mutations" | "destructive";
+
+const MODE_ALLOWED: Record<SqlMode, StatementCategory[]> = {
+  "read-only":   ["select", "inspect"],
+  "mutations":   ["select", "inspect", "insert", "update", "delete", "merge", "transaction", "session"],
+  "destructive": ALL_CATEGORIES,
+};
+
+export function sqlPolicyFromSettings(settings: Record<string, unknown>): QueryPolicy {
+  const raw = typeof settings.mode === "string" ? settings.mode : "read-only";
+  const mode: SqlMode = raw === "mutations" || raw === "destructive" ? raw : "read-only";
+  const bool = (key: string, fallback: boolean): boolean => {
+    const v = settings[key];
+    if (typeof v === "boolean") return v;
+    if (v === "true") return true;
+    if (v === "false") return false;
+    return fallback;
+  };
+  const maxRows = ((): number | null => {
+    const v = settings.max_rows;
+    const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+    return Number.isFinite(n) ? (n > 0 ? n : null) : 1000;
+  })();
+  return {
+    preset: "custom",
+    allowed: [...MODE_ALLOWED[mode]],
+    blockStacked: bool("block_stacked", true),
+    requireWhere: bool("require_where", true),
+    allowFilesystem: bool("allow_filesystem", false),
+    maxRows,
+    maxEstimatedRows: null,
+    maxEstimatedCost: null,
+  };
+}
+
 export function defaultPolicyFor(environment: string): QueryPolicy {
   if (environment === "production" || environment === "staging") {
     return { ...PRESETS["read-only"] };

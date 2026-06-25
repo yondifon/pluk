@@ -84,13 +84,13 @@ enum MCPClient: String, CaseIterable, Identifiable {
 private enum DetailTab: String, CaseIterable {
     case overview = "Overview"
     case logs     = "Logs"
-    case policy   = "Policy"
+    case policy   = "Tools"
 
     var icon: String {
         switch self {
         case .overview: "link"
         case .logs:     "list.bullet.rectangle"
-        case .policy:   "shield"
+        case .policy:   "wrench.and.screwdriver"
         }
     }
 }
@@ -151,6 +151,7 @@ struct ConnectionDetailView: View {
                 }
             }
             Spacer()
+            headerTestButton
             Button("Edit", action: onEdit)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -219,7 +220,6 @@ struct ConnectionDetailView: View {
                 mcpURLSection
                 configSnippetSection
                 connectionDetailsSection
-                testSection
             }
             .padding(18)
         }
@@ -349,47 +349,36 @@ struct ConnectionDetailView: View {
         }
     }
 
-    // MARK: - Test
+    // MARK: - Test (header action)
 
-    private var testSection: some View {
-        DetailSection("Status") {
-            InspectorRow("Connection") {
-                testButton
-            }
-        }
-    }
+    private var isTesting: Bool { if case .testing = testStatus { return true }; return false }
 
+    // A top-right action: tap to test. The result is just a small glyph beside the
+    // button (spinner / green check / red x) — the outcome, success or failure, is
+    // delivered as a toast, so no message crowds the header.
     @ViewBuilder
-    private var testButton: some View {
-        switch testStatus {
-        case .idle:
-            Button("Test connection") { runTest() }
+    private var headerTestButton: some View {
+        HStack(spacing: 6) {
+            switch testStatus {
+            case .idle:
+                EmptyView()
+            case .testing:
+                ProgressView().scaleEffect(0.55)
+            case .ok:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.system(size: 13))
+                    .onAppear { resetTestStatus(after: 3) }
+            case .fail:
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+                    .font(.system(size: 13))
+                    .onAppear { resetTestStatus(after: 5) }
+            }
+            Button("Test", action: runTest)
                 .buttonStyle(.bordered)
-
-        case .testing:
-            HStack(spacing: 6) {
-                ProgressView().scaleEffect(0.7)
-                Text("Testing…")
-                    .font(.dev(size: 12))
-                    .foregroundColor(.secondary)
-            }
-
-        case .ok:
-            Label("Connected", systemImage: "checkmark.circle.fill")
-                .font(.dev(size: 12, weight: .medium))
-                .foregroundColor(.green)
-                .onAppear { resetTestStatus(after: 3) }
-
-        case .fail(let msg):
-            VStack(alignment: .leading, spacing: 4) {
-                Label("Failed", systemImage: "xmark.circle.fill")
-                    .font(.dev(size: 12, weight: .medium))
-                    .foregroundColor(.red)
-                Text(msg)
-                    .font(.dev(size: 11))
-                    .foregroundColor(.secondary)
-            }
-            .onAppear { resetTestStatus(after: 6) }
+                .controlSize(.small)
+                .disabled(isTesting)
         }
     }
 
@@ -403,15 +392,30 @@ struct ConnectionDetailView: View {
                 req.timeoutInterval = 12
                 let (data, _) = try await URLSession.shared.data(for: req)
                 let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                let ok = json?["ok"] as? Bool == true
+                let error = json?["error"] as? String ?? "Unknown error"
                 await MainActor.run {
-                    testStatus = (json?["ok"] as? Bool == true) ? .ok : .fail(json?["error"] as? String ?? "Unknown error")
+                    testStatus = ok ? .ok : .fail(error)
+                    presentTestToast(ok: ok, message: ok ? "Connected." : error)
                 }
                 // The test wrote health server-side; pull it so the dot updates now.
                 await store.refreshHealth()
             } catch {
-                await MainActor.run { testStatus = .fail(error.localizedDescription) }
+                await MainActor.run {
+                    testStatus = .fail(error.localizedDescription)
+                    presentTestToast(ok: false, message: error.localizedDescription)
+                }
             }
         }
+    }
+
+    private func presentTestToast(ok: Bool, message: String) {
+        store.toastCenter?.present(Toast(
+            connectionId: conn.id,
+            title: conn.name,
+            message: message,
+            kind: ok ? .success : .error
+        ))
     }
 
     private func resetTestStatus(after seconds: Double) {
@@ -427,130 +431,82 @@ struct ConnectionDetailView: View {
     // read/write permissions instead of statement categories + SQL guards.
     // Resolved policy kind for this connection's adapter: "sql" | "action" |
     // "none". Falls back to SQL vs action by connection shape when unknown.
-    private var policyKind: String {
-        if let kind = store.adapters.first(where: { $0.id == conn.type })?.policyKind {
-            return kind
+    private var adapterManifest: AdapterManifest? {
+        store.adapters.first(where: { $0.id == conn.type })
+    }
+
+    private func isEnabled(_ tool: AdapterToolDef) -> Bool {
+        conn.toolConfig[tool.name]?.enabled ?? tool.defaultEnabled
+    }
+
+    // A read-only mirror of the per-tool config: which tools the agent can see and
+    // how each enabled tool is configured.
+    @ViewBuilder
+    private var policyTab: some View {
+        let tools = adapterManifest?.tools ?? []
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                if tools.isEmpty {
+                    DetailSection("Tools") {
+                        Text("Tool list unavailable — the local pluk server isn't responding.")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                    }
+                } else {
+                    DetailSection("Tools") {
+                        InspectorRow("Enabled", value: "\(tools.filter(isEnabled).count) of \(tools.count)")
+                    }
+                    DetailSection("Exposed to the agent") {
+                        ForEach(tools) { tool in toolStatusRow(tool) }
+                    }
+                }
+            }
+            .padding(18)
         }
-        return conn.connectionType == nil ? "action" : "sql"
     }
 
     @ViewBuilder
-    private var policyTab: some View {
-        switch policyKind {
-        case "action": actionPolicyTab
-        case "none":   confirmPolicyTab
-        default:       sqlPolicyTab
-        }
-    }
-
-    private var confirmPolicyTab: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                DetailSection("Confirmation") {
-                    InspectorRow("Commands", value: "Unrestricted")
-                    InspectorRow("Gate", value: "Confirmed per command")
+    private func toolStatusRow(_ tool: AdapterToolDef) -> some View {
+        let enabled = isEnabled(tool)
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(tool.name)
+                        .font(.dev(size: 12))
+                        .foregroundColor(enabled ? .primary : .secondary)
+                    ToolCategoryTag(category: tool.category)
                 }
-                Text("Commands run unrestricted as the connecting user. There is no allowlist or read/write policy — every command must be confirmed in your agent client before it runs.")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 2)
-            }
-            .padding(18)
-        }
-    }
-
-    private var actionPolicyTab: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                DetailSection("Permissions") {
-                    InspectorRow("Mode", value: conn.readOnly ? "Read-only" : "Read & write")
-                    InspectorRow("Description", value: conn.readOnly
-                                 ? "Agent can only read."
-                                 : "Agent can read and modify data.")
-                }
-                DetailSection("Allowed Actions") {
-                    InspectorRow("Read") { actionBadge(allowed: true) }
-                    InspectorRow("Write") { actionBadge(allowed: !conn.readOnly) }
+                if enabled, let summary = settingsSummary(tool) {
+                    Text(summary).font(.system(size: 10)).foregroundColor(.secondary)
                 }
             }
-            .padding(18)
+            Spacer(minLength: 0)
+            Text(enabled ? "On" : "Off")
+                .font(.dev(size: 11, weight: .medium))
+                .foregroundColor(enabled ? .white : .secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(enabled ? Color.green.opacity(0.7) : Color(NSColor.separatorColor))
+                .clipShape(.capsule)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .overlay(alignment: .bottom) { Divider().padding(.leading, 10) }
     }
 
-    private func actionBadge(allowed: Bool) -> some View {
-        Text(allowed ? "Allowed" : "Blocked")
-            .font(.dev(size: 11, weight: .medium))
-            .foregroundColor(allowed ? .white : .secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(allowed ? Color.green.opacity(0.7) : Color(NSColor.separatorColor))
-            .clipShape(.capsule)
-    }
-
-    private var sqlPolicyTab: some View {
-        let policy = conn.queryPolicy
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                DetailSection("Preset") {
-                    InspectorRow("Name", value: policy.preset.label)
-                    InspectorRow("Description", value: policy.preset.description)
-                }
-
-                DetailSection("Allowed Statement Types") {
-                    let groups: [(String, [StatementCategory])] = [
-                        ("Read",   [.select, .inspect]),
-                        ("Write",  [.insert, .update, .delete, .merge]),
-                        ("Schema", [.create, .alter, .drop, .truncate, .rename]),
-                        ("Admin",  [.transaction, .session, .procedure, .maintenance, .grant]),
-                    ]
-                    ForEach(groups, id: \.0) { groupName, cats in
-                        HStack(alignment: .top) {
-                            Text(groupName)
-                                .font(.dev(size: 12))
-                                .foregroundColor(.secondary)
-                                .frame(width: 86, alignment: .leading)
-                            FlowRow(cats.map { cat in
-                                (cat.label, policy.allowed.contains(cat))
-                            })
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .overlay(alignment: .bottom) {
-                            Divider().padding(.leading, 106)
-                        }
-                    }
-                }
-
-                DetailSection("Guards") {
-                    InspectorRow("Stacked statements") {
-                        guardBadge(blocked: policy.blockStacked, onLabel: "Blocked", offLabel: "Allowed")
-                    }
-                    InspectorRow("WHERE on mutations") {
-                        guardBadge(blocked: policy.requireWhere, onLabel: "Required", offLabel: "Optional")
-                    }
-                    InspectorRow("Filesystem / COPY") {
-                        guardBadge(blocked: !policy.allowFilesystem, onLabel: "Blocked", offLabel: "Allowed")
-                    }
-                    InspectorRow("Max rows") {
-                        Text(policy.maxRows.map { "\($0)" } ?? "Unlimited")
-                            .font(.dev(size: 12))
-                    }
-                }
-            }
-            .padding(18)
+    // One-line summary of an enabled tool's settings (e.g. "Statements: Mutations").
+    private func settingsSummary(_ tool: AdapterToolDef) -> String? {
+        guard let settings = tool.settings, !settings.isEmpty else { return nil }
+        let state = conn.toolConfig[tool.name]
+        let parts: [String] = settings.compactMap { f in
+            let v = state?.settings[f.key] ?? f.defaultValue ?? ""
+            if v.isEmpty { return nil }
+            let display = f.options?.first(where: { $0.value == v })?.label ?? v
+            return "\(f.label): \(display)"
         }
-    }
-
-    private func guardBadge(blocked: Bool, onLabel: String, offLabel: String) -> some View {
-        Text(blocked ? onLabel : offLabel)
-            .font(.dev(size: 11, weight: .medium))
-            .foregroundColor(blocked ? .white : .secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(blocked ? Color.red.opacity(0.75) : Color(NSColor.separatorColor))
-            .clipShape(.capsule)
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private var health: ConnHealth? { store.health[conn.id] }
@@ -560,34 +516,6 @@ struct ConnectionDetailView: View {
     private var dotColor: Color {
         guard let health else { return .gray }
         return health.isError ? .red : .green
-    }
-}
-
-// MARK: - Flow row (wrapping category chips)
-
-private struct FlowRow: View {
-    let items: [(label: String, active: Bool)]
-
-    init(_ items: [(String, Bool)]) {
-        self.items = items.map { (label: $0.0, active: $0.1) }
-    }
-
-    var body: some View {
-        // Simple wrap using a fixed-width approach for macOS
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                ForEach(items, id: \.label) { item in
-                    Text(item.label)
-                        .font(.dev(size: 10, weight: .medium))
-                        .foregroundColor(item.active ? .white : .secondary)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(item.active ? Color.accentColor.opacity(0.8) : Color(NSColor.separatorColor).opacity(0.5))
-                        .clipShape(.capsule)
-                        .opacity(item.active ? 1 : 0.6)
-                }
-            }
-        }
     }
 }
 

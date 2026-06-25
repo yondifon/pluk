@@ -43,12 +43,14 @@ struct ConfigFieldDef: Codable, Identifiable, Hashable {
     var options: [FieldOption]?
     var showIf: ShowIf?
     var defaultValue: String?
+    var help: String?
+    var danger: Bool?
 
     var id: String { key }
 
     enum CodingKeys: String, CodingKey {
         case key, label, type, group, required, secret, placeholder
-        case fileTypes, options, showIf
+        case fileTypes, options, showIf, help, danger
         case defaultValue = "default"
     }
 
@@ -64,6 +66,8 @@ struct ConfigFieldDef: Codable, Identifiable, Hashable {
         fileTypes = try? c.decode([String].self, forKey: .fileTypes)
         options = try? c.decode([FieldOption].self, forKey: .options)
         showIf = try? c.decode(ShowIf.self, forKey: .showIf)
+        help = try? c.decode(String.self, forKey: .help)
+        danger = try? c.decode(Bool.self, forKey: .danger)
         // `default` may be string, number, or bool — normalize to string.
         if let s = try? c.decode(String.self, forKey: .defaultValue) {
             defaultValue = s
@@ -77,12 +81,21 @@ struct ConfigFieldDef: Codable, Identifiable, Hashable {
     }
 }
 
-// One tool an action adapter exposes, with its policy category. Lets the form
-// describe — per adapter — what Write unlocks and what a read-only integration
-// hides from the agent.
-struct AdapterAction: Codable, Hashable {
+// One tool an adapter exposes. Every tool can be toggled on/off per integration;
+// some carry their own settings (rendered when the tool is expanded). Mirrors the
+// TS ToolSpec.
+struct AdapterToolDef: Codable, Identifiable, Hashable {
     let name: String
-    let category: String        // read | write | delete | admin
+    let description: String
+    let category: String          // read | write | delete | admin | inspect
+    let defaultEnabled: Bool
+    var settings: [ConfigFieldDef]?
+
+    var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name, description, category, defaultEnabled, settings
+    }
 }
 
 struct AdapterManifest: Codable, Identifiable, Hashable {
@@ -91,22 +104,10 @@ struct AdapterManifest: Codable, Identifiable, Hashable {
     let category: String
     let policyKind: String       // "sql" | "action" | "none"
     let agentHint: String?
-    var actions: [AdapterAction]?
+    var tools: [AdapterToolDef]
     let configFields: [ConfigFieldDef]
 
     var isSQL: Bool { policyKind == "sql" }
-    var isAction: Bool { policyKind == "action" }
-    var hasPolicy: Bool { policyKind != "none" }
-
-    /// Tool names the Write permission unlocks (write + delete categories), in
-    /// declaration order. Hidden from the agent entirely in read-only mode.
-    var writeActionNames: [String] {
-        var names: [String] = []
-        for a in actions ?? [] where a.category == "write" || a.category == "delete" {
-            names.append(a.name)
-        }
-        return names
-    }
 
     /// Fields grouped in declaration order, preserving first-seen group order.
     var groupedFields: [(group: String, fields: [ConfigFieldDef])] {

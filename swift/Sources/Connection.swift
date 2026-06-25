@@ -64,174 +64,28 @@ enum Environment: String, CaseIterable {
     }
 }
 
-// ── Query Policy ─────────────────────────────────────────────────────────────
+// ── Tool config ───────────────────────────────────────────────────────────────
+// The unified policy model: each adapter tool is toggled on/off and may carry its
+// own settings. Persisted in the `query_policy` column as
+// `{ "tools": { "<name>": { "enabled": Bool, "settings": { … } } } }`.
 
-enum QueryPreset: String, CaseIterable, Codable, Identifiable {
-    case readOnly       = "read-only"
-    case readWrite      = "read-write"
-    case migrations     = "migrations"
-    case unrestricted   = "unrestricted"
-    case custom         = "custom"
+struct ToolState: Equatable {
+    var enabled: Bool
+    /// Setting key → string value; coerced to the declared type on serialize.
+    var settings: [String: String]
 
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .readOnly:     "Read-only"
-        case .readWrite:    "Read & Write"
-        case .migrations:   "Migrations"
-        case .unrestricted: "Unrestricted"
-        case .custom:       "Custom"
-        }
-    }
-
-    var description: String {
-        switch self {
-        case .readOnly:     "SELECT, DESCRIBE, EXPLAIN, SHOW. Recommended for production."
-        case .readWrite:    "SELECT, DESCRIBE + INSERT/UPDATE/DELETE. Requires WHERE on mutations."
-        case .migrations:   "Full DDL access. CREATE, ALTER, DROP, stored procedures."
-        case .unrestricted: "No restrictions. All statement types, filesystem ops allowed."
-        case .custom:       "Custom combination of allowed statement types and guards."
-        }
-    }
-
-    var isDestructive: Bool { self == .unrestricted }
-}
-
-enum StatementCategory: String, CaseIterable, Codable, Identifiable {
-    // Read
-    case select, inspect
-    // Write
-    case insert, update, delete, merge
-    // Schema
-    case create, alter, drop, truncate, rename
-    // Admin
-    case transaction, session, procedure, maintenance, grant
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .select:      "SELECT"
-        case .inspect:     "DESCRIBE / EXPLAIN / SHOW / PRAGMA"
-        case .insert:      "INSERT"
-        case .update:      "UPDATE"
-        case .delete:      "DELETE"
-        case .merge:       "MERGE / REPLACE / UPSERT"
-        case .create:      "CREATE"
-        case .alter:       "ALTER"
-        case .drop:        "DROP"
-        case .truncate:    "TRUNCATE"
-        case .rename:      "RENAME"
-        case .transaction: "BEGIN / COMMIT / ROLLBACK"
-        case .session:     "SET / RESET / USE"
-        case .procedure:   "CALL / DO / EXEC"
-        case .maintenance: "VACUUM / ANALYZE / OPTIMIZE"
-        case .grant:       "GRANT / REVOKE"
-        }
-    }
-
-    var group: String {
-        switch self {
-        case .select, .inspect:                                  "Read"
-        case .insert, .update, .delete, .merge:                  "Write"
-        case .create, .alter, .drop, .truncate, .rename:         "Schema"
-        case .transaction, .session, .procedure, .maintenance, .grant: "Admin"
-        }
+    init(enabled: Bool, settings: [String: String] = [:]) {
+        self.enabled = enabled
+        self.settings = settings
     }
 }
 
-struct QueryPolicy: Codable, Equatable {
-    var preset: QueryPreset
-    var allowed: [StatementCategory]
-    var blockStacked: Bool
-    var requireWhere: Bool
-    var allowFilesystem: Bool
-    var maxRows: Int?
-
-    // MARK: - Preset factories
-
-    static func make(_ preset: QueryPreset) -> QueryPolicy {
-        switch preset {
-        case .readOnly:
-            return QueryPolicy(
-                preset: .readOnly,
-                allowed: [.select, .inspect],
-                blockStacked: true, requireWhere: false,
-                allowFilesystem: false, maxRows: 1000
-            )
-        case .readWrite:
-            return QueryPolicy(
-                preset: .readWrite,
-                allowed: [.select, .inspect, .insert, .update, .delete, .merge, .transaction, .session],
-                blockStacked: true, requireWhere: true,
-                allowFilesystem: false, maxRows: 1000
-            )
-        case .migrations:
-            return QueryPolicy(
-                preset: .migrations,
-                allowed: [
-                    .select, .inspect,
-                    .insert, .update, .delete, .merge,
-                    .create, .alter, .drop, .truncate, .rename,
-                    .transaction, .session, .procedure, .maintenance,
-                ],
-                blockStacked: false, requireWhere: true,
-                allowFilesystem: false, maxRows: nil
-            )
-        case .unrestricted:
-            return QueryPolicy(
-                preset: .unrestricted,
-                allowed: StatementCategory.allCases,
-                blockStacked: false, requireWhere: false,
-                allowFilesystem: true, maxRows: nil
-            )
-        case .custom:
-            return QueryPolicy(
-                preset: .custom,
-                allowed: [.select, .inspect],
-                blockStacked: true, requireWhere: false,
-                allowFilesystem: false, maxRows: nil
-            )
-        }
-    }
-
-    static func `default`(for environment: Environment) -> QueryPolicy {
-        switch environment {
-        case .production, .staging: return .make(.readOnly)
-        case .development, .local:  return .make(.readWrite)
-        }
-    }
-
-    // MARK: - JSON helpers
-
-    func toJSON() -> String? {
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        guard let data = try? encoder.encode(self) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    static func fromJSON(_ string: String?) -> QueryPolicy? {
-        guard let string, let data = string.data(using: .utf8) else { return nil }
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try? decoder.decode(QueryPolicy.self, from: data)
-    }
-
-    // MARK: - Mutations
-
-    mutating func toggle(_ category: StatementCategory) {
-        if allowed.contains(category) {
-            allowed.removeAll { $0 == category }
-        } else {
-            allowed.append(category)
-        }
-        preset = .custom
-    }
-
-    mutating func apply(preset newPreset: QueryPreset) {
-        self = QueryPolicy.make(newPreset)
+extension AdapterToolDef {
+    /// A fresh tool state seeded from this tool's declared defaults.
+    func seededState() -> ToolState {
+        var s: [String: String] = [:]
+        for f in settings ?? [] where f.defaultValue != nil { s[f.key] = f.defaultValue }
+        return ToolState(enabled: defaultEnabled, settings: s)
     }
 }
 
@@ -244,7 +98,7 @@ struct Connection: Identifiable, Equatable {
     var config: [String: String]      // service-specific, mirrors the TS config blob
     var environment: Environment
     var readOnly: Bool
-    var queryPolicy: QueryPolicy
+    var toolConfig: [String: ToolState]
     var token: String
     var createdAt: String
 
@@ -271,14 +125,17 @@ struct ConnectionDraft {
     var type: String = "postgres"
     var config: [String: String] = [:]
     var environment: Environment = .development
-    var queryPolicy: QueryPolicy = .make(.readWrite)
-    var policyKind: String = "sql"     // "sql" | "action"
-    /// For action-policy adapters (Linear, …): whether writes are allowed.
-    var allowWrite: Bool = true
+    var policyKind: String = "sql"     // "sql" | "action" | "none"
+
+    /// Per-tool enable + settings, keyed by tool name.
+    var toolConfig: [String: ToolState] = [:]
 
     /// Field definitions for the selected adapter — set by the form from the
     /// catalog. Drives both rendering and type-correct JSON serialization.
     var fields: [ConfigFieldDef] = []
+    /// Tool definitions for the selected adapter, used to render the Tools section
+    /// and to type-coerce each tool's settings on serialize.
+    var tools: [AdapterToolDef] = []
 
     init() {}
 
@@ -287,29 +144,45 @@ struct ConnectionDraft {
         type = conn.type
         config = conn.config
         environment = conn.environment
-        queryPolicy = conn.queryPolicy
-        allowWrite = !conn.readOnly
+        toolConfig = conn.toolConfig
     }
 
     func value(_ key: String) -> String { config[key] ?? "" }
 
-    /// Switch adapter type and seed defaults for the new adapter's fields.
-    mutating func setType(_ newType: String, fields newFields: [ConfigFieldDef]) {
-        type = newType
-        fields = newFields
-        var seeded: [String: String] = [:]
-        for f in newFields where f.defaultValue != nil {
-            seeded[f.key] = f.defaultValue
+    /// Adopt an adapter manifest: store its field + tool defs, and seed any tool
+    /// not already configured with its declared default (so editing a connection
+    /// saved before a tool existed still shows it).
+    mutating func adopt(_ manifest: AdapterManifest, resetConfig: Bool) {
+        type = manifest.id
+        policyKind = manifest.policyKind
+        fields = manifest.configFields
+        tools = manifest.tools
+        if resetConfig {
+            var seededCfg: [String: String] = [:]
+            for f in manifest.configFields where f.defaultValue != nil { seededCfg[f.key] = f.defaultValue }
+            config = seededCfg
+            toolConfig = [:]
         }
-        config = seeded
+        for t in manifest.tools where toolConfig[t.name] == nil {
+            toolConfig[t.name] = t.seededState()
+        }
+        applyEnvironmentDefaults()
+    }
+
+    /// SQL connections in a writable environment default the query tool to allow
+    /// mutations; production/staging stay read-only. Only applied while the query
+    /// tool is still at its seeded read-only default (never overrides a choice).
+    private mutating func applyEnvironmentDefaults() {
+        guard policyKind == "sql", var q = toolConfig["query"] else { return }
+        if (q.settings["mode"] ?? "read-only") == "read-only",
+           environment == .development || environment == .local {
+            q.settings["mode"] = "mutations"
+            toolConfig["query"] = q
+        }
     }
 
     mutating func setEnvironment(_ newEnv: Environment) {
         environment = newEnv
-        // Only update policy if it hasn't been customized
-        if queryPolicy.preset != .custom {
-            queryPolicy = .default(for: newEnv)
-        }
     }
 }
 

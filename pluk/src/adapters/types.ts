@@ -22,6 +22,8 @@ export interface ConfigField {
   options?: { value: string; label: string }[];  // for `select`
   showIf?: { key: string; equals: unknown };      // conditional visibility
   fileTypes?: string[];                  // for `file` picker (pem/key/sqlite…)
+  danger?: boolean;                      // flag a risky setting (UI styles it red)
+  help?: string;                         // one-line explanation shown under the control
 }
 
 /** How the policy/audit layer interprets this adapter.
@@ -30,13 +32,21 @@ export interface ConfigField {
  *  - "none":   no policy gate; every call is confirmed by the client instead. */
 export type PolicyKind = "sql" | "action" | "none";
 
-/** Static metadata for one tool an action adapter exposes. Lets the UI describe,
- *  per adapter, what each permission unlocks and what a read-only integration
- *  hides — without a live connection. */
-export interface ActionMeta {
+/** Static description of one tool an adapter exposes, for the catalog/UI. Drives
+ *  the per-tool enable toggle and the (optional) expandable settings form. Tool
+ *  definitions don't depend on a live connection, so this is built once. */
+export interface ToolSpec {
   name: string;
-  category: string;       // "read" | "write" | "delete" | "admin"
   description: string;
+  /** Coarse class for grouping + default-on: "read" tools default enabled,
+   *  "write"/"delete"/"admin" default disabled. */
+  category: string;
+  /** Whether this tool is on by default for a fresh integration. Derived from
+   *  `category` when omitted. */
+  defaultEnabled: boolean;
+  /** This tool's own settings, rendered when the tool is expanded. Reuses the
+   *  ConfigField shape; keys are scoped to the tool's settings object. */
+  settings?: ConfigField[];
 }
 
 export interface Adapter {
@@ -45,10 +55,10 @@ export interface Adapter {
   category: string;                      // "database" | "issue-tracker" | …
   policyKind: PolicyKind;
   agentHint: string;                      // shown in the UI beside the MCP URL
-  /** The tools this adapter exposes, with their policy category. Drives the UI's
-   *  per-adapter permission copy + the preview of what a read-only integration
-   *  hides. Empty/absent for adapters that don't enumerate statically (sql, ssh). */
-  actions?: ActionMeta[];
+  /** The fixed set of tools this adapter exposes. Each is individually toggled
+   *  on/off and may carry its own settings. Drives the catalog/UI tool list and
+   *  the per-tool defaults used when an integration hasn't configured a tool. */
+  toolSpecs: ToolSpec[];
   configFields: ConfigField[];
   /** Verify the config can reach the service. Throws on failure. */
   testConnection(integration: Integration): Promise<void>;

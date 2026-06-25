@@ -1,10 +1,15 @@
 import { test, expect } from "bun:test";
 import { getAdapter, buildAdapterServer } from "./index.js";
-import { parseActionPolicy } from "../mcp/actionPolicy.js";
 import type { Integration } from "../store/integrations.js";
 
-function redisConn(readOnly: number, query_policy: string | null = null): Integration {
-  return { id: "r", name: "R", type: "redis", config: { host: "h" }, read_only: readOnly, query_policy, token: "t", created_at: "" };
+// Build a Redis integration with an explicit per-tool config. `enable` lists the
+// tool names turned on; everything else falls to its declared default (read tools
+// on, write/delete off).
+function redisConn(enable?: string[]): Integration {
+  const query_policy = enable
+    ? JSON.stringify({ tools: Object.fromEntries(enable.map((n) => [n, { enabled: true }])) })
+    : null;
+  return { id: "r", name: "R", type: "redis", config: { host: "h" }, read_only: 0, query_policy, token: "t", created_at: "" };
 }
 
 function toolNames(conn: Integration): string[] {
@@ -13,32 +18,35 @@ function toolNames(conn: Integration): string[] {
   return Object.keys((server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools).sort();
 }
 
-test("the binary write toggle grants delete too (a modify means it can delete)", () => {
-  expect(parseActionPolicy(null, 1).allowed).toEqual(["read"]);
-  expect(parseActionPolicy(null, 0).allowed).toEqual(["read", "write", "delete"]);
-});
-
-test("an explicit policy blob wins and is the only way to grant admin", () => {
-  expect(parseActionPolicy('{"actions":["read"]}', 0).allowed).toEqual(["read"]);
-  expect(parseActionPolicy('{"actions":["read","write","delete","admin"]}', 1).allowed).toContain("admin");
-});
-
-test("a read-only integration never advertises write/delete tools to the agent", () => {
+test("an unconfigured integration exposes read tools but not write/delete (fail safe)", () => {
   // Hidden, not merely blocked — the MCP server doesn't register them at all.
-  const names = toolNames(redisConn(1));
+  const names = toolNames(redisConn());
   expect(names).toContain("get");
   expect(names).toContain("scan");
   for (const hidden of ["set", "expire", "del"]) expect(names).not.toContain(hidden);
 });
 
-test("a read+write integration exposes write and delete tools (incl. del)", () => {
-  const names = toolNames(redisConn(0));
-  for (const shown of ["set", "expire", "del"]) expect(names).toContain(shown);
+test("enabling a write/delete tool exposes exactly that tool", () => {
+  const names = toolNames(redisConn(["set", "del"]));
+  expect(names).toContain("set");
+  expect(names).toContain("del");
+  expect(names).not.toContain("expire"); // not enabled → still hidden
 });
 
-test("the adapter publishes static action metadata for the catalog/UI", () => {
-  const actions = getAdapter("redis")!.actions ?? [];
-  expect(actions.find((a) => a.name === "del")?.category).toBe("delete");
-  expect(actions.find((a) => a.name === "set")?.category).toBe("write");
-  expect(actions.find((a) => a.name === "get")?.category).toBe("read");
+test("a disabled read tool is removed from the surface", () => {
+  // `get` defaults on; explicitly disabling it drops it from the server.
+  const query_policy = JSON.stringify({ tools: { get: { enabled: false } } });
+  const conn: Integration = { id: "r", name: "R", type: "redis", config: { host: "h" }, read_only: 0, query_policy, token: "t", created_at: "" };
+  const names = toolNames(conn);
+  expect(names).toContain("scan");
+  expect(names).not.toContain("get");
+});
+
+test("the adapter publishes static tool specs for the catalog/UI", () => {
+  const specs = getAdapter("redis")!.toolSpecs;
+  expect(specs.find((t) => t.name === "del")?.category).toBe("delete");
+  expect(specs.find((t) => t.name === "del")?.defaultEnabled).toBe(false);
+  expect(specs.find((t) => t.name === "set")?.category).toBe("write");
+  expect(specs.find((t) => t.name === "get")?.category).toBe("read");
+  expect(specs.find((t) => t.name === "get")?.defaultEnabled).toBe(true);
 });

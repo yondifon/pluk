@@ -52,7 +52,7 @@ const server = Bun.serve({
         category: a.category,
         policyKind: a.policyKind,
         agentHint: a.agentHint,
-        actions: a.actions ?? [],
+        tools: a.toolSpecs,
         configFields: a.configFields,
       }));
       return Response.json({ adapters });

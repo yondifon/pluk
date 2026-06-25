@@ -4,7 +4,9 @@ import { homedir } from "os";
 import { join } from "path";
 import type { Integration } from "../../store/integrations.js";
 import type { Driver } from "../../db/index.js";
-import { parsePolicy, evaluate, capRows, dialectFor, policyDescription, parsePostgresCost } from "../../mcp/policy.js";
+import { sqlPolicyFromSettings, evaluate, capRows, dialectFor, policyDescription, parsePostgresCost } from "../../mcp/policy.js";
+import { toolGate } from "../../mcp/toolConfig.js";
+import type { ConfigField, ToolSpec } from "../types.js";
 import { logQuery } from "../../store/queryLog.js";
 import { listSavedQueries, getSavedQuery } from "../../store/savedQueries.js";
 import { listMaskedColumns, maskRow } from "../../store/maskedColumns.js";
@@ -43,7 +45,8 @@ export function sqlAgentHint(type: string): string {
 // Reflects the current query policy, so a read-only DB and an unrestricted one
 // announce different constraints.
 export function sqlInstructions(conn: Integration): string {
-  const policy = parsePolicy(conn.query_policy, conn.read_only);
+  const gate = toolGate(conn.query_policy);
+  const policy = sqlPolicyFromSettings(gate.settings("query"));
   return buildInstructions(conn, {
     kind: sqlLabel(conn.type),
     access: "Query and inspect this database. Every statement is checked against the policy below and recorded in the activity log.",
@@ -53,12 +56,62 @@ export function sqlInstructions(conn: Integration): string {
   });
 }
 
+// The `query` tool's settings: the SQL policy, expressed as a single mode plus
+// structural guards. Shared by every statement-running tool on the adapter.
+const QUERY_SETTINGS: ConfigField[] = [
+  {
+    key: "mode", label: "Statements", type: "select", default: "read-only",
+    help: "Which kinds of SQL this connection may run.",
+    options: [
+      { value: "read-only", label: "Read-only (SELECT)" },
+      { value: "mutations", label: "Mutations (INSERT/UPDATE/DELETE)" },
+      { value: "destructive", label: "Destructive (DROP/TRUNCATE, DDL)" },
+    ],
+  },
+  { key: "require_where", label: "Require WHERE on UPDATE/DELETE", type: "toggle", default: true,
+    help: "Block UPDATE or DELETE without a WHERE clause." },
+  { key: "block_stacked", label: "Block stacked statements", type: "toggle", default: true,
+    help: "Reject queries containing more than one statement (SELECT 1; DROP …)." },
+  { key: "allow_filesystem", label: "Allow filesystem / COPY ops", type: "toggle", default: false, danger: true,
+    help: "Allow COPY … PROGRAM, INTO OUTFILE, LOAD DATA, ATTACH DATABASE, pg_read_file." },
+  { key: "max_rows", label: "Max rows returned", type: "number", default: 1000,
+    help: "Cap rows returned to the agent. 0 = no cap." },
+];
+
+// Static tool catalog for the SQL family. Every tool is individually toggleable
+// (all default on); only `query` carries settings (they form the SQL policy that
+// also governs export_query / run_saved_query).
+export function sqlToolSpecs(): ToolSpec[] {
+  const read = (name: string, description: string, settings?: ConfigField[]): ToolSpec =>
+    ({ name, description, category: "read", defaultEnabled: true, settings });
+  return [
+    read("query", "Run a SQL query against the database.", QUERY_SETTINGS),
+    read("list_tables", "List all tables in the database."),
+    read("sample_table", "Preview rows from a table without writing SQL."),
+    read("explain_query", "Show a query's execution plan without running it."),
+    read("describe_table", "Get column definitions for a table."),
+    read("list_relationships", "List foreign key relationships between tables."),
+    read("search_schema", "Find tables or columns matching a term."),
+    read("table_stats", "Get cheap table statistics (estimated rows, size, indexes)."),
+    read("list_schemas", "List all schemas or databases."),
+    read("export_query", "Run a SQL query and save results to a local CSV or JSON file."),
+    read("run_saved_query", "Run a saved query by name."),
+    read("list_saved_queries", "List saved queries for this connection."),
+  ];
+}
+
 // Register the SQL surface onto a host (a bare McpServer for a single endpoint,
 // or a namespaced host when aggregated into a group).
 export function registerSqlServer(server: ToolHost, conn: Integration, sessionIdRef: { value: string }): void {
-  const policy = parsePolicy(conn.query_policy, conn.read_only);
+  const gate = toolGate(conn.query_policy);
+  // The SQL policy (mode + guards) lives as the `query` tool's settings and
+  // governs every statement-running tool (query / export_query / run_saved_query).
+  const policy = sqlPolicyFromSettings(gate.settings("query"));
   const dialect = dialectFor(conn.type);
   const policyDesc = policyDescription(policy);
+  // Every SQL tool is individually toggleable; all default on. A disabled tool is
+  // simply not registered, so the agent never sees it.
+  const on = (name: string): boolean => gate.enabled(name, true);
 
   const readOnlyMode = policy.allowed.length === 2 && policy.allowed.includes("select") && policy.allowed.includes("inspect");
   const maskedColumns = listMaskedColumns(conn.id);
@@ -205,17 +258,17 @@ ${sql}` } },
     }
   );
 
-  server.tool(
+  if (on("query")) server.tool(
     "query",
     `Run a SQL query against the database. ${policyDesc}`,
     { sql: z.string().describe("SQL query to execute") },
     ({ sql }) => gatedQuery(sql, "query"),
   );
 
-  server.tool("list_tables", "List all tables in the database", () =>
+  if (on("list_tables")) server.tool("list_tables", "List all tables in the database", () =>
     introspect("list_tables", async (driver) => (await driver.listTables()).join("\n")));
 
-  server.tool(
+  if (on("sample_table")) server.tool(
     "sample_table",
     "Preview rows from a table without writing SQL",
     {
@@ -236,7 +289,7 @@ ${sql}` } },
       })
   );
 
-  server.tool(
+  if (on("explain_query")) server.tool(
     "explain_query",
     "Show query execution plan without running the query",
     {
@@ -255,7 +308,7 @@ ${sql}` } },
     }
   );
 
-  server.tool(
+  if (on("describe_table")) server.tool(
     "describe_table",
     "Get column definitions for a table",
     { table: z.string().describe("Table name") },
@@ -263,7 +316,7 @@ ${sql}` } },
       introspect("describe_table", async (driver) => JSON.stringify(await driver.describeTable(table), null, 2))
   );
 
-  server.tool(
+  if (on("list_relationships")) server.tool(
     "list_relationships",
     "List foreign key relationships between tables",
     { table: z.string().optional().describe("Filter to a specific table (optional)") },
@@ -271,7 +324,7 @@ ${sql}` } },
       introspect("list_relationships", async (driver) => JSON.stringify(await driver.listRelationships(table), null, 2))
   );
 
-  server.tool(
+  if (on("search_schema")) server.tool(
     "search_schema",
     "Find tables or columns matching a term",
     { term: z.string().describe("Search term (substring match on table or column names)") },
@@ -279,7 +332,7 @@ ${sql}` } },
       introspect("search_schema", async (driver) => JSON.stringify(await driver.searchSchema(term), null, 2))
   );
 
-  server.tool(
+  if (on("table_stats")) server.tool(
     "table_stats",
     "Get cheap table statistics (estimated rows, size, indexes)",
     { table: z.string().describe("Table name") },
@@ -287,10 +340,10 @@ ${sql}` } },
       introspect("table_stats", async (driver) => JSON.stringify(await driver.tableStats(table), null, 2))
   );
 
-  server.tool("list_schemas", "List all schemas or databases", () =>
+  if (on("list_schemas")) server.tool("list_schemas", "List all schemas or databases", () =>
     introspect("list_schemas", async (driver) => (await driver.listSchemas()).join("\n")));
 
-  server.tool(
+  if (on("export_query")) server.tool(
     "export_query",
     "Run a SQL query and save results to a local CSV or JSON file",
     {
@@ -330,7 +383,7 @@ ${sql}` } },
     }
   );
 
-  server.tool(
+  if (on("run_saved_query")) server.tool(
     "run_saved_query",
     "Run a saved query by name",
     { name: z.string().describe("Name of the saved query") },
@@ -341,7 +394,7 @@ ${sql}` } },
     }
   );
 
-  server.tool(
+  if (on("list_saved_queries")) server.tool(
     "list_saved_queries",
     "List saved queries for this connection",
     async () => {

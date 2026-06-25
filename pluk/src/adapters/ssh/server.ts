@@ -5,6 +5,8 @@ import { runCommand, openForward, listForwards, closeForward } from "./client.js
 import { logError } from "../../log.js";
 import { buildInstructions } from "../../mcp/instructions.js";
 import { ok, err, runGated, type ToolResult } from "../kit.js";
+import { toolGate } from "../../mcp/toolConfig.js";
+import type { ToolSpec } from "../types.js";
 import type { ToolHost } from "../../mcp/namespace.js";
 
 export const SSH_AGENT_HINT = "Use this for SSH access to the remote host — run shell commands to inspect logs, processes, disk and memory, and Docker/systemd services for debugging and ops, and open local port forwards (ssh -L) so a remote service like a database or web UI is reachable at localhost on this machine. Every command runs as the SSH user and must be confirmed before it runs.";
@@ -53,7 +55,29 @@ export function sshInstructions(conn: Integration): string {
   });
 }
 
+// Static tool catalog for SSH. Every tool is individually toggleable (all default
+// on); none carry settings — confirmation in the client is the safeguard.
+export function sshToolSpecs(): ToolSpec[] {
+  const t = (name: string, description: string): ToolSpec =>
+    ({ name, description, category: "read", defaultEnabled: true });
+  return [
+    t("run_command", "Run a shell command on the remote host over SSH."),
+    t("run_batch", "Run several shell commands in sequence on the remote host."),
+    t("debug_snapshot", "Capture a quick health snapshot of the remote host."),
+    t("run_saved_command", "Run a pre-selected (saved) command by name."),
+    t("list_saved_commands", "List the saved commands available for this integration."),
+    t("open_forward", "Open a local port forward (ssh -L) to a remote service."),
+    t("list_forwards", "List the open local port forwards for this connection."),
+    t("close_forward", "Close an open local port forward by its id."),
+  ];
+}
+
 export function registerSshServer(server: ToolHost, conn: Integration, sessionIdRef: { value: string }): void {
+  const gate = toolGate(conn.query_policy);
+  // Every SSH tool is individually toggleable; all default on. A disabled tool is
+  // not registered, so the agent never sees it.
+  const on = (name: string): boolean => gate.enabled(name, true);
+
   // Run one command on the remote host through the activity log and return its
   // shaped MCP result. No allowlist or permission check — the command runs as-is;
   // confirmation by the client is the safeguard. Shared by every command tool so
@@ -80,7 +104,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
     );
   }
 
-  server.tool(
+  if (on("run_command")) server.tool(
     "run_command",
     "Run a shell command on the remote host over SSH. The command runs unmodified as the connecting user — confirm before running, as it can change or destroy remote state.",
     {
@@ -91,7 +115,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
     ({ command, working_dir }) => runOne(command, working_dir, "run_command"),
   );
 
-  server.tool(
+  if (on("run_batch")) server.tool(
     "run_batch",
     "Run several shell commands in sequence on the remote host. Returns each command's output in order. Confirm before running — commands run unmodified as the connecting user.",
     {
@@ -124,7 +148,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
     },
   );
 
-  server.tool(
+  if (on("debug_snapshot")) server.tool(
     "debug_snapshot",
     "Capture a quick health snapshot of the remote host (kernel, load, disk, memory, processes, logins, containers). Useful as a first step when debugging.",
     CONFIRM_ANNOTATIONS,
@@ -141,7 +165,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
     },
   );
 
-  server.tool(
+  if (on("run_saved_command")) server.tool(
     "run_saved_command",
     "Run a pre-selected (saved) command by name. Confirm before running — saved commands run unmodified as the connecting user.",
     { name: z.string().describe("Name of the saved command") },
@@ -159,7 +183,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
     },
   );
 
-  server.tool(
+  if (on("list_saved_commands")) server.tool(
     "list_saved_commands",
     "List the pre-selected (saved) commands available for this SSH integration.",
     { readOnlyHint: true, openWorldHint: false } as const,
@@ -170,7 +194,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
     },
   );
 
-  server.tool(
+  if (on("open_forward")) server.tool(
     "open_forward",
     "Open a local port forward (ssh -L) over this connection so a service reachable from the remote host becomes available at localhost on this machine. Returns the local port to connect to (e.g. `psql -h localhost -p <port>`). The forward stays open for the session until closed.",
     {
@@ -197,7 +221,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
     },
   );
 
-  server.tool(
+  if (on("list_forwards")) server.tool(
     "list_forwards",
     "List the open local port forwards for this connection (local port → remote target).",
     { readOnlyHint: true, openWorldHint: false } as const,
@@ -208,7 +232,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
     },
   );
 
-  server.tool(
+  if (on("close_forward")) server.tool(
     "close_forward",
     "Close an open local port forward by its id (the `remoteHost:remotePort` returned by open_forward / list_forwards).",
     { id: z.string().describe('Forward id, e.g. "localhost:5432"') },

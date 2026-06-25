@@ -540,19 +540,60 @@ final class ConnectionStore {
 
     // MARK: - Policy encoding
 
-    private func readOnlyFlag(_ d: ConnectionDraft) -> Int {
-        if d.policyKind == "action" { return d.allowWrite ? 0 : 1 }
-        return d.queryPolicy.preset == .readOnly ? 1 : 0
+    // The `read_only` column is legacy (the per-tool config now carries all policy);
+    // the TS server ignores it. Kept zero so the shared schema stays populated.
+    private func readOnlyFlag(_ d: ConnectionDraft) -> Int { 0 }
+
+    // Serialize the draft's per-tool config to the query_policy blob:
+    // { "tools": { "<name>": { "enabled": Bool, "settings": { …typed… } } } }.
+    // Each setting is coerced to the type the tool declared (number → Int, toggle
+    // → Bool) so the TS side reads it correctly.
+    private func policyJSON(_ d: ConnectionDraft) -> String? {
+        var settingTypeByTool: [String: [String: String]] = [:]
+        for t in d.tools {
+            settingTypeByTool[t.name] = Dictionary((t.settings ?? []).map { ($0.key, $0.type) }, uniquingKeysWith: { a, _ in a })
+        }
+
+        var tools: [String: Any] = [:]
+        for (name, state) in d.toolConfig {
+            var entry: [String: Any] = ["enabled": state.enabled]
+            let types = settingTypeByTool[name] ?? [:]
+            var settings: [String: Any] = [:]
+            for (key, value) in state.settings {
+                if value.isEmpty { continue }
+                switch types[key] {
+                case "number": if let i = Int(value) { settings[key] = i }
+                case "toggle": settings[key] = (value == "true")
+                default: settings[key] = value
+                }
+            }
+            if !settings.isEmpty { entry["settings"] = settings }
+            tools[name] = entry
+        }
+
+        let obj: [String: Any] = ["tools": tools]
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+              let json = String(data: data, encoding: .utf8) else { return nil }
+        return json
     }
 
-    private func policyJSON(_ d: ConnectionDraft) -> String? {
-        if d.policyKind == "action" {
-            let actions = d.allowWrite ? ["read", "write"] : ["read"]
-            let obj: [String: Any] = ["actions": actions]
-            guard let data = try? JSONSerialization.data(withJSONObject: obj) else { return nil }
-            return String(data: data, encoding: .utf8)
+    // Parse the query_policy blob into per-tool state. Settings values are kept as
+    // strings (mirroring the config-blob parse) for the form's string bindings.
+    private func parseToolConfig(_ raw: String?) -> [String: ToolState] {
+        guard let raw,
+              let obj = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any],
+              let tools = obj["tools"] as? [String: Any] else { return [:] }
+        var result: [String: ToolState] = [:]
+        for (name, any) in tools {
+            guard let entry = any as? [String: Any] else { continue }
+            let enabled = (entry["enabled"] as? Bool) ?? true
+            var settings: [String: String] = [:]
+            if let s = entry["settings"] as? [String: Any] {
+                for (k, v) in s { settings[k] = stringify(v) }
+            }
+            result[name] = ToolState(enabled: enabled, settings: settings)
         }
-        return d.queryPolicy.toJSON()
+        return result
     }
 
     // MARK: - Config blob (pack)
@@ -605,19 +646,13 @@ final class ConnectionStore {
 
         let environment = Environment(rawValue: str(4) ?? "development") ?? .development
         let readOnly = bool(5)
-        let queryPolicyJSON = str(6)
-
-        // Parse stored SQL policy, falling back to the read_only flag. (Action
-        // adapters store {actions:[…]}, which won't parse here — the read_only
-        // flag carries their read/write intent.)
-        let queryPolicy = QueryPolicy.fromJSON(queryPolicyJSON)
-            ?? (readOnly ? .make(.readOnly) : .default(for: environment))
+        let toolConfig = parseToolConfig(str(6))
 
         return Connection(
             id: id, name: name, type: type, config: config,
             environment: environment,
             readOnly: readOnly,
-            queryPolicy: queryPolicy,
+            toolConfig: toolConfig,
             token: token, createdAt: createdAt
         )
     }

@@ -1,13 +1,9 @@
 import type { ZodRawShape } from "zod";
-import type { Adapter, ActionMeta, ConfigField } from "./types.js";
+import type { Adapter, ToolSpec, ConfigField } from "./types.js";
 import type { Integration } from "../store/integrations.js";
 import type { ToolHost } from "../mcp/namespace.js";
-import {
-  parseActionPolicy,
-  actionAllowed,
-  actionPolicyDescription,
-  type ActionCategory,
-} from "../mcp/actionPolicy.js";
+import { type ActionCategory } from "../mcp/actionPolicy.js";
+import { toolGate, defaultEnabledForCategory } from "../mcp/toolConfig.js";
 import { createLogEntry, updateLogEntry, logQuery, type Verdict } from "../store/queryLog.js";
 import { buildInstructions } from "../mcp/instructions.js";
 import { logError } from "../log.js";
@@ -102,17 +98,22 @@ export async function runGated(
 
 // ── Action adapter factory ───────────────────────────────────────────────────
 
-/** One tool on a REST/action service. Declares its data fetch + policy category;
- *  the platform handles gating, logging, and response shaping. */
+/** One tool on a REST/action service. Declares its data fetch + coarse category
+ *  (drives the default-on state); the platform handles enable-gating, logging,
+ *  and response shaping. */
 export interface ActionTool {
   name: string;
   description: string;
   schema?: ZodRawShape;
   category: ActionCategory;
+  /** This tool's own settings, surfaced in the UI when the tool is expanded and
+   *  passed to `run` at call time. */
+  settings?: ConfigField[];
   /** Log line for this call. Defaults to the tool name. */
   detail?: (args: Record<string, unknown>) => string;
-  /** Fetch the data; the returned value is JSON-stringified for the agent + log. */
-  run: (args: Record<string, unknown>) => Promise<unknown>;
+  /** Fetch the data; the returned value is JSON-stringified for the agent + log.
+   *  Receives the tool's resolved settings (from the integration's config). */
+  run: (args: Record<string, unknown>, settings: Record<string, unknown>) => Promise<unknown>;
 }
 
 export interface ActionAdapterSpec<C> {
@@ -141,12 +142,38 @@ export interface ActionAdapterSpec<C> {
  * all supplied here.
  */
 export function actionAdapter<C>(spec: ActionAdapterSpec<C>): Adapter {
+  // Enumerate the tools once, statically, for the catalog/UI + per-tool defaults.
+  // Tool definitions (name/category/description/settings) don't depend on config —
+  // the client is only used inside each tool's `run`. Build a throwaway client/conn
+  // defensively: some client builders read config (and may throw on blanks), some
+  // tool builders read the client — fall back through both so metadata never breaks.
+  const toolSpecs: ToolSpec[] = ((): ToolSpec[] => {
+    const dummyConn = { config: {} } as Integration;
+    let dummyClient: C | undefined;
+    try { dummyClient = spec.client(dummyConn, { value: "" }); } catch { dummyClient = undefined; }
+    try {
+      return spec.tools(dummyConn, dummyClient as C).map((t) => ({
+        name: t.name,
+        description: t.description,
+        category: t.category,
+        defaultEnabled: defaultEnabledForCategory(t.category),
+        settings: t.settings,
+      }));
+    } catch {
+      return [];
+    }
+  })();
+  const defaultEnabledByName = new Map(toolSpecs.map((t) => [t.name, t.defaultEnabled]));
+
   const instructions = (conn: Integration): string => {
-    const policy = parseActionPolicy(conn.query_policy, conn.read_only);
+    const gate = toolGate(conn.query_policy);
+    const enabled = toolSpecs
+      .filter((t) => gate.enabled(t.name, t.defaultEnabled))
+      .map((t) => t.name);
     return buildInstructions(conn, {
       kind: spec.label,
       access: spec.access,
-      policy: actionPolicyDescription(policy),
+      policy: enabled.length ? `Enabled tools: ${enabled.join(", ")}.` : "No tools are enabled on this integration.",
       start: spec.start,
       hint: spec.agentHint,
     });
@@ -154,14 +181,15 @@ export function actionAdapter<C>(spec: ActionAdapterSpec<C>): Adapter {
 
   const register = (host: ToolHost, conn: Integration, sessionIdRef: { value: string }): void => {
     const client = spec.client(conn, sessionIdRef);
-    const policy = parseActionPolicy(conn.query_policy, conn.read_only);
-    const policyDesc = actionPolicyDescription(policy);
+    const gate = toolGate(conn.query_policy);
 
     for (const tool of spec.tools(conn, client)) {
-      // Don't even register a tool the integration's policy disallows — a
-      // read-only integration shouldn't advertise write/delete tools to the agent
-      // at all. The precheck below stays as defense in depth.
-      if (!actionAllowed(policy, tool.category)) continue;
+      // A disabled tool is not registered at all — the agent never sees it. This
+      // is how an integration shrinks its surface (and locks out write/delete).
+      const fallback = defaultEnabledByName.get(tool.name) ?? defaultEnabledForCategory(tool.category);
+      if (!gate.enabled(tool.name, fallback)) continue;
+
+      const settings = gate.settings(tool.name);
 
       const handler = (args: Record<string, unknown>): Promise<ToolResult> =>
         runGated(
@@ -172,23 +200,15 @@ export function actionAdapter<C>(spec: ActionAdapterSpec<C>): Adapter {
             detail: tool.detail ? tool.detail(args) : tool.name,
           },
           async () => {
-            const data = await tool.run(args);
+            const data = await tool.run(args, settings);
             const rows = Array.isArray(data) ? data : [data];
             const text = JSON.stringify(data, null, 2);
             return { text, result: { rows }, responseText: text };
           },
           {
-            precheck: () =>
-              actionAllowed(policy, tool.category)
-                ? undefined
-                : `Action "${tool.name}" needs "${tool.category}" permission; this integration allows: ${policy.allowed.join(", ")}.`,
             onError: (e) => logError(`${spec.id} ${tool.name} failed`, e, { integration: conn.name }),
           },
         );
-
-      // Read tools append the live policy summary to their description (so an
-      // agent sees, inline, what it is allowed to do).
-      const description = tool.category === "read" ? `${tool.description} ${policyDesc}` : tool.description;
 
       // The SDK's `tool` is heavily overloaded on the schema shape; cast at the
       // boundary (as namespace.ts does) since our handler is schema-agnostic. Bind
@@ -196,30 +216,10 @@ export function actionAdapter<C>(spec: ActionAdapterSpec<C>): Adapter {
       // is a prototype method that needs its receiver (the namespaced host wraps it
       // in a closure, so binding is a harmless no-op there).
       const reg = (host.tool as (...a: unknown[]) => unknown).bind(host);
-      if (tool.schema) reg(tool.name, description, tool.schema, handler);
-      else reg(tool.name, description, handler);
+      if (tool.schema) reg(tool.name, tool.description, tool.schema, handler);
+      else reg(tool.name, tool.description, handler);
     }
   };
-
-  // Enumerate the tools once, statically, for the catalog/UI. Tool definitions
-  // (name/category/description) don't depend on config — the client is only used
-  // inside each tool's `run`. Build a throwaway client/conn defensively: some
-  // client builders read config (and may throw on blanks), some tool builders read
-  // the client — so fall back through both, never letting metadata break the adapter.
-  const actions = ((): ActionMeta[] => {
-    const dummyConn = { config: {} } as Integration;
-    let dummyClient: C | undefined;
-    try { dummyClient = spec.client(dummyConn, { value: "" }); } catch { dummyClient = undefined; }
-    try {
-      return spec.tools(dummyConn, dummyClient as C).map((t) => ({
-        name: t.name,
-        category: t.category,
-        description: t.description,
-      }));
-    } catch {
-      return [];
-    }
-  })();
 
   return {
     id: spec.id,
@@ -227,7 +227,7 @@ export function actionAdapter<C>(spec: ActionAdapterSpec<C>): Adapter {
     category: spec.category,
     policyKind: "action",
     agentHint: spec.agentHint,
-    actions,
+    toolSpecs,
     configFields: spec.configFields,
     testConnection: spec.testConnection,
     instructions,

@@ -68,18 +68,12 @@ struct ConnectionFormView: View {
 
     private func select(_ m: AdapterManifest, resetConfig: Bool) {
         manifest = m
-        draft.type = m.id
-        draft.fields = m.configFields
-        draft.policyKind = m.policyKind
-        if resetConfig {
-            var seeded: [String: String] = [:]
-            for f in m.configFields where f.defaultValue != nil { seeded[f.key] = f.defaultValue }
-            draft.config = seeded
-        } else {
+        if !resetConfig {
             for f in m.configFields where f.defaultValue != nil && (draft.config[f.key] ?? "").isEmpty {
                 draft.config[f.key] = f.defaultValue
             }
         }
+        draft.adopt(m, resetConfig: resetConfig)
     }
 
     // MARK: - Header
@@ -223,13 +217,7 @@ struct ConnectionFormView: View {
                     }
                 }
 
-                if manifest.isSQL {
-                    queryPolicySection
-                } else if manifest.isAction {
-                    actionPolicySection
-                } else {
-                    confirmPolicySection
-                }
+                toolsSection
             }
         }
         }
@@ -311,224 +299,157 @@ struct ConnectionFormView: View {
         Binding(get: { draft.config[key] == "true" }, set: { draft.config[key] = $0 ? "true" : "false" })
     }
 
-    // MARK: - Action policy section (non-SQL adapters)
+    // MARK: - Tools section (every adapter)
 
-    // Tools the Write permission unlocks for the selected adapter (write + delete).
-    private var writeActionNames: [String] { manifest?.writeActionNames ?? [] }
-
-    private var actionPolicySection: some View {
-        DetailSection("Permissions") {
-            VStack(alignment: .leading, spacing: 6) {
-                Toggle("Read", isOn: .constant(true))
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 12))
-                    .disabled(true)
-                    .help("Read access is always allowed")
-                    .padding(.horizontal, 14)
-                    .padding(.top, 8)
-
-                Toggle("Write", isOn: $draft.allowWrite)
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 12))
-                    .help(writeActionNames.isEmpty
-                          ? "Allow the agent to modify data"
-                          : "Allow the agent to run: \(writeActionNames.joined(separator: ", "))")
-                    .padding(.horizontal, 14)
-
-                Text(draft.allowWrite ? writeOnSummary : readOnlySummary)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 8)
-
-                // Preview the tools that won't be exposed to the agent in read-only
-                // mode — these are filtered out of the MCP server entirely, not just
-                // blocked on call.
-                if !draft.allowWrite, !writeActionNames.isEmpty {
-                    HiddenToolsNote(names: writeActionNames)
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, 8)
-                }
-            }
-        }
-    }
-
-    private var writeOnSummary: String {
-        writeActionNames.isEmpty
-            ? "Agent can read and modify data."
-            : "Agent can read, plus modify via: \(writeActionNames.joined(separator: ", "))."
-    }
-
-    private var readOnlySummary: String {
-        "Agent can only read. Write actions are blocked."
-    }
-
-    // MARK: - Confirmation policy section (no-policy adapters, e.g. SSH)
-
-    private var confirmPolicySection: some View {
-        DetailSection("Policy") {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "hand.raised.fill")
-                    .foregroundColor(.secondary)
-                    .font(.system(size: 12))
-                Text("Commands run unrestricted as the connecting user. Every command must be confirmed in your agent client before it runs.")
+    // The unified policy UI: a list of the adapter's tools, each toggled on/off,
+    // each with its own settings shown when enabled. Replaces the old per-policy
+    // sections (SQL statement categories, action read/write, SSH confirm note).
+    private var toolsSection: some View {
+        DetailSection("Tools") {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Turn off tools to shrink what the agent sees. Expand an enabled tool to set how it behaves.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+
+                ForEach(draft.tools) { tool in
+                    toolRow(tool)
+                    if tool.id != draft.tools.last?.id {
+                        Divider().padding(.leading, 36)
+                    }
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.bottom, 6)
         }
     }
 
-    // MARK: - Query policy section (SQL adapters)
-
-    private var queryPolicySection: some View {
-        DetailSection("Query Policy") {
-            VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Preset")
-                            .font(.dev(size: 11, weight: .semibold))
-                            .textCase(.uppercase)
-                            .frame(width: 80, alignment: .leading)
-                        Picker("", selection: Binding(
-                            get: { draft.queryPolicy.preset },
-                            set: { draft.queryPolicy.apply(preset: $0) }
-                        )) {
-                            ForEach(QueryPreset.allCases) { p in
-                                Text(p.label).tag(p)
-                            }
+    @ViewBuilder
+    private func toolRow(_ tool: AdapterToolDef) -> some View {
+        let enabled = draft.toolConfig[tool.name]?.enabled ?? tool.defaultEnabled
+        let hasSettings = !(tool.settings ?? []).isEmpty
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 10) {
+                Toggle("", isOn: toolEnabledBinding(tool))
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(tool.name)
+                            .font(.dev(size: 12, weight: .medium))
+                            .foregroundColor(enabled ? .primary : .secondary)
+                        ToolCategoryTag(category: tool.category)
+                        if hasSettings, enabled {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.tertiary)
                         }
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: 160, alignment: .leading)
                     }
-                    Text(draft.queryPolicy.preset.description)
+                    Text(tool.description)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
-                        .padding(.leading, 88)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
 
-                    if draft.queryPolicy.preset == .unrestricted {
-                        HStack(spacing: 4) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.red)
-                                .font(.system(size: 11))
-                            Text("Unrestricted allows all SQL, including DROP, TRUNCATE, and filesystem ops.")
-                                .font(.system(size: 11))
-                                .foregroundColor(.red)
-                        }
-                        .padding(.leading, 88)
+            if enabled, hasSettings {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(tool.settings ?? []) { setting in
+                        settingRow(tool: tool, setting: setting)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.top, 8)
-                .padding(.bottom, 2)
-
-                Divider()
-
-                let groups: [(String, [StatementCategory])] = [
-                    ("Read",   [.select, .inspect]),
-                    ("Write",  [.insert, .update, .delete, .merge]),
-                    ("Schema", [.create, .alter, .drop, .truncate, .rename]),
-                    ("Admin",  statementAdminCategories),
-                ]
-
-                ForEach(groups, id: \.0) { groupName, categories in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(groupName)
-                            .font(.dev(size: 10, weight: .semibold))
-                            .foregroundColor(.secondary)
-                            .textCase(.uppercase)
-                            .padding(.horizontal, 10)
-                            .padding(.top, 6)
-                        ForEach(categories) { cat in
-                            HStack {
-                                Toggle(cat.label, isOn: Binding(
-                                    get: { draft.queryPolicy.allowed.contains(cat) },
-                                    set: { _ in draft.queryPolicy.toggle(cat) }
-                                ))
-                                .toggleStyle(.checkbox)
-                                .font(.system(size: 12))
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 2)
-                        }
-                    }
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Guards")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.secondary)
-                        .textCase(.uppercase)
-                        .padding(.horizontal, 10)
-                        .padding(.top, 4)
-
-                    Toggle("Block stacked statements (SELECT 1; DROP …)", isOn: $draft.queryPolicy.blockStacked)
-                        .toggleStyle(.checkbox)
-                        .font(.system(size: 12))
-                        .help("Reject queries that contain more than one SQL statement")
-                        .padding(.horizontal, 14)
-
-                    Toggle("Require WHERE on UPDATE / DELETE", isOn: $draft.queryPolicy.requireWhere)
-                        .toggleStyle(.checkbox)
-                        .font(.system(size: 12))
-                        .help("Block UPDATE or DELETE without a WHERE clause")
-                        .padding(.horizontal, 14)
-
-                    Toggle("Allow filesystem / COPY ops", isOn: $draft.queryPolicy.allowFilesystem)
-                        .toggleStyle(.checkbox)
-                        .font(.system(size: 12))
-                        .foregroundColor(draft.queryPolicy.allowFilesystem ? .red : .primary)
-                        .help("Allow COPY … PROGRAM, INTO OUTFILE, LOAD DATA, ATTACH DATABASE, pg_read_file")
-                        .padding(.horizontal, 14)
-
-                    HStack {
-                        Toggle("Max rows returned", isOn: Binding(
-                            get: { draft.queryPolicy.maxRows != nil },
-                            set: { on in draft.queryPolicy.maxRows = on ? 1000 : nil }
-                        ))
-                        .toggleStyle(.checkbox)
-                        .font(.system(size: 12))
-                        .frame(width: 160)
-
-                        if draft.queryPolicy.maxRows != nil {
-                            TextField("1000", value: Binding(
-                                get: { draft.queryPolicy.maxRows ?? 1000 },
-                                set: { draft.queryPolicy.maxRows = max(1, $0) }
-                            ), format: .number)
-                            .textFieldStyle(.plain)
-                            .frame(width: 80)
-                            Text("rows")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                }
-                .padding(.bottom, 8)
-                .onChange(of: draft.queryPolicy.blockStacked) { _, _ in markCustom() }
-                .onChange(of: draft.queryPolicy.requireWhere) { _, _ in markCustom() }
-                .onChange(of: draft.queryPolicy.allowFilesystem) { _, _ in markCustom() }
-                .onChange(of: draft.queryPolicy.maxRows) { _, _ in markCustom() }
+                .padding(.leading, 38)
+                .padding(.trailing, 14)
+                .padding(.bottom, 10)
             }
         }
     }
 
-    // Admin categories depend on driver type (SQLite has no GRANT)
-    private var statementAdminCategories: [StatementCategory] {
-        var cats: [StatementCategory] = [.transaction, .session, .procedure, .maintenance]
-        if draft.type != "sqlite" { cats.append(.grant) }
-        return cats
+    @ViewBuilder
+    private func settingRow(tool: AdapterToolDef, setting: ConfigFieldDef) -> some View {
+        let def = setting.defaultValue ?? ""
+        VStack(alignment: .leading, spacing: 3) {
+            switch setting.type {
+            case "toggle":
+                let isOn = (draft.toolConfig[tool.name]?.settings[setting.key] ?? def) == "true"
+                Toggle(setting.label, isOn: settingBoolBinding(tool, setting.key))
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12))
+                    .foregroundColor(setting.danger == true && isOn ? .red : .primary)
+            case "select":
+                HStack {
+                    Text(setting.label).font(.system(size: 12)).frame(width: 120, alignment: .leading)
+                    Picker("", selection: settingTextBinding(tool, setting.key, default: def)) {
+                        ForEach(setting.options ?? [], id: \.value) { opt in
+                            Text(opt.label).font(.dev(size: 12)).tag(opt.value)
+                        }
+                    }
+                    .pickerStyle(.menu).labelsHidden().frame(maxWidth: 240, alignment: .leading)
+                    Spacer(minLength: 0)
+                }
+            case "number":
+                HStack {
+                    Text(setting.label).font(.system(size: 12)).frame(width: 120, alignment: .leading)
+                    TextField(def, text: settingTextBinding(tool, setting.key, default: def))
+                        .textFieldStyle(.plain).font(.dev(size: 12)).frame(width: 90)
+                    Spacer(minLength: 0)
+                }
+            default: // text / password
+                HStack {
+                    Text(setting.label).font(.system(size: 12)).frame(width: 120, alignment: .leading)
+                    TextField(setting.placeholder ?? "", text: settingTextBinding(tool, setting.key, default: def))
+                        .textFieldStyle(.plain).font(.dev(size: 12))
+                }
+            }
+            if let help = setting.help {
+                Text(help)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, setting.type == "toggle" ? 20 : 124)
+            }
+        }
     }
 
-    private func markCustom() {
-        if draft.queryPolicy.preset != .custom {
-            draft.queryPolicy.preset = .custom
-        }
+    // MARK: - Tool-config bindings
+
+    private func toolEnabledBinding(_ tool: AdapterToolDef) -> Binding<Bool> {
+        Binding(
+            get: { draft.toolConfig[tool.name]?.enabled ?? tool.defaultEnabled },
+            set: { on in
+                var state = draft.toolConfig[tool.name] ?? tool.seededState()
+                state.enabled = on
+                draft.toolConfig[tool.name] = state
+            }
+        )
+    }
+
+    private func settingTextBinding(_ tool: AdapterToolDef, _ key: String, default def: String) -> Binding<String> {
+        Binding(
+            get: { draft.toolConfig[tool.name]?.settings[key] ?? def },
+            set: { value in
+                var state = draft.toolConfig[tool.name] ?? tool.seededState()
+                state.settings[key] = value
+                draft.toolConfig[tool.name] = state
+            }
+        )
+    }
+
+    private func settingBoolBinding(_ tool: AdapterToolDef, _ key: String) -> Binding<Bool> {
+        Binding(
+            get: { (draft.toolConfig[tool.name]?.settings[key] ?? "false") == "true" },
+            set: { on in
+                var state = draft.toolConfig[tool.name] ?? tool.seededState()
+                state.settings[key] = on ? "true" : "false"
+                draft.toolConfig[tool.name] = state
+            }
+        )
     }
 
     // MARK: - Footer
@@ -581,21 +502,28 @@ struct ConnectionFormView: View {
     }
 }
 
-// Read-only preview: the tools that are filtered out of the MCP server (not just
-// blocked) because the integration grants read only. Shows the agent never sees them.
-private struct HiddenToolsNote: View {
-    let names: [String]
+// A small colored tag for a tool's category (read / write / delete / admin), so
+// the destructive tools stand out in the list.
+struct ToolCategoryTag: View {
+    let category: String
+
+    private var color: Color {
+        switch category {
+        case "write": .orange
+        case "delete", "admin": .red
+        default: .secondary   // read / inspect
+        }
+    }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "eye.slash")
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-            Text("Hidden from the agent: \(names.joined(separator: ", "))")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        Text(category)
+            .font(.dev(size: 9, weight: .medium))
+            .textCase(.uppercase)
+            .foregroundColor(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.12))
+            .clipShape(.capsule)
     }
 }
 

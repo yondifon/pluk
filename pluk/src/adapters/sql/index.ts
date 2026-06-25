@@ -1,7 +1,7 @@
 import type { Adapter } from "../types.js";
 import type { Integration } from "../../store/integrations.js";
 import { createDriver } from "../../db/index.js";
-import { registerSqlServer, sqlAgentHint, sqlInstructions } from "./server.js";
+import { registerSqlServer, sqlAgentHint, sqlInstructions, sqlToolSpecs } from "./server.js";
 import { networkSqlFields, sqliteFields } from "./fields.js";
 
 // Opening a driver and immediately closing it is the connectivity test for the
@@ -20,6 +20,7 @@ export const postgresAdapter: Adapter = {
   label: "PostgreSQL",
   category: "database",
   policyKind: "sql",
+  toolSpecs: sqlToolSpecs(),
   agentHint: sqlAgentHint("postgres"),
   configFields: networkSqlFields(5432),
   testConnection: testSql,
@@ -32,6 +33,7 @@ export const mysqlAdapter: Adapter = {
   label: "MySQL",
   category: "database",
   policyKind: "sql",
+  toolSpecs: sqlToolSpecs(),
   agentHint: sqlAgentHint("mysql"),
   configFields: networkSqlFields(3306),
   testConnection: testSql,
@@ -44,6 +46,7 @@ export const sqliteAdapter: Adapter = {
   label: "SQLite",
   category: "database",
   policyKind: "sql",
+  toolSpecs: sqlToolSpecs(),
   agentHint: sqlAgentHint("sqlite"),
   configFields: sqliteFields,
   testConnection: testSql,
