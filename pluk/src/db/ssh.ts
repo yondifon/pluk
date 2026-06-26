@@ -243,7 +243,7 @@ export async function openSSHTunnel(
   const sessionId = typeof sessionIdOrFatal === "string" ? sessionIdOrFatal : undefined;
   const onFatal = typeof sessionIdOrFatal === "function" ? sessionIdOrFatal : maybeOnFatal;
 
-  if (sessionId) {
+  if (sessionId && !sshConfig.proxyCommand) {
     return openSharedClientTunnel(config, sessionId, username, onFatal);
   }
 
