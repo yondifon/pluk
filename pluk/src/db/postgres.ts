@@ -1,6 +1,22 @@
-import { Pool } from "pg";
+import { Pool, types } from "pg";
 import type { Driver, SqlConfig } from "./index.js";
 import { recordExecutedSql } from "./sqlLog.js";
+
+const TEXT_DATE_TYPE_OIDS = new Set([
+  1082, // date
+  1114, // timestamp without time zone
+  1184, // timestamp with time zone
+]);
+
+export const postgresDateTypesAsText = {
+  getTypeParser(oid: number, format?: "text" | "binary") {
+    if ((format ?? "text") === "text" && TEXT_DATE_TYPE_OIDS.has(oid)) {
+      return (value: string) => value;
+    }
+
+    return types.getTypeParser(oid, format);
+  },
+};
 
 export function createPostgresDriver(
   cfg: SqlConfig,
@@ -15,6 +31,7 @@ export function createPostgresDriver(
     password: cfg.password,
     database: cfg.database,
     connectionTimeoutMillis: 8000,
+    types: postgresDateTypesAsText,
     // Keep pooled sockets warm and bound their lifetime. Over a long-lived SSH
     // tunnel an idle connection's forwarded channel can die silently; TCP
     // keepalive surfaces that fast (default idleTimeoutMillis already recycles

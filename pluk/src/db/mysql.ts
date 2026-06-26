@@ -2,6 +2,8 @@ import mysql from "mysql2/promise";
 import type { Driver, SqlConfig } from "./index.js";
 import { recordExecutedSql } from "./sqlLog.js";
 
+export const mysqlDateStrings = true;
+
 export function createMysqlDriver(
   cfg: SqlConfig,
   host: string,
@@ -15,6 +17,7 @@ export function createMysqlDriver(
     password: cfg.password,
     database: cfg.database,
     connectTimeout: 8000,
+    dateStrings: mysqlDateStrings,
     // Keep pooled sockets warm and recycle idle ones. Over a long-lived SSH
     // tunnel an idle connection's forwarded channel can die silently; TCP
     // keepalive surfaces that as an error (fast retry) instead of a hung query,
