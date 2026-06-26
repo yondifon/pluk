@@ -80,7 +80,7 @@ interface Resource {
 }
 
 /** Open a client (and an SSH tunnel if configured). The caller owns teardown. */
-async function open(cfg: RedisCfg, onFatal?: () => void): Promise<Resource> {
+async function open(cfg: RedisCfg, sessionId?: string, onFatal?: () => void): Promise<Resource> {
   if (cfg.url && !cfg.ssh) return { client: new RedisClient(cfg.url) };
 
   if (cfg.ssh) {
@@ -95,6 +95,7 @@ async function open(cfg: RedisCfg, onFatal?: () => void): Promise<Resource> {
         remoteHost: cfg.host,
         remotePort: cfg.port,
       },
+      sessionId,
       onFatal,
     );
     // The local hop to the forwarded port is plaintext; Redis AUTH still applies.
@@ -136,7 +137,7 @@ function getResource(sessionId: string, conn: Integration): Promise<Resource> {
     return existing.resource;
   }
   // Self-heal: a dropped SSH tunnel evicts the entry so the next call rebuilds it.
-  const resource = open(redisConfig(conn), () => { if (pool.get(k) === entry) evictByKey(k); });
+  const resource = open(redisConfig(conn), sessionId, () => { if (pool.get(k) === entry) evictByKey(k); });
   const entry: Entry = { resource, idleTimer: setTimeout(() => evictByKey(k), IDLE_MS) };
   pool.set(k, entry);
   resource.catch(() => { if (pool.get(k) === entry) { clearTimeout(entry.idleTimer); pool.delete(k); } });

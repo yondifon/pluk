@@ -56,6 +56,7 @@ export interface GateOpts {
   /** Side effects to run only on a true error (not on cancellation), e.g.
    *  evicting a pooled driver. The raw error is passed through. */
   onError?: (error: unknown) => void;
+  formatError?: (error: unknown, status: Verdict) => string;
 }
 
 /**
@@ -89,7 +90,7 @@ export async function runGated(
   } catch (e) {
     const msg = (e as Error).message;
     const status = opts.classifyError?.(msg) ?? "error";
-    const text = `${status === "cancelled" ? "Cancelled" : "Error"}: ${msg}`;
+    const text = opts.formatError?.(e, status) ?? `${status === "cancelled" ? "Cancelled" : "Error"}: ${msg}`;
     updateLogEntry(logId, status, msg, undefined, text);
     if (status === "error") opts.onError?.(e);
     return err(text);

@@ -99,3 +99,15 @@ test("two same-type members register on one server without colliding", () => {
   expect(Object.keys(tools)).toContain("metrics__query");
   expect(Object.keys(tools)).toContain("analytics__query");
 });
+
+test("SQL query tool accepts sql and query args", async () => {
+  const server = new McpServer({ name: "DB Production", version: "1.0.0" });
+  registerSqlServer(server, { ...fakeSqlite("a", "Metrics"), environment: "production" }, { value: "" });
+
+  const tool = (server as unknown as { _registeredTools: Record<string, { inputSchema: { safeParse: (v: unknown) => { success: boolean } }; handler: (v: unknown) => Promise<{ isError?: boolean }> }> })._registeredTools.query;
+  if (!tool) throw new Error("query tool was not registered");
+
+  expect(tool.inputSchema.safeParse({ sql: "select 1" }).success).toBe(true);
+  expect(tool.inputSchema.safeParse({ query: "select 1" }).success).toBe(true);
+  expect((await tool.handler({})).isError).toBe(true);
+});

@@ -3,6 +3,8 @@ import type { Integration } from "../../store/integrations.js";
 import { createDriver } from "../../db/index.js";
 import { registerSqlServer, sqlAgentHint, sqlInstructions, sqlToolSpecs } from "./server.js";
 import { networkSqlFields, sqliteFields } from "./fields.js";
+import { handleSqlApi, handleSqlLogApi } from "./api.js";
+import { humanizeSqlError } from "./errors.js";
 
 // Opening a driver and immediately closing it is the connectivity test for the
 // whole SQL family (it sets up the SSH tunnel + SSL + auth, same as a real call).
@@ -24,6 +26,9 @@ export const postgresAdapter: Adapter = {
   agentHint: sqlAgentHint("postgres"),
   configFields: networkSqlFields(5432),
   testConnection: testSql,
+  humanizeError: humanizeSqlError,
+  handleApi: handleSqlApi,
+  handleGlobalApi: handleSqlLogApi,
   instructions: sqlInstructions,
   register: registerSqlServer,
 };
@@ -37,6 +42,9 @@ export const mysqlAdapter: Adapter = {
   agentHint: sqlAgentHint("mysql"),
   configFields: networkSqlFields(3306),
   testConnection: testSql,
+  humanizeError: humanizeSqlError,
+  handleApi: handleSqlApi,
+  handleGlobalApi: handleSqlLogApi,
   instructions: sqlInstructions,
   register: registerSqlServer,
 };
@@ -50,6 +58,9 @@ export const sqliteAdapter: Adapter = {
   agentHint: sqlAgentHint("sqlite"),
   configFields: sqliteFields,
   testConnection: testSql,
+  humanizeError: humanizeSqlError,
+  handleApi: handleSqlApi,
+  handleGlobalApi: handleSqlLogApi,
   instructions: sqlInstructions,
   register: registerSqlServer,
 };

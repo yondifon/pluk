@@ -17,11 +17,12 @@ import {
   withCancellable,
   registerQueryAbort,
   clearQueryAbort,
-} from "../../mcp/pool.js";
+} from "./pool.js";
 import { logError } from "../../log.js";
 import { buildInstructions } from "../../mcp/instructions.js";
 import { ok, err, runGated, type ToolResult, type LogSnapshot } from "../kit.js";
 import type { ToolHost } from "../../mcp/namespace.js";
+import { formatSqlError } from "./errors.js";
 
 // Human label for a SQL adapter id — single source for the manifest and the
 // agent-facing instructions so they never drift.
@@ -128,11 +129,42 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
     } catch (e) {
       evictDriver(sid, conn.id);
       logError(`tool ${label} failed`, e, { integration: conn.name, type: conn.type });
-      return err(`Error: ${(e as Error).message}`);
+      return err(formatSqlError(e));
     }
   }
 
   type QueryRows = { rows: unknown[]; fields?: string[] };
+  type SqlResultMeta = {
+    env: string;
+    host: string;
+    connection: string;
+    type: string;
+    fields?: string[];
+    rows: unknown[];
+    truncated: boolean;
+    row_cap: number | null;
+    row_count: number;
+    returned_rows: number;
+  };
+
+  function resultWithMeta(result: QueryRows, rows: unknown[], truncated: boolean, rowCap: number | null): SqlResultMeta {
+    return {
+      env: conn.environment ?? "development",
+      host: String(conn.config.host ?? conn.config.filename ?? "localhost"),
+      connection: conn.name,
+      type: conn.type,
+      fields: result.fields ?? [],
+      rows,
+      truncated,
+      row_cap: rowCap,
+      row_count: result.rows.length,
+      returned_rows: rows.length,
+    };
+  }
+
+  function missingSqlArg(): ToolResult {
+    return err('Missing SQL. Pass either "sql" or "query".');
+  }
 
   // The postgres cost gate: returns a block reason if the planner's estimate
   // exceeds the policy's row/cost ceiling, else undefined. No-op off postgres or
@@ -173,6 +205,7 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
       evictDriver(sessionIdRef.value, conn.id);
       logError("query tool failed", e, { integration: conn.name, type: conn.type });
     },
+    formatError: (e: unknown) => formatSqlError(e),
   };
 
   // Run a SQL statement through the policy gate + activity log, returning rows
@@ -192,8 +225,9 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
 
           const result = await runStatement<QueryRows>(driver, sql, queryAc.signal, source);
           const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
-          const maskedResult: LogSnapshot & QueryRows = { ...result, rows: mask(rows) };
-          let text = JSON.stringify(maskedResult, null, 2);
+          const maskedRows = mask(rows);
+          const maskedResult: LogSnapshot & QueryRows = { fields: result.fields, rows: maskedRows };
+          let text = JSON.stringify(resultWithMeta(result, maskedRows, truncated, limit), null, 2);
           if (truncated) {
             text += `\n\n[Row limit: showing first ${limit} of ${result.rows.length} rows. Add a LIMIT clause to see all results.]`;
           }
@@ -261,8 +295,14 @@ ${sql}` } },
   if (on("query")) server.tool(
     "query",
     `Run a SQL query against the database. ${policyDesc}`,
-    { sql: z.string().describe("SQL query to execute") },
-    ({ sql }) => gatedQuery(sql, "query"),
+    {
+      sql: z.string().optional().describe("SQL query to execute"),
+      query: z.string().optional().describe("Alias for sql"),
+    },
+    ({ sql, query }) => {
+      const statement = sql ?? query;
+      return statement ? gatedQuery(statement, "query") : Promise.resolve(missingSqlArg());
+    },
   );
 
   if (on("list_tables")) server.tool("list_tables", "List all tables in the database", () =>
@@ -279,9 +319,9 @@ ${sql}` } },
       introspect("sample_table", async (driver) => {
         const effectiveLimit = policy.maxRows === null ? limit : Math.min(limit, policy.maxRows);
         const result = await driver.sampleTable(table, effectiveLimit);
-        const { rows, truncated } = capRows(result.rows, policy.maxRows);
+        const { rows, truncated, limit: rowCap } = capRows(result.rows, policy.maxRows);
         const maskedRows = maskedColumns.length > 0 ? rows.map(r => maskRow(r as Record<string, unknown>, maskedColumns)) : rows;
-        let text = JSON.stringify({ fields: result.fields ?? [], rows: maskedRows }, null, 2);
+        let text = JSON.stringify(resultWithMeta(result, maskedRows, truncated, rowCap), null, 2);
         if (truncated) {
           text += `\n\n[Row limit: showing first ${policy.maxRows} of ${result.rows.length} rows.]`;
         }
@@ -293,18 +333,21 @@ ${sql}` } },
     "explain_query",
     "Show query execution plan without running the query",
     {
-      sql: z.string().describe("SQL query to explain"),
+      sql: z.string().optional().describe("SQL query to explain"),
+      query: z.string().optional().describe("Alias for sql"),
     },
-    ({ sql }) => {
+    ({ sql, query }) => {
+      const statement = sql ?? query;
+      if (!statement) return Promise.resolve(missingSqlArg());
       // `explain` runs no policy-changing statement, so a passing query is logged
       // by the driver layer (via introspect), not as a gated tool call. A blocked
       // query is still recorded so the audit log shows the denial.
-      const verdict = evaluate(sql, policy, dialect);
+      const verdict = evaluate(statement, policy, dialect);
       if (!verdict.ok) {
-        logQuery(conn.id, conn.name, sql, "blocked", verdict.categories, verdict.reason ?? undefined, undefined, undefined, undefined, conn.viaGroup);
+        logQuery(conn.id, conn.name, statement, "blocked", verdict.categories, verdict.reason ?? undefined, undefined, undefined, undefined, conn.viaGroup);
         return Promise.resolve(err(`Blocked: ${verdict.reason}`));
       }
-      return introspect("explain_query", async (driver) => JSON.stringify(await driver.explain(sql), null, 2));
+      return introspect("explain_query", async (driver) => JSON.stringify(await driver.explain(statement), null, 2));
     }
   );
 
@@ -347,26 +390,31 @@ ${sql}` } },
     "export_query",
     "Run a SQL query and save results to a local CSV or JSON file",
     {
-      sql: z.string().describe("SQL query to execute"),
+      sql: z.string().optional().describe("SQL query to execute"),
+      query: z.string().optional().describe("Alias for sql"),
       format: z.enum(["csv", "json"]).default("csv").describe("Export file format"),
     },
-    ({ sql, format }) => {
-      const verdict = evaluate(sql, policy, dialect);
+    ({ sql, query, format }) => {
+      const statement = sql ?? query;
+      if (!statement) return Promise.resolve(missingSqlArg());
+      const verdict = evaluate(statement, policy, dialect);
       return runGated(
         conn,
-        { category: verdict.categories, action: "export_query", detail: sql },
+        { category: verdict.categories, action: "export_query", detail: statement },
         async (logId) => {
           const sid = sessionIdRef.value;
           const queryAc = registerQueryAbort(logId, sid);
           try {
             const driver = await getDriver(sid, conn);
-            const result = await runStatement<QueryRows>(driver, sql, queryAc.signal, "export_query");
+            const result = await runStatement<QueryRows>(driver, statement, queryAc.signal, "export_query");
 
-            const { rows } = capRows(result.rows, policy.maxRows);
+            const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
             const maskedRows = mask(rows);
 
             const fields = result.fields ?? (maskedRows[0] ? Object.keys(maskedRows[0] as object) : []);
-            const payload = format === "csv" ? toCsv(maskedRows, fields) : JSON.stringify({ fields, rows: maskedRows }, null, 2);
+            const payload = format === "csv"
+              ? toCsv(maskedRows, fields)
+              : JSON.stringify(resultWithMeta({ ...result, fields }, maskedRows, truncated, limit), null, 2);
             const filePath = makeExportPath(conn.name, format);
             await Bun.write(filePath, payload);
 

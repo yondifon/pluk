@@ -82,6 +82,7 @@ export interface Driver {
 
 export async function createDriver(
   integration: Integration,
+  sessionId?: string,
   onFatal?: () => void
 ): Promise<Driver> {
   const cfg = sqlConfigFrom(integration);
@@ -101,7 +102,7 @@ export async function createDriver(
       passphrase: cfg.ssh_password,
       remoteHost: effectiveHost,
       remotePort: effectivePort,
-    }, onFatal);
+    }, sessionId, onFatal);
     tunnel = t;
     effectiveHost = "127.0.0.1";
     effectivePort = t.localPort;

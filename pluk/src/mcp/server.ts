@@ -1,11 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { openSession, closeSession } from "./pool.js";
+import { logError } from "../log.js";
 
 // MCP streamable-HTTP transport + session registry. Target-agnostic: the caller
 // supplies a factory that builds the McpServer (a single integration's adapter
-// server, or a group's aggregated server). Per-query cancellation lives in
-// pool.ts (see cancelQuery).
+// server, or a group's aggregated server). Adapter-owned pools subscribe to
+// session close hooks in pool.ts.
 
 interface Session {
   transport: WebStandardStreamableHTTPServerTransport;
@@ -35,7 +36,7 @@ export async function resetSessions(ownerId?: string): Promise<number> {
   for (const sid of ids) {
     const session = sessions.get(sid);
     sessions.delete(sid);
-    closeSession(sid); // abort in-flight calls + evict pooled drivers/tunnels
+    closeSession(sid); // abort in-flight calls + notify adapter-owned pools
     try { await session?.server.close(); } catch { /* best-effort */ }
   }
   return ids.length;
@@ -48,7 +49,12 @@ export async function handleMcpRequest(req: Request, ownerId: string, makeServer
   if (sessionId) {
     const session = sessions.get(sessionId);
     if (!session) return new Response("Session not found", { status: 404 });
-    return session.transport.handleRequest(req);
+    try {
+      return await session.transport.handleRequest(req);
+    } catch (err) {
+      logError("MCP request failed", err, { ownerId: session.ownerId, sessionId });
+      return new Response("MCP request failed; session kept alive", { status: 500 });
+    }
   }
 
   // New session — sessionIdRef lets tool handlers look up the pool by session
@@ -72,5 +78,10 @@ export async function handleMcpRequest(req: Request, ownerId: string, makeServer
   session = { transport, server, ownerId };
   await server.connect(transport);
 
-  return transport.handleRequest(req);
+  try {
+    return await transport.handleRequest(req);
+  } catch (err) {
+    logError("MCP request failed during session init", err, { ownerId });
+    return new Response("MCP request failed during session init", { status: 500 });
+  }
 }

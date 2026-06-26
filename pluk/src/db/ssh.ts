@@ -13,6 +13,7 @@ import {
   resolveAgentSocket,
   type SSHConfigEntry,
 } from "../ssh/config.js";
+import { getSharedSSHClient, evictSharedSSHClient, type SSHParams } from "../ssh/client.js";
 
 export interface SSHTunnelConfig {
   host: string;
@@ -42,6 +43,17 @@ class TunnelReadinessTimeout extends Error {}
 // fails fast and loud instead of burning the retry loop / handshake budget.
 function isAuthError(message: string): boolean {
   return /permission denied|communication with agent failed|signing failed|publickey|no supported authentication|authentication failed|too many authentication failures/i.test(message);
+}
+
+function sharedParams(config: SSHTunnelConfig, username: string): SSHParams {
+  return {
+    host: config.host,
+    port: config.port,
+    user: username,
+    authType: config.authType,
+    keyPath: config.keyPath,
+    password: config.passphrase,
+  };
 }
 
 // ── SSH config helpers ────────────────────────────────────────────────────────
@@ -169,14 +181,71 @@ async function openOpenSSHTunnel(
   };
 }
 
+async function openSharedClientTunnel(
+  config: SSHTunnelConfig,
+  sessionId: string,
+  username: string,
+  onFatal?: () => void
+): Promise<Tunnel> {
+  const params = sharedParams(config, username);
+  const sshClient = await getSharedSSHClient(sessionId, params);
+  const forwardServer = createServer((socket) => {
+    sshClient.forwardOut(
+      "127.0.0.1", 0,
+      config.remoteHost, config.remotePort,
+      (err, channel) => {
+        if (err) {
+          socket.destroy();
+          evictSharedSSHClient(sessionId, params);
+          onFatal?.();
+          return;
+        }
+        socket.pipe(channel);
+        channel.pipe(socket);
+        socket.on("close", () => channel.destroy());
+        channel.on("close", () => socket.destroy());
+      }
+    );
+  });
+
+  return new Promise((resolve, reject) => {
+    forwardServer.once("error", reject);
+    forwardServer.listen(0, "127.0.0.1", () => {
+      forwardServer.removeListener("error", reject);
+      forwardServer.on("error", () => {});
+      const addr = forwardServer.address();
+      const localPort = typeof addr === "object" && addr ? addr.port : 0;
+      let intentional = false;
+      sshClient.once("close", () => {
+        forwardServer.close();
+        if (!intentional) onFatal?.();
+      });
+      resolve({
+        localPort,
+        close: () => {
+          intentional = true;
+          forwardServer.close();
+        },
+      });
+    });
+  });
+}
+
 // ── Tunnel ────────────────────────────────────────────────────────────────────
 
 export async function openSSHTunnel(
   config: SSHTunnelConfig,
-  onFatal?: () => void
+  sessionIdOrFatal?: string | (() => void),
+  maybeOnFatal?: () => void
 ): Promise<Tunnel> {
   const sshConfig = parseSSHConfig(config.host);
   const username = config.user || sshConfig.user || userInfo().username;
+  const sessionId = typeof sessionIdOrFatal === "string" ? sessionIdOrFatal : undefined;
+  const onFatal = typeof sessionIdOrFatal === "function" ? sessionIdOrFatal : maybeOnFatal;
+
+  if (sessionId) {
+    return openSharedClientTunnel(config, sessionId, username, onFatal);
+  }
 
   if (sshConfig.proxyCommand) {
     // Cloudflare Access and other proxy tunnels can fail transiently on DNS or auth — retry

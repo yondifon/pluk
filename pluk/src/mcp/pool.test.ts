@@ -28,7 +28,8 @@ mock.module("../db/index.js", () => ({
   },
 }));
 
-const { getDriver, closeSession } = await import("./pool.js");
+const { getDriver } = await import("../adapters/sql/pool.js");
+const { closeSession } = await import("./pool.js");
 
 const integration = { id: "i1", name: "DB", type: "postgres", config: {} } as never;
 

@@ -62,6 +62,9 @@ export interface Adapter {
   configFields: ConfigField[];
   /** Verify the config can reach the service. Throws on failure. */
   testConnection(integration: Integration): Promise<void>;
+  humanizeError?(error: unknown): string;
+  handleApi?(integration: Integration, req: Request, subpath: string): Promise<Response | null>;
+  handleGlobalApi?(req: Request, path: string): Promise<Response | null> | Response | null;
   /**
    * Agent-facing guidance for this integration, built per session from live
    * config + policy (see mcp/instructions.ts). Returned in the MCP `initialize`
