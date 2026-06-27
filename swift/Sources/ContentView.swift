@@ -146,14 +146,20 @@ struct ContentView: View {
         }
         .listStyle(.sidebar)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button("New Integration") { sheet = .add }
-                    Button("New Group") { selectedID = store.createGroup() }
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    sheet = .add
                 } label: {
-                    Label("New", systemImage: "plus")
+                    Label("New Integration", systemImage: "plus")
                 }
-                .help("Add an integration or group")
+                .help("New Integration")
+
+                Button {
+                    selectedID = store.createGroup()
+                } label: {
+                    Label("New Group", systemImage: "square.stack.3d.up")
+                }
+                .help("New Group")
             }
         }
     }
