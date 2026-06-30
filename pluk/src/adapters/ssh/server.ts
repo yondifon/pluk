@@ -3,6 +3,7 @@ import type { Integration } from "../../store/integrations.js";
 import { getSavedCommand, listSavedCommands } from "../../store/savedCommands.js";
 import { runCommand, openForward, listForwards, closeForward } from "./client.js";
 import { logError } from "../../log.js";
+import { humanizeSshError } from "./errors.js";
 import { buildInstructions } from "../../mcp/instructions.js";
 import { ok, err, runGated, type ToolResult } from "../kit.js";
 import { toolGate } from "../../mcp/toolConfig.js";
@@ -100,7 +101,10 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
           ? { text, result, responseText: text }
           : { text, isError: true, reason: `exit ${code}`, result, responseText: text };
       },
-      { onError: (e) => logError(`ssh ${toolName} failed`, e, { integration: conn.name }) },
+      {
+        onError: (e) => logError(`ssh ${toolName} failed`, e, { integration: conn.name }),
+        formatError: (e) => humanizeSshError(e),
+      },
     );
   }
 
@@ -216,7 +220,10 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
             `Connect to it at 127.0.0.1:${fwd.localPort} on this machine. Close it with close_forward "${fwd.id}".`;
           return { text, result: { rows: [forwardRow(fwd)] }, responseText: text };
         },
-        { onError: (e) => logError("ssh open_forward failed", e, { integration: conn.name }) },
+        {
+          onError: (e) => logError("ssh open_forward failed", e, { integration: conn.name }),
+          formatError: (e) => humanizeSshError(e),
+        },
       );
     },
   );

@@ -115,7 +115,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Don't let the window shrink below the toolbar's intrinsic width, or its
         // trailing actions clip off-screen with no way to scroll to them.
         window.contentMinSize = NSSize(width: 720, height: 520)
-        window.contentViewController = NSHostingController(rootView: ContentView(store: store, serverManager: serverManager))
+        window.contentViewController = NSHostingController(
+            rootView: ContentView(store: store, serverManager: serverManager)
+        )
         // Restore the user's last size/position; center only on first-ever launch.
         window.setFrameAutosaveName("PlukMainWindow")
         if !window.setFrameUsingName("PlukMainWindow") {

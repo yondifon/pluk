@@ -12,7 +12,7 @@ export function classifySqlError(err: unknown): SqlErrorInfo {
   const msg = e?.message ?? String(err);
   const code = e?.code;
 
-  if (/communication with agent failed|agent refused operation|signing failed .* agent|SSH_AUTH_SOCK|open agent|could not open a connection to your authentication agent/i.test(msg)) {
+  if (/communication with agent failed|agent refused operation|signing failed .* agent|SSH_AUTH_SOCK|open agent|could not open a connection to your authentication agent|No reply from server/i.test(msg)) {
     return {
       category: "auth_failed",
       message: "Can't reach your SSH key agent.",
@@ -30,7 +30,7 @@ export function classifySqlError(err: unknown): SqlErrorInfo {
     };
   }
 
-  if (/connection reset by peer|cloudflared|ProxyCommand exited|did not become ready|unexpected EOF|process exited before tunnel|No reply from server/i.test(msg)) {
+  if (/connection reset by peer|cloudflared|ProxyCommand exited|did not become ready|unexpected EOF|process exited before tunnel/i.test(msg)) {
     return {
       category: "tunnel_failed",
       message: "SSH proxy connection dropped.",
