@@ -116,6 +116,10 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
 
   const readOnlyMode = policy.allowed.length === 2 && policy.allowed.includes("select") && policy.allowed.includes("inspect");
   const maskedColumns = listMaskedColumns(conn.id);
+  const usesSsh = conn.config.use_ssh === true || conn.config.use_ssh === "true";
+  const timeoutOption: Record<string, z.ZodTypeAny> = conn.type === "sqlite" && !usesSsh ? {} : {
+    timeout: z.number().int().positive().max(600).optional().describe("Max seconds to wait before aborting the query (default 30)."),
+  };
 
   // Read-only introspection tools share one shape: acquire the pooled driver,
   // run under the tool timeout, evict on failure. `fn` produces the response text.
@@ -166,6 +170,10 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
     return err('Missing SQL. Pass either "sql" or "query".');
   }
 
+  function toTimeoutMs(timeout?: number): number | undefined {
+    return (conn.type === "sqlite" && !usesSsh) || !timeout ? undefined : timeout * 1000;
+  }
+
   // The postgres cost gate: returns a block reason if the planner's estimate
   // exceeds the policy's row/cost ceiling, else undefined. No-op off postgres or
   // when no ceiling is set.
@@ -186,10 +194,11 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
 
   // Execute a policy-passed statement under the tool timeout + per-query abort.
   // Postgres read-only mode uses a read-only transaction.
-  function runStatement<T extends QueryRows>(driver: Driver, sql: string, signal: AbortSignal, label: string): Promise<T> {
+  function runStatement<T extends QueryRows>(driver: Driver, sql: string, signal: AbortSignal, label: string, timeoutMs?: number): Promise<T> {
     const useReadOnly = readOnlyMode && conn.type === "postgres";
-    const work = (useReadOnly ? driver.queryReadOnly(sql) : driver.query(sql)) as Promise<T>;
-    return withToolTimeout(withCancellable(work, signal), label);
+    const opts = timeoutMs ? { timeoutMs } : undefined;
+    const work = (useReadOnly ? driver.queryReadOnly(sql, undefined, opts) : driver.query(sql, undefined, opts)) as Promise<T>;
+    return withToolTimeout(withCancellable(work, signal), label, timeoutMs);
   }
 
   // Apply the masked-column policy to a row set.
@@ -210,8 +219,9 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
 
   // Run a SQL statement through the policy gate + activity log, returning rows
   // (masked + row-capped). Shared by `query` and `run_saved_query`.
-  function gatedQuery(sql: string, source: string): Promise<ToolResult> {
+  function gatedQuery(sql: string, source: string, timeoutMs?: number, rowCap?: number): Promise<ToolResult> {
     const verdict = evaluate(sql, policy, dialect);
+    const effectiveCap = policy.maxRows === null ? rowCap ?? null : Math.min(rowCap ?? policy.maxRows, policy.maxRows);
     return runGated(
       conn,
       { category: verdict.categories, action: source, detail: sql },
@@ -223,8 +233,8 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
           const block = await costBlock(driver, sql);
           if (block) return { blocked: block };
 
-          const result = await runStatement<QueryRows>(driver, sql, queryAc.signal, source);
-          const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
+          const result = await runStatement<QueryRows>(driver, sql, queryAc.signal, source, timeoutMs);
+          const { rows, truncated, limit } = capRows(result.rows, effectiveCap);
           const maskedRows = mask(rows);
           const maskedResult: LogSnapshot & QueryRows = { fields: result.fields, rows: maskedRows };
           let text = JSON.stringify(resultWithMeta(result, maskedRows, truncated, limit), null, 2);
@@ -298,10 +308,14 @@ ${sql}` } },
     {
       sql: z.string().optional().describe("SQL query to execute"),
       query: z.string().optional().describe("Alias for sql"),
+      ...timeoutOption,
+      limit: z.number().int().positive().max(1_000_000).optional().describe("Max rows to return, overriding the default cap (1000)."),
     },
-    ({ sql, query }) => {
+    (args) => {
+      const { sql, query, limit } = args;
+      const timeout = (args as typeof args & { timeout?: number }).timeout;
       const statement = sql ?? query;
-      return statement ? gatedQuery(statement, "query") : Promise.resolve(missingSqlArg());
+      return statement ? gatedQuery(statement, "query", toTimeoutMs(timeout), limit) : Promise.resolve(missingSqlArg());
     },
   );
 
@@ -393,11 +407,15 @@ ${sql}` } },
       sql: z.string().optional().describe("SQL query to execute"),
       query: z.string().optional().describe("Alias for sql"),
       format: z.enum(["csv", "json"]).default("csv").describe("Export file format"),
+      ...timeoutOption,
     },
-    ({ sql, query, format }) => {
+    (args) => {
+      const { sql, query, format } = args;
+      const timeout = (args as typeof args & { timeout?: number }).timeout;
       const statement = sql ?? query;
       if (!statement) return Promise.resolve(missingSqlArg());
       const verdict = evaluate(statement, policy, dialect);
+      const timeoutMs = toTimeoutMs(timeout);
       return runGated(
         conn,
         { category: verdict.categories, action: "export_query", detail: statement },
@@ -406,7 +424,7 @@ ${sql}` } },
           const queryAc = registerQueryAbort(logId, sid);
           try {
             const driver = await getDriver(sid, conn);
-            const result = await runStatement<QueryRows>(driver, statement, queryAc.signal, "export_query");
+            const result = await runStatement<QueryRows>(driver, statement, queryAc.signal, "export_query", timeoutMs);
 
             const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
             const maskedRows = mask(rows);
@@ -434,11 +452,16 @@ ${sql}` } },
   if (on("run_saved_query")) server.tool(
     "run_saved_query",
     "Run a saved query by name",
-    { name: z.string().describe("Name of the saved query") },
-    ({ name }) => {
+    {
+      name: z.string().describe("Name of the saved query"),
+      ...timeoutOption,
+    },
+    (args) => {
+      const { name } = args;
+      const timeout = (args as typeof args & { timeout?: number }).timeout;
       const saved = getSavedQuery(conn.id, name);
       if (!saved) return Promise.resolve(err(`Saved query "${name}" not found.`));
-      return gatedQuery(saved.sql, "run_saved_query");
+      return gatedQuery(saved.sql, "run_saved_query", toTimeoutMs(timeout));
     }
   );
 

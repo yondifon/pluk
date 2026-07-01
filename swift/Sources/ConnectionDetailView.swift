@@ -321,6 +321,7 @@ struct ConnectionDetailView: View {
         DetailSection("Configuration") {
             if conn.type == "sqlite" {
                 InspectorRow("File", value: conn.config["filename"] ?? "-")
+                InspectorRow("SSH", value: conn.config["use_ssh"] == "true" ? (conn.config["ssh_host"] ?? "-") : "Off")
             } else if conn.connectionType != nil {
                 InspectorRow("Host", value: conn.config["host"] ?? "-")
                 InspectorRow("Port", value: conn.config["port"] ?? "-")
@@ -530,4 +531,3 @@ struct ConnectionDetailView: View {
     )
 }
 #endif
-

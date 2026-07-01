@@ -38,4 +38,9 @@ export function networkSqlFields(defaultPort: number): ConfigField[] {
 
 export const sqliteFields: ConfigField[] = [
   { key: "filename", label: "Path", type: "file", group: "File", required: true, placeholder: "/path/to/db.sqlite", fileTypes: ["db", "sqlite", "sqlite3"] },
+  { key: "use_ssh", label: "SSH", type: "toggle", group: "SSH" },
+  { key: "ssh_host", label: "SSH Host", type: "text", group: "SSH", showIf: { key: "use_ssh", equals: true } },
+  { key: "ssh_port", label: "SSH Port", type: "number", group: "SSH", default: 22, showIf: { key: "use_ssh", equals: true } },
+  { key: "ssh_user", label: "SSH User", type: "text", group: "SSH", showIf: { key: "use_ssh", equals: true } },
+  ...sshAuthFields({ prefix: "ssh_", group: "SSH", showIf: { key: "use_ssh", equals: true } }),
 ];

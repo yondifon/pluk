@@ -4,6 +4,10 @@ import { recordExecutedSql } from "./sqlLog.js";
 
 export const mysqlDateStrings = true;
 
+function queryConfig(sql: string, params: unknown[], timeoutMs?: number) {
+  return timeoutMs ? { sql, values: params, timeout: timeoutMs } : { sql, values: params };
+}
+
 export function createMysqlDriver(
   cfg: SqlConfig,
   host: string,
@@ -48,16 +52,16 @@ export function createMysqlDriver(
     };
 
   return {
-    async query(sql, params = []) {
-      const [rows, fields] = await pool.query(sql, params);
+    async query(sql, params = [], opts) {
+      const [rows, fields] = await pool.query(queryConfig(sql, params, opts?.timeoutMs));
       return {
         rows: rows as unknown[],
         fields: Array.isArray(fields) ? fields.map((f: mysql.FieldPacket) => f.name ?? "") : undefined,
       };
     },
 
-    async queryReadOnly(sql, params = []) {
-      const [rows, fields] = await pool.query(sql, params);
+    async queryReadOnly(sql, params = [], opts) {
+      const [rows, fields] = await pool.query(queryConfig(sql, params, opts?.timeoutMs));
       return {
         rows: rows as unknown[],
         fields: Array.isArray(fields) ? fields.map((f: mysql.FieldPacket) => f.name ?? "") : undefined,

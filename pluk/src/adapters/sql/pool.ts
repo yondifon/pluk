@@ -20,8 +20,8 @@ function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T>
   ]);
 }
 
-export function withToolTimeout<T>(work: Promise<T>, label: string): Promise<T> {
-  return withTimeout(work, TOOL_TIMEOUT_MS, label);
+export function withToolTimeout<T>(work: Promise<T>, label: string, ms: number = TOOL_TIMEOUT_MS): Promise<T> {
+  return withTimeout(work, ms, label);
 }
 
 export function withCancellable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -89,7 +89,7 @@ export async function getDriver(sessionId: string, integration: Integration): Pr
 }
 
 function createDriverEntry(key: string, sessionId: string, integration: Integration): DriverEntry {
-  const useSsh = Boolean(integration.config.use_ssh);
+  const useSsh = integration.config.use_ssh === true || integration.config.use_ssh === "true";
   const connectTimeout = useSsh ? CONNECT_TIMEOUT_SSH_MS : CONNECT_TIMEOUT_DIRECT_MS;
   const created = createDriver(integration, sessionId, () => {
     if (driverPool.get(key) === entry) evictDriverByKey(key);

@@ -13,7 +13,7 @@ export interface SqlConfig {
   database?: string;
   filename?: string;
   socket_path?: string;
-  use_ssh?: boolean;
+  use_ssh?: boolean | string;
   ssh_host?: string;
   ssh_port?: number;
   ssh_user?: string;
@@ -26,6 +26,8 @@ export interface SqlConfig {
   ssl_cert_path?: string;
   ssl_key_path?: string;
 }
+
+export type SSHConfig = Pick<SqlConfig, "filename" | "ssh_host" | "ssh_port" | "ssh_user" | "ssh_auth_type" | "ssh_key_path" | "ssh_password">;
 
 function sqlConfigFrom(integration: Integration): SqlConfig {
   return { type: integration.type, ...(integration.config as Partial<SqlConfig>) };
@@ -65,8 +67,8 @@ export interface TableStats {
 }
 
 export interface Driver {
-  query(sql: string, params?: unknown[]): Promise<QueryResult>;
-  queryReadOnly(sql: string, params?: unknown[]): Promise<QueryResult>;
+  query(sql: string, params?: unknown[], opts?: { timeoutMs?: number }): Promise<QueryResult>;
+  queryReadOnly(sql: string, params?: unknown[], opts?: { timeoutMs?: number }): Promise<QueryResult>;
   explain(sql: string): Promise<QueryResult>;
   listTables(): Promise<string[]>;
   describeTable(table: string): Promise<ColumnInfo[]>;
@@ -92,7 +94,9 @@ export async function createDriver(
   let effectivePort = cfg.port ?? defaultPort(cfg.type);
   let tunnel: { close: () => void } | null = null;
 
-  if (cfg.use_ssh && cfg.ssh_host) {
+  const useSsh = cfg.use_ssh === true || cfg.use_ssh === "true";
+
+  if (cfg.type !== "sqlite" && useSsh && cfg.ssh_host) {
     const t = await openSSHTunnel({
       host: cfg.ssh_host,
       port: cfg.ssh_port ?? 22,
@@ -125,8 +129,13 @@ export async function createDriver(
         break;
       }
       case "sqlite": {
-        const { createSqliteDriver } = await import("./sqlite.js");
-        driver = createSqliteDriver(cfg.filename!);
+        if (useSsh) {
+          const { createRemoteSqliteDriver } = await import("./sqliteRemote.js");
+          driver = createRemoteSqliteDriver(cfg, sessionId ?? `test:${integration.id}`);
+        } else {
+          const { createSqliteDriver } = await import("./sqlite.js");
+          driver = createSqliteDriver(cfg.filename!);
+        }
         break;
       }
       default:

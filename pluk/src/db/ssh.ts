@@ -13,7 +13,6 @@ import {
   resolveAgentSocket,
   type SSHConfigEntry,
 } from "../ssh/config.js";
-import { getSharedSSHClient, evictSharedSSHClient, type SSHParams } from "../ssh/client.js";
 
 export interface SSHTunnelConfig {
   host: string;
@@ -43,17 +42,6 @@ class TunnelReadinessTimeout extends Error {}
 // fails fast and loud instead of burning the retry loop / handshake budget.
 function isAuthError(message: string): boolean {
   return /permission denied|communication with agent failed|signing failed|publickey|no supported authentication|authentication failed|too many authentication failures/i.test(message);
-}
-
-function sharedParams(config: SSHTunnelConfig, username: string): SSHParams {
-  return {
-    host: config.host,
-    port: config.port,
-    user: username,
-    authType: config.authType,
-    keyPath: config.keyPath,
-    password: config.passphrase,
-  };
 }
 
 // ── SSH config helpers ────────────────────────────────────────────────────────
@@ -181,56 +169,6 @@ async function openOpenSSHTunnel(
   };
 }
 
-async function openSharedClientTunnel(
-  config: SSHTunnelConfig,
-  sessionId: string,
-  username: string,
-  onFatal?: () => void
-): Promise<Tunnel> {
-  const params = sharedParams(config, username);
-  const sshClient = await getSharedSSHClient(sessionId, params);
-  const forwardServer = createServer((socket) => {
-    sshClient.forwardOut(
-      "127.0.0.1", 0,
-      config.remoteHost, config.remotePort,
-      (err, channel) => {
-        if (err) {
-          socket.destroy();
-          evictSharedSSHClient(sessionId, params);
-          onFatal?.();
-          return;
-        }
-        socket.pipe(channel);
-        channel.pipe(socket);
-        socket.on("close", () => channel.destroy());
-        channel.on("close", () => socket.destroy());
-      }
-    );
-  });
-
-  return new Promise((resolve, reject) => {
-    forwardServer.once("error", reject);
-    forwardServer.listen(0, "127.0.0.1", () => {
-      forwardServer.removeListener("error", reject);
-      forwardServer.on("error", () => {});
-      const addr = forwardServer.address();
-      const localPort = typeof addr === "object" && addr ? addr.port : 0;
-      let intentional = false;
-      sshClient.once("close", () => {
-        forwardServer.close();
-        if (!intentional) onFatal?.();
-      });
-      resolve({
-        localPort,
-        close: () => {
-          intentional = true;
-          forwardServer.close();
-        },
-      });
-    });
-  });
-}
-
 // ── Tunnel ────────────────────────────────────────────────────────────────────
 
 export async function openSSHTunnel(
@@ -240,18 +178,21 @@ export async function openSSHTunnel(
 ): Promise<Tunnel> {
   const sshConfig = parseSSHConfig(config.host);
   const username = config.user || sshConfig.user || userInfo().username;
-  const sessionId = typeof sessionIdOrFatal === "string" ? sessionIdOrFatal : undefined;
   const onFatal = typeof sessionIdOrFatal === "function" ? sessionIdOrFatal : maybeOnFatal;
 
-  if (sessionId && !sshConfig.proxyCommand) {
-    return openSharedClientTunnel(config, sessionId, username, onFatal);
-  }
-
-  if (sshConfig.proxyCommand) {
-    // Cloudflare Access and other proxy tunnels can fail transiently on DNS or auth — retry
+  // Route agent/key tunnels through the system `ssh` binary. The in-process ssh2
+  // forwardOut channel opens but silently fails to pass data under Bun: the
+  // driver connects to a live-looking local port that never delivers a byte and
+  // dies on the connect timeout. OpenSSH forwards reliably and drives the
+  // 1Password agent via IdentityAgent. Password auth can't be fed to OpenSSH
+  // non-interactively; encrypted key files also need ssh2's passphrase support.
+  if (config.authType === "agent" || (config.authType === "key" && !config.passphrase)) {
+    // proxyCommand tunnels (e.g. Cloudflare Access) can fail transiently on DNS
+    // or auth — retry within the handshake budget. Direct tunnels get one shot.
+    const attempts = sshConfig.proxyCommand ? 3 : 1;
     let lastErr: Error | undefined;
     const deadline = Date.now() + HANDSHAKE_TIMEOUT_MS;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       const started = Date.now();
       const remaining = deadline - started;
       if (remaining <= 0) break;
@@ -262,7 +203,7 @@ export async function openSSHTunnel(
         // An auth/agent failure won't clear on retry — surface it now.
         if (isAuthError(lastErr.message)) break;
         const failedFast = Date.now() - started < FAST_RETRY_WINDOW_MS;
-        if (attempt < 3 && failedFast && !(lastErr instanceof TunnelReadinessTimeout)) {
+        if (attempt < attempts && failedFast && !(lastErr instanceof TunnelReadinessTimeout)) {
           console.warn(`[pluk] OpenSSH tunnel attempt ${attempt} failed: ${lastErr.message}. Retrying in 2s…`);
           await new Promise((r) => setTimeout(r, 2000));
         }

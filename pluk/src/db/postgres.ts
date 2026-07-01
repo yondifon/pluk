@@ -18,6 +18,10 @@ export const postgresDateTypesAsText = {
   },
 };
 
+function queryConfig(sql: string, params: unknown[], timeoutMs?: number) {
+  return timeoutMs ? { text: sql, values: params, query_timeout: timeoutMs } : { text: sql, values: params };
+}
+
 export function createPostgresDriver(
   cfg: SqlConfig,
   host: string,
@@ -68,16 +72,16 @@ export function createPostgresDriver(
     };
 
   return {
-    async query(sql, params = []) {
-      const result = await pool.query(sql, params as unknown[]);
+    async query(sql, params = [], opts) {
+      const result = await pool.query(queryConfig(sql, params as unknown[], opts?.timeoutMs));
       return { rows: result.rows, fields: result.fields.map((f) => f.name) };
     },
 
-    async queryReadOnly(sql, params = []) {
+    async queryReadOnly(sql, params = [], opts) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN READ ONLY");
-        const result = await client.query(sql, params as unknown[]);
+        const result = await client.query(queryConfig(sql, params as unknown[], opts?.timeoutMs));
         return { rows: result.rows, fields: result.fields.map((f) => f.name) };
       } finally {
         await client.query("ROLLBACK").catch(() => {});
