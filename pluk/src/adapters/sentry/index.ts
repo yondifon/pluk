@@ -4,7 +4,9 @@ import { actionAdapter, type ActionTool } from "../kit.js";
 import { sentryFields } from "./fields.js";
 import { sentryConfig, sentryRequest, type SentryConfig } from "./client.js";
 
-const AGENT_HINT = "Use this for Sentry error monitoring — list and read issues across projects, pull the latest event's stack trace and tags to debug, and resolve or ignore issues when write is permitted. Start with list_issues, then use latest_event for stack traces.";
+const LOG_FIELDS = ["timestamp", "severity", "message", "trace_id", "project"];
+
+const AGENT_HINT = "Use this for Sentry error monitoring and logs — list/read issues, pull latest issue events, query structured logs, and inspect project error events. Start with list_issues + latest_event for issue debugging, or query_logs for log search.";
 
 // Sentry's tools. Each declares its policy category, log line, and REST call;
 // gating, logging, and response shaping are handled by actionAdapter.
@@ -55,6 +57,50 @@ function sentryTools(cfg: SentryConfig): ActionTool[] {
       run: (a) => sentryRequest(cfg, "GET", `/issues/${encodeURIComponent(String(a.id))}/events/latest/`),
     },
     {
+      name: "list_events",
+      description: "List recent error events for a project, optionally with full event bodies.",
+      category: "read",
+      schema: {
+        project: z.string().optional().describe("Project slug. Defaults to the integration's project if set."),
+        period: z.string().default("24h").describe("Stats period, e.g. 15m, 24h, 7d"),
+        full: z.boolean().default(false).describe("Include full event bodies, including stacktraces."),
+        limit: z.number().int().min(1).max(100).default(25).describe("Max events to return"),
+      },
+      detail: (a) => `list_events project=${(a.project as string) ?? cfg.project ?? "*"} period=${a.period} full=${a.full} limit=${a.limit}`,
+      run: async (a) => {
+        const proj = (a.project as string | undefined) ?? cfg.project;
+        if (!proj) throw new Error("No project given. Pass project or set project_slug in the integration config.");
+        const events = await sentryRequest<unknown[]>(cfg, "GET", `/projects/${cfg.org}/${proj}/events/`, {
+          statsPeriod: a.period as string,
+          full: a.full as boolean,
+        });
+        return Array.isArray(events) ? events.slice(0, a.limit as number) : events;
+      },
+    },
+    {
+      name: "query_logs",
+      description: "Query Sentry structured logs using Explore's logs dataset.",
+      category: "read",
+      schema: {
+        query: z.string().optional().describe('Sentry log search query, e.g. "severity:error payment.failed"'),
+        project: z.string().optional().describe("Project slug or id. Defaults to the integration's project if set; omit for all projects."),
+        period: z.string().default("24h").describe("Stats period, e.g. 15m, 24h, 7d"),
+        fields: z.array(z.string()).default(LOG_FIELDS).describe("Explore fields to return. Defaults to timestamp, severity, message, trace_id, project."),
+        sort: z.string().default("-timestamp").describe("Sort field, e.g. -timestamp"),
+        limit: z.number().int().min(1).max(100).default(25).describe("Max log rows to return"),
+      },
+      detail: (a) => `query_logs project=${(a.project as string) ?? cfg.project ?? "*"} query="${(a.query as string) ?? ""}" period=${a.period} limit=${a.limit}`,
+      run: (a) => sentryRequest(cfg, "GET", `/organizations/${cfg.org}/events/`, {
+        dataset: "logs",
+        field: (a.fields as string[]).slice(0, 20),
+        query: a.query as string | undefined,
+        project: (a.project as string | undefined) ?? cfg.project ?? "-1",
+        statsPeriod: a.period as string,
+        sort: a.sort as string,
+        per_page: a.limit as number,
+      }),
+    },
+    {
       name: "update_issue",
       description: "Resolve, ignore, or reopen an issue (write).",
       category: "write",
@@ -75,7 +121,7 @@ export const sentryAdapter = actionAdapter<SentryConfig>({
   category: "observability",
   agentHint: AGENT_HINT,
   access:
-    "Read projects, issues, and event stack traces; resolve or ignore issues when write is permitted. Every action is policy-checked and recorded in the activity log.",
+    "Read projects, issues, event stack traces, project error events, and structured logs; resolve or ignore issues when write is permitted. Every action is policy-checked and recorded in the activity log.",
   configFields: sentryFields,
   client: (conn) => sentryConfig(conn),
   async testConnection(conn: Integration): Promise<void> {

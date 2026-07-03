@@ -26,7 +26,7 @@ export async function sentryRequest<T>(
   cfg: SentryConfig,
   method: string,
   path: string,
-  query?: Record<string, string | number | undefined>,
+  query?: Record<string, string | number | boolean | (string | number | boolean)[] | undefined>,
   body?: unknown,
 ): Promise<T> {
   if (!cfg.token) throw new Error("Sentry auth token is missing. Set it in the integration config.");
@@ -34,7 +34,9 @@ export async function sentryRequest<T>(
 
   const url = new URL(`${cfg.baseUrl}/api/0${path}`);
   for (const [k, v] of Object.entries(query ?? {})) {
-    if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
+    if (v === undefined || v === "") continue;
+    const values = Array.isArray(v) ? v : [v];
+    for (const value of values) url.searchParams.append(k, String(value));
   }
 
   let res: Response;

@@ -106,9 +106,9 @@ Read‑only blocks `create_issue` and `comment`.
 
 ## Sentry
 
-Error monitoring over the Sentry API (sentry.io or self‑hosted). **Action policy.**
+Error monitoring and structured log search over the Sentry API (sentry.io or self‑hosted). **Action policy.**
 
-*Agent hint: start with `list_issues`, then `latest_event` for stack traces.*
+*Agent hint: start with `list_issues`, then `latest_event` for stack traces; use `query_logs` when you need logs instead of issue groups.*
 
 | Field | Notes |
 | --- | --- |
@@ -123,6 +123,8 @@ Error monitoring over the Sentry API (sentry.io or self‑hosted). **Action poli
 | `list_issues` | read | List issues, newest first; scoped to the default project if set. |
 | `get_issue` | read | Get one issue by id or short id (e.g. `BACKEND-1A`). |
 | `latest_event` | read | Latest event for an issue, with stacktrace and tags. |
+| `list_events` | read | Recent project error events, optionally with full event bodies. |
+| `query_logs` | read | Query Sentry structured logs through Explore's `logs` dataset. |
 | `update_issue` | write | Resolve, ignore, or reopen an issue. |
 
 Read‑only blocks `update_issue`.
