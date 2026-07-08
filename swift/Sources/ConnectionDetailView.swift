@@ -4,13 +4,14 @@ import SwiftUI
 // MARK: - MCP client config snippets
 
 enum MCPClient: String, CaseIterable, Identifiable {
-    case opencode, claude, cursor, windsurf
+    case opencode, codex, claude, cursor, windsurf
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .opencode: "opencode"
+        case .codex: "Codex"
         case .claude: "Claude"
         case .cursor: "Cursor"
         case .windsurf: "Windsurf"
@@ -20,6 +21,7 @@ enum MCPClient: String, CaseIterable, Identifiable {
     var configPath: String {
         switch self {
         case .opencode: "~/.opencode/opencode.jsonc"
+        case .codex: "~/.codex/config.toml"
         case .claude: "~/Library/Application Support/Claude/claude_desktop_config.json"
         case .cursor: "~/.cursor/mcp.json"
         case .windsurf: "~/.codeium/windsurf/mcp_config.json"
@@ -40,6 +42,11 @@ enum MCPClient: String, CaseIterable, Identifiable {
                 }
               }
             }
+            """
+        case .codex:
+            return """
+            [mcp_servers.\(key)]
+            url = "\(url)"
             """
         case .claude:
             // Claude Desktop wraps remote servers via mcp-remote (no native HTTP yet).

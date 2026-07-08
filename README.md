@@ -81,7 +81,22 @@ Set `APPLE_IDENTITY` to code-sign the bundle: `make bundle APPLE_IDENTITY="Devel
 1. Open Pluk from the menu bar and add an integration. Pick a type — a database (host, port, credentials, optional SSH and read-only flag) or Linear (API key) — and the form shows just that adapter's settings.
 2. Test the integration from the detail view.
 3. Copy its MCP URL — one URL per integration, so each agent only sees what you intend.
-4. Add it to your MCP client. Example (`opencode.jsonc`):
+4. Add it to your MCP client. Examples:
+
+   Codex (`~/.codex/config.toml`):
+
+   ```toml
+   [mcp_servers.my-prod-db]
+   url = "http://localhost:4242/mcp/<token>"
+   ```
+
+   Or via CLI:
+
+   ```bash
+   codex mcp add my-prod-db --url http://localhost:4242/mcp/<token>
+   ```
+
+   opencode (`opencode.jsonc`):
 
    ```jsonc
    {
