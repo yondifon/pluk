@@ -149,6 +149,26 @@ struct ContentView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(Color.pageSurface)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Text("pluk")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text("LOCAL")
+                    .font(.dev(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .tracking(0.5)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.pageSurface)
+            .overlay(alignment: .bottom) { Divider() }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -157,6 +177,7 @@ struct ContentView: View {
                     Label("New Integration", systemImage: "plus")
                 }
                 .help("New Integration")
+                .keyboardShortcut("n", modifiers: .command)
 
                 Button {
                     selectedID = store.createGroup()
@@ -164,6 +185,7 @@ struct ContentView: View {
                     Label("New Group", systemImage: "square.stack.3d.up")
                 }
                 .help("New Group")
+                .keyboardShortcut("n", modifiers: [.command, .shift])
             }
         }
     }
@@ -441,6 +463,7 @@ struct EnvTag: View {
 
 private struct ServerStatusBanner: View {
     let serverManager: ServerManager
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 8) {
@@ -466,10 +489,10 @@ private struct ServerStatusBanner: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
-        .background(.bar)
+        .background(Color.pageSurface)
         .overlay(alignment: .top) { Divider() }
         .transition(.move(edge: .bottom).combined(with: .opacity))
-        .animation(.easeInOut(duration: 0.2), value: serverManager.status == .stopped)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: serverManager.status == .stopped)
     }
 }
 
@@ -479,21 +502,27 @@ struct EmptyStateView: View {
     let onAdd: () -> Void
 
     var body: some View {
-        VStack(spacing: 14) {
-            Text("pluk")
-                .font(.system(size: 52, weight: .ultraLight))
-                .tracking(-1)
-
-            Text("Plug any service into your AI agents — databases, Linear, and more")
-                .font(.system(size: 13))
-                .foregroundColor(.secondary)
-
+        VStack(alignment: .leading, spacing: 10) {
+            Text("NO INTEGRATION SELECTED")
+                .font(.dev(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.45)
+            Text("Connect a service to get started")
+                .font(.system(size: 20, weight: .semibold))
+                .textSelection(.disabled)
+            Text("Add a database, Linear workspace, or another local MCP endpoint. Pluk keeps the server and policy controls on this Mac.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineSpacing(2)
+                .frame(maxWidth: 430, alignment: .leading)
             Button("New Integration", action: onAdd)
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .padding(.top, 4)
+                .controlSize(.regular)
+                .keyboardShortcut("n", modifiers: .command)
+                .padding(.top, 6)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .padding(32)
     }
 }
 

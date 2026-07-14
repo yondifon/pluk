@@ -31,7 +31,7 @@ prefix is what the agent sees on every tool.
 3. Optionally set per‑member **overrides** (e.g. a default team for a Linear
    member) in the same sheet.
 4. Copy the group's MCP URL from its detail view and paste it into your AI client
-   (Codex, opencode, Claude Desktop, Cursor, or Windsurf) — same as an
+   (Codex, opencode, Claude Code, Cursor, Windsurf, or Antigravity) — same as an
    [integration](./integrations.md), one URL for all members.
 
 You build a group from integrations that already exist, so add those first.

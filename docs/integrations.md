@@ -16,7 +16,7 @@ http://localhost:4242/mcp/<token>
 
 One URL per integration, so each agent only sees the one service you handed it.
 Paste the URL into your MCP client (the detail view has ready‑made snippets for
-Codex, opencode, Claude Desktop, Cursor, and Windsurf).
+Codex, opencode, Claude Code, Cursor, Windsurf, and Antigravity).
 
 ## Adding one
 

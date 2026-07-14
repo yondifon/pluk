@@ -12,9 +12,8 @@ struct GroupDetailView: View {
     let onDelete: () -> Void
 
     @State private var urlCopied = false
-    @State private var snippetCopied = false
-    @State private var selectedClient: MCPClient = .opencode
     @State private var tab: GroupTab = .overview
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum GroupTab: String, CaseIterable {
         case overview = "Overview"
@@ -35,6 +34,7 @@ struct GroupDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            Divider()
             tabBar
             Divider()
             switch tab {
@@ -42,7 +42,7 @@ struct GroupDetailView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         endpointSection
-                        configSnippetSection
+                        ConfigSnippetSection(mcpKey: group.mcpKey, mcpURL: group.mcpURL)
                         membersSection
                     }
                     .padding(18)
@@ -113,65 +113,24 @@ struct GroupDetailView: View {
 
     private var endpointSection: some View {
         DetailSection("MCP endpoint") {
-            HStack(spacing: 10) {
-                Text(group.mcpURL)
-                    .font(.dev(size: 12))
-                    .textSelection(.enabled)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer()
-                Button(urlCopied ? "Copied!" : "Copy") {
-                    copy(group.mcpURL) { urlCopied = $0 }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .tint(urlCopied ? .green : .accentColor)
-                .animation(.easeInOut(duration: 0.15), value: urlCopied)
-            }
-            .padding(12)
-        }
-    }
-
-    // MARK: - Config samples (one endpoint, all member tools)
-
-    private var configSnippet: String {
-        selectedClient.snippet(key: group.mcpKey, url: group.mcpURL)
-    }
-
-    private var configSnippetSection: some View {
-        DetailSection("Config") {
-            HStack(spacing: 8) {
-                Text("Client")
-                    .font(.dev(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
-                    .textCase(.uppercase)
-                Picker("", selection: $selectedClient) {
-                    ForEach(MCPClient.allCases) { client in
-                        Text(client.label).tag(client)
+            InspectorRow("URL") {
+                HStack(spacing: 8) {
+                    Text(group.mcpURL)
+                        .font(.dev(size: 12))
+                        .foregroundColor(.primary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Button(urlCopied ? "Copied!" : "Copy") {
+                        copy(group.mcpURL) { urlCopied = $0 }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(urlCopied ? .green : .accentColor)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: urlCopied)
                 }
-                .pickerStyle(.menu)
-                .fixedSize()
-                Spacer()
-                Button(snippetCopied ? "Copied!" : "Copy") {
-                    copy(configSnippet) { snippetCopied = $0 }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(snippetCopied ? .green : nil)
-                .animation(.easeInOut(duration: 0.15), value: snippetCopied)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-
-            Divider()
-
-            Text(configSnippet)
-                .font(.dev(size: 11))
-                .foregroundColor(.primary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
         }
     }
 

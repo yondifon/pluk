@@ -4,7 +4,7 @@ import SwiftUI
 // MARK: - MCP client config snippets
 
 enum MCPClient: String, CaseIterable, Identifiable {
-    case opencode, codex, claude, cursor, windsurf
+    case opencode, codex, claudeCode, cursor, windsurf, antigravity
 
     var id: String { rawValue }
 
@@ -12,21 +12,29 @@ enum MCPClient: String, CaseIterable, Identifiable {
         switch self {
         case .opencode: "opencode"
         case .codex: "Codex"
-        case .claude: "Claude"
+        case .claudeCode: "Claude Code"
         case .cursor: "Cursor"
         case .windsurf: "Windsurf"
+        case .antigravity: "Antigravity"
         }
     }
 
+    // Project-scoped config, relative to the repo root, for clients that support
+    // it — Pluk hands out one URL per project, so per-project config is the
+    // intended home. Windsurf and Antigravity have no project scope, so they
+    // fall back to their single global file.
     var configPath: String {
         switch self {
-        case .opencode: "~/.opencode/opencode.jsonc"
-        case .codex: "~/.codex/config.toml"
-        case .claude: "~/Library/Application Support/Claude/claude_desktop_config.json"
-        case .cursor: "~/.cursor/mcp.json"
+        case .opencode: "opencode.json"
+        case .codex: ".codex/config.toml"
+        case .claudeCode: ".mcp.json"
+        case .cursor: ".cursor/mcp.json"
         case .windsurf: "~/.codeium/windsurf/mcp_config.json"
+        case .antigravity: "~/.gemini/config/mcp_config.json"
         }
     }
+
+    var configLanguage: String { self == .codex ? "toml" : "json" }
 
     func snippet(key: String, url: String) -> String {
         switch self {
@@ -48,15 +56,14 @@ enum MCPClient: String, CaseIterable, Identifiable {
             [mcp_servers.\(key)]
             url = "\(url)"
             """
-        case .claude:
-            // Claude Desktop wraps remote servers via mcp-remote (no native HTTP yet).
-            // --allow-http is required for non-HTTPS (localhost) URLs.
+        case .claudeCode:
+            // Claude Code speaks HTTP transport natively — no mcp-remote wrapper.
             return """
             {
               "mcpServers": {
                 "\(key)": {
-                  "command": "bunx",
-                  "args": ["mcp-remote", "\(url)", "--allow-http"]
+                  "type": "http",
+                  "url": "\(url)"
                 }
               }
             }
@@ -72,7 +79,9 @@ enum MCPClient: String, CaseIterable, Identifiable {
               }
             }
             """
-        case .windsurf:
+        case .windsurf, .antigravity:
+            // Both read mcpServers with serverUrl for remote (Streamable HTTP)
+            // servers; Antigravity's config is shared by its IDE and CLI.
             return """
             {
               "mcpServers": {
@@ -82,6 +91,81 @@ enum MCPClient: String, CaseIterable, Identifiable {
               }
             }
             """
+        }
+    }
+}
+
+// MARK: - Config snippet section
+
+// Shared "Config" card for integration and group detail views: client picker +
+// one Copy action above a flat, chrome-less snippet. The snippet renders
+// embedded so the DetailSection card stays the only surface.
+struct ConfigSnippetSection: View {
+    let mcpKey: String
+    let mcpURL: String
+
+    @State private var selectedClient: MCPClient = .opencode
+    @State private var copied = false
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var snippet: String {
+        selectedClient.snippet(key: mcpKey, url: mcpURL)
+    }
+
+    private var snippetMarkdown: String {
+        "```\(selectedClient.configLanguage)\n\(snippet)\n```"
+    }
+
+    var body: some View {
+        DetailSection("Config") {
+            HStack(spacing: 8) {
+                Text("Client")
+                    .font(.dev(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .textCase(.uppercase)
+                Picker("", selection: $selectedClient) {
+                    ForEach(MCPClient.allCases) { client in
+                        Text(client.label).tag(client)
+                    }
+                }
+                .pickerStyle(.menu)
+                .fixedSize()
+                Spacer()
+                Button(copied ? "Copied!" : "Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(snippet, forType: .string)
+                    copied = true
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(1.5))
+                        copied = false
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(copied ? .green : nil)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: copied)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 5) {
+                    Text("Add to")
+                        .foregroundColor(.secondary)
+                    Text(selectedClient.configPath)
+                        .font(.dev(size: 11, weight: .semibold))
+                        .textSelection(.enabled)
+                }
+                .font(.dev(size: 11))
+
+                MarkdownResponseView(markdown: snippetMarkdown, embedded: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .codeBlockSurface(cornerRadius: 6)
+            }
+            .padding(10)
         }
     }
 }
@@ -113,9 +197,8 @@ struct ConnectionDetailView: View {
 
     @State private var selectedTab: DetailTab = .overview
     @State private var urlCopied = false
-    @State private var snippetCopied = false
-    @State private var selectedClient: MCPClient = .opencode
     @State private var testStatus: TestStatus = .idle
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum TestStatus { case idle, testing, ok, fail(String) }
 
@@ -225,7 +308,7 @@ struct ConnectionDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 mcpURLSection
-                configSnippetSection
+                ConfigSnippetSection(mcpKey: conn.mcpKey, mcpURL: conn.mcpURL)
                 connectionDetailsSection
             }
             .padding(18)
@@ -235,7 +318,7 @@ struct ConnectionDetailView: View {
     // MARK: - MCP URL
 
     private var mcpURLSection: some View {
-        DetailSection("MCP") {
+        DetailSection("MCP endpoint") {
             InspectorRow("URL") {
                 HStack(spacing: 8) {
                     Text(conn.mcpURL)
@@ -268,58 +351,9 @@ struct ConnectionDetailView: View {
             }
         }
         .buttonStyle(.borderedProminent)
-        .controlSize(.regular)
+        .controlSize(.small)
         .tint(urlCopied ? .green : .accentColor)
-        .animation(.easeInOut(duration: 0.15), value: urlCopied)
-    }
-
-    // MARK: - Config snippet
-
-    private var configSnippet: String {
-        selectedClient.snippet(key: conn.mcpKey, url: conn.mcpURL)
-    }
-
-    private var configSnippetSection: some View {
-        DetailSection("Config") {
-            HStack(spacing: 8) {
-                Text("Client")
-                    .font(.dev(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
-                    .textCase(.uppercase)
-                Picker("", selection: $selectedClient) {
-                    ForEach(MCPClient.allCases) { client in
-                        Text(client.label).tag(client)
-                    }
-                }
-                .pickerStyle(.menu)
-                .fixedSize()
-                Spacer()
-                Button(snippetCopied ? "Copied!" : "Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(configSnippet, forType: .string)
-                    snippetCopied = true
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(1.5))
-                        snippetCopied = false
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(snippetCopied ? .green : nil)
-                .animation(.easeInOut(duration: 0.15), value: snippetCopied)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-
-            Divider()
-
-            Text(configSnippet)
-                .font(.dev(size: 11))
-                .foregroundColor(.primary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: urlCopied)
     }
 
     // MARK: - Connection details

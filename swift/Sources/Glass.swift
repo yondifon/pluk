@@ -33,53 +33,59 @@ struct GlassGroup<Content: View>: View {
     var body: some View { content }
 }
 
+extension Color {
+    /// Uniform page surface — white in light mode, content-dark in dark mode.
+    /// Window, sidebar, detail, sheets, and section cards all share this so the
+    /// app reads as one continuous surface, not gray-page-with-white-cards.
+    static let pageSurface = Color(nsColor: .textBackgroundColor)
+
+    /// A gently "projected" fill for content we want to set apart — code blocks,
+    /// config snippets, data tables. Just a hair off the page so it reads as a
+    /// recessed panel, never a hard slab.
+    static let projectedSurface = Color.secondary.opacity(0.06)
+}
+
 extension View {
-    /// Solid default window backing (white in light mode).
+    /// Uniform white/dark page backing for the window.
     func glassWindowBackground() -> some View {
-        background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
+        background(Color.pageSurface.ignoresSafeArea())
     }
 
-    /// Solid backing for sheets/panels.
+    /// Uniform page backing for sheets/panels.
     func glassPanelBackground() -> some View {
-        background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
+        background(Color.pageSurface.ignoresSafeArea())
     }
 }
 
 // MARK: - Shared surfaces & rows
 
 extension View {
-    /// Solid card surface — a regular control-background fill with a hairline edge.
+    /// Section card — the uniform page fill delineated by a hairline, so groups
+    /// read as one surface with the rest of the app rather than a lighter slab.
     func cardSurface(cornerRadius: CGFloat = 8) -> some View {
         self
             .background(
-                Color(nsColor: .controlBackgroundColor),
-                in: .rect(cornerRadius: cornerRadius)
+                Color.pageSurface,
+                in: .rect(cornerRadius: min(cornerRadius, 5))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: min(cornerRadius, 5), style: .continuous)
+                    .stroke(Color.primary.opacity(0.10), lineWidth: 0.5)
             )
     }
 
-    /// Inset surface for code / data blocks (config snippets, result tables) —
-    /// a subtle translucent fill + hairline so they read as a distinct block over
-    /// the card without the opaque slab a solid window color would paint.
+    /// Projected surface for code / data blocks (config snippets, result tables)
+    /// — a slight grey fill, no border, so the content reads as a recessed panel
+    /// inside its card, never a card-in-a-card.
     func codeBlockSurface(cornerRadius: CGFloat = 6) -> some View {
-        self
-            .background(
-                Color.secondary.opacity(0.05),
-                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-            )
+        self.background(
+            Color.projectedSurface,
+            in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        )
     }
 }
 
-/// A titled card: uppercase section label over a `cardSurface()`-wrapped group of
-/// rows. Shared by the detail inspector and the add/edit forms so sections look
-/// identical across surfaces.
+/// A titled inspector section: a restrained label over a flat group of rows.
 struct DetailSection<Content: View>: View {
     let title: String
     let content: Content
@@ -92,7 +98,7 @@ struct DetailSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(.dev(size: 11, weight: .semibold))
+                .font(.dev(size: 10, weight: .semibold))
                 .foregroundColor(.secondary)
                 .textCase(.uppercase)
                 .padding(.bottom, 6)

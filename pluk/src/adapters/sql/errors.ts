@@ -1,4 +1,6 @@
-export type SqlErrorCategory = "auth_failed" | "tunnel_failed" | "query_failed" | "connection_failed";
+import { isSshPending } from "../../ssh/pending.js";
+
+export type SqlErrorCategory = "auth_failed" | "tunnel_failed" | "query_failed" | "connection_failed" | "pending_approval";
 
 export interface SqlErrorInfo {
   category: SqlErrorCategory;
@@ -11,6 +13,15 @@ export function classifySqlError(err: unknown): SqlErrorInfo {
   const e = err as { message?: string; code?: string };
   const msg = e?.message ?? String(err);
   const code = e?.code;
+
+  if (isSshPending(err)) {
+    return {
+      category: "pending_approval",
+      message: "SSH connection is waiting for approval.",
+      hint: "Approve the 1Password/SSH agent prompt (or finish the proxy login), then retry — the connection keeps going in the background.",
+      code,
+    };
+  }
 
   if (/communication with agent failed|agent refused operation|signing failed .* agent|SSH_AUTH_SOCK|open agent|could not open a connection to your authentication agent|No reply from server/i.test(msg)) {
     return {

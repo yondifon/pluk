@@ -63,6 +63,7 @@ final class ToastCenter {
 struct ToastOverlay: View {
     let center: ToastCenter
     var onRetry: (String) -> Void
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 8) {
@@ -76,7 +77,7 @@ struct ToastOverlay: View {
         .padding(.top, 10)
         .padding(.trailing, 14)
         .frame(maxWidth: .infinity, alignment: .topTrailing)
-        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: center.toasts)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: center.toasts)
         .allowsHitTesting(true)
     }
 }
@@ -123,9 +124,9 @@ private struct ToastCard: View {
         .padding(.horizontal, 13)
         .padding(.vertical, 11)
         .frame(width: 320, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .background(.bar, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .strokeBorder(accent.opacity(0.35), lineWidth: 1)
         )
         .overlay(alignment: .leading) {

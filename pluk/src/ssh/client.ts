@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from "fs";
 import { homedir, userInfo } from "os";
 import { Duplex } from "stream";
 import { onSessionClose } from "../mcp/pool.js";
+import { SSH_CONNECT_RESPAWN_MS, SSH_CONNECT_WAIT_MS, sshPendingError } from "./pending.js";
 import {
   expandHome,
   parseSSHConfig,
@@ -120,6 +121,9 @@ export function connectSSH(p: SSHParams): Promise<Client> {
 
 interface Entry {
   client: Promise<Client>;
+  startedAt: number;
+  settled: boolean;
+  interactive: boolean; // agent/key auth can block on an approval prompt
 }
 
 const pool = new Map<string, Entry>();
@@ -143,14 +147,34 @@ function sharedKey(sessionId: string, p: SSHParams): string {
 export function getSharedSSHClient(sessionId: string, p: SSHParams): Promise<Client> {
   const key = sharedKey(sessionId, p);
   const existing = pool.get(key);
-  if (existing) return existing.client;
+  if (existing) {
+    // A connect pending past the respawn window is doomed — its approval
+    // prompt expired unseen. Kill it and fall through to a fresh connect so a
+    // fresh prompt can appear. Otherwise reuse it under the bounded wait.
+    if (existing.settled || Date.now() - existing.startedAt <= SSH_CONNECT_RESPAWN_MS) {
+      return awaitReady(existing);
+    }
+    evictByKey(key);
+  }
 
   const client = connectSSH(p);
-  const entry: Entry = { client };
+  const entry: Entry = { client, startedAt: Date.now(), settled: false, interactive: p.authType !== "password" };
+  client.then(() => { entry.settled = true; }, () => { entry.settled = true; });
   pool.set(key, entry);
   client.then((c) => c.on("close", () => { if (pool.get(key) === entry) evictByKey(key); }))
     .catch(() => { if (pool.get(key) === entry) pool.delete(key); });
-  return client;
+  return awaitReady(entry);
+}
+
+// Bound a caller's wait on an in-flight connect that may be blocked on an
+// interactive approval (1Password confirm, proxy browser login). The connect
+// keeps running; once approved it stays pooled for the next call.
+function awaitReady(entry: Entry): Promise<Client> {
+  if (entry.settled || !entry.interactive) return entry.client;
+  return Promise.race([
+    entry.client,
+    new Promise<Client>((_, reject) => setTimeout(() => reject(sshPendingError()), SSH_CONNECT_WAIT_MS)),
+  ]);
 }
 
 export function evictSharedSSHClient(sessionId: string, p: SSHParams): void {

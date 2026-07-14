@@ -23,6 +23,7 @@ import { buildInstructions } from "../../mcp/instructions.js";
 import { ok, err, runGated, type ToolResult, type LogSnapshot } from "../kit.js";
 import type { ToolHost } from "../../mcp/namespace.js";
 import { formatSqlError } from "./errors.js";
+import { isSshPending } from "../../ssh/pending.js";
 
 // Human label for a SQL adapter id — single source for the manifest and the
 // agent-facing instructions so they never drift.
@@ -131,8 +132,13 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
       const driver = await getDriver(sid, conn);
       return await withToolTimeout((async (): Promise<ToolResult> => ok(await fn(driver)))(), label);
     } catch (e) {
-      evictDriver(sid, conn.id);
-      logError(`tool ${label} failed`, e, { integration: conn.name, type: conn.type });
+      // A connect awaiting an interactive approval isn't broken — evicting it
+      // would close the tunnel the moment the user approves. Leave it in the
+      // pool so the approval lands and the next retry succeeds.
+      if (!isSshPending(e)) {
+        evictDriver(sid, conn.id);
+        logError(`tool ${label} failed`, e, { integration: conn.name, type: conn.type });
+      }
       return err(formatSqlError(e));
     }
   }
@@ -211,6 +217,7 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
   const queryGateOpts = {
     classifyError: (msg: string) => (msg.includes("cancelled") ? "cancelled" : "error") as "cancelled" | "error",
     onError: (e: unknown) => {
+      if (isSshPending(e)) return;
       evictDriver(sessionIdRef.value, conn.id);
       logError("query tool failed", e, { integration: conn.name, type: conn.type });
     },
@@ -296,7 +303,7 @@ ${sql}` } },
           return { contents: [{ uri: "schema://full", mimeType: "text/plain", text }] };
         })(), "schema_resource");
       } catch (err) {
-        evictDriver(sid, conn.id);
+        if (!isSshPending(err)) evictDriver(sid, conn.id);
         return { contents: [{ uri: "schema://full", mimeType: "text/plain", text: `Error: ${(err as Error).message}` }] };
       }
     }

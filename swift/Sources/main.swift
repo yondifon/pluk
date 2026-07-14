@@ -110,7 +110,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.isOpaque = true
-        window.backgroundColor = .windowBackgroundColor
+        window.backgroundColor = .textBackgroundColor
         window.delegate = self
         // Don't let the window shrink below the toolbar's intrinsic width, or its
         // trailing actions clip off-screen with no way to scroll to them.

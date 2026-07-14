@@ -20,6 +20,7 @@ struct LogsTab: View {
     @State private var expandedId: Int? = nil
     @State private var showRetentionPicker = false
     @State private var pollTimer: Timer? = nil
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum VerdictFilter: String, CaseIterable {
         case all = "All"
@@ -296,6 +297,7 @@ private struct LogEntryRow: View {
     @State private var copiedSQL = false
     @State private var copiedResult = false
     @State private var showResponseSheet = false
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // The best full response to copy/open: the raw text the tool returned,
     // falling back to the stored result rows, then the verdict reason.
@@ -438,7 +440,7 @@ private struct LogEntryRow: View {
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default) { onToggle() }
         .background(isExpanded ? Color.accentColor.opacity(0.04) : .clear)
-        .animation(.easeInOut(duration: 0.12), value: isExpanded)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.12), value: isExpanded)
         .sheet(isPresented: $showResponseSheet) {
             ResponseSheet(title: entry.sql, text: fullResponse ?? "")
         }
@@ -661,15 +663,21 @@ private struct ResultPreview: View {
 
 // MARK: - Raw response (full tool output in an expanded log entry)
 
-// Shows the full agent-visible response inline. Short responses render whole;
-// long ones are clamped with an "Open" affordance to a focused, scrollable sheet.
+// Shows the full agent-visible response inline using the same Markdown renderer
+// as the focused response sheet. Long responses keep an "Open" affordance for
+// keyboard-friendly inspection in a larger surface.
 private struct ResponseTextBlock: View {
     let text: String
     let onOpen: () -> Void
 
-    private static let inlineLineCap = 16
-    private var lineCount: Int { text.reduce(1) { $1 == "\n" ? $0 + 1 : $0 } }
-    private var isLong: Bool { lineCount > Self.inlineLineCap || text.count > 1400 }
+    // Inline is a cheap teaser only. The full response can be megabytes of
+    // minified JSON; pretty-printing or highlighting all of it to show a peek is
+    // what froze the row on expand. Slice raw first, format only the slice.
+    private static let previewLines = 10
+    private static let previewChars = 1200
+
+    @State private var preview = ""
+    @State private var moreToShow = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -679,7 +687,7 @@ private struct ResponseTextBlock: View {
                     .foregroundColor(.secondary)
                     .tracking(0.4)
                 Spacer()
-                if isLong {
+                if moreToShow {
                     Button(action: onOpen) {
                         Label("Open", systemImage: "arrow.up.left.and.arrow.down.right")
                             .font(.dev(size: 9.5, weight: .medium))
@@ -689,33 +697,45 @@ private struct ResponseTextBlock: View {
                     .help("Open the full response in a window")
                 }
             }
-            Text(text)
-                .font(.dev(size: 10.5))
-                .foregroundColor(.primary.opacity(0.8))
-                .lineLimit(isLong ? Self.inlineLineCap : nil)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            MarkdownResponseView(markdown: preview, embedded: true)
                 .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .codeBlockSurface(cornerRadius: 5)
-            if isLong {
-                Text("\(lineCount) lines — Open to see the full response")
+            if moreToShow {
+                Text("Preview truncated — Open for the full, formatted response")
                     .font(.dev(size: 9))
                     .foregroundColor(.secondary)
             }
         }
+        .task(id: text) { buildPreview() }
+    }
+
+    private func buildPreview() {
+        let rawLines = text.components(separatedBy: "\n")
+        let slice = rawLines.prefix(Self.previewLines).joined(separator: "\n")
+        let capped = String(slice.prefix(Self.previewChars))
+        moreToShow = rawLines.count > Self.previewLines || text.count > capped.count
+        // Formatting a ~1 KB slice is cheap; if the slice isn't valid JSON on its
+        // own it just renders as-is.
+        preview = ResponseFormatter.formatted(capped)
     }
 }
 
-// Focused, resizable view of a full response: scrollable, selectable, copyable.
+// Focused, resizable view of a full response: pretty-printed, scrollable,
+// selectable, copyable. Reader controls the point size and line height (both
+// persisted) so long reviews stay legible.
 private struct ResponseSheet: View {
     let title: String
     let text: String
     @SwiftUI.Environment(\.dismiss) private var dismiss
     @State private var copied = false
+    @State private var display = ""
+    @AppStorage("responseFontSize") private var fontSize: Double = 13
+    @AppStorage("responseLineHeight") private var lineHeight: Double = 4
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Response").font(.system(size: 13, weight: .semibold))
                     Text(title)
@@ -725,6 +745,7 @@ private struct ResponseSheet: View {
                         .truncationMode(.middle)
                 }
                 Spacer()
+                typeControls
                 Button(copied ? "Copied" : "Copy") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
@@ -738,15 +759,68 @@ private struct ResponseSheet: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             Divider()
-            ScrollView {
-                Text(text)
-                    .font(.dev(size: 12))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
+            Group {
+                if display.isEmpty {
+                    ProgressView("Formatting…")
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    let block = Self.singleCodeBlock(display)
+                    CodeTextView(
+                        code: block?.code ?? display,
+                        language: block?.language ?? "text",
+                        fontSize: CGFloat(fontSize),
+                        lineSpacing: CGFloat(lineHeight)
+                    )
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 680, height: 560)
+        .frame(minWidth: 560, idealWidth: 780, maxWidth: .infinity,
+               minHeight: 460, idealHeight: 660, maxHeight: .infinity)
         .glassPanelBackground()
+        .task {
+            guard display.isEmpty else { return }
+            // Off the main actor: pretty-printing a large payload must not block
+            // the sheet from appearing.
+            display = await Task.detached { ResponseFormatter.formatted(text) }.value
+        }
+    }
+
+    // When the formatted response is a single fenced block (the usual case —
+    // pretty-printed JSON), unwrap it so the code viewer gets clean source and
+    // the right language. Mixed prose falls back to rendering the raw text.
+    private static func singleCodeBlock(_ s: String) -> (code: String, language: String)? {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("```"), trimmed.hasSuffix("```"),
+              trimmed.components(separatedBy: "```").count == 3 else { return nil }
+        var lines = trimmed.components(separatedBy: "\n")
+        let language = String(lines.removeFirst().dropFirst(3))
+            .trimmingCharacters(in: .whitespaces)
+        if lines.last?.trimmingCharacters(in: .whitespaces) == "```" { lines.removeLast() }
+        return (lines.joined(separator: "\n"), language.isEmpty ? "text" : language)
+    }
+
+    // Font size + line-height steppers. Small, monospaced-digit readout so the
+    // header width doesn't jump as the numbers change.
+    private var typeControls: some View {
+        HStack(spacing: 10) {
+            Stepper(value: $fontSize, in: 10...24, step: 1) {
+                HStack(spacing: 3) {
+                    Image(systemName: "textformat.size").font(.system(size: 10))
+                    Text("\(Int(fontSize))").font(.dev(size: 11)).monospacedDigit()
+                }
+            }
+            .controlSize(.small)
+            .fixedSize()
+            .help("Text size")
+
+            Stepper(value: $lineHeight, in: 0...14, step: 1) {
+                Image(systemName: "arrow.up.and.down.text.horizontal").font(.system(size: 11))
+            }
+            .controlSize(.small)
+            .fixedSize()
+            .help("Line height")
+        }
     }
 }

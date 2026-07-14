@@ -4,6 +4,7 @@ import { userInfo } from "os";
 import type { Integration } from "../../store/integrations.js";
 import { onSessionClose } from "../../mcp/pool.js";
 import { connectSSH, evictSharedSSHClient, getSharedSSHClient, type SSHParams } from "../../ssh/client.js";
+import { isSshPending } from "../../ssh/pending.js";
 
 // Remote command execution over SSH for the ssh adapter. Connections are cached
 // per (session, integration) and reused across tool calls, so an agent-confirm
@@ -147,9 +148,11 @@ export async function runCommand(
     return await execOnce(client, command, timeoutMs);
   } catch (err) {
     // A command timeout leaves the SSH connection healthy — keep it so the next
-    // call doesn't trigger a fresh agent (1Password) confirm. Any other failure
+    // call doesn't trigger a fresh agent (1Password) confirm. A connect still
+    // waiting on an interactive approval must also stay pooled, or evicting it
+    // would kill the tunnel the moment the user approves. Any other failure
     // may mean a dead connection, so evict and reconnect next time.
-    if (!(err instanceof CommandTimeoutError)) {
+    if (!(err instanceof CommandTimeoutError) && !isSshPending(err)) {
       evictByKey(k);
       evictSharedSSHClient(sessionId, params(conn));
     }

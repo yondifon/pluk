@@ -2,6 +2,7 @@ import type { Integration } from "../../store/integrations.js";
 import { createDriver, type Driver } from "../../db/index.js";
 import { recordHealth } from "../../mcp/health.js";
 import { onSessionClose, sessionSignal } from "../../mcp/pool.js";
+import { SSH_CONNECT_RESPAWN_MS, SSH_CONNECT_WAIT_MS, sshPendingError } from "../../ssh/pending.js";
 import { classifySqlError, humanizeSqlError } from "./errors.js";
 
 const IDLE_MS = 5 * 60 * 1000;
@@ -41,6 +42,9 @@ interface DriverEntry {
   driver: Promise<Driver>;
   idleTimer: ReturnType<typeof setTimeout>;
   lastUsed: number;
+  startedAt: number;
+  settled: boolean;
+  useSsh: boolean;
   validating?: Promise<Driver>;
 }
 
@@ -79,6 +83,22 @@ export async function getDriver(sessionId: string, integration: Integration): Pr
   const existing = driverPool.get(key);
   if (existing) {
     resetIdleTimer(key, existing);
+
+    // An SSH connect still in flight is usually blocked on an interactive
+    // approval (1Password confirm, proxy browser login). Don't weld this call
+    // — and every retry — to it for the whole connect budget: wait briefly,
+    // then surface a "waiting for approval" error while the connect keeps
+    // going. A connect pending past the respawn window is doomed (its prompt
+    // expired unseen), so kill it and spawn fresh to trigger a fresh prompt.
+    if (existing.useSsh && !existing.settled) {
+      if (Date.now() - existing.startedAt <= SSH_CONNECT_RESPAWN_MS) {
+        existing.lastUsed = Date.now();
+        return awaitConnect(existing);
+      }
+      evictDriverByKey(key);
+      return awaitConnect(createDriverEntry(key, sessionId, integration));
+    }
+
     const idleFor = Date.now() - existing.lastUsed;
     if (idleFor < STALE_AFTER_MS && !existing.validating) {
       existing.lastUsed = Date.now();
@@ -89,7 +109,17 @@ export async function getDriver(sessionId: string, integration: Integration): Pr
     return existing.validating;
   }
 
-  return createDriverEntry(key, sessionId, integration).driver;
+  return awaitConnect(createDriverEntry(key, sessionId, integration));
+}
+
+// Bound a tool call's wait on an in-flight SSH connect. The connect itself
+// keeps running; once approved it lands in the pool for the next call.
+function awaitConnect(entry: DriverEntry): Promise<Driver> {
+  if (!entry.useSsh || entry.settled) return entry.driver;
+  return Promise.race([
+    entry.driver,
+    new Promise<Driver>((_, reject) => setTimeout(() => reject(sshPendingError()), SSH_CONNECT_WAIT_MS)),
+  ]);
 }
 
 function createDriverEntry(key: string, sessionId: string, integration: Integration): DriverEntry {
@@ -103,7 +133,8 @@ function createDriverEntry(key: string, sessionId: string, integration: Integrat
   });
   const driver = withTimeout(created, connectTimeout, "connect");
   const idleTimer = setTimeout(() => evictDriverByKey(key), IDLE_MS);
-  const entry: DriverEntry = { driver, idleTimer, lastUsed: Date.now() };
+  const entry: DriverEntry = { driver, idleTimer, lastUsed: Date.now(), startedAt: Date.now(), settled: false, useSsh };
+  driver.then(() => { entry.settled = true; }, () => { entry.settled = true; });
   driverPool.set(key, entry);
 
   driver.catch(() => {
@@ -189,7 +220,7 @@ async function validateOrRebuild(
       // Immediate rebuild counts as attempt 0; keep retrying in the background
       // if it also fails (e.g. agent still locked).
       fresh.driver.catch(() => scheduleReconnect(key, sessionId, integration, 1));
-      return fresh.driver;
+      return awaitConnect(fresh);
     }
     if (current) return current.driver;
     throw new Error("Driver evicted during healthcheck");

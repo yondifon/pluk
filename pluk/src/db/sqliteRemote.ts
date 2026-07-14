@@ -1,6 +1,7 @@
 import type { Client } from "ssh2";
 import type { Driver, RelationshipInfo, SSHConfig, TableStats } from "./index.js";
 import { evictSharedSSHClient, getSharedSSHClient, type SSHParams } from "../ssh/client.js";
+import { isSshPending } from "../ssh/pending.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_BYTES = 1_000_000;
@@ -75,7 +76,9 @@ export function createRemoteSqliteDriver(cfg: SSHConfig, sessionId: string): Dri
       const output = (await exec(client, command, timeoutMs)).trim();
       return output ? JSON.parse(output) as Record<string, unknown>[] : [];
     } catch (err) {
-      evictSharedSSHClient(sessionId, params);
+      // A connect awaiting an interactive approval stays pooled — evicting it
+      // would close the connection the moment the user approves.
+      if (!isSshPending(err)) evictSharedSSHClient(sessionId, params);
       throw err;
     }
   }
