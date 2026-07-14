@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     var store: ConnectionStore
     var serverManager: ServerManager
+    var updateChecker: UpdateChecker
     @State private var selectedID: String?
     @State private var sheet: ActiveSheet?
     @State private var pendingDelete: PendingDelete?
@@ -76,8 +77,18 @@ struct ContentView: View {
             ToastOverlay(center: toastCenter) { connId in store.test(connectionId: connId) }
         }
         .safeAreaInset(edge: .bottom) {
-            if serverManager.status != .running {
-                ServerStatusBanner(serverManager: serverManager)
+            VStack(spacing: 0) {
+                switch updateChecker.state {
+                case .updateAvailable(let commit):
+                    UpdateBanner(commit: commit, updating: false) { updateChecker.installUpdate() }
+                case .updating:
+                    UpdateBanner(commit: nil, updating: true) {}
+                default:
+                    EmptyView()
+                }
+                if serverManager.status != .running {
+                    ServerStatusBanner(serverManager: serverManager)
+                }
             }
         }
         .sheet(item: $sheet) { active in
@@ -496,6 +507,43 @@ private struct ServerStatusBanner: View {
     }
 }
 
+// MARK: - Update banner
+
+private struct UpdateBanner: View {
+    let commit: String?
+    let updating: Bool
+    let onUpdate: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if updating {
+                ProgressView().scaleEffect(0.7).frame(width: 12, height: 12)
+                Text("Updating — rebuilding from source, app will relaunch (log: \(UpdateChecker.updateLogPath))")
+                    .font(.dev(size: 11))
+                    .foregroundColor(.secondary)
+            } else {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(.accentColor)
+                Text("Update available — \(commit.map { String($0.prefix(7)) } ?? "new commit") on remote")
+                    .font(.dev(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            if !updating {
+                Button("Update & Relaunch", action: onUpdate)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(Color.pageSurface)
+        .overlay(alignment: .top) { Divider() }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
 // MARK: - Empty state
 
 struct EmptyStateView: View {
@@ -528,6 +576,6 @@ struct EmptyStateView: View {
 
 #if DEBUG
 #Preview {
-    ContentView(store: .preview, serverManager: .preview)
+    ContentView(store: .preview, serverManager: .preview, updateChecker: .preview)
 }
 #endif

@@ -31,7 +31,8 @@ swift-build:
 
 bundle: server swift-build
 	@v=$$(cat VERSION); \
-	printf "→ assembling Pluk.app v$$v\n"; \
+	commit=$$(git rev-parse HEAD); \
+	printf "→ assembling Pluk.app v$$v ($$commit)\n"; \
 	rm -rf $(DIST)/$(APP).app; \
 	mkdir -p $(DIST)/$(APP).app/Contents/MacOS; \
 	mkdir -p $(DIST)/$(APP).app/Contents/Resources; \
@@ -41,7 +42,10 @@ bundle: server swift-build
 	cp swift/AppIcon.icns $(DIST)/$(APP).app/Contents/Resources/AppIcon.icns; \
 	cp swift/Sources/Resources/MenuBarIcon.png $(DIST)/$(APP).app/Contents/Resources/MenuBarIcon.png; \
 	cp -R swift/Sources/Resources/AdapterLogos $(DIST)/$(APP).app/Contents/Resources/AdapterLogos; \
-	sed "s/{{VERSION}}/$$v/g" swift/Info.plist.template \
+	sed -e "s/{{VERSION}}/$$v/g" \
+		-e "s/{{COMMIT}}/$$commit/g" \
+		-e "s|{{REPO}}|$(CURDIR)|g" \
+		swift/Info.plist.template \
 		> $(DIST)/$(APP).app/Contents/Info.plist
 ifdef APPLE_IDENTITY
 	@printf "→ signing with $(APPLE_IDENTITY)\n"
