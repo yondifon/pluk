@@ -162,24 +162,6 @@ struct ContentView: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .background(Color.pageSurface)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                Text("pluk")
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Text("LOCAL")
-                    .font(.dev(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .tracking(0.5)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.pageSurface)
-            .overlay(alignment: .bottom) { Divider() }
-        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
