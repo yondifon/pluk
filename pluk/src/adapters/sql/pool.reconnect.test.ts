@@ -62,7 +62,7 @@ mock.module("../../db/index.js", () => ({
   },
 }));
 
-const { getDriver } = await import("./pool.js");
+const { getDriver, evictDriverEverywhere } = await import("./pool.js");
 
 const integration: Integration = {
   id: "pg1",
@@ -144,6 +144,24 @@ test("in-flight connect: bounded wait, no duplicate spawn, approval lands for th
   await settle();
   await getDriver("s2", integration);
   expect(connectCalls).toBe(calls);
+});
+
+// Force-refresh (the Test button): tear down a live pooled driver across
+// sessions so the next call reconnects from scratch — re-triggering the SSH
+// prompt instead of reusing a poisoned/pending entry.
+test("evictDriverEverywhere forces the next call to reconnect fresh", async () => {
+  connectBehavior = "ok";
+  await getDriver("s-refresh", integration);
+  const calls = connectCalls;
+
+  // Same session reuses the pooled driver — no new connect.
+  await getDriver("s-refresh", integration);
+  expect(connectCalls).toBe(calls);
+
+  // Force-refresh drops it; the next call must build a brand-new connection.
+  evictDriverEverywhere(integration.id);
+  await getDriver("s-refresh", integration);
+  expect(connectCalls).toBe(calls + 1);
 });
 
 // Regression: a connect stuck past the respawn window (its prompt expired

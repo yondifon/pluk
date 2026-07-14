@@ -237,6 +237,21 @@ function evictDriverByKey(key: string): void {
   entry.driver.then((d) => d.close()).catch(() => {});
 }
 
+// Force-drop every cached driver and pending reconnect for an integration
+// across ALL live sessions. The manual Test button calls this so a stuck or
+// pending-approval connection is torn down and the next call connects from
+// scratch — re-triggering the 1Password/agent prompt. This is the app's
+// equivalent of re-running a git command to force a fresh SSH auth.
+export function evictDriverEverywhere(integrationId: string): void {
+  const suffix = `::${integrationId}`;
+  for (const key of [...driverPool.keys()]) {
+    if (key.endsWith(suffix)) evictDriverByKey(key);
+  }
+  for (const key of [...reconnectTimers.keys()]) {
+    if (key.endsWith(suffix)) cancelReconnect(key);
+  }
+}
+
 export function evictDriver(sessionId: string, integrationId?: string): void {
   if (integrationId) {
     const key = driverKey(sessionId, integrationId);

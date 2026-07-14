@@ -8,6 +8,8 @@ struct ContentView: View {
     @State private var sheet: ActiveSheet?
     @State private var pendingDelete: PendingDelete?
     @State private var toastCenter = ToastCenter()
+    @State private var search = ""
+    @FocusState private var searchFocused: Bool
 
     // A delete awaiting confirmation. Every delete entry point (sidebar context
     // menu, detail header button, for both integrations and groups) routes here
@@ -56,6 +58,33 @@ struct ContentView: View {
 
     var selectedGroup: ConnectionGroup? {
         store.groups.first { $0.id == selectedID }
+    }
+
+    // MARK: - Filtering
+
+    private var query: String {
+        search.trimmingCharacters(in: .whitespaces)
+    }
+
+    private var filteredGroups: [ConnectionGroup] {
+        guard !query.isEmpty else { return store.groups }
+        return store.groups.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
+
+    // Match name, adapter type (raw + label), and environment so users can filter
+    // by "postgres", "prod", or a connection's name interchangeably.
+    private var filteredConnections: [Connection] {
+        guard !query.isEmpty else { return store.connections }
+        return store.connections.filter { conn in
+            conn.name.localizedCaseInsensitiveContains(query)
+                || conn.type.localizedCaseInsensitiveContains(query)
+                || conn.typeLabel.localizedCaseInsensitiveContains(query)
+                || conn.environment.label.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private var noMatches: Bool {
+        !query.isEmpty && filteredGroups.isEmpty && filteredConnections.isEmpty
     }
 
     var body: some View {
@@ -131,37 +160,18 @@ struct ContentView: View {
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        List(selection: $selectedID) {
-            if !store.groups.isEmpty {
-                Section("Groups") {
-                    ForEach(store.groups) { group in
-                        GroupRow(group: group)
-                            .tag(group.id)
-                            .contextMenu {
-                                Button("Delete", role: .destructive) {
-                                    pendingDelete = .group(group)
-                                }
-                            }
-                    }
-                }
-            }
-
-            Section("Integrations") {
-                ForEach(store.connections) { conn in
-                    ConnectionRow(conn: conn, health: store.health[conn.id])
-                        .tag(conn.id)
-                        .contextMenu {
-                            Button("Duplicate") { selectedID = store.duplicate(conn) }
-                            Button("Delete", role: .destructive) {
-                                pendingDelete = .connection(conn)
-                            }
-                        }
-                }
-            }
+        VStack(spacing: 0) {
+            searchField
+            sidebarList
         }
-        .listStyle(.sidebar)
-        .scrollContentBackground(.hidden)
         .background(Color.pageSurface)
+        // Hidden ⌘F shortcut focuses the filter field (searchFocused binding on
+        // .searchable is macOS 15+; this custom field keeps ⌘F working on 14).
+        .background(
+            Button("") { searchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0)
+        )
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -179,6 +189,78 @@ struct ContentView: View {
                 }
                 .help("New Group")
                 .keyboardShortcut("n", modifiers: [.command, .shift])
+            }
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            TextField("Filter integrations", text: $search)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .focused($searchFocused)
+                .onExitCommand { search = ""; searchFocused = false }
+            if !search.isEmpty {
+                Button {
+                    search = ""
+                    searchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+    }
+
+    private var sidebarList: some View {
+        List(selection: $selectedID) {
+            if !filteredGroups.isEmpty {
+                Section("Groups") {
+                    ForEach(filteredGroups) { group in
+                        GroupRow(group: group)
+                            .tag(group.id)
+                            .contextMenu {
+                                Button("Delete", role: .destructive) {
+                                    pendingDelete = .group(group)
+                                }
+                            }
+                    }
+                }
+            }
+
+            if !filteredConnections.isEmpty {
+                Section("Integrations") {
+                    ForEach(filteredConnections) { conn in
+                        ConnectionRow(conn: conn, health: store.health[conn.id])
+                            .tag(conn.id)
+                            .contextMenu {
+                                Button("Duplicate") { selectedID = store.duplicate(conn) }
+                                Button("Delete", role: .destructive) {
+                                    pendingDelete = .connection(conn)
+                                }
+                            }
+                    }
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(Color.pageSurface)
+        .overlay {
+            if noMatches {
+                ContentUnavailableView.search(text: query)
             }
         }
     }

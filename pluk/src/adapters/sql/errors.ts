@@ -18,7 +18,7 @@ export function classifySqlError(err: unknown): SqlErrorInfo {
     return {
       category: "pending_approval",
       message: "SSH connection is waiting for approval.",
-      hint: "Approve the 1Password/SSH agent prompt (or finish the proxy login), then retry — the connection keeps going in the background.",
+      hint: "Approve the 1Password/SSH agent prompt (or finish the proxy login), then retry. If no prompt appears, click Test in Pluk to force a fresh connection.",
       code,
     };
   }
