@@ -69,9 +69,11 @@ export function createRemoteSqliteDriver(cfg: SSHConfig, sessionId: string): Dri
   if (!filename) throw new Error("SQLite path is missing. Set the remote database file path.");
   const remotePath = filename;
 
-  async function runJson(sql: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<Record<string, unknown>[]> {
+  async function runJson(sql: string, timeoutMs = DEFAULT_TIMEOUT_MS, readonly = false): Promise<Record<string, unknown>[]> {
     const client = await getSharedSSHClient(sessionId, params);
-    const command = `sqlite3 -json ${shellQuote(remotePath)} ${shellQuote(sql)}`;
+    // -readonly opens the database file read-only, so the sqlite3 process itself
+    // refuses any write — the engine-level guard for read-only connections.
+    const command = `sqlite3 ${readonly ? "-readonly " : ""}-json ${shellQuote(remotePath)} ${shellQuote(sql)}`;
     try {
       const output = (await exec(client, command, timeoutMs)).trim();
       return output ? JSON.parse(output) as Record<string, unknown>[] : [];
@@ -83,14 +85,25 @@ export function createRemoteSqliteDriver(cfg: SSHConfig, sessionId: string): Dri
     }
   }
 
+  // The remote driver shells out to `sqlite3`, which has no bind-parameter
+  // channel, so params can't be sent safely (inlining would be an injection
+  // vector). Reject them instead of silently dropping and returning wrong rows.
+  function rejectParams(params?: unknown[]): void {
+    if (params && params.length > 0) {
+      throw new Error("Bind parameters are not supported for SQLite over SSH. Inline literal values instead.");
+    }
+  }
+
   return {
-    async query(sql, _params = [], opts) {
+    async query(sql, params = [], opts) {
+      rejectParams(params);
       const rows = await runJson(sql, opts?.timeoutMs);
       return { rows, fields: rows[0] ? Object.keys(rows[0]) : undefined };
     },
 
-    async queryReadOnly(sql, _params = [], opts) {
-      const rows = await runJson(sql, opts?.timeoutMs);
+    async queryReadOnly(sql, params = [], opts) {
+      rejectParams(params);
+      const rows = await runJson(sql, opts?.timeoutMs, true);
       return { rows, fields: rows[0] ? Object.keys(rows[0]) : undefined };
     },
 

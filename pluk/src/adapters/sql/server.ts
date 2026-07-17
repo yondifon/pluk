@@ -3,7 +3,8 @@ import { mkdirSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import type { Integration } from "../../store/integrations.js";
-import { isValidDatabaseName, type Driver } from "../../db/index.js";
+import type { Driver } from "../../db/index.js";
+import { isValidDatabaseName } from "../../db/dbName.js";
 import { sqlPolicyFromSettings, evaluate, capRows, dialectFor, policyDescription, parsePostgresCost } from "../../mcp/policy.js";
 import { toolGate } from "../../mcp/toolConfig.js";
 import type { ConfigField, ToolSpec } from "../types.js";
@@ -84,8 +85,16 @@ const QUERY_SETTINGS: ConfigField[] = [
 // (all default on); only `query` carries settings (they form the SQL policy that
 // also governs export_query / run_saved_query).
 export function sqlToolSpecs(): ToolSpec[] {
+  // Opt-in tools ship default-off so a fresh connection exposes only the lean set
+  // most developers use out of the box (query + core inspection). The rest —
+  // perf/discovery/niche/setup-dependent/side-effecting — are one click to enable.
+  const optIn = new Set([
+    "explain_query", "list_relationships", "table_stats",
+    "list_schemas", "list_databases", "export_query",
+    "run_saved_query", "list_saved_queries",
+  ]);
   const read = (name: string, description: string, settings?: ConfigField[]): ToolSpec =>
-    ({ name, description, category: "read", defaultEnabled: true, settings });
+    ({ name, description, category: "read", defaultEnabled: !optIn.has(name), settings });
   return [
     read("query", "Run a SQL query against the database.", QUERY_SETTINGS),
     read("list_tables", "List all tables in the database."),
@@ -112,9 +121,11 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
   const policy = sqlPolicyFromSettings(gate.settings("query"));
   const dialect = dialectFor(conn.type);
   const policyDesc = policyDescription(policy);
-  // Every SQL tool is individually toggleable; all default on. A disabled tool is
-  // simply not registered, so the agent never sees it.
-  const on = (name: string): boolean => gate.enabled(name, true);
+  // Every SQL tool is individually toggleable. The default-on state is the single
+  // source of truth in sqlToolSpecs(); a disabled tool is simply not registered,
+  // so the agent never sees it.
+  const toolDefaults = new Map(sqlToolSpecs().map((t) => [t.name, t.defaultEnabled]));
+  const on = (name: string): boolean => gate.enabled(name, toolDefaults.get(name) ?? true);
 
   const readOnlyMode = policy.allowed.length === 2 && policy.allowed.includes("select") && policy.allowed.includes("inspect");
   const maskedColumns = listMaskedColumns(conn.id);
@@ -138,6 +149,36 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
       "Database to run against on this server. This connection has no fixed database, so name the one to use (see list_schemas). Access is limited to databases the connection's user was granted."
     ),
   } : {};
+
+  // Bind parameters for placeholders in the SQL. Prefer these over inlining
+  // values: the driver escapes them, values can never change the statement's
+  // category, and quoting is handled for you. Placeholder syntax is dialect
+  // specific ($1/$2 on Postgres, ? on MySQL/SQLite).
+  const paramsOption: Record<string, z.ZodTypeAny> = {
+    params: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional().describe(
+      conn.type === "postgres"
+        ? "Values to bind to $1, $2, … placeholders in the SQL. Prefer this over inlining values."
+        : "Values to bind to ? placeholders in the SQL. Prefer this over inlining values."
+    ),
+  };
+
+  // Postgres scopes tables by schema (default "public"); MySQL/SQLite don't have
+  // the concept (MySQL uses the `database` arg instead), so the arg is Postgres
+  // only. Discover schemas with list_schemas, then pass one here.
+  const supportsSchemaArg = conn.type === "postgres";
+  const schemaOption: Record<string, z.ZodTypeAny> = supportsSchemaArg ? {
+    schema: z.string().max(128).optional().describe("Postgres schema to inspect (default: public). See list_schemas for options."),
+  } : {};
+
+  // Validate a requested schema (identifier charset, same as a database name) so
+  // a hostile value can't reach a quoted identifier in the driver.
+  function resolveSchema(requested?: string): { ok: true; schema?: string } | { ok: false; error: string } {
+    if (!requested) return { ok: true, schema: undefined };
+    if (!isValidDatabaseName(requested)) {
+      return { ok: false, error: `Invalid schema name "${requested}". Allowed: letters, digits, _, $, -.` };
+    }
+    return { ok: true, schema: requested };
+  }
 
   // Resolve a requested target database against the pin rule. Pinned connections
   // ignore any stray value (the arg isn't exposed); multi-db connections validate
@@ -188,12 +229,20 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
     }
   }
 
-  // Resolve the target database from tool args, then run an introspection under
-  // it. Surfaces a pin/validation error before touching the pool.
-  function introspectDb(label: string, database: string | undefined, fn: (driver: Driver) => Promise<string>): Promise<ToolResult> {
-    const r = resolveDatabase(database);
-    if (!r.ok) return Promise.resolve(err(r.error));
-    return introspect(label, fn, r.db);
+  // Resolve target database + schema from tool args, then run an introspection
+  // under them. Surfaces a pin/validation error before touching the pool. The
+  // resolved schema (undefined outside Postgres) is handed to the fn so it can
+  // scope the driver call.
+  function introspectScoped(
+    label: string,
+    args: { database?: string; schema?: string },
+    fn: (driver: Driver, schema?: string) => Promise<string>
+  ): Promise<ToolResult> {
+    const d = resolveDatabase(args.database);
+    if (!d.ok) return Promise.resolve(err(d.error));
+    const s = resolveSchema(args.schema);
+    if (!s.ok) return Promise.resolve(err(s.error));
+    return introspect(label, (driver) => fn(driver, s.schema), d.db);
   }
 
   type QueryRows = { rows: unknown[]; fields?: string[] };
@@ -244,10 +293,10 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
   // The postgres cost gate: returns a block reason if the planner's estimate
   // exceeds the policy's row/cost ceiling, else undefined. No-op off postgres or
   // when no ceiling is set.
-  async function costBlock(driver: Driver, sql: string): Promise<string | undefined> {
+  async function costBlock(driver: Driver, sql: string, params?: unknown[]): Promise<string | undefined> {
     const enabled = policy.maxEstimatedRows !== null || policy.maxEstimatedCost !== null;
     if (!enabled || conn.type !== "postgres") return undefined;
-    const explain = await driver.explain(sql);
+    const explain = await driver.explain(sql, params);
     const plan = Array.isArray(explain.rows[0]) ? explain.rows[0][0] : explain.rows[0];
     const estimate = parsePostgresCost(plan);
     if (
@@ -261,10 +310,16 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
 
   // Execute a policy-passed statement under the tool timeout + per-query abort.
   // Postgres read-only mode uses a read-only transaction.
-  function runStatement<T extends QueryRows>(driver: Driver, sql: string, signal: AbortSignal, label: string, timeoutMs?: number): Promise<T> {
-    const useReadOnly = readOnlyMode && conn.type === "postgres";
-    const opts = timeoutMs ? { timeoutMs } : undefined;
-    const work = (useReadOnly ? driver.queryReadOnly(sql, undefined, opts) : driver.query(sql, undefined, opts)) as Promise<T>;
+  function runStatement<T extends QueryRows>(driver: Driver, sql: string, signal: AbortSignal, label: string, timeoutMs?: number, params?: unknown[]): Promise<T> {
+    // In read-only mode every dialect routes through queryReadOnly, which each
+    // driver backs with an engine-level guard (Postgres BEGIN READ ONLY, MySQL
+    // START TRANSACTION READ ONLY, SQLite query_only / -readonly).
+    const useReadOnly = readOnlyMode;
+    // Hand the signal to the driver so it cancels the statement server-side
+    // (pg_cancel_backend / KILL QUERY); withCancellable still unblocks the caller
+    // immediately so the agent isn't left waiting on the round trip.
+    const opts = { timeoutMs, signal };
+    const work = (useReadOnly ? driver.queryReadOnly(sql, params, opts) : driver.query(sql, params, opts)) as Promise<T>;
     return withToolTimeout(withCancellable(work, signal), label, timeoutMs);
   }
 
@@ -287,7 +342,7 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
 
   // Run a SQL statement through the policy gate + activity log, returning rows
   // (masked + row-capped). Shared by `query` and `run_saved_query`.
-  function gatedQuery(sql: string, source: string, timeoutMs?: number, rowCap?: number, database?: string): Promise<ToolResult> {
+  function gatedQuery(sql: string, source: string, timeoutMs?: number, rowCap?: number, database?: string, params?: unknown[]): Promise<ToolResult> {
     const verdict = evaluate(sql, policy, dialect);
     const effectiveCap = policy.maxRows === null ? rowCap ?? null : Math.min(rowCap ?? policy.maxRows, policy.maxRows);
     return runGated(
@@ -298,10 +353,10 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
         const queryAc = registerQueryAbort(logId, sid);
         try {
           const driver = await getDriver(sid, conn, database);
-          const block = await costBlock(driver, sql);
+          const block = await costBlock(driver, sql, params);
           if (block) return { blocked: block };
 
-          const result = await runStatement<QueryRows>(driver, sql, queryAc.signal, source, timeoutMs);
+          const result = await runStatement<QueryRows>(driver, sql, queryAc.signal, source, timeoutMs, params);
           const { rows, truncated, limit } = capRows(result.rows, effectiveCap);
           const maskedRows = mask(rows);
           const maskedResult: LogSnapshot & QueryRows = { fields: result.fields, rows: maskedRows };
@@ -378,22 +433,24 @@ ${sql}` } },
       query: z.string().optional().describe("Alias for sql"),
       ...timeoutOption,
       ...dbOption,
+      ...paramsOption,
       limit: z.number().int().positive().max(1_000_000).optional().describe("Max rows to return, overriding the default cap (1000)."),
     },
     (args) => {
       const { sql, query, limit } = args;
       const timeout = (args as typeof args & { timeout?: number }).timeout;
       const database = (args as typeof args & { database?: string }).database;
+      const params = (args as typeof args & { params?: unknown[] }).params;
       const statement = sql ?? query;
       if (!statement) return Promise.resolve(missingSqlArg());
       const r = resolveDatabase(database);
       if (!r.ok) return Promise.resolve(err(r.error));
-      return gatedQuery(statement, "query", toTimeoutMs(timeout), limit, r.db);
+      return gatedQuery(statement, "query", toTimeoutMs(timeout), limit, r.db, params);
     },
   );
 
-  if (on("list_tables")) server.tool("list_tables", "List all tables in the database", { ...dbOption }, (args) =>
-    introspectDb("list_tables", (args as { database?: string }).database, async (driver) => (await driver.listTables()).join("\n")));
+  if (on("list_tables")) server.tool("list_tables", "List all tables in the database", { ...dbOption, ...schemaOption }, (args) =>
+    introspectScoped("list_tables", args as { database?: string; schema?: string }, async (driver, schema) => (await driver.listTables(schema)).join("\n")));
 
   if (on("sample_table")) server.tool(
     "sample_table",
@@ -402,13 +459,16 @@ ${sql}` } },
       table: z.string().describe("Table name"),
       limit: z.number().int().min(1).max(1000).default(20).describe("Max rows to preview"),
       ...dbOption,
+      ...schemaOption,
     },
     ({ table, limit, ...rest }) => {
       const r = resolveDatabase((rest as { database?: string }).database);
       if (!r.ok) return Promise.resolve(err(r.error));
+      const s = resolveSchema((rest as { schema?: string }).schema);
+      if (!s.ok) return Promise.resolve(err(s.error));
       return introspect("sample_table", async (driver) => {
         const effectiveLimit = policy.maxRows === null ? limit : Math.min(limit, policy.maxRows);
-        const result = await driver.sampleTable(table, effectiveLimit);
+        const result = await driver.sampleTable(table, effectiveLimit, s.schema);
         const { rows, truncated, limit: rowCap } = capRows(result.rows, policy.maxRows);
         const maskedRows = maskedColumns.length > 0 ? rows.map(r => maskRow(r as Record<string, unknown>, maskedColumns)) : rows;
         let text = JSON.stringify(resultWithMeta(result, maskedRows, truncated, rowCap, r.db), null, 2);
@@ -427,12 +487,14 @@ ${sql}` } },
       sql: z.string().optional().describe("SQL query to explain"),
       query: z.string().optional().describe("Alias for sql"),
       ...dbOption,
+      ...paramsOption,
     },
     ({ sql, query, ...rest }) => {
       const statement = sql ?? query;
       if (!statement) return Promise.resolve(missingSqlArg());
       const r = resolveDatabase((rest as { database?: string }).database);
       if (!r.ok) return Promise.resolve(err(r.error));
+      const params = (rest as { params?: unknown[] }).params;
       // `explain` runs no policy-changing statement, so a passing query is logged
       // by the driver layer (via introspect), not as a gated tool call. A blocked
       // query is still recorded so the audit log shows the denial.
@@ -441,40 +503,40 @@ ${sql}` } },
         logQuery(conn.id, conn.name, statement, "blocked", verdict.categories, verdict.reason ?? undefined, undefined, undefined, undefined, conn.viaGroup, r.db ?? pinnedDb);
         return Promise.resolve(err(`Blocked: ${verdict.reason}`));
       }
-      return introspect("explain_query", async (driver) => JSON.stringify(await driver.explain(statement), null, 2), r.db);
+      return introspect("explain_query", async (driver) => JSON.stringify(await driver.explain(statement, params), null, 2), r.db);
     }
   );
 
   if (on("describe_table")) server.tool(
     "describe_table",
     "Get column definitions for a table",
-    { table: z.string().describe("Table name"), ...dbOption },
+    { table: z.string().describe("Table name"), ...dbOption, ...schemaOption },
     ({ table, ...rest }) =>
-      introspectDb("describe_table", (rest as { database?: string }).database, async (driver) => JSON.stringify(await driver.describeTable(table), null, 2))
+      introspectScoped("describe_table", rest as { database?: string; schema?: string }, async (driver, schema) => JSON.stringify(await driver.describeTable(table, schema), null, 2))
   );
 
   if (on("list_relationships")) server.tool(
     "list_relationships",
     "List foreign key relationships between tables",
-    { table: z.string().optional().describe("Filter to a specific table (optional)"), ...dbOption },
+    { table: z.string().optional().describe("Filter to a specific table (optional)"), ...dbOption, ...schemaOption },
     ({ table, ...rest }) =>
-      introspectDb("list_relationships", (rest as { database?: string }).database, async (driver) => JSON.stringify(await driver.listRelationships(table), null, 2))
+      introspectScoped("list_relationships", rest as { database?: string; schema?: string }, async (driver, schema) => JSON.stringify(await driver.listRelationships(table, schema), null, 2))
   );
 
   if (on("search_schema")) server.tool(
     "search_schema",
     "Find tables or columns matching a term",
-    { term: z.string().describe("Search term (substring match on table or column names)"), ...dbOption },
+    { term: z.string().describe("Search term (substring match on table or column names)"), ...dbOption, ...schemaOption },
     ({ term, ...rest }) =>
-      introspectDb("search_schema", (rest as { database?: string }).database, async (driver) => JSON.stringify(await driver.searchSchema(term), null, 2))
+      introspectScoped("search_schema", rest as { database?: string; schema?: string }, async (driver, schema) => JSON.stringify(await driver.searchSchema(term, schema), null, 2))
   );
 
   if (on("table_stats")) server.tool(
     "table_stats",
     "Get cheap table statistics (estimated rows, size, indexes)",
-    { table: z.string().describe("Table name"), ...dbOption },
+    { table: z.string().describe("Table name"), ...dbOption, ...schemaOption },
     ({ table, ...rest }) =>
-      introspectDb("table_stats", (rest as { database?: string }).database, async (driver) => JSON.stringify(await driver.tableStats(table), null, 2))
+      introspectScoped("table_stats", rest as { database?: string; schema?: string }, async (driver, schema) => JSON.stringify(await driver.tableStats(table, schema), null, 2))
   );
 
   if (on("list_schemas")) server.tool("list_schemas", "List all schemas or databases", () =>
@@ -496,10 +558,12 @@ ${sql}` } },
       format: z.enum(["csv", "json"]).default("csv").describe("Export file format"),
       ...timeoutOption,
       ...dbOption,
+      ...paramsOption,
     },
     (args) => {
       const { sql, query, format } = args;
       const timeout = (args as typeof args & { timeout?: number }).timeout;
+      const params = (args as typeof args & { params?: unknown[] }).params;
       const statement = sql ?? query;
       if (!statement) return Promise.resolve(missingSqlArg());
       const r = resolveDatabase((args as typeof args & { database?: string }).database);
@@ -514,7 +578,7 @@ ${sql}` } },
           const queryAc = registerQueryAbort(logId, sid);
           try {
             const driver = await getDriver(sid, conn, r.db);
-            const result = await runStatement<QueryRows>(driver, statement, queryAc.signal, "export_query", timeoutMs);
+            const result = await runStatement<QueryRows>(driver, statement, queryAc.signal, "export_query", timeoutMs, params);
 
             const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
             const maskedRows = mask(rows);
@@ -546,15 +610,17 @@ ${sql}` } },
       name: z.string().describe("Name of the saved query"),
       ...timeoutOption,
       ...dbOption,
+      ...paramsOption,
     },
     (args) => {
       const { name } = args;
       const timeout = (args as typeof args & { timeout?: number }).timeout;
+      const params = (args as typeof args & { params?: unknown[] }).params;
       const r = resolveDatabase((args as typeof args & { database?: string }).database);
       if (!r.ok) return Promise.resolve(err(r.error));
       const saved = getSavedQuery(conn.id, name);
       if (!saved) return Promise.resolve(err(`Saved query "${name}" not found.`));
-      return gatedQuery(saved.sql, "run_saved_query", toTimeoutMs(timeout), undefined, r.db);
+      return gatedQuery(saved.sql, "run_saved_query", toTimeoutMs(timeout), undefined, r.db, params);
     }
   );
 

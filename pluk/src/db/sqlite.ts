@@ -15,21 +15,28 @@ export function createSqliteDriver(filename: string): Driver {
   };
 
   return {
-    async query(sql) {
+    async query(sql, params = []) {
       const stmt = db.query(sql);
-      const rows = stmt.all();
+      const rows = stmt.all(...(params as never[]));
       return { rows };
     },
 
-    async queryReadOnly(sql) {
-      const stmt = db.query(sql);
-      const rows = stmt.all();
-      return { rows };
+    async queryReadOnly(sql, params = []) {
+      // query_only makes SQLite reject any write for the duration — the engine
+      // enforces read-only even if the policy classifier is fooled. Reset in
+      // finally so the shared connection isn't left locked for later writes.
+      db.run("PRAGMA query_only = ON");
+      try {
+        const rows = db.query(sql).all(...(params as never[]));
+        return { rows };
+      } finally {
+        db.run("PRAGMA query_only = OFF");
+      }
     },
 
-    async explain(sql) {
+    async explain(sql, params = []) {
       const stmt = db.query("EXPLAIN QUERY PLAN " + sql);
-      const rows = stmt.all();
+      const rows = stmt.all(...(params as never[]));
       return { rows };
     },
 

@@ -41,6 +41,14 @@ export interface QueryResult {
   fields?: string[];
 }
 
+/** Per-call options for a running query. `signal` lets a driver cancel the
+ *  statement server-side (e.g. pg_cancel_backend / KILL QUERY) when the caller
+ *  aborts, not merely stop waiting for it. */
+export interface QueryOpts {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
 export interface ColumnInfo {
   column: string;
   type: string;
@@ -70,18 +78,20 @@ export interface TableStats {
 }
 
 export interface Driver {
-  query(sql: string, params?: unknown[], opts?: { timeoutMs?: number }): Promise<QueryResult>;
-  queryReadOnly(sql: string, params?: unknown[], opts?: { timeoutMs?: number }): Promise<QueryResult>;
-  explain(sql: string): Promise<QueryResult>;
-  listTables(): Promise<string[]>;
-  describeTable(table: string): Promise<ColumnInfo[]>;
-  sampleTable(table: string, limit: number): Promise<QueryResult>;
-  listRelationships(table?: string): Promise<RelationshipInfo[]>;
-  searchSchema(term: string): Promise<SchemaSearchResult[]>;
-  tableStats(table: string): Promise<TableStats>;
+  query(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult>;
+  queryReadOnly(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult>;
+  explain(sql: string, params?: unknown[]): Promise<QueryResult>;
+  // `schema` is honored by Postgres (default "public"); MySQL/SQLite ignore it —
+  // MySQL scoping is per-database (the `database` arg), SQLite has one schema.
+  listTables(schema?: string): Promise<string[]>;
+  describeTable(table: string, schema?: string): Promise<ColumnInfo[]>;
+  sampleTable(table: string, limit: number, schema?: string): Promise<QueryResult>;
+  listRelationships(table?: string, schema?: string): Promise<RelationshipInfo[]>;
+  searchSchema(term: string, schema?: string): Promise<SchemaSearchResult[]>;
+  tableStats(table: string, schema?: string): Promise<TableStats>;
   listSchemas(): Promise<string[]>;
   listDatabases(): Promise<string[]>;
-  getFullSchema(): Promise<string>;
+  getFullSchema(schema?: string): Promise<string>;
   testConnection(): Promise<void>;
   close(): Promise<void>;
 }

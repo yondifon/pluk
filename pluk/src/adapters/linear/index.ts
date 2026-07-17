@@ -88,6 +88,7 @@ function linearTools(apiKey: string, defaultTeam: string | undefined): ActionToo
       name: "list_teams",
       description: "List teams (id, name, key). Use a team id to create issues.",
       category: "read",
+      defaultEnabled: false,
       run: async () => {
         const data = await linearGraphQL<{ teams: { nodes: unknown[] } }>(apiKey, `{ teams { nodes { id name key } } }`);
         return data.teams.nodes;
@@ -97,6 +98,7 @@ function linearTools(apiKey: string, defaultTeam: string | undefined): ActionToo
       name: "list_projects",
       description: "List projects with their state, progress percent, and issue counts (total/completed). Optionally filter by name.",
       category: "read",
+      defaultEnabled: false,
       schema: {
         query: z.string().optional().describe("Filter projects whose name contains this text"),
         limit: z.number().int().min(1).max(100).default(25).describe("Max projects to return"),
@@ -117,6 +119,7 @@ function linearTools(apiKey: string, defaultTeam: string | undefined): ActionToo
       name: "project_updates",
       description: "Read a project's status-update log (the periodic updates with health on-track/at-risk/off-track), newest first. Use list_projects to find the project id.",
       category: "read",
+      defaultEnabled: false,
       schema: {
         project_id: z.string().describe("Project id (UUID) from list_projects"),
         limit: z.number().int().min(1).max(50).default(10).describe("Max updates to return"),

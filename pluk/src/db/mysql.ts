@@ -51,25 +51,66 @@ export function createMysqlDriver(
       }
     };
 
+  // On abort, kill the running statement from a *separate* pooled connection
+  // (the busy one can't take commands). threadId is numeric, so the placeholder
+  // formats to `KILL QUERY <n>`. Killing a finished query is a harmless no-op.
+  function onAbortKill(threadId: number | undefined, signal: AbortSignal | undefined): () => void {
+    if (!threadId || !signal) return () => {};
+    const handler = () => { pool.query("KILL QUERY ?", [threadId]).catch(() => {}); };
+    signal.addEventListener("abort", handler, { once: true });
+    return () => signal.removeEventListener("abort", handler);
+  }
+
   return {
     async query(sql, params = [], opts) {
-      const [rows, fields] = await pool.query(queryConfig(sql, params, opts?.timeoutMs));
-      return {
-        rows: rows as unknown[],
-        fields: Array.isArray(fields) ? fields.map((f: mysql.FieldPacket) => f.name ?? "") : undefined,
-      };
+      // No signal → the simple pooled path (introspection, cost gate, etc.).
+      if (!opts?.signal) {
+        const [rows, fields] = await pool.query(queryConfig(sql, params, opts?.timeoutMs));
+        return {
+          rows: rows as unknown[],
+          fields: Array.isArray(fields) ? fields.map((f: mysql.FieldPacket) => f.name ?? "") : undefined,
+        };
+      }
+      // Cancellable path: a dedicated connection so we know its thread id.
+      const conn = await pool.getConnection();
+      const detach = onAbortKill(conn.threadId, opts.signal);
+      try {
+        const [rows, fields] = await conn.query(queryConfig(sql, params, opts?.timeoutMs));
+        return {
+          rows: rows as unknown[],
+          fields: Array.isArray(fields) ? fields.map((f: mysql.FieldPacket) => f.name ?? "") : undefined,
+        };
+      } finally {
+        detach();
+        conn.release();
+      }
     },
 
     async queryReadOnly(sql, params = [], opts) {
-      const [rows, fields] = await pool.query(queryConfig(sql, params, opts?.timeoutMs));
-      return {
-        rows: rows as unknown[],
-        fields: Array.isArray(fields) ? fields.map((f: mysql.FieldPacket) => f.name ?? "") : undefined,
-      };
+      // Run inside a read-only transaction so the server itself rejects any write
+      // — defense in depth if the policy classifier ever misreads a statement.
+      // A dedicated connection is required: the transaction state is per-session.
+      const conn = await pool.getConnection();
+      const detach = onAbortKill(conn.threadId, opts?.signal);
+      try {
+        await conn.query("START TRANSACTION READ ONLY");
+        const [rows, fields] = await conn.query(queryConfig(sql, params, opts?.timeoutMs));
+        await conn.query("COMMIT");
+        return {
+          rows: rows as unknown[],
+          fields: Array.isArray(fields) ? fields.map((f: mysql.FieldPacket) => f.name ?? "") : undefined,
+        };
+      } catch (e) {
+        await conn.query("ROLLBACK").catch(() => {});
+        throw e;
+      } finally {
+        detach();
+        conn.release();
+      }
     },
 
-    async explain(sql) {
-      const [rows, fields] = await pool.query("EXPLAIN " + sql);
+    async explain(sql, params = []) {
+      const [rows, fields] = await pool.query("EXPLAIN " + sql, params as unknown[]);
       return {
         rows: rows as unknown[],
         fields: Array.isArray(fields) ? fields.map((f: mysql.FieldPacket) => f.name ?? "") : undefined,

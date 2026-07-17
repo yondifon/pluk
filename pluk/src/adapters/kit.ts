@@ -108,6 +108,11 @@ export interface ActionTool {
   description: string;
   schema?: ZodRawShape;
   category: ActionCategory;
+  /** Override the default-on state. Omitted → derived from `category` (read on,
+   *  write/delete/admin off). Set `false` on a read tool that is niche/heavy so it
+   *  ships default-off (the user opts in); never set `true` on a state-changing
+   *  tool. */
+  defaultEnabled?: boolean;
   /** This tool's own settings, surfaced in the UI when the tool is expanded and
    *  passed to `run` at call time. */
   settings?: ConfigField[];
@@ -158,7 +163,7 @@ export function actionAdapter<C>(spec: ActionAdapterSpec<C>): Adapter {
         name: t.name,
         description: t.description,
         category: t.category,
-        defaultEnabled: defaultEnabledForCategory(t.category),
+        defaultEnabled: t.defaultEnabled ?? defaultEnabledForCategory(t.category),
         settings: t.settings,
       }));
     } catch {

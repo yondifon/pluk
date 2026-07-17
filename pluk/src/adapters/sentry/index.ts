@@ -60,6 +60,7 @@ function sentryTools(cfg: SentryConfig): ActionTool[] {
       name: "list_events",
       description: "List recent error events for a project, optionally with full event bodies.",
       category: "read",
+      defaultEnabled: false,
       schema: {
         project: z.string().optional().describe("Project slug. Defaults to the integration's project if set."),
         period: z.string().default("24h").describe("Stats period, e.g. 15m, 24h, 7d"),
@@ -81,6 +82,7 @@ function sentryTools(cfg: SentryConfig): ActionTool[] {
       name: "query_logs",
       description: "Query Sentry structured logs using Explore's logs dataset.",
       category: "read",
+      defaultEnabled: false,
       schema: {
         query: z.string().optional().describe('Sentry log search query, e.g. "severity:error payment.failed"'),
         project: z.string().optional().describe("Project slug or id. Defaults to the integration's project if set; omit for all projects."),

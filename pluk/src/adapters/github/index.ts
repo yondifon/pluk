@@ -112,6 +112,7 @@ function githubTools(cfg: GitHubConfig): ActionTool[] {
       name: "commit_status",
       description: "Get the combined commit status and check-runs for a ref (CI state).",
       category: "read",
+      defaultEnabled: false,
       schema: { repo: repoArg, ref: z.string().describe("Branch, tag, or commit sha") },
       detail: (a) => `commit_status ${(a.repo as string) ?? cfg.defaultRepo ?? "?"}@${a.ref}`,
       run: async (a) => {

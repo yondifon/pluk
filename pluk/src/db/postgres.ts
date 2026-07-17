@@ -71,43 +71,70 @@ export function createPostgresDriver(
       }
     };
 
+  // On abort, cancel the running statement server-side from a *separate* pooled
+  // connection (the busy one can't take commands). Returns a cleanup to detach
+  // the listener. Cancelling a finished query is a harmless no-op, so errors are
+  // swallowed.
+  function onAbortCancel(pid: number | undefined, signal: AbortSignal | undefined): () => void {
+    if (!pid || !signal) return () => {};
+    const handler = () => { pool.query("SELECT pg_cancel_backend($1)", [pid]).catch(() => {}); };
+    signal.addEventListener("abort", handler, { once: true });
+    return () => signal.removeEventListener("abort", handler);
+  }
+
   return {
     async query(sql, params = [], opts) {
-      const result = await pool.query(queryConfig(sql, params as unknown[], opts?.timeoutMs));
-      return { rows: result.rows, fields: result.fields.map((f) => f.name) };
+      // No signal → the simple pooled path (introspection, cost gate, etc.).
+      if (!opts?.signal) {
+        const result = await pool.query(queryConfig(sql, params as unknown[], opts?.timeoutMs));
+        return { rows: result.rows, fields: result.fields.map((f) => f.name) };
+      }
+      // Cancellable path: a dedicated connection so we know its backend pid.
+      const client = await pool.connect();
+      const detach = onAbortCancel((client as { processID?: number }).processID,opts.signal);
+      try {
+        const result = await client.query(queryConfig(sql, params as unknown[], opts?.timeoutMs));
+        return { rows: result.rows, fields: result.fields.map((f) => f.name) };
+      } finally {
+        detach();
+        client.release();
+      }
     },
 
     async queryReadOnly(sql, params = [], opts) {
       const client = await pool.connect();
+      const detach = onAbortCancel((client as { processID?: number }).processID,opts?.signal);
       try {
         await client.query("BEGIN READ ONLY");
         const result = await client.query(queryConfig(sql, params as unknown[], opts?.timeoutMs));
         return { rows: result.rows, fields: result.fields.map((f) => f.name) };
       } finally {
+        detach();
         await client.query("ROLLBACK").catch(() => {});
         client.release();
       }
     },
 
-    async explain(sql) {
-      const result = await pool.query("EXPLAIN (FORMAT JSON) " + sql);
+    async explain(sql, params = []) {
+      const result = await pool.query({ text: "EXPLAIN (FORMAT JSON) " + sql, values: params as unknown[] });
       return { rows: result.rows, fields: result.fields.map((f) => f.name) };
     },
 
-    async listTables() {
+    async listTables(schema = "public") {
       const result = await pool.query(
-        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+        "SELECT tablename FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",
+        [schema]
       );
       return result.rows.map((r) => r.tablename as string);
     },
 
-    async describeTable(table) {
+    async describeTable(table, schema = "public") {
       const result = await pool.query(
         `SELECT column_name, data_type, is_nullable
          FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = $1
+         WHERE table_schema = $2 AND table_name = $1
          ORDER BY ordinal_position`,
-        [table]
+        [table, schema]
       );
       return result.rows.map((r) => ({
         column: r.column_name as string,
@@ -116,29 +143,30 @@ export function createPostgresDriver(
       }));
     },
 
-    async sampleTable(table, limit) {
+    async sampleTable(table, limit, schema = "public") {
       const quoted = table.replace(/"/g, '""');
-      const result = await pool.query(`SELECT * FROM "${quoted}" LIMIT $1`, [limit]);
+      const quotedSchema = schema.replace(/"/g, '""');
+      const result = await pool.query(`SELECT * FROM "${quotedSchema}"."${quoted}" LIMIT $1`, [limit]);
       return { rows: result.rows, fields: result.fields.map((f) => f.name) };
     },
 
-    async searchSchema(term) {
+    async searchSchema(term, schema = "public") {
       const pattern = `%${term.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
       const result = await pool.query(
         `
         SELECT 'table' AS kind, table_name AS "table", NULL::text AS "column", NULL::text AS type
         FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_name ILIKE $1
+        WHERE table_schema = $2 AND table_name ILIKE $1
         UNION ALL
         SELECT 'column', c.table_name, c.column_name, c.data_type
         FROM information_schema.columns c
         JOIN information_schema.tables t
           ON c.table_schema = t.table_schema AND c.table_name = t.table_name
-        WHERE c.table_schema = 'public'
+        WHERE c.table_schema = $2
           AND (c.column_name ILIKE $1 OR c.table_name ILIKE $1)
         ORDER BY "table", kind, "column"
         `,
-        [pattern]
+        [pattern, schema]
       );
       return result.rows.map((r) => ({
         kind: r.kind as "table" | "column",
@@ -148,7 +176,7 @@ export function createPostgresDriver(
       }));
     },
 
-    async listRelationships(table) {
+    async listRelationships(table, schema = "public") {
       let sql = `
         SELECT
           tc.table_name AS from_table,
@@ -164,11 +192,11 @@ export function createPostgresDriver(
           ON ccu.constraint_name = tc.constraint_name
           AND ccu.table_schema = tc.table_schema
         WHERE tc.constraint_type = 'FOREIGN KEY'
-          AND tc.table_schema = 'public'
+          AND tc.table_schema = $1
       `;
-      const params: string[] = [];
+      const params: string[] = [schema];
       if (table) {
-        sql += " AND tc.table_name = $1";
+        sql += " AND tc.table_name = $2";
         params.push(table);
       }
       sql += " ORDER BY tc.table_name, kcu.ordinal_position";
@@ -182,20 +210,20 @@ export function createPostgresDriver(
       }));
     },
 
-    async tableStats(table) {
+    async tableStats(table, schema = "public") {
       const rel = await pool.query(
         `SELECT c.reltuples AS estimated_rows, pg_total_relation_size(c.oid) AS size_bytes
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = 'public' AND c.relname = $1`,
-        [table]
+         WHERE n.nspname = $2 AND c.relname = $1`,
+        [table, schema]
       );
       const indexRes = await pool.query(
         `SELECT indexname, indexdef
          FROM pg_indexes
-         WHERE schemaname = 'public' AND tablename = $1
+         WHERE schemaname = $2 AND tablename = $1
          ORDER BY indexname`,
-        [table]
+        [table, schema]
       );
       const indexes = (indexRes.rows as { indexname: string; indexdef: string }[]).map((r) => {
         const match = r.indexdef.match(/\(([^)]+)\)/);
@@ -229,12 +257,13 @@ export function createPostgresDriver(
       return result.rows.map((r) => r.datname as string);
     },
 
-    async getFullSchema() {
+    async getFullSchema(schema = "public") {
       const columns = await pool.query(
         `SELECT table_name, column_name, data_type, is_nullable, ordinal_position
          FROM information_schema.columns
-         WHERE table_schema = 'public'
-         ORDER BY table_name, ordinal_position`
+         WHERE table_schema = $1
+         ORDER BY table_name, ordinal_position`,
+        [schema]
       );
       const keys = await pool.query(
         `SELECT kcu.table_name, kcu.column_name, tc.constraint_type
@@ -242,8 +271,9 @@ export function createPostgresDriver(
          JOIN information_schema.key_column_usage kcu
            ON tc.constraint_name = kcu.constraint_name
            AND tc.table_schema = kcu.table_schema
-         WHERE tc.table_schema = 'public'
-           AND tc.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')`
+         WHERE tc.table_schema = $1
+           AND tc.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')`,
+        [schema]
       );
       const fks = await pool.query(
         `SELECT
@@ -259,7 +289,8 @@ export function createPostgresDriver(
            ON ccu.constraint_name = tc.constraint_name
            AND ccu.table_schema = tc.table_schema
          WHERE tc.constraint_type = 'FOREIGN KEY'
-           AND tc.table_schema = 'public'`
+           AND tc.table_schema = $1`,
+        [schema]
       );
 
       const tables = new Map<string, { column: string; type: string; nullable: boolean; pk: boolean }[]>();

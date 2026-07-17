@@ -59,8 +59,15 @@ export function sshInstructions(conn: Integration): string {
 // Static tool catalog for SSH. Every tool is individually toggleable (all default
 // on); none carry settings — confirmation in the client is the safeguard.
 export function sshToolSpecs(): ToolSpec[] {
+  // Opt-in tools ship default-off so a fresh connection exposes only run_command
+  // (the whole point of SSH). Batching, the health snapshot, saved commands, and
+  // port forwarding are one click to enable.
+  const optIn = new Set([
+    "run_batch", "debug_snapshot", "run_saved_command",
+    "list_saved_commands", "open_forward", "list_forwards", "close_forward",
+  ]);
   const t = (name: string, description: string): ToolSpec =>
-    ({ name, description, category: "read", defaultEnabled: true });
+    ({ name, description, category: "read", defaultEnabled: !optIn.has(name) });
   return [
     t("run_command", "Run a shell command on the remote host over SSH."),
     t("run_batch", "Run several shell commands in sequence on the remote host."),
@@ -75,9 +82,11 @@ export function sshToolSpecs(): ToolSpec[] {
 
 export function registerSshServer(server: ToolHost, conn: Integration, sessionIdRef: { value: string }): void {
   const gate = toolGate(conn.query_policy);
-  // Every SSH tool is individually toggleable; all default on. A disabled tool is
-  // not registered, so the agent never sees it.
-  const on = (name: string): boolean => gate.enabled(name, true);
+  // Every SSH tool is individually toggleable. The default-on state is the single
+  // source of truth in sshToolSpecs(); a disabled tool is not registered, so the
+  // agent never sees it.
+  const toolDefaults = new Map(sshToolSpecs().map((t) => [t.name, t.defaultEnabled]));
+  const on = (name: string): boolean => gate.enabled(name, toolDefaults.get(name) ?? true);
 
   // Run one command on the remote host through the activity log and return its
   // shaped MCP result. No allowlist or permission check — the command runs as-is;
