@@ -12,6 +12,7 @@ agent gets. Pluk ships with six types across four categories.
 | [`linear`](#linear) | issue‑tracker | action | 6 |
 | [`sentry`](#sentry) | observability | action | 5 |
 | [`ssh`](#ssh) | infrastructure | action | 2 |
+| [`herd`](#laravel-herd) | local‑dev | action | 3 |
 
 The **Policy** column is how Pluk decides whether a given call is allowed:
 
@@ -172,6 +173,54 @@ Host app4-ssh-infra.example.com
   ProxyCommand /opt/homebrew/bin/cloudflared access ssh --hostname %h
   IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
 ```
+
+---
+
+## Laravel Herd
+
+Give a branch its own local URL. **Action policy** — `list_sites` is read,
+`create_site` is write, `destroy_site` is delete, so a read‑only integration can
+only look.
+
+*Agent hint: run `list_sites` to see what's already up.*
+
+| Field | Notes |
+| --- | --- |
+| `app_path` | The Laravel app's git repository — the folder Herd already serves (required). |
+| `site` | Base site name; defaults to the app folder name. |
+| `tld` | Default `test`. |
+| `secure` | Serve feature sites over HTTPS. Default on. |
+| `worktree_root` | Where worktrees are created; defaults to `../<app>-worktrees`. |
+| `link_paths` | Untracked paths symlinked from the app (comma separated). Default `vendor, node_modules, public/build`. |
+| `env_file` | Copied into the worktree with `APP_URL` rewritten. Default `.env`; blank to skip. |
+| `herd_bin` | Herd CLI path; defaults to Herd's bundled binary. |
+
+| Tool | Access | What it does |
+| --- | --- | --- |
+| `list_sites` | read | List the feature sites — feature, branch, URL, worktree path. |
+| `create_site` | write | Worktree + links + `herd link`; returns the URL to test. |
+| `destroy_site` | delete | `herd unlink` + remove the worktree. |
+
+`create_site checkout-fix` on an app at `~/Herd/app` (served at `app.test`):
+
+1. `git worktree add ~/Herd/app-worktrees/checkout-fix` on branch `checkout-fix`
+   — created from `HEAD` unless the branch already exists, or `base` says
+   otherwise. Tracked files only.
+2. Symlinks each `link_paths` entry back to the app, so the worktree boots
+   without a `composer install` / `npm install`. Paths already present in the
+   worktree, or missing from the app, are reported as skipped rather than
+   clobbered.
+3. Copies `.env` with `APP_URL=https://checkout-fix.app.test`. It's copied, not
+   linked, so repointing the URL can't touch the app everyone else is using —
+   the DB and every other credential stay shared.
+4. `herd link checkout-fix.app --secure` → **https://checkout-fix.app.test**.
+
+`destroy_site` unsecures, unlinks, and removes the worktree; it never deletes the
+branch. Pass `force` when the worktree has uncommitted changes. Teardown steps
+are best‑effort — a link that's already gone is reported, not fatal.
+
+Both sides of a feature site share one database. Migrations run from a worktree
+hit the app's DB.
 
 ---
 
