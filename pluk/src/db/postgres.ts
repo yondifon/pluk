@@ -220,6 +220,15 @@ export function createPostgresDriver(
       return result.rows.map((r) => r.schema_name as string);
     },
 
+    async listDatabases() {
+      // Real databases in the cluster (not schemas). Template databases are
+      // excluded — they can't be connected to for queries anyway.
+      const result = await pool.query(
+        "SELECT datname FROM pg_database WHERE datistemplate = false AND datallowconn = true ORDER BY datname"
+      );
+      return result.rows.map((r) => r.datname as string);
+    },
+
     async getFullSchema() {
       const columns = await pool.query(
         `SELECT table_name, column_name, data_type, is_nullable, ordinal_position

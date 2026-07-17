@@ -130,6 +130,12 @@ export function createSqliteDriver(filename: string): Driver {
       return ["main"];
     },
 
+    async listDatabases() {
+      // main + any ATTACHed databases on this connection.
+      const rows = db.query("PRAGMA database_list").all() as { name: string }[];
+      return rows.map((r) => r.name);
+    },
+
     async getFullSchema() {
       const tables = (db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[]).map(r => r.name);
       const lines: string[] = [];

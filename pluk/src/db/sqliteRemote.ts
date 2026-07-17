@@ -168,6 +168,11 @@ export function createRemoteSqliteDriver(cfg: SSHConfig, sessionId: string): Dri
       return ["main"];
     },
 
+    async listDatabases() {
+      const rows = await runJson("PRAGMA database_list");
+      return rows.map((r) => String(r.name ?? ""));
+    },
+
     async getFullSchema() {
       const lines: string[] = [];
       for (const table of await this.listTables()) {

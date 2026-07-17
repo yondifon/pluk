@@ -2,6 +2,9 @@ import { readFileSync } from "fs";
 import type { Integration } from "../store/integrations.js";
 import { openSSHTunnel } from "./ssh.js";
 import { runWithSqlLog } from "./sqlLog.js";
+import { resolveOverrideDatabase } from "./dbName.js";
+
+export { isValidDatabaseName } from "./dbName.js";
 
 /** Flat SQL connection config extracted from an Integration's `config` blob. */
 export interface SqlConfig {
@@ -77,6 +80,7 @@ export interface Driver {
   searchSchema(term: string): Promise<SchemaSearchResult[]>;
   tableStats(table: string): Promise<TableStats>;
   listSchemas(): Promise<string[]>;
+  listDatabases(): Promise<string[]>;
   getFullSchema(): Promise<string>;
   testConnection(): Promise<void>;
   close(): Promise<void>;
@@ -85,9 +89,15 @@ export interface Driver {
 export async function createDriver(
   integration: Integration,
   sessionId?: string,
-  onFatal?: () => void
+  onFatal?: () => void,
+  databaseOverride?: string
 ): Promise<Driver> {
   const cfg = sqlConfigFrom(integration);
+  // A per-call target database (multi-db connections). The pin rule + name
+  // validation are enforced here so a driver is never built for a foreign
+  // database behind a pinned connection's back, even if a caller skips its own
+  // check. Throws (fail closed) on a bad name or a pin violation.
+  cfg.database = resolveOverrideDatabase(cfg.database, databaseOverride);
 
   // Resolve effective host/port, tunneling through SSH if configured
   let effectiveHost = cfg.host ?? "localhost";
@@ -146,7 +156,7 @@ export async function createDriver(
     throw err;
   }
 
-  driver = instrumentDriver(driver, integration);
+  driver = instrumentDriver(driver, integration, cfg.database);
 
   if (!tunnel) return driver;
 
@@ -159,10 +169,10 @@ export async function createDriver(
 // Tag introspection/utility methods with a source so the driver layer logs the
 // SQL they send (the user-facing query/queryReadOnly paths log richly elsewhere,
 // so they're intentionally left un-instrumented to avoid duplicate entries).
-function instrumentDriver(driver: Driver, integration: Integration): Driver {
+function instrumentDriver(driver: Driver, integration: Integration, database?: string): Driver {
   const wrap = <A extends unknown[], R>(source: string, fn: (...args: A) => Promise<R>) =>
     (...args: A): Promise<R> =>
-      runWithSqlLog({ connId: integration.id, connName: integration.name, source, group: integration.viaGroup }, () => fn(...args));
+      runWithSqlLog({ connId: integration.id, connName: integration.name, source, group: integration.viaGroup, database }, () => fn(...args));
 
   driver.explain = wrap("explain_query", driver.explain.bind(driver));
   driver.listTables = wrap("list_tables", driver.listTables.bind(driver));
@@ -172,6 +182,7 @@ function instrumentDriver(driver: Driver, integration: Integration): Driver {
   driver.searchSchema = wrap("search_schema", driver.searchSchema.bind(driver));
   driver.tableStats = wrap("table_stats", driver.tableStats.bind(driver));
   driver.listSchemas = wrap("list_schemas", driver.listSchemas.bind(driver));
+  driver.listDatabases = wrap("list_databases", driver.listDatabases.bind(driver));
   driver.getFullSchema = wrap("schema_resource", driver.getFullSchema.bind(driver));
   return driver;
 }

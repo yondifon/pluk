@@ -46,6 +46,7 @@ function fakeDriver(): Driver {
     searchSchema: async () => [],
     tableStats: async () => ({ table: "t", estimatedRows: null, sizeBytes: null, indexes: [] }),
     listSchemas: async () => [],
+    listDatabases: async () => [],
     getFullSchema: async () => "",
     testConnection: async () => {},
     close: async () => {},

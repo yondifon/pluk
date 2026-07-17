@@ -3,7 +3,7 @@ import { mkdirSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import type { Integration } from "../../store/integrations.js";
-import type { Driver } from "../../db/index.js";
+import { isValidDatabaseName, type Driver } from "../../db/index.js";
 import { sqlPolicyFromSettings, evaluate, capRows, dialectFor, policyDescription, parsePostgresCost } from "../../mcp/policy.js";
 import { toolGate } from "../../mcp/toolConfig.js";
 import type { ConfigField, ToolSpec } from "../types.js";
@@ -96,6 +96,7 @@ export function sqlToolSpecs(): ToolSpec[] {
     read("search_schema", "Find tables or columns matching a term."),
     read("table_stats", "Get cheap table statistics (estimated rows, size, indexes)."),
     read("list_schemas", "List all schemas or databases."),
+    read("list_databases", "List databases on the server (targets for the `database` argument)."),
     read("export_query", "Run a SQL query and save results to a local CSV or JSON file."),
     read("run_saved_query", "Run a saved query by name."),
     read("list_saved_queries", "List saved queries for this connection."),
@@ -122,14 +123,58 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
     timeout: z.number().int().positive().max(600).optional().describe("Max seconds to wait before aborting the query (default 30)."),
   };
 
+  // Multi-database targeting. A connection configured WITH a database at setup is
+  // *pinned*: it can only ever reach that database, and the `database` argument is
+  // not even exposed (so the agent cannot ask for another). A connection with no
+  // database is multi-db: each call may name a target, served by its own isolated
+  // pool. Cross-database data isolation is ultimately enforced by the privileges
+  // GRANTed to the connection's DB user — the pin is the app-level scope on top.
+  const pinnedDb = typeof conn.config.database === "string" && conn.config.database.trim() !== ""
+    ? conn.config.database.trim()
+    : undefined;
+  const supportsDbArg = !pinnedDb && conn.type !== "sqlite";
+  const dbOption: Record<string, z.ZodTypeAny> = supportsDbArg ? {
+    database: z.string().max(128).optional().describe(
+      "Database to run against on this server. This connection has no fixed database, so name the one to use (see list_schemas). Access is limited to databases the connection's user was granted."
+    ),
+  } : {};
+
+  // Resolve a requested target database against the pin rule. Pinned connections
+  // ignore any stray value (the arg isn't exposed); multi-db connections validate
+  // the name and fall back to the server default when none is given.
+  function resolveDatabase(requested?: string): { ok: true; db?: string } | { ok: false; error: string } {
+    if (pinnedDb) return { ok: true, db: undefined };
+    if (requested === undefined || requested === "") return { ok: true, db: undefined };
+    if (!isValidDatabaseName(requested)) {
+      return { ok: false, error: `Invalid database name "${requested}". Allowed: letters, digits, _, $, -.` };
+    }
+    return { ok: true, db: requested };
+  }
+
+  // Block statements that switch the connection's active database out from under
+  // the pool. `USE db` (MySQL) both defeats the database pin and poisons a pooled
+  // connection for later queries; the correct way to reach another database is the
+  // `database` argument, which routes to a separate, isolated pool.
+  function switchBlock(sql: string): string | undefined {
+    const s = sql.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ").replace(/#[^\n]*/g, " ");
+    // Match a USE at the start or after a `;` — the latter matters only when
+    // stacked statements are allowed (migrations/destructive mode).
+    if (/(^|;)\s*use\s+\S/i.test(s)) {
+      return pinnedDb
+        ? `This connection is locked to database "${pinnedDb}". USE is blocked.`
+        : "USE is blocked. Pass the `database` argument to choose a database instead.";
+    }
+    return undefined;
+  }
+
   // Read-only introspection tools share one shape: acquire the pooled driver,
   // run under the tool timeout, evict on failure. `fn` produces the response text.
   // Introspection statements are recorded by the driver layer, so there is no
   // tool-level log entry here (only the gated query tools below create one).
-  async function introspect(label: string, fn: (driver: Driver) => Promise<string>): Promise<ToolResult> {
+  async function introspect(label: string, fn: (driver: Driver) => Promise<string>, database?: string): Promise<ToolResult> {
     const sid = sessionIdRef.value;
     try {
-      const driver = await getDriver(sid, conn);
+      const driver = await getDriver(sid, conn, database);
       return await withToolTimeout((async (): Promise<ToolResult> => ok(await fn(driver)))(), label);
     } catch (e) {
       // A connect awaiting an interactive approval isn't broken — evicting it
@@ -143,12 +188,21 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
     }
   }
 
+  // Resolve the target database from tool args, then run an introspection under
+  // it. Surfaces a pin/validation error before touching the pool.
+  function introspectDb(label: string, database: string | undefined, fn: (driver: Driver) => Promise<string>): Promise<ToolResult> {
+    const r = resolveDatabase(database);
+    if (!r.ok) return Promise.resolve(err(r.error));
+    return introspect(label, fn, r.db);
+  }
+
   type QueryRows = { rows: unknown[]; fields?: string[] };
   type SqlResultMeta = {
     env: string;
     host: string;
     connection: string;
     type: string;
+    database?: string;
     fields?: string[];
     rows: unknown[];
     truncated: boolean;
@@ -157,12 +211,19 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
     returned_rows: number;
   };
 
-  function resultWithMeta(result: QueryRows, rows: unknown[], truncated: boolean, rowCap: number | null): SqlResultMeta {
+  // The database a call actually ran against: the per-call target, else the
+  // connection's pinned/configured database (undefined = unpinned server default).
+  function effectiveDb(database?: string): string | undefined {
+    return database ?? pinnedDb;
+  }
+
+  function resultWithMeta(result: QueryRows, rows: unknown[], truncated: boolean, rowCap: number | null, database?: string): SqlResultMeta {
     return {
       env: conn.environment ?? "development",
       host: String(conn.config.host ?? conn.config.filename ?? "localhost"),
       connection: conn.name,
       type: conn.type,
+      database: effectiveDb(database),
       fields: result.fields ?? [],
       rows,
       truncated,
@@ -226,17 +287,17 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
 
   // Run a SQL statement through the policy gate + activity log, returning rows
   // (masked + row-capped). Shared by `query` and `run_saved_query`.
-  function gatedQuery(sql: string, source: string, timeoutMs?: number, rowCap?: number): Promise<ToolResult> {
+  function gatedQuery(sql: string, source: string, timeoutMs?: number, rowCap?: number, database?: string): Promise<ToolResult> {
     const verdict = evaluate(sql, policy, dialect);
     const effectiveCap = policy.maxRows === null ? rowCap ?? null : Math.min(rowCap ?? policy.maxRows, policy.maxRows);
     return runGated(
       conn,
-      { category: verdict.categories, action: source, detail: sql },
+      { category: verdict.categories, action: source, detail: sql, database: database ?? pinnedDb },
       async (logId) => {
         const sid = sessionIdRef.value;
         const queryAc = registerQueryAbort(logId, sid);
         try {
-          const driver = await getDriver(sid, conn);
+          const driver = await getDriver(sid, conn, database);
           const block = await costBlock(driver, sql);
           if (block) return { blocked: block };
 
@@ -244,7 +305,7 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
           const { rows, truncated, limit } = capRows(result.rows, effectiveCap);
           const maskedRows = mask(rows);
           const maskedResult: LogSnapshot & QueryRows = { fields: result.fields, rows: maskedRows };
-          let text = JSON.stringify(resultWithMeta(result, maskedRows, truncated, limit), null, 2);
+          let text = JSON.stringify(resultWithMeta(result, maskedRows, truncated, limit, database), null, 2);
           if (truncated) {
             text += `\n\n[Row limit: showing first ${limit} of ${result.rows.length} rows. Add a LIMIT clause to see all results.]`;
           }
@@ -253,7 +314,7 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
           clearQueryAbort(logId);
         }
       },
-      { precheck: () => (verdict.ok ? undefined : verdict.reason ?? "blocked"), ...queryGateOpts },
+      { precheck: () => switchBlock(sql) ?? (verdict.ok ? undefined : verdict.reason ?? "blocked"), ...queryGateOpts },
     );
   }
 
@@ -311,23 +372,28 @@ ${sql}` } },
 
   if (on("query")) server.tool(
     "query",
-    `Run a SQL query against the database. ${policyDesc}`,
+    `Run a SQL query against the database. ${policyDesc}${supportsDbArg ? " This connection has no fixed database — pass `database` to choose one." : ""}`,
     {
       sql: z.string().optional().describe("SQL query to execute"),
       query: z.string().optional().describe("Alias for sql"),
       ...timeoutOption,
+      ...dbOption,
       limit: z.number().int().positive().max(1_000_000).optional().describe("Max rows to return, overriding the default cap (1000)."),
     },
     (args) => {
       const { sql, query, limit } = args;
       const timeout = (args as typeof args & { timeout?: number }).timeout;
+      const database = (args as typeof args & { database?: string }).database;
       const statement = sql ?? query;
-      return statement ? gatedQuery(statement, "query", toTimeoutMs(timeout), limit) : Promise.resolve(missingSqlArg());
+      if (!statement) return Promise.resolve(missingSqlArg());
+      const r = resolveDatabase(database);
+      if (!r.ok) return Promise.resolve(err(r.error));
+      return gatedQuery(statement, "query", toTimeoutMs(timeout), limit, r.db);
     },
   );
 
-  if (on("list_tables")) server.tool("list_tables", "List all tables in the database", () =>
-    introspect("list_tables", async (driver) => (await driver.listTables()).join("\n")));
+  if (on("list_tables")) server.tool("list_tables", "List all tables in the database", { ...dbOption }, (args) =>
+    introspectDb("list_tables", (args as { database?: string }).database, async (driver) => (await driver.listTables()).join("\n")));
 
   if (on("sample_table")) server.tool(
     "sample_table",
@@ -335,19 +401,23 @@ ${sql}` } },
     {
       table: z.string().describe("Table name"),
       limit: z.number().int().min(1).max(1000).default(20).describe("Max rows to preview"),
+      ...dbOption,
     },
-    ({ table, limit }) =>
-      introspect("sample_table", async (driver) => {
+    ({ table, limit, ...rest }) => {
+      const r = resolveDatabase((rest as { database?: string }).database);
+      if (!r.ok) return Promise.resolve(err(r.error));
+      return introspect("sample_table", async (driver) => {
         const effectiveLimit = policy.maxRows === null ? limit : Math.min(limit, policy.maxRows);
         const result = await driver.sampleTable(table, effectiveLimit);
         const { rows, truncated, limit: rowCap } = capRows(result.rows, policy.maxRows);
         const maskedRows = maskedColumns.length > 0 ? rows.map(r => maskRow(r as Record<string, unknown>, maskedColumns)) : rows;
-        let text = JSON.stringify(resultWithMeta(result, maskedRows, truncated, rowCap), null, 2);
+        let text = JSON.stringify(resultWithMeta(result, maskedRows, truncated, rowCap, r.db), null, 2);
         if (truncated) {
           text += `\n\n[Row limit: showing first ${policy.maxRows} of ${result.rows.length} rows.]`;
         }
         return text;
-      })
+      }, r.db);
+    }
   );
 
   if (on("explain_query")) server.tool(
@@ -356,56 +426,66 @@ ${sql}` } },
     {
       sql: z.string().optional().describe("SQL query to explain"),
       query: z.string().optional().describe("Alias for sql"),
+      ...dbOption,
     },
-    ({ sql, query }) => {
+    ({ sql, query, ...rest }) => {
       const statement = sql ?? query;
       if (!statement) return Promise.resolve(missingSqlArg());
+      const r = resolveDatabase((rest as { database?: string }).database);
+      if (!r.ok) return Promise.resolve(err(r.error));
       // `explain` runs no policy-changing statement, so a passing query is logged
       // by the driver layer (via introspect), not as a gated tool call. A blocked
       // query is still recorded so the audit log shows the denial.
       const verdict = evaluate(statement, policy, dialect);
       if (!verdict.ok) {
-        logQuery(conn.id, conn.name, statement, "blocked", verdict.categories, verdict.reason ?? undefined, undefined, undefined, undefined, conn.viaGroup);
+        logQuery(conn.id, conn.name, statement, "blocked", verdict.categories, verdict.reason ?? undefined, undefined, undefined, undefined, conn.viaGroup, r.db ?? pinnedDb);
         return Promise.resolve(err(`Blocked: ${verdict.reason}`));
       }
-      return introspect("explain_query", async (driver) => JSON.stringify(await driver.explain(statement), null, 2));
+      return introspect("explain_query", async (driver) => JSON.stringify(await driver.explain(statement), null, 2), r.db);
     }
   );
 
   if (on("describe_table")) server.tool(
     "describe_table",
     "Get column definitions for a table",
-    { table: z.string().describe("Table name") },
-    ({ table }) =>
-      introspect("describe_table", async (driver) => JSON.stringify(await driver.describeTable(table), null, 2))
+    { table: z.string().describe("Table name"), ...dbOption },
+    ({ table, ...rest }) =>
+      introspectDb("describe_table", (rest as { database?: string }).database, async (driver) => JSON.stringify(await driver.describeTable(table), null, 2))
   );
 
   if (on("list_relationships")) server.tool(
     "list_relationships",
     "List foreign key relationships between tables",
-    { table: z.string().optional().describe("Filter to a specific table (optional)") },
-    ({ table }) =>
-      introspect("list_relationships", async (driver) => JSON.stringify(await driver.listRelationships(table), null, 2))
+    { table: z.string().optional().describe("Filter to a specific table (optional)"), ...dbOption },
+    ({ table, ...rest }) =>
+      introspectDb("list_relationships", (rest as { database?: string }).database, async (driver) => JSON.stringify(await driver.listRelationships(table), null, 2))
   );
 
   if (on("search_schema")) server.tool(
     "search_schema",
     "Find tables or columns matching a term",
-    { term: z.string().describe("Search term (substring match on table or column names)") },
-    ({ term }) =>
-      introspect("search_schema", async (driver) => JSON.stringify(await driver.searchSchema(term), null, 2))
+    { term: z.string().describe("Search term (substring match on table or column names)"), ...dbOption },
+    ({ term, ...rest }) =>
+      introspectDb("search_schema", (rest as { database?: string }).database, async (driver) => JSON.stringify(await driver.searchSchema(term), null, 2))
   );
 
   if (on("table_stats")) server.tool(
     "table_stats",
     "Get cheap table statistics (estimated rows, size, indexes)",
-    { table: z.string().describe("Table name") },
-    ({ table }) =>
-      introspect("table_stats", async (driver) => JSON.stringify(await driver.tableStats(table), null, 2))
+    { table: z.string().describe("Table name"), ...dbOption },
+    ({ table, ...rest }) =>
+      introspectDb("table_stats", (rest as { database?: string }).database, async (driver) => JSON.stringify(await driver.tableStats(table), null, 2))
   );
 
   if (on("list_schemas")) server.tool("list_schemas", "List all schemas or databases", () =>
     introspect("list_schemas", async (driver) => (await driver.listSchemas()).join("\n")));
+
+  if (on("list_databases")) server.tool(
+    "list_databases",
+    supportsDbArg
+      ? "List databases on the server. Pass one of these as `database` on other tools to query it."
+      : "List databases on the server.",
+    () => introspect("list_databases", async (driver) => (await driver.listDatabases()).join("\n")));
 
   if (on("export_query")) server.tool(
     "export_query",
@@ -415,22 +495,25 @@ ${sql}` } },
       query: z.string().optional().describe("Alias for sql"),
       format: z.enum(["csv", "json"]).default("csv").describe("Export file format"),
       ...timeoutOption,
+      ...dbOption,
     },
     (args) => {
       const { sql, query, format } = args;
       const timeout = (args as typeof args & { timeout?: number }).timeout;
       const statement = sql ?? query;
       if (!statement) return Promise.resolve(missingSqlArg());
+      const r = resolveDatabase((args as typeof args & { database?: string }).database);
+      if (!r.ok) return Promise.resolve(err(r.error));
       const verdict = evaluate(statement, policy, dialect);
       const timeoutMs = toTimeoutMs(timeout);
       return runGated(
         conn,
-        { category: verdict.categories, action: "export_query", detail: statement },
+        { category: verdict.categories, action: "export_query", detail: statement, database: r.db ?? pinnedDb },
         async (logId) => {
           const sid = sessionIdRef.value;
           const queryAc = registerQueryAbort(logId, sid);
           try {
-            const driver = await getDriver(sid, conn);
+            const driver = await getDriver(sid, conn, r.db);
             const result = await runStatement<QueryRows>(driver, statement, queryAc.signal, "export_query", timeoutMs);
 
             const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);
@@ -439,7 +522,7 @@ ${sql}` } },
             const fields = result.fields ?? (maskedRows[0] ? Object.keys(maskedRows[0] as object) : []);
             const payload = format === "csv"
               ? toCsv(maskedRows, fields)
-              : JSON.stringify(resultWithMeta({ ...result, fields }, maskedRows, truncated, limit), null, 2);
+              : JSON.stringify(resultWithMeta({ ...result, fields }, maskedRows, truncated, limit, r.db), null, 2);
             const filePath = makeExportPath(conn.name, format);
             await Bun.write(filePath, payload);
 
@@ -451,7 +534,7 @@ ${sql}` } },
             clearQueryAbort(logId);
           }
         },
-        { precheck: () => (verdict.ok ? undefined : verdict.reason ?? "blocked"), ...queryGateOpts },
+        { precheck: () => switchBlock(statement) ?? (verdict.ok ? undefined : verdict.reason ?? "blocked"), ...queryGateOpts },
       );
     }
   );
@@ -462,13 +545,16 @@ ${sql}` } },
     {
       name: z.string().describe("Name of the saved query"),
       ...timeoutOption,
+      ...dbOption,
     },
     (args) => {
       const { name } = args;
       const timeout = (args as typeof args & { timeout?: number }).timeout;
+      const r = resolveDatabase((args as typeof args & { database?: string }).database);
+      if (!r.ok) return Promise.resolve(err(r.error));
       const saved = getSavedQuery(conn.id, name);
       if (!saved) return Promise.resolve(err(`Saved query "${name}" not found.`));
-      return gatedQuery(saved.sql, "run_saved_query", toTimeoutMs(timeout));
+      return gatedQuery(saved.sql, "run_saved_query", toTimeoutMs(timeout), undefined, r.db);
     }
   );
 

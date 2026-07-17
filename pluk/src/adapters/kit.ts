@@ -44,6 +44,7 @@ export interface GateMeta {
   category: string; // log category (action category, SQL statement categories, …)
   action: string;   // originating tool / operation (the log `source`)
   detail: string;   // human-readable line stored in the log (`sql` column)
+  database?: string; // target database when the call selected one (multi-db SQL connections)
 }
 
 export interface GateOpts {
@@ -73,11 +74,11 @@ export async function runGated(
 ): Promise<ToolResult> {
   const block = opts.precheck?.();
   if (block !== undefined) {
-    logQuery(conn.id, conn.name, meta.detail, "blocked", meta.category, block, undefined, meta.action, undefined, conn.viaGroup);
+    logQuery(conn.id, conn.name, meta.detail, "blocked", meta.category, block, undefined, meta.action, undefined, conn.viaGroup, meta.database);
     return err(`Blocked: ${block}`);
   }
 
-  const logId = createLogEntry(conn.id, conn.name, meta.detail, "pending", meta.category, undefined, meta.action, conn.viaGroup);
+  const logId = createLogEntry(conn.id, conn.name, meta.detail, "pending", meta.category, undefined, meta.action, conn.viaGroup, meta.database);
   try {
     const outcome = await run(logId);
     if ("blocked" in outcome) {

@@ -28,7 +28,7 @@ mock.module("../db/index.js", () => ({
   },
 }));
 
-const { getDriver } = await import("../adapters/sql/pool.js");
+const { getDriver, evictDriver } = await import("../adapters/sql/pool.js");
 const { closeSession } = await import("./pool.js");
 
 const integration = { id: "i1", name: "DB", type: "postgres", config: {} } as never;
@@ -79,6 +79,42 @@ test("a dead long-idle driver fails the probe and is rebuilt", async () => {
   const d2 = (await getDriver("s1", integration)) as unknown as { id: number };
   expect(d2.id).not.toBe(d1.id); // probe failed → fresh driver
   expect(createCount).toBe(2);
+});
+
+test("each target database gets its own isolated driver; same database reuses", async () => {
+  const t0 = new Date("2026-06-20T00:00:00Z");
+  setSystemTime(t0);
+
+  // Two different databases on one connection must never share a pool: a call
+  // for `analytics` must not be served the driver built for `billing`.
+  const a = (await getDriver("s1", integration, "billing")) as unknown as { id: number };
+  const b = (await getDriver("s1", integration, "analytics")) as unknown as { id: number };
+  expect(b.id).not.toBe(a.id);
+  expect(createCount).toBe(2);
+
+  // Same (session, connection, database) reuses its driver — no rebuild.
+  const a2 = (await getDriver("s1", integration, "billing")) as unknown as { id: number };
+  expect(a2.id).toBe(a.id);
+  expect(createCount).toBe(2);
+
+  // The connection's default database ("" segment) is its own pool too.
+  await getDriver("s1", integration);
+  expect(createCount).toBe(3);
+});
+
+test("evictDriver drops every per-database driver for a connection", async () => {
+  const t0 = new Date("2026-06-20T00:00:00Z");
+  setSystemTime(t0);
+  await getDriver("s1", integration, "billing");
+  await getDriver("s1", integration, "analytics");
+  expect(createCount).toBe(2);
+
+  evictDriver("s1", "i1");
+
+  // Both databases were dropped → each rebuilds on next use.
+  await getDriver("s1", integration, "billing");
+  await getDriver("s1", integration, "analytics");
+  expect(createCount).toBe(4);
 });
 
 test("concurrent stale callers share the probe and rebuilt driver", async () => {

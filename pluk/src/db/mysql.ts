@@ -193,6 +193,14 @@ export function createMysqlDriver(
       return (rows as Record<string, string>[]).map((r) => Object.values(r)[0] ?? "");
     },
 
+    // In MySQL a database and a schema are the same thing, so this mirrors
+    // listSchemas — but it exists so the multi-db discovery tool works uniformly
+    // across engines.
+    async listDatabases() {
+      const [rows] = await pool.query("SHOW DATABASES");
+      return (rows as Record<string, string>[]).map((r) => Object.values(r)[0] ?? "");
+    },
+
     async getFullSchema() {
       const [columns] = await pool.query(
         `SELECT table_name, column_name, data_type, is_nullable, ordinal_position

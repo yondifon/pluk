@@ -10,6 +10,7 @@ interface SqlLogContext {
   connName: string;
   source: string;
   group?: LogGroup; // set when the statement is run through a group endpoint
+  database?: string; // effective target database for this driver (multi-db connections)
 }
 
 const als = new AsyncLocalStorage<SqlLogContext>();
@@ -22,5 +23,5 @@ export function runWithSqlLog<T>(ctx: SqlLogContext, fn: () => Promise<T>): Prom
 export function recordExecutedSql(sql: string, rowCount: number | null, error?: string): void {
   const ctx = als.getStore();
   if (!ctx) return;
-  logExecutedStatement(ctx.connId, ctx.connName, sql, ctx.source, rowCount, error, ctx.group);
+  logExecutedStatement(ctx.connId, ctx.connName, sql, ctx.source, rowCount, error, ctx.group, ctx.database);
 }
