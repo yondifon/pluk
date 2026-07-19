@@ -42,7 +42,9 @@ struct GroupDetailView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         endpointSection
-                        ConfigSnippetSection(mcpKey: group.mcpKey, mcpURL: group.mcpURL)
+                        ConfigSnippetSection(mcpKey: group.mcpKey, mcpURL: group.mcpURL,
+                                             title: group.name, id: group.id,
+                                             toastCenter: store.toastCenter)
                         membersSection
                     }
                     .padding(18)

@@ -305,9 +305,14 @@ struct ConnectionFormView: View {
     // each with its own settings shown when enabled. Replaces the old per-policy
     // sections (SQL statement categories, action read/write, SSH confirm note).
     private var toolsSection: some View {
-        DetailSection("Tools") {
+        let enabledCount = draft.tools.filter { draft.toolConfig[$0.name]?.enabled ?? $0.defaultEnabled }.count
+        // Grouped by default state, not current on/off, so a row never jumps
+        // between sections when you toggle it — you can enable several in a row.
+        let defaults = draft.tools.filter { $0.defaultEnabled }
+        let extras = draft.tools.filter { !$0.defaultEnabled }
+        return DetailSection("Tools") {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Turn off tools to shrink what the agent sees. Expand an enabled tool to set how it behaves.")
+                Text("\(enabledCount) of \(draft.tools.count) on. Enable tools to give the agent more, disable to shrink what it sees. Expand an enabled tool to configure it.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -316,14 +321,38 @@ struct ConnectionFormView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 4)
 
-                ForEach(draft.tools) { tool in
-                    toolRow(tool)
-                    if tool.id != draft.tools.last?.id {
-                        Divider().padding(.leading, 36)
+                toolRows(defaults)
+
+                if !extras.isEmpty {
+                    Divider().padding(.top, 4)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("More tools")
+                            .font(.dev(size: 11, weight: .medium))
+                            .foregroundColor(.primary)
+                        Text("Off by default — enable the ones you need.")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 8)
+                    .padding(.bottom, 6)
+
+                    toolRows(extras)
                 }
             }
             .padding(.bottom, 6)
+        }
+    }
+
+    // A tool list with hairline dividers between rows (no trailing divider).
+    @ViewBuilder
+    private func toolRows(_ tools: [AdapterToolDef]) -> some View {
+        ForEach(tools) { tool in
+            toolRow(tool)
+            if tool.id != tools.last?.id {
+                Divider().padding(.leading, 36)
+            }
         }
     }
 

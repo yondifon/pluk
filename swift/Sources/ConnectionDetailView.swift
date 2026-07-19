@@ -19,22 +19,64 @@ enum MCPClient: String, CaseIterable, Identifiable {
         }
     }
 
-    // Project-scoped config, relative to the repo root, for clients that support
-    // it — Pluk hands out one URL per project, so per-project config is the
-    // intended home. Windsurf and Antigravity have no project scope, so they
-    // fall back to their single global file.
-    var configPath: String {
+    var format: ConfigFormat { self == .codex ? .toml : .json }
+
+    // JSON key holding the server map. opencode nests under "mcp"; every other
+    // JSON client uses "mcpServers". (Codex is TOML and ignores this.)
+    var containerKey: String { self == .opencode ? "mcp" : "mcpServers" }
+
+    // Config locations this client understands. Project-scoped clients get a
+    // per-repo file; the rest only have a single global file.
+    var supportedScopes: [ConfigScope] {
         switch self {
-        case .opencode: "opencode.json"
-        case .codex: ".codex/config.toml"
-        case .claudeCode: ".mcp.json"
-        case .cursor: ".cursor/mcp.json"
-        case .windsurf: "~/.codeium/windsurf/mcp_config.json"
-        case .antigravity: "~/.gemini/config/mcp_config.json"
+        case .opencode, .claudeCode, .cursor: [.project, .global]
+        case .codex, .windsurf, .antigravity: [.global]
+        }
+    }
+
+    // Config file for a scope. Project paths are relative to a chosen repo root;
+    // global paths are absolute (a leading ~ is expanded by the injector).
+    // Global-only clients fall back to their global path for either scope.
+    func configPath(_ scope: ConfigScope) -> String {
+        switch scope {
+        case .project:
+            switch self {
+            case .opencode: "opencode.json"
+            case .claudeCode: ".mcp.json"
+            case .cursor: ".cursor/mcp.json"
+            case .codex, .windsurf, .antigravity: configPath(.global)
+            }
+        case .global:
+            switch self {
+            case .opencode: "~/.config/opencode/opencode.json"
+            case .codex: "~/.codex/config.toml"
+            case .claudeCode: "~/.claude.json"
+            case .cursor: "~/.cursor/mcp.json"
+            case .windsurf: "~/.codeium/windsurf/mcp_config.json"
+            case .antigravity: "~/.gemini/config/mcp_config.json"
+            }
         }
     }
 
     var configLanguage: String { self == .codex ? "toml" : "json" }
+
+    // The server's value object as written into a JSON config. Mirrors the shape
+    // rendered by `snippet` below — keep the two in sync. (Codex is TOML; the
+    // injector writes its `url = "…"` block directly.)
+    func entryObject(url: String) -> [String: Any] {
+        switch self {
+        case .opencode:
+            return ["type": "remote", "enabled": true, "url": url, "oauth": false]
+        case .claudeCode:
+            return ["type": "http", "url": url]
+        case .cursor:
+            return ["command": "bunx", "args": ["mcp-remote", url]]
+        case .windsurf, .antigravity:
+            return ["serverUrl": url]
+        case .codex:
+            return ["url": url]
+        }
+    }
 
     func snippet(key: String, url: String) -> String {
         switch self {
@@ -103,8 +145,13 @@ enum MCPClient: String, CaseIterable, Identifiable {
 struct ConfigSnippetSection: View {
     let mcpKey: String
     let mcpURL: String
+    // Identify the integration/group for the result toast.
+    let title: String
+    let id: String
+    let toastCenter: ToastCenter?
 
     @State private var selectedClient: MCPClient = .opencode
+    @State private var selectedScope: ConfigScope = .project
     @State private var copied = false
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -130,7 +177,26 @@ struct ConfigSnippetSection: View {
                 }
                 .pickerStyle(.menu)
                 .fixedSize()
+                .onChange(of: selectedClient) { _, client in
+                    // Keep the scope valid when switching to a global-only client.
+                    if !client.supportedScopes.contains(selectedScope) {
+                        selectedScope = client.supportedScopes.first ?? .global
+                    }
+                }
+                // Only offer a scope choice when the client has more than one.
+                if selectedClient.supportedScopes.count > 1 {
+                    Picker("", selection: $selectedScope) {
+                        ForEach(selectedClient.supportedScopes) { scope in
+                            Text(scope.label).tag(scope)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                }
                 Spacer()
+                Button("Add") { addToConfig() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 Button(copied ? "Copied!" : "Copy") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(snippet, forType: .string)
@@ -154,7 +220,7 @@ struct ConfigSnippetSection: View {
                 HStack(spacing: 5) {
                     Text("Add to")
                         .foregroundColor(.secondary)
-                    Text(selectedClient.configPath)
+                    Text(selectedClient.configPath(selectedScope))
                         .font(.dev(size: 11, weight: .semibold))
                         .textSelection(.enabled)
                 }
@@ -167,6 +233,49 @@ struct ConfigSnippetSection: View {
             }
             .padding(10)
         }
+    }
+
+    // Write the entry into the selected client's config. Project scope asks for
+    // the repo folder first; global writes straight to the user-level file.
+    private func addToConfig() {
+        guard selectedScope != .project else {
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Add Here"
+            panel.message = "Choose the project folder for \(selectedClient.label)"
+            guard panel.runModal() == .OK, let dir = panel.url?.path else { return }
+            inject(projectDir: dir)
+            return
+        }
+        inject(projectDir: nil)
+    }
+
+    private func inject(projectDir: String?) {
+        do {
+            let result = try MCPConfigInjector.inject(
+                client: selectedClient, scope: selectedScope,
+                projectDir: projectDir, key: mcpKey, url: mcpURL)
+            switch result {
+            case .added(let path):
+                presentToast(.success, "Added \(mcpKey) to \(pretty(path))")
+            case .skipped(let path):
+                presentToast(.success, "\(mcpKey) already in \(pretty(path)) — left unchanged")
+            }
+        } catch {
+            presentToast(.error, error.localizedDescription)
+        }
+    }
+
+    private func presentToast(_ kind: Toast.Kind, _ message: String) {
+        toastCenter?.present(Toast(connectionId: id, title: title, message: message, kind: kind))
+    }
+
+    // Collapse the home dir back to ~ so the toast path stays readable.
+    private func pretty(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
     }
 }
 
@@ -308,7 +417,9 @@ struct ConnectionDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 mcpURLSection
-                ConfigSnippetSection(mcpKey: conn.mcpKey, mcpURL: conn.mcpURL)
+                ConfigSnippetSection(mcpKey: conn.mcpKey, mcpURL: conn.mcpURL,
+                                     title: conn.name, id: conn.id,
+                                     toastCenter: store.toastCenter)
                 connectionDetailsSection
             }
             .padding(18)
@@ -500,8 +611,12 @@ struct ConnectionDetailView: View {
                     DetailSection("Tools") {
                         InspectorRow("Enabled", value: "\(tools.filter(isEnabled).count) of \(tools.count)")
                     }
+                    // Enabled first: the surface the agent actually has, then the
+                    // off tools below for reference.
                     DetailSection("Exposed to the agent") {
-                        ForEach(tools) { tool in toolStatusRow(tool) }
+                        ForEach(tools.filter(isEnabled) + tools.filter { !isEnabled($0) }) { tool in
+                            toolStatusRow(tool)
+                        }
                     }
                 }
             }
