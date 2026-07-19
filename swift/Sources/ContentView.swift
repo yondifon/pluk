@@ -10,6 +10,9 @@ struct ContentView: View {
     @State private var toastCenter = ToastCenter()
     @State private var search = ""
     @FocusState private var searchFocused: Bool
+    @State private var typeFilter: Set<String> = []
+    @State private var envFilter: Set<Environment> = []
+    @State private var showFilters = false
 
     // A delete awaiting confirmation. Every delete entry point (sidebar context
     // menu, detail header button, for both integrations and groups) routes here
@@ -66,25 +69,67 @@ struct ContentView: View {
         search.trimmingCharacters(in: .whitespaces)
     }
 
+    private var filtersActive: Bool { !typeFilter.isEmpty || !envFilter.isEmpty }
+    private var isNarrowed: Bool { !query.isEmpty || filtersActive }
+
+    // Type filters are integration-scoped (groups have no adapter type), so any
+    // active type filter hides groups. The environment filter keeps groups whose
+    // scope matches — plus unscoped/mixed groups, which may span the chosen env.
     private var filteredGroups: [ConnectionGroup] {
-        guard !query.isEmpty else { return store.groups }
-        return store.groups.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        guard typeFilter.isEmpty else { return [] }
+        return store.groups.filter { group in
+            let matchSearch = query.isEmpty || group.name.localizedCaseInsensitiveContains(query)
+            let matchEnv = envFilter.isEmpty || group.environment.map(envFilter.contains) ?? true
+            return matchSearch && matchEnv
+        }
+    }
+
+    private var filteredConnections: [Connection] {
+        store.connections.filter { matchesSearch($0) && matchesType($0) && matchesEnv($0) }
     }
 
     // Match name, adapter type (raw + label), and environment so users can filter
     // by "postgres", "prod", or a connection's name interchangeably.
-    private var filteredConnections: [Connection] {
-        guard !query.isEmpty else { return store.connections }
-        return store.connections.filter { conn in
-            conn.name.localizedCaseInsensitiveContains(query)
-                || conn.type.localizedCaseInsensitiveContains(query)
-                || conn.typeLabel.localizedCaseInsensitiveContains(query)
-                || conn.environment.label.localizedCaseInsensitiveContains(query)
-        }
+    private func matchesSearch(_ conn: Connection) -> Bool {
+        guard !query.isEmpty else { return true }
+        return conn.name.localizedCaseInsensitiveContains(query)
+            || conn.type.localizedCaseInsensitiveContains(query)
+            || conn.typeLabel.localizedCaseInsensitiveContains(query)
+            || conn.environment.label.localizedCaseInsensitiveContains(query)
+    }
+
+    private func matchesType(_ conn: Connection) -> Bool {
+        typeFilter.isEmpty || typeFilter.contains(conn.type)
+    }
+
+    private func matchesEnv(_ conn: Connection) -> Bool {
+        envFilter.isEmpty || envFilter.contains(conn.environment)
     }
 
     private var noMatches: Bool {
-        !query.isEmpty && filteredGroups.isEmpty && filteredConnections.isEmpty
+        isNarrowed && filteredGroups.isEmpty && filteredConnections.isEmpty
+    }
+
+    // Filter menu options — only adapter types / environments actually in use, so
+    // the popover never offers a filter that would yield nothing.
+    private var availableTypes: [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for conn in store.connections where seen.insert(conn.type).inserted {
+            out.append(conn.type)
+        }
+        return out.sorted { label(forType: $0).localizedCaseInsensitiveCompare(label(forType: $1)) == .orderedAscending }
+    }
+
+    private var availableEnvs: [Environment] {
+        let present = Set(store.connections.map(\.environment)).union(store.groups.compactMap(\.environment))
+        return Environment.allCases.filter { present.contains($0) }
+    }
+
+    private func label(forType type: String) -> String {
+        store.adapters.first { $0.id == type }?.label
+            ?? ConnectionType(rawValue: type)?.label
+            ?? type.capitalized
     }
 
     var body: some View {
@@ -161,7 +206,7 @@ struct ContentView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            searchField
+            searchRow
             sidebarList
         }
         .background(Color.pageSurface)
@@ -193,6 +238,16 @@ struct ContentView: View {
         }
     }
 
+    private var searchRow: some View {
+        HStack(spacing: 6) {
+            searchField
+            filterButton
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+    }
+
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
@@ -219,9 +274,31 @@ struct ContentView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .padding(.horizontal, 10)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
+    }
+
+    // Funnel beside the search: opens a popover to narrow the list by adapter type
+    // and environment. Fills + tints accent while any filter is applied.
+    private var filterButton: some View {
+        Button {
+            showFilters.toggle()
+        } label: {
+            Image(systemName: filtersActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                .font(.system(size: 13))
+                .foregroundStyle(filtersActive ? Color.accentColor : .secondary)
+                .frame(width: 27, height: 27)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("Filter by type and environment")
+        .popover(isPresented: $showFilters, arrowEdge: .bottom) {
+            FilterPopover(
+                types: availableTypes,
+                label: label(forType:),
+                environments: availableEnvs,
+                typeFilter: $typeFilter,
+                envFilter: $envFilter
+            )
+        }
     }
 
     private var sidebarList: some View {
@@ -260,7 +337,15 @@ struct ContentView: View {
         .background(Color.pageSurface)
         .overlay {
             if noMatches {
-                ContentUnavailableView.search(text: query)
+                if query.isEmpty {
+                    ContentUnavailableView(
+                        "No matches",
+                        systemImage: "line.3.horizontal.decrease.circle",
+                        description: Text("No integrations match the selected filters.")
+                    )
+                } else {
+                    ContentUnavailableView.search(text: query)
+                }
             }
         }
     }
@@ -531,6 +616,111 @@ struct EnvTag: View {
                 .foregroundStyle(.secondary)
         }
         .help("\(environment.label) environment")
+    }
+}
+
+// MARK: - Filter popover
+
+// Multi-select filter beside the search field. A popover (not a Menu) so several
+// types/environments can be toggled without it dismissing on every choice.
+private struct FilterPopover: View {
+    let types: [String]
+    let label: (String) -> String
+    let environments: [Environment]
+    @Binding var typeFilter: Set<String>
+    @Binding var envFilter: Set<Environment>
+
+    private var active: Bool { !typeFilter.isEmpty || !envFilter.isEmpty }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if !types.isEmpty {
+                        section("Type") {
+                            ForEach(types, id: \.self) { type in
+                                FilterRow(isOn: typeFilter.contains(type)) {
+                                    toggle(&typeFilter, type)
+                                } label: {
+                                    TypeBadge(type: type, size: 18)
+                                    Text(label(type)).font(.system(size: 12))
+                                }
+                            }
+                        }
+                    }
+                    if !environments.isEmpty {
+                        section("Environment") {
+                            ForEach(environments, id: \.self) { env in
+                                FilterRow(isOn: envFilter.contains(env)) {
+                                    toggle(&envFilter, env)
+                                } label: {
+                                    Circle()
+                                        .fill(env.color.opacity(0.85))
+                                        .frame(width: 7, height: 7)
+                                        .frame(width: 18)
+                                    Text(env.label).font(.system(size: 12))
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(12)
+            }
+        }
+        .frame(width: 220)
+        .frame(maxHeight: 360)
+    }
+
+    private var header: some View {
+        HStack {
+            Text("Filters").font(.system(size: 12, weight: .semibold))
+            Spacer()
+            if active {
+                Button("Clear") { typeFilter = []; envFilter = [] }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+    }
+
+    @ViewBuilder
+    private func section<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title.uppercased())
+                .font(.dev(size: 9, weight: .semibold))
+                .tracking(0.45)
+                .foregroundStyle(.tertiary)
+            VStack(alignment: .leading, spacing: 2) { content() }
+        }
+    }
+
+    private func toggle<T: Hashable>(_ set: inout Set<T>, _ value: T) {
+        if set.contains(value) { set.remove(value) } else { set.insert(value) }
+    }
+}
+
+private struct FilterRow<Label: View>: View {
+    let isOn: Bool
+    let action: () -> Void
+    @ViewBuilder let label: () -> Label
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                label()
+                Spacer(minLength: 4)
+                Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(isOn ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
