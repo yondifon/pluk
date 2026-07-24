@@ -165,6 +165,37 @@ test("evictDriverEverywhere forces the next call to reconnect fresh", async () =
   expect(connectCalls).toBe(calls + 1);
 });
 
+// Regression: "waiting for approval" is a guess. A connect that never lands
+// (stale tunnel, unreachable host) must not answer pending forever — after the
+// ration runs out, callers get the real failure and the doomed attempt is
+// dropped so the next call opens a brand-new SSH connection.
+test("repeated pending stops after the ration and reports the real failure", async () => {
+  connectBehavior = "hang";
+  const mark = nextTimerId - 1;
+
+  const attempts: Promise<unknown>[] = [];
+  for (let i = 0; i < 3; i++) {
+    const p = getDriver("s4", integration);
+    p.catch(() => {});
+    attempts.push(p);
+    await settle();
+  }
+
+  const calls = connectCalls;
+  const waits = takeNewTimers(mark).filter((t) => t.ms === 25_000);
+  expect(waits).toHaveLength(3);
+  for (const t of waits) t.fn();
+
+  const codes = await Promise.all(attempts.map((p) => p.catch((e) => (e as { code?: string }).code)));
+  expect(codes).toEqual(["SSH_CONNECT_PENDING", "SSH_CONNECT_PENDING", "SSH_CONNECT_STALLED"]);
+
+  // The stuck attempt was evicted → the next call connects from scratch.
+  const next = getDriver("s4", integration);
+  next.catch(() => {});
+  await settle();
+  expect(connectCalls).toBe(calls + 1);
+});
+
 // Regression: a connect stuck past the respawn window (its prompt expired
 // unseen) must be killed and respawned so a fresh prompt can appear.
 test("connect stuck past the respawn window is replaced by a fresh attempt", async () => {

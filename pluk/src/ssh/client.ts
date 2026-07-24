@@ -4,7 +4,14 @@ import { readFileSync, existsSync } from "fs";
 import { homedir, userInfo } from "os";
 import { Duplex } from "stream";
 import { onSessionClose } from "../mcp/pool.js";
-import { SSH_CONNECT_RESPAWN_MS, SSH_CONNECT_WAIT_MS, sshPendingError } from "./pending.js";
+import {
+  SSH_CONNECT_RESPAWN_MS,
+  SSH_CONNECT_WAIT_MS,
+  clearConnectEpisode,
+  connectWaitError,
+  isSshStalled,
+  recordConnectFailure,
+} from "./pending.js";
 import {
   expandHome,
   parseSSHConfig,
@@ -152,28 +159,38 @@ export function getSharedSSHClient(sessionId: string, p: SSHParams): Promise<Cli
     // prompt expired unseen. Kill it and fall through to a fresh connect so a
     // fresh prompt can appear. Otherwise reuse it under the bounded wait.
     if (existing.settled || Date.now() - existing.startedAt <= SSH_CONNECT_RESPAWN_MS) {
-      return awaitReady(existing);
+      return awaitReady(key, existing);
     }
     evictByKey(key);
   }
 
   const client = connectSSH(p);
   const entry: Entry = { client, startedAt: Date.now(), settled: false, interactive: p.authType !== "password" };
-  client.then(() => { entry.settled = true; }, () => { entry.settled = true; });
+  client.then(
+    () => { entry.settled = true; clearConnectEpisode(key); },
+    (e) => { entry.settled = true; recordConnectFailure(key, e); },
+  );
   pool.set(key, entry);
   client.then((c) => c.on("close", () => { if (pool.get(key) === entry) evictByKey(key); }))
     .catch(() => { if (pool.get(key) === entry) pool.delete(key); });
-  return awaitReady(entry);
+  return awaitReady(key, entry);
 }
 
 // Bound a caller's wait on an in-flight connect that may be blocked on an
 // interactive approval (1Password confirm, proxy browser login). The connect
-// keeps running; once approved it stays pooled for the next call.
-function awaitReady(entry: Entry): Promise<Client> {
+// keeps running; once approved it stays pooled for the next call. Once the pool
+// has claimed "waiting for approval" too many times for this key with nothing
+// connecting, drop the doomed attempt and report the real failure instead.
+function awaitReady(key: string, entry: Entry): Promise<Client> {
   if (entry.settled || !entry.interactive) return entry.client;
   return Promise.race([
     entry.client,
-    new Promise<Client>((_, reject) => setTimeout(() => reject(sshPendingError()), SSH_CONNECT_WAIT_MS)),
+    new Promise<Client>((_, reject) => setTimeout(() => {
+      if (entry.settled) return; // connect already landed; the race is over
+      const err = connectWaitError(key);
+      if (isSshStalled(err) && pool.get(key) === entry) evictByKey(key);
+      reject(err);
+    }, SSH_CONNECT_WAIT_MS)),
   ]);
 }
 

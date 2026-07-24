@@ -2,7 +2,14 @@ import type { Integration } from "../../store/integrations.js";
 import { createDriver, type Driver } from "../../db/index.js";
 import { recordHealth } from "../../mcp/health.js";
 import { onSessionClose, sessionSignal } from "../../mcp/pool.js";
-import { SSH_CONNECT_RESPAWN_MS, SSH_CONNECT_WAIT_MS, sshPendingError } from "../../ssh/pending.js";
+import {
+  SSH_CONNECT_RESPAWN_MS,
+  SSH_CONNECT_WAIT_MS,
+  clearConnectEpisode,
+  connectWaitError,
+  isSshStalled,
+  recordConnectFailure,
+} from "../../ssh/pending.js";
 import { classifySqlError, humanizeSqlError } from "./errors.js";
 
 const IDLE_MS = 5 * 60 * 1000;
@@ -97,10 +104,10 @@ export async function getDriver(sessionId: string, integration: Integration, dat
     if (existing.useSsh && !existing.settled) {
       if (Date.now() - existing.startedAt <= SSH_CONNECT_RESPAWN_MS) {
         existing.lastUsed = Date.now();
-        return awaitConnect(existing);
+        return awaitConnect(key, existing);
       }
       evictDriverByKey(key);
-      return awaitConnect(createDriverEntry(key, sessionId, integration, database));
+      return awaitConnect(key, createDriverEntry(key, sessionId, integration, database));
     }
 
     const idleFor = Date.now() - existing.lastUsed;
@@ -113,16 +120,24 @@ export async function getDriver(sessionId: string, integration: Integration, dat
     return existing.validating;
   }
 
-  return awaitConnect(createDriverEntry(key, sessionId, integration, database));
+  return awaitConnect(key, createDriverEntry(key, sessionId, integration, database));
 }
 
 // Bound a tool call's wait on an in-flight SSH connect. The connect itself
-// keeps running; once approved it lands in the pool for the next call.
-function awaitConnect(entry: DriverEntry): Promise<Driver> {
+// keeps running; once approved it lands in the pool for the next call. Once the
+// pool has claimed "waiting for approval" too many times for this key with
+// nothing connecting, the claim is retired: drop the doomed attempt and report
+// the real failure, so the next call opens a fresh SSH connection.
+function awaitConnect(key: string, entry: DriverEntry): Promise<Driver> {
   if (!entry.useSsh || entry.settled) return entry.driver;
   return Promise.race([
     entry.driver,
-    new Promise<Driver>((_, reject) => setTimeout(() => reject(sshPendingError()), SSH_CONNECT_WAIT_MS)),
+    new Promise<Driver>((_, reject) => setTimeout(() => {
+      if (entry.settled) return; // connect already landed; the race is over
+      const err = connectWaitError(key);
+      if (isSshStalled(err) && driverPool.get(key) === entry) evictDriverByKey(key);
+      reject(err);
+    }, SSH_CONNECT_WAIT_MS)),
   ]);
 }
 
@@ -138,7 +153,10 @@ function createDriverEntry(key: string, sessionId: string, integration: Integrat
   const driver = withTimeout(created, connectTimeout, "connect");
   const idleTimer = setTimeout(() => evictDriverByKey(key), IDLE_MS);
   const entry: DriverEntry = { driver, idleTimer, lastUsed: Date.now(), startedAt: Date.now(), settled: false, useSsh };
-  driver.then(() => { entry.settled = true; }, () => { entry.settled = true; });
+  driver.then(
+    () => { entry.settled = true; clearConnectEpisode(key); },
+    (e) => { entry.settled = true; recordConnectFailure(key, e); },
+  );
   driverPool.set(key, entry);
 
   driver.catch(() => {
@@ -226,7 +244,7 @@ async function validateOrRebuild(
       // Immediate rebuild counts as attempt 0; keep retrying in the background
       // if it also fails (e.g. agent still locked).
       fresh.driver.catch(() => scheduleReconnect(key, sessionId, integration, database, 1));
-      return awaitConnect(fresh);
+      return awaitConnect(key, fresh);
     }
     if (current) return current.driver;
     throw new Error("Driver evicted during healthcheck");
@@ -256,7 +274,7 @@ function keyIntegrationId(key: string): string | undefined {
 
 export function evictDriverEverywhere(integrationId: string): void {
   for (const key of [...driverPool.keys()]) {
-    if (keyIntegrationId(key) === integrationId) evictDriverByKey(key);
+    if (keyIntegrationId(key) === integrationId) { clearConnectEpisode(key); evictDriverByKey(key); }
   }
   for (const key of [...reconnectTimers.keys()]) {
     if (keyIntegrationId(key) === integrationId) cancelReconnect(key);

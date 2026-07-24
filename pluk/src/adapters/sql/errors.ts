@@ -1,4 +1,4 @@
-import { isSshPending } from "../../ssh/pending.js";
+import { isSshPending, isSshStalled } from "../../ssh/pending.js";
 
 export type SqlErrorCategory = "auth_failed" | "tunnel_failed" | "query_failed" | "connection_failed" | "pending_approval";
 
@@ -19,6 +19,15 @@ export function classifySqlError(err: unknown): SqlErrorInfo {
       category: "pending_approval",
       message: "SSH connection is waiting for approval.",
       hint: "Approve the 1Password/SSH agent prompt (or finish the proxy login), then retry. If no prompt appears, click Test in Pluk to force a fresh connection.",
+      code,
+    };
+  }
+
+  if (isSshStalled(err)) {
+    return {
+      category: "tunnel_failed",
+      message: msg,
+      hint: "The stuck attempt was dropped — retry to open a brand-new SSH connection. If it keeps failing, check the host/proxy is reachable and your SSH agent is unlocked.",
       code,
     };
   }
