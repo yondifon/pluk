@@ -41,9 +41,9 @@ struct ConnectionFormView: View {
                 if adapters.isEmpty {
                     if adaptersLoadFailed { adapterErrorView } else { loadingView }
                 } else if picking {
-                    ScrollView { typeChooser.padding(.horizontal, 18).padding(.vertical, 14) }
+                    ScrollView { typeChooser.padding(.horizontal, Space.xl).padding(.vertical, Space.lg) }
                 } else {
-                    ScrollView { formBody.padding(.horizontal, 18).padding(.vertical, 14) }
+                    ScrollView { formBody.padding(.horizontal, Space.xl).padding(.vertical, Space.lg) }
                 }
             }
             Divider()
@@ -80,11 +80,11 @@ struct ConnectionFormView: View {
 
     private var formHeader: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(editingConn != nil ? "Edit Integration" : "New Integration")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.uiTitle)
                 Text(draft.name.isEmpty ? "Integration settings" : draft.name)
-                    .font(.system(size: 11))
+                    .font(.uiCaption)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
             }
@@ -101,60 +101,65 @@ struct ConnectionFormView: View {
             .frame(width: 130)
             .help("Environment — sets a safe default policy for new integrations")
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.md)
     }
 
     // MARK: - Body
 
     private var loadingView: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Space.sm) {
             ProgressView()
-            Text("Loading adapters…").font(.system(size: 12)).foregroundColor(.secondary)
+            Text("Loading adapters…").font(.uiCaption).foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, minHeight: 200)
     }
 
     private var adapterErrorView: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: Space.md) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 24, weight: .light))
                 .foregroundStyle(.secondary)
             Text("Couldn't load adapters")
-                .font(.system(size: 13, weight: .medium))
+                .font(.uiHeadline)
             Text("The local pluk server isn't responding. Make sure it's running, then retry.")
-                .font(.system(size: 11))
+                .font(.uiCaption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
             Button("Retry", action: onRetryAdapters)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .padding(.top, 2)
+                .padding(.top, Space.xxs)
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, Space.xl)
         .frame(maxWidth: .infinity, minHeight: 200)
     }
 
     // MARK: - Type chooser (shown when adding a new integration)
 
     private var typeChooser: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: Space.lg) {
             ForEach(groupedAdapters, id: \.category) { category, items in
                 DetailSection(prettyCategory(category)) {
                     ForEach(items) { adapter in
                         Button { choose(adapter) } label: {
-                            HStack(spacing: 10) {
+                            HStack(spacing: Space.md) {
                                 TypeBadge(type: adapter.id)
-                                Text(adapter.label).font(.system(size: 13))
+                                Text(adapter.label).font(.uiBody)
                                 Spacer()
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 10, weight: .semibold))
                                     .foregroundStyle(.tertiary)
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 9)
+                            .padding(.horizontal, Space.md)
+                            .padding(.vertical, Space.sm)
                             .contentShape(Rectangle())
-                            .overlay(alignment: .bottom) { Divider().padding(.leading, 44) }
+                            .overlay(alignment: .bottom) {
+                                Rectangle()
+                                    .fill(Color.hairline)
+                                    .frame(height: 0.5)
+                                    .padding(.leading, 44)
+                            }
                         }
                         .buttonStyle(.plain)
                     }
@@ -186,8 +191,8 @@ struct ConnectionFormView: View {
 
     @ViewBuilder
     private var formBody: some View {
-        GlassGroup(spacing: 16) {
-        VStack(alignment: .leading, spacing: 16) {
+        GlassGroup(spacing: Space.lg) {
+        VStack(alignment: .leading, spacing: Space.lg) {
             DetailSection("General") {
                 row("Name") {
                     TextField(namePlaceholder, text: $draft.name)
@@ -199,7 +204,7 @@ struct ConnectionFormView: View {
                 row("Type") {
                     TypeBadge(type: draft.type)
                     Text(manifest?.label ?? draft.type.capitalized)
-                        .font(.dev(size: 12))
+                        .font(.uiLabel)
                     Spacer()
                     Button("Change") { picking = true }
                         .buttonStyle(.bordered)
@@ -245,19 +250,19 @@ struct ConnectionFormView: View {
             row(f.label) {
                 SecureField(f.placeholder ?? "••••••", text: textBinding(f.key))
                     .textFieldStyle(.plain)
-                    .font(.dev(size: 12))
+                    .font(.mono(12))
             }
         case "select":
             row(f.label) {
                 Picker("", selection: textBinding(f.key)) {
                     ForEach(f.options ?? [], id: \.value) { opt in
                         Text(opt.label)
-                            .font(.dev(size: 12))
+                            .font(.uiLabel)
                             .tag(opt.value)
                     }
                 }
                 .pickerStyle(.menu)
-                .font(.dev(size: 12))
+                .font(.uiLabel)
                 .frame(maxWidth: 200, alignment: .leading)
             }
         case "file":
@@ -265,7 +270,7 @@ struct ConnectionFormView: View {
                 HStack {
                     TextField(f.placeholder ?? "", text: textBinding(f.key))
                         .textFieldStyle(.plain)
-                        .font(.dev(size: 12))
+                        .font(.mono(12))
                     browseButton(title: "Choose…", types: f.fileTypes ?? []) { draft.config[f.key] = $0 }
                 }
             }
@@ -273,7 +278,7 @@ struct ConnectionFormView: View {
             row(f.label) {
                 TextField(f.placeholder ?? "", text: textBinding(f.key))
                     .textFieldStyle(.plain)
-                    .font(.dev(size: 12))
+                    .font(.mono(12))
                     .frame(width: 90)
                 Spacer(minLength: 0)
             }
@@ -281,7 +286,7 @@ struct ConnectionFormView: View {
             row(f.label) {
                 TextField(f.placeholder ?? "", text: textBinding(f.key))
                     .textFieldStyle(.plain)
-                    .font(.dev(size: 12))
+                    .font(.mono(12))
             }
         }
     }
@@ -313,35 +318,38 @@ struct ConnectionFormView: View {
         return DetailSection("Tools") {
             VStack(alignment: .leading, spacing: 0) {
                 Text("\(enabledCount) of \(draft.tools.count) on. Enable tools to give the agent more, disable to shrink what it sees. Expand an enabled tool to configure it.")
-                    .font(.system(size: 11))
+                    .font(.uiCaption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
+                    .padding(.horizontal, Space.lg)
+                    .padding(.top, Space.sm)
+                    .padding(.bottom, Space.xs)
 
                 toolRows(defaults)
 
                 if !extras.isEmpty {
-                    Divider().padding(.top, 4)
-                    VStack(alignment: .leading, spacing: 1) {
+                    Rectangle()
+                        .fill(Color.hairline)
+                        .frame(height: 0.5)
+                        .padding(.top, Space.xs)
+                    VStack(alignment: .leading, spacing: Space.xxs) {
                         Text("More tools")
-                            .font(.dev(size: 11, weight: .medium))
+                            .font(.uiSection)
                             .foregroundColor(.primary)
                         Text("Off by default — enable the ones you need.")
-                            .font(.system(size: 10))
+                            .font(.uiCaption)
                             .foregroundColor(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 8)
-                    .padding(.bottom, 6)
+                    .padding(.horizontal, Space.lg)
+                    .padding(.top, Space.sm)
+                    .padding(.bottom, Space.sm)
 
                     toolRows(extras)
                 }
             }
-            .padding(.bottom, 6)
+            .padding(.bottom, Space.sm)
         }
     }
 
@@ -351,7 +359,10 @@ struct ConnectionFormView: View {
         ForEach(tools) { tool in
             toolRow(tool)
             if tool.id != tools.last?.id {
-                Divider().padding(.leading, 36)
+                Rectangle()
+                    .fill(Color.hairline)
+                    .frame(height: 0.5)
+                    .padding(.leading, Space.xxl)
             }
         }
     }
@@ -361,14 +372,14 @@ struct ConnectionFormView: View {
         let enabled = draft.toolConfig[tool.name]?.enabled ?? tool.defaultEnabled
         let hasSettings = !(tool.settings ?? []).isEmpty
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: Space.md) {
                 Toggle("", isOn: toolEnabledBinding(tool))
                     .toggleStyle(.checkbox)
                     .labelsHidden()
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: Space.xxs) {
+                    HStack(spacing: Space.sm) {
                         Text(tool.name)
-                            .font(.dev(size: 12, weight: .medium))
+                            .font(.mono(12, weight: .medium))
                             .foregroundColor(enabled ? .primary : .secondary)
                         ToolCategoryTag(category: tool.category)
                         if hasSettings, enabled {
@@ -378,24 +389,24 @@ struct ConnectionFormView: View {
                         }
                     }
                     Text(tool.description)
-                        .font(.system(size: 11))
+                        .font(.uiCaption)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.sm)
 
             if enabled, hasSettings {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: Space.md) {
                     ForEach(tool.settings ?? []) { setting in
                         settingRow(tool: tool, setting: setting)
                     }
                 }
-                .padding(.leading, 38)
-                .padding(.trailing, 14)
-                .padding(.bottom, 10)
+                .padding(.leading, Space.xxl)
+                .padding(.trailing, Space.lg)
+                .padding(.bottom, Space.md)
             }
         }
     }
@@ -403,20 +414,20 @@ struct ConnectionFormView: View {
     @ViewBuilder
     private func settingRow(tool: AdapterToolDef, setting: ConfigFieldDef) -> some View {
         let def = setting.defaultValue ?? ""
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: Space.xxs) {
             switch setting.type {
             case "toggle":
                 let isOn = (draft.toolConfig[tool.name]?.settings[setting.key] ?? def) == "true"
                 Toggle(setting.label, isOn: settingBoolBinding(tool, setting.key))
                     .toggleStyle(.checkbox)
-                    .font(.system(size: 12))
+                    .font(.uiLabel)
                     .foregroundColor(setting.danger == true && isOn ? .red : .primary)
             case "select":
                 HStack {
-                    Text(setting.label).font(.system(size: 12)).frame(width: 120, alignment: .leading)
+                    Text(setting.label).font(.uiLabel).frame(width: 120, alignment: .leading)
                     Picker("", selection: settingTextBinding(tool, setting.key, default: def)) {
                         ForEach(setting.options ?? [], id: \.value) { opt in
-                            Text(opt.label).font(.dev(size: 12)).tag(opt.value)
+                            Text(opt.label).font(.uiLabel).tag(opt.value)
                         }
                     }
                     .pickerStyle(.menu).labelsHidden().frame(maxWidth: 240, alignment: .leading)
@@ -424,24 +435,24 @@ struct ConnectionFormView: View {
                 }
             case "number":
                 HStack {
-                    Text(setting.label).font(.system(size: 12)).frame(width: 120, alignment: .leading)
+                    Text(setting.label).font(.uiLabel).frame(width: 120, alignment: .leading)
                     TextField(def, text: settingTextBinding(tool, setting.key, default: def))
-                        .textFieldStyle(.plain).font(.dev(size: 12)).frame(width: 90)
+                        .textFieldStyle(.plain).font(.mono(12)).frame(width: 90)
                     Spacer(minLength: 0)
                 }
             default: // text / password
                 HStack {
-                    Text(setting.label).font(.system(size: 12)).frame(width: 120, alignment: .leading)
+                    Text(setting.label).font(.uiLabel).frame(width: 120, alignment: .leading)
                     TextField(setting.placeholder ?? "", text: settingTextBinding(tool, setting.key, default: def))
-                        .textFieldStyle(.plain).font(.dev(size: 12))
+                        .textFieldStyle(.plain).font(.mono(12))
                 }
             }
             if let help = setting.help {
                 Text(help)
-                    .font(.system(size: 10))
+                    .font(.uiCaption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, setting.type == "toggle" ? 20 : 124)
+                    .padding(.leading, setting.type == "toggle" ? Space.xl : 124)
             }
         }
     }
@@ -493,8 +504,8 @@ struct ConnectionFormView: View {
                     .disabled(!canSave)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.md)
     }
 
     private var canSave: Bool {
@@ -546,11 +557,10 @@ struct ToolCategoryTag: View {
 
     var body: some View {
         Text(category)
-            .font(.dev(size: 9, weight: .medium))
-            .textCase(.uppercase)
+            .font(.uiCaption)
             .foregroundColor(color)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
+            .padding(.horizontal, Space.xs)
+            .padding(.vertical, Space.xxs)
             .background(color.opacity(0.12))
             .clipShape(.capsule)
     }

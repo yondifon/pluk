@@ -39,15 +39,15 @@ struct GroupFormView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Edit Group").font(.system(size: 15, weight: .semibold))
+                Text("Edit Group").font(.uiTitle)
                 Spacer()
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
+            .padding(.horizontal, Space.xl)
+            .padding(.vertical, Space.lg)
             Divider()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: Space.lg) {
                     field("Name") {
                         TextField("Group name", text: $name)
                             .textFieldStyle(.plain)
@@ -66,18 +66,18 @@ struct GroupFormView: View {
                     field("Integrations") {
                         if connections.isEmpty {
                             Text("No integrations yet.")
-                                .font(.system(size: 12))
+                                .font(.uiLabel)
                                 .foregroundColor(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
+                                .padding(.horizontal, Space.md)
+                                .padding(.vertical, Space.md)
                                 .cardSurface()
                         } else {
                             VStack(spacing: 0) {
                                 ForEach(connections) { conn in
                                     memberRow(conn)
                                     if conn.id != connections.last?.id {
-                                        Divider().padding(.leading, 30)
+                                        Rectangle().fill(Color.hairline).frame(height: 0.5).padding(.leading, Space.xxl - 2)
                                     }
                                 }
                             }
@@ -85,7 +85,7 @@ struct GroupFormView: View {
                         }
                     }
                 }
-                .padding(18)
+                .padding(Space.xl)
             }
 
             Divider()
@@ -97,8 +97,8 @@ struct GroupFormView: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(trimmedName.isEmpty)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
+            .padding(.horizontal, Space.xl)
+            .padding(.vertical, Space.lg)
         }
         .glassPanelBackground()
         .frame(width: 480, height: 580)
@@ -113,41 +113,41 @@ struct GroupFormView: View {
             Button {
                 if on { included.remove(conn.id) } else { included.insert(conn.id) }
             } label: {
-                HStack(spacing: 9) {
+                HStack(spacing: Space.sm + 1) {
                     Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 14))
+                        .font(.uiBody)
                         .foregroundStyle(on ? Color.accentColor : Color.secondary)
                     TypeBadge(type: conn.type)
-                    Text(conn.name).font(.system(size: 13)).lineLimit(1)
+                    Text(conn.name).font(.uiBody).lineLimit(1)
                     EnvTag(environment: conn.environment)
                     Spacer()
                 }
                 .contentShape(Rectangle())
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, Space.md)
+                .padding(.vertical, Space.sm)
             }
             .buttonStyle(.plain)
 
             if on && !fields.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: Space.sm) {
                     Text("Overrides for this group (blank = inherit)")
-                        .font(.system(size: 10))
+                        .font(.uiCaption)
                         .foregroundStyle(.tertiary)
                     ForEach(fields) { f in
-                        HStack(spacing: 8) {
+                        HStack(spacing: Space.sm) {
                             Text(f.label)
-                                .font(.dev(size: 11))
+                                .font(.uiCaption)
                                 .foregroundColor(.secondary)
                                 .frame(width: 110, alignment: .leading)
                             TextField(inheritPlaceholder(conn, f), text: binding(conn.id, f.key))
                                 .textFieldStyle(.plain)
-                                .font(.dev(size: 12))
+                                .font(.mono(12))
                         }
                     }
                 }
-                .padding(.leading, 30)
-                .padding(.trailing, 12)
-                .padding(.bottom, 10)
+                .padding(.leading, Space.xxl - 2)
+                .padding(.trailing, Space.md)
+                .padding(.bottom, Space.md)
             }
         }
     }
@@ -193,13 +193,12 @@ struct GroupFormView: View {
 
     @ViewBuilder
     private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: Space.md) {
             Text(label)
-                .font(.dev(size: 11, weight: .semibold))
+                .font(.uiSection)
                 .foregroundColor(.secondary)
-                .textCase(.uppercase)
                 .frame(width: 90, alignment: .leading)
-                .padding(.top, 2)
+                .padding(.top, Space.xxs)
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

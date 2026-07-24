@@ -92,9 +92,9 @@ struct LogsTab: View {
     // MARK: - Toolbar
 
     private var toolbar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Space.md) {
             // Stats pills
-            HStack(spacing: 10) {
+            HStack(spacing: Space.md) {
                 statPill(entries.count, label: "total", color: .secondary)
                 statPill(stats.allowed, label: "ok", color: .green)
                 if stats.blocked > 0 {
@@ -107,13 +107,13 @@ struct LogsTab: View {
             .fixedSize()
 
             // Search — scan SQL / tool / member
-            HStack(spacing: 5) {
+            HStack(spacing: Space.xs) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                 TextField(scope.isGroup ? "Filter SQL, tool, integration…" : "Filter SQL or tool…", text: $search)
                     .textFieldStyle(.plain)
-                    .font(.dev(size: 11))
+                    .font(.uiLabel)
                     .lineLimit(1)
                 if !search.isEmpty {
                     Button { search = "" } label: {
@@ -123,34 +123,35 @@ struct LogsTab: View {
                     .foregroundColor(.secondary)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color.secondary.opacity(0.08))
+            .padding(.horizontal, Space.sm)
+            .padding(.vertical, Space.xs)
+            .background(Color.controlFill)
             .clipShape(.capsule)
             .frame(minWidth: 120, maxWidth: 240)
             .layoutPriority(-1)
 
-            Spacer(minLength: 8)
+            Spacer(minLength: Space.sm)
 
             // Verdict filter — segmented capsule track; labels never wrap
-            HStack(spacing: 2) {
+            HStack(spacing: Space.xxs) {
                 ForEach(VerdictFilter.allCases, id: \.self) { f in
                     Button { filter = f } label: {
                         Text(f.rawValue)
-                            .font(.dev(size: 11, weight: filter == f ? .semibold : .regular))
+                            .font(.uiLabel)
+                            .fontWeight(filter == f ? .semibold : .regular)
                             .foregroundColor(filter == f ? .accentColor : .secondary)
                             .lineLimit(1)
                             .fixedSize()
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 4)
+                            .padding(.horizontal, Space.sm)
+                            .padding(.vertical, Space.xs)
                             .background(filter == f ? Color.accentColor.opacity(0.12) : .clear)
                             .clipShape(.capsule)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(2)
-            .background(Color.secondary.opacity(0.06))
+            .padding(Space.xxs)
+            .background(Color.controlFill)
             .clipShape(.capsule)
             .fixedSize()
 
@@ -175,12 +176,12 @@ struct LogsTab: View {
                     reload()
                 }
             } label: {
-                HStack(spacing: 3) {
+                HStack(spacing: Space.xxs) {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.system(size: 10))
                     let days = store.logRetentionDays
                     Text(days == 0 ? "Forever" : "\(days)d")
-                        .font(.dev(size: 11))
+                        .font(.uiLabel)
                 }
                 .foregroundColor(.secondary)
             }
@@ -198,17 +199,17 @@ struct LogsTab: View {
             .foregroundColor(.secondary)
             .help("Refresh")
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 9)
+        .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.sm)
     }
 
     private func statPill(_ count: Int, label: String, color: Color) -> some View {
-        HStack(spacing: 3) {
+        HStack(spacing: Space.xxs) {
             Text("\(count)")
-                .font(.dev(size: 11, weight: .semibold))
+                .font(.mono(11, weight: .semibold))
                 .foregroundColor(color == .secondary ? .primary : color)
             Text(label)
-                .font(.dev(size: 11))
+                .font(.uiCaption)
                 .foregroundColor(.secondary)
         }
     }
@@ -216,15 +217,15 @@ struct LogsTab: View {
     // MARK: - Empty state
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Space.sm) {
             Image(systemName: "list.bullet.rectangle")
                 .font(.system(size: 28))
                 .foregroundColor(.secondary.opacity(0.4))
             Text(emptyTitle)
-                .font(.system(size: 13))
+                .font(.uiBody)
                 .foregroundColor(.secondary)
             Text(emptySubtitle)
-                .font(.system(size: 11))
+                .font(.uiCaption)
                 .foregroundColor(.secondary.opacity(0.7))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 280)
@@ -260,7 +261,7 @@ struct LogsTab: View {
                         onToggle: { expandedId = expanded ? nil : entry.id },
                         onStop: { stopQuery(entry) }
                     )
-                    Divider().padding(.leading, 18)
+                    Rectangle().fill(Color.hairline).frame(height: 0.5).padding(.leading, Space.xl)
                 }
             }
         }
@@ -315,16 +316,16 @@ private struct LogEntryRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: Space.md) {
                 // Verdict indicator bar
                 RoundedRectangle(cornerRadius: 2)
                     .fill(verdictColor)
                     .frame(width: 3)
                     .frame(minHeight: 36)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Space.xs) {
                     // Top row: badge + member/tool chips + SQL preview
-                    HStack(spacing: 6) {
+                    HStack(spacing: Space.sm) {
                         VerdictBadge(verdict: entry.verdict)
 
                         if showConnection {
@@ -337,7 +338,7 @@ private struct LogEntryRow: View {
 
                         if let cats = entry.categories, !cats.isEmpty {
                             Text(cats)
-                                .font(.dev(size: 10))
+                                .font(.uiCaption)
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
                         }
@@ -347,7 +348,8 @@ private struct LogEntryRow: View {
                         if entry.verdict == "pending" {
                             Button(action: onStop) {
                                 Label("Stop", systemImage: "stop.fill")
-                                    .font(.system(size: 10, weight: .medium))
+                                    .font(.uiLabel)
+                                    .fontWeight(.medium)
                             }
                             .buttonStyle(.plain)
                             .foregroundColor(.red)
@@ -355,7 +357,7 @@ private struct LogEntryRow: View {
                         }
 
                         Text(relativeTime(entry.createdAt))
-                            .font(.dev(size: 10))
+                            .font(.mono(10))
                             .foregroundColor(.secondary)
                             .lineLimit(1)
                     }
@@ -363,22 +365,21 @@ private struct LogEntryRow: View {
                     // Query — a one-line preview when collapsed; a structured,
                     // selectable code block when expanded (mirrors the response).
                     if isExpanded {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("QUERY")
-                                .font(.dev(size: 9.5, weight: .semibold))
+                        VStack(alignment: .leading, spacing: Space.xs) {
+                            Text("Query")
+                                .font(.uiSection)
                                 .foregroundColor(.secondary)
-                                .tracking(0.4)
                             Text(entry.sql)
-                                .font(.dev(size: 11.5))
+                                .font(.mono(12))
                                 .foregroundColor(.primary)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(8)
-                                .codeBlockSurface(cornerRadius: 5)
+                                .padding(Space.sm)
+                                .codeBlockSurface(cornerRadius: Radius.sm)
                         }
                     } else {
                         Text(entry.sql)
-                            .font(.dev(size: 11.5))
+                            .font(.mono(12))
                             .foregroundColor(.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -388,34 +389,34 @@ private struct LogEntryRow: View {
                     // Expanded: reason + result preview + full timestamp
                     if isExpanded {
                         if let reason = entry.reason, !reason.isEmpty {
-                            HStack(spacing: 4) {
+                            HStack(spacing: Space.xs) {
                                 Image(systemName: "exclamationmark.circle.fill")
                                     .font(.system(size: 10))
                                     .foregroundColor(verdictColor)
                                 Text(reason)
-                                    .font(.system(size: 11))
+                                    .font(.uiCaption)
                                     .foregroundColor(.secondary)
                             }
-                            .padding(.top, 2)
+                            .padding(.top, Space.xxs)
                         }
 
                         // Full response: raw tool output when stored, else the
                         // structured result rows as a mini-table.
                         if let raw = entry.responseText, !raw.isEmpty {
                             ResponseTextBlock(text: raw) { showResponseSheet = true }
-                                .padding(.top, 6)
+                                .padding(.top, Space.sm)
                         } else if let json = entry.resultJson {
                             ResultPreview(json: json, rowCount: entry.rowCount)
-                                .padding(.top, 6)
+                                .padding(.top, Space.sm)
                         }
 
                         Text(localTime(entry.createdAt))
-                            .font(.dev(size: 10))
+                            .font(.mono(10))
                             .foregroundColor(.secondary.opacity(0.7))
-                            .padding(.top, 1)
+                            .padding(.top, Space.xxs)
 
                         // Copy actions for the query and its response
-                        HStack(spacing: 6) {
+                        HStack(spacing: Space.sm) {
                             copyButton(copiedSQL ? "Copied!" : "Copy", copied: copiedSQL) {
                                 copy(entry.sql)
                                 flash($copiedSQL)
@@ -427,13 +428,13 @@ private struct LogEntryRow: View {
                                 }
                             }
                         }
-                        .padding(.top, 6)
+                        .padding(.top, Space.sm)
                     }
                 }
-                .padding(.vertical, 10)
-                .padding(.trailing, 18)
+                .padding(.vertical, Space.md)
+                .padding(.trailing, Space.xl)
             }
-            .padding(.leading, 18)
+            .padding(.leading, Space.xl)
         }
         .contentShape(Rectangle())
         .onTapGesture { onToggle() }
@@ -449,7 +450,8 @@ private struct LogEntryRow: View {
     private func copyButton(_ title: String, copied: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: copied ? "checkmark" : "doc.on.doc")
-                .font(.system(size: 10, weight: .medium))
+                .font(.uiLabel)
+                .fontWeight(.medium)
         }
         .buttonStyle(.bordered)
         .controlSize(.mini)
@@ -458,13 +460,13 @@ private struct LogEntryRow: View {
 
     // Compact monospace tag for the member integration / originating tool.
     private func chip(_ text: String, system: String, color: Color) -> some View {
-        HStack(spacing: 3) {
+        HStack(spacing: Space.xxs) {
             Image(systemName: system).font(.system(size: 8))
-            Text(text).font(.dev(size: 10, weight: .medium)).lineLimit(1)
+            Text(text).font(.mono(10, weight: .medium)).lineLimit(1)
         }
         .foregroundColor(color)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
+        .padding(.horizontal, Space.sm)
+        .padding(.vertical, Space.xxs)
         .background(color.opacity(0.1))
         .clipShape(.capsule)
     }
@@ -528,22 +530,22 @@ private struct VerdictBadge: View {
 
     var body: some View {
         if verdict == "pending" {
-            HStack(spacing: 4) {
+            HStack(spacing: Space.xs) {
                 ProgressView().scaleEffect(0.55).frame(width: 10, height: 10)
                 Text("RUNNING")
-                    .font(.dev(size: 9, weight: .bold))
+                    .font(.mono(9, weight: .bold))
                     .foregroundColor(.secondary)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Color.secondary.opacity(0.1))
+            .padding(.horizontal, Space.sm)
+            .padding(.vertical, Space.xxs)
+            .background(Color.controlFill)
             .clipShape(.capsule)
         } else {
             Text(label)
-                .font(.dev(size: 9, weight: .bold))
+                .font(.mono(9, weight: .bold))
                 .foregroundColor(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
+                .padding(.horizontal, Space.sm)
+                .padding(.vertical, Space.xxs)
                 .background(color)
                 .clipShape(.capsule)
         }
@@ -617,31 +619,31 @@ private struct ResultPreview: View {
                     HStack(spacing: 0) {
                         ForEach(p.fields.prefix(6), id: \.self) { field in
                             Text(field)
-                                .font(.dev(size: 9.5, weight: .semibold))
+                                .font(.mono(10, weight: .semibold))
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(Color.secondary.opacity(0.08))
+                                .padding(.horizontal, Space.sm)
+                                .padding(.vertical, Space.xxs)
+                                .background(Color.controlFill)
                         }
                     }
-                    .clipShape(.rect(cornerRadius: 4, style: .continuous))
+                    .clipShape(.rect(cornerRadius: Radius.sm, style: .continuous))
 
                     // Data rows
                     ForEach(p.rows) { row in
                         HStack(spacing: 0) {
                             ForEach(row.cells.prefix(6)) { cell in
                                 Text(cell.text)
-                                    .font(.dev(size: 9.5))
+                                    .font(.mono(10))
                                     .foregroundColor(.primary.opacity(0.75))
                                     .lineLimit(1)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
+                                    .padding(.horizontal, Space.sm)
+                                    .padding(.vertical, Space.xxs)
                             }
                         }
-                        Divider().opacity(0.5)
+                        Rectangle().fill(Color.hairline).frame(height: 0.5)
                     }
 
                     // Footer: row counts
@@ -649,13 +651,13 @@ private struct ResultPreview: View {
                     let showing = min(p.rows.count, 5)
                     if total > showing {
                         Text("\(showing) of \(total) rows")
-                            .font(.dev(size: 9.5))
+                            .font(.mono(10))
                             .foregroundColor(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.top, 3)
+                            .padding(.horizontal, Space.sm)
+                            .padding(.top, Space.xxs)
                     }
                 }
-                .codeBlockSurface(cornerRadius: 5)
+                .codeBlockSurface(cornerRadius: Radius.sm)
             }
         }
     }
@@ -680,17 +682,17 @@ private struct ResponseTextBlock: View {
     @State private var moreToShow = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Space.xs) {
             HStack {
-                Text("RESPONSE")
-                    .font(.dev(size: 9.5, weight: .semibold))
+                Text("Response")
+                    .font(.uiSection)
                     .foregroundColor(.secondary)
-                    .tracking(0.4)
                 Spacer()
                 if moreToShow {
                     Button(action: onOpen) {
                         Label("Open", systemImage: "arrow.up.left.and.arrow.down.right")
-                            .font(.dev(size: 9.5, weight: .medium))
+                            .font(.uiLabel)
+                            .fontWeight(.medium)
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.accentColor)
@@ -698,12 +700,12 @@ private struct ResponseTextBlock: View {
                 }
             }
             MarkdownResponseView(markdown: preview, embedded: true)
-                .padding(8)
+                .padding(Space.sm)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .codeBlockSurface(cornerRadius: 5)
+                .codeBlockSurface(cornerRadius: Radius.sm)
             if moreToShow {
                 Text("Preview truncated — Open for the full, formatted response")
-                    .font(.dev(size: 9))
+                    .font(.uiCaption)
                     .foregroundColor(.secondary)
             }
         }
@@ -735,11 +737,11 @@ private struct ResponseSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Response").font(.system(size: 13, weight: .semibold))
+            HStack(spacing: Space.md) {
+                VStack(alignment: .leading, spacing: Space.xxs) {
+                    Text("Response").font(.uiHeadline)
                     Text(title)
-                        .font(.dev(size: 10))
+                        .font(.mono(10))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -756,8 +758,8 @@ private struct ResponseSheet: View {
                     .controlSize(.small)
                     .keyboardShortcut(.defaultAction)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.md)
             Divider()
             Group {
                 if display.isEmpty {
@@ -804,11 +806,11 @@ private struct ResponseSheet: View {
     // Font size + line-height steppers. Small, monospaced-digit readout so the
     // header width doesn't jump as the numbers change.
     private var typeControls: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Space.md) {
             Stepper(value: $fontSize, in: 10...24, step: 1) {
-                HStack(spacing: 3) {
+                HStack(spacing: Space.xxs) {
                     Image(systemName: "textformat.size").font(.system(size: 10))
-                    Text("\(Int(fontSize))").font(.dev(size: 11)).monospacedDigit()
+                    Text("\(Int(fontSize))").font(.uiLabel).monospacedDigit()
                 }
             }
             .controlSize(.small)

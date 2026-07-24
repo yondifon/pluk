@@ -165,11 +165,10 @@ struct ConfigSnippetSection: View {
 
     var body: some View {
         DetailSection("Config") {
-            HStack(spacing: 8) {
+            HStack(spacing: Space.sm) {
                 Text("Client")
-                    .font(.dev(size: 11, weight: .semibold))
+                    .font(.uiLabel)
                     .foregroundColor(.secondary)
-                    .textCase(.uppercase)
                 Picker("", selection: $selectedClient) {
                     ForEach(MCPClient.allCases) { client in
                         Text(client.label).tag(client)
@@ -211,27 +210,27 @@ struct ConfigSnippetSection: View {
                 .tint(copied ? .green : nil)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: copied)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, Space.md)
+            .padding(.top, Space.md)
+            .padding(.bottom, Space.sm)
 
-            Divider()
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 5) {
+            VStack(alignment: .leading, spacing: Space.sm) {
+                HStack(spacing: Space.xs + 1) {
                     Text("Add to")
+                        .font(.uiCaption)
                         .foregroundColor(.secondary)
                     Text(selectedClient.configPath(selectedScope))
-                        .font(.dev(size: 11, weight: .semibold))
+                        .font(.mono(11))
                         .textSelection(.enabled)
                 }
-                .font(.dev(size: 11))
 
                 MarkdownResponseView(markdown: snippetMarkdown, embedded: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .codeBlockSurface(cornerRadius: 6)
+                    .padding(Space.md)
+                    .codeBlockSurface(cornerRadius: Radius.sm)
             }
-            .padding(10)
+            .padding(.horizontal, Space.md)
+            .padding(.bottom, Space.md)
         }
     }
 
@@ -314,9 +313,8 @@ struct ConnectionDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
             tabBar
-            Divider()
+            Rectangle().fill(Color.hairline).frame(height: 0.5)
             tabContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -325,79 +323,68 @@ struct ConnectionDetailView: View {
 
     // MARK: - Header
 
+    // Identity on the left, state in the middle, actions on the right. The meta
+    // line answers the questions someone pointing an agent at this integration
+    // actually asks — what service, which environment, can it write, how much
+    // of its tool surface is exposed — without needing a trip to another tab.
     private var header: some View {
-        HStack(spacing: 11) {
-            TypeBadge(type: conn.type, size: 32)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 7) {
-                    Circle()
-                        .fill(dotColor)
-                        .frame(width: 8, height: 8)
-                        .help(health?.isError == true ? (health?.error ?? "Connection failing") : "")
-                        .accessibilityHidden(true) // color re-encodes the status shown as text below
-                    Text(conn.name)
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                if health?.isError == true {
-                    Text("Connection issue")
-                        .font(.dev(size: 11))
-                        .foregroundColor(.red)
-                        .help(health?.error ?? "Connection failing")
-                } else {
-                    Text("\(conn.typeLabel) · \(conn.environment.label)")
-                        .font(.dev(size: 11))
-                        .foregroundColor(.secondary)
+        HStack(alignment: .top, spacing: Space.md) {
+            TypeBadge(type: conn.type, size: 34)
+            VStack(alignment: .leading, spacing: Space.xs + 1) {
+                Text(conn.name)
+                    .font(.uiTitle)
+                    .tracking(-0.2)
+                    .lineLimit(1)
+                HStack(spacing: Space.sm - 2) {
+                    Text(metaLine)
+                        .font(.uiCaption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if conn.readOnly {
+                        Tag(text: "Read-only", systemImage: "lock.fill")
+                    }
                 }
             }
-            Spacer()
-            headerTestButton
-            Button("Edit", action: onEdit)
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            Button("Duplicate", action: onDuplicate)
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            Button(role: .destructive, action: onDelete) {
-                Label("Delete", systemImage: "trash")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            Spacer(minLength: Space.md)
+            StatusChip(status: status, checkedAt: health?.at, detail: health?.error)
+            headerActions
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.horizontal, Space.xl)
+        .padding(.top, Space.lg)
+        .padding(.bottom, Space.md)
+    }
+
+    private var metaLine: String {
+        var parts = ["\(conn.typeLabel) · \(conn.environment.label)"]
+        let tools = adapterManifest?.tools ?? []
+        if !tools.isEmpty { parts.append("\(tools.filter(isEnabled).count)/\(tools.count) tools") }
+        return parts.joined(separator: "  ·  ")
+    }
+
+    // One primary action plus an overflow: Test is the thing people press, the
+    // rest are occasional and don't need to sit on screen as four equal buttons.
+    private var headerActions: some View {
+        HStack(spacing: Space.sm - 2) {
+            headerTestButton
+            Menu {
+                Button("Edit…", action: onEdit)
+                Button("Duplicate", action: onDuplicate)
+                Divider()
+                Button("Delete…", role: .destructive, action: onDelete)
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More actions")
+        }
     }
 
     // MARK: - Tab bar
 
     private var tabBar: some View {
-        HStack(spacing: 0) {
-            ForEach(DetailTab.allCases, id: \.self) { tab in
-                Button {
-                    selectedTab = tab
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 11))
-                        Text(tab.rawValue)
-                            .font(.dev(size: 12, weight: .medium))
-                    }
-                    .foregroundColor(selectedTab == tab ? .accentColor : .secondary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .overlay(alignment: .bottom) {
-                        if selectedTab == tab {
-                            Rectangle()
-                                .fill(Color.accentColor)
-                                .frame(height: 2)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 4)
-        .background(.clear)
+        PillTabs(tabs: DetailTab.allCases, title: \.rawValue, selection: $selectedTab)
     }
 
     // MARK: - Tab content
@@ -415,14 +402,14 @@ struct ConnectionDetailView: View {
 
     private var overviewTab: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: Space.xl) {
                 mcpURLSection
                 ConfigSnippetSection(mcpKey: conn.mcpKey, mcpURL: conn.mcpURL,
                                      title: conn.name, id: conn.id,
                                      toastCenter: store.toastCenter)
                 connectionDetailsSection
             }
-            .padding(18)
+            .padding(Space.xl)
         }
     }
 
@@ -431,9 +418,9 @@ struct ConnectionDetailView: View {
     private var mcpURLSection: some View {
         DetailSection("MCP endpoint") {
             InspectorRow("URL") {
-                HStack(spacing: 8) {
+                HStack(spacing: Space.sm) {
                     Text(conn.mcpURL)
-                        .font(.dev(size: 12))
+                        .font(.mono(12))
                         .foregroundColor(.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -598,59 +585,57 @@ struct ConnectionDetailView: View {
     private var policyTab: some View {
         let tools = adapterManifest?.tools ?? []
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: Space.xl) {
                 if tools.isEmpty {
                     DetailSection("Tools") {
                         Text("Tool list unavailable — the local pluk server isn't responding.")
-                            .font(.system(size: 11))
+                            .font(.uiLabel)
                             .foregroundColor(.secondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
+                            .padding(.horizontal, Space.md)
+                            .padding(.vertical, Space.md)
                     }
                 } else {
-                    DetailSection("Tools") {
-                        InspectorRow("Enabled", value: "\(tools.filter(isEnabled).count) of \(tools.count)")
-                    }
                     // Enabled first: the surface the agent actually has, then the
-                    // off tools below for reference.
-                    DetailSection("Exposed to the agent") {
+                    // off tools below for reference. The count lives in the header
+                    // instead of its own card — same fact, one less box.
+                    DetailSection("\(tools.filter(isEnabled).count) of \(tools.count) tools exposed to the agent") {
                         ForEach(tools.filter(isEnabled) + tools.filter { !isEnabled($0) }) { tool in
                             toolStatusRow(tool)
                         }
                     }
                 }
             }
-            .padding(18)
+            .padding(Space.xl)
         }
     }
 
     @ViewBuilder
     private func toolStatusRow(_ tool: AdapterToolDef) -> some View {
         let enabled = isEnabled(tool)
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+        HStack(alignment: .top, spacing: Space.md) {
+            // A dot, not a pill: the list is long, and "which of these is live"
+            // reads faster as a column of marks than as a column of words.
+            Circle()
+                .fill(enabled ? Color.green : Color.secondary.opacity(0.35))
+                .frame(width: 6, height: 6)
+                .padding(.top, 5)
+                .help(enabled ? "Exposed to the agent" : "Not exposed")
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                HStack(spacing: Space.sm - 2) {
                     Text(tool.name)
-                        .font(.dev(size: 12))
+                        .font(.mono(12))
                         .foregroundColor(enabled ? .primary : .secondary)
                     ToolCategoryTag(category: tool.category)
                 }
                 if enabled, let summary = settingsSummary(tool) {
-                    Text(summary).font(.system(size: 10)).foregroundColor(.secondary)
+                    Text(summary).font(.uiCaption).foregroundColor(.secondary)
                 }
             }
             Spacer(minLength: 0)
-            Text(enabled ? "On" : "Off")
-                .font(.dev(size: 11, weight: .medium))
-                .foregroundColor(enabled ? .white : .secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(enabled ? Color.green.opacity(0.7) : Color(NSColor.separatorColor))
-                .clipShape(.capsule)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .overlay(alignment: .bottom) { Divider().padding(.leading, 10) }
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm)
+        .opacity(enabled ? 1 : 0.6)
     }
 
     // One-line summary of an enabled tool's settings (e.g. "Statements: Mutations").
@@ -668,11 +653,12 @@ struct ConnectionDetailView: View {
 
     private var health: ConnHealth? { store.health[conn.id] }
 
-    // Health, not type: red when failing, green when known-good, gray when
-    // untested this session — so the dot never falsely implies "connected".
-    private var dotColor: Color {
-        guard let health else { return .gray }
-        return health.isError ? .red : .green
+    // Health, not type: failing when the last check errored, healthy when it
+    // passed, unknown when nothing has checked yet — so the chip never falsely
+    // implies "connected".
+    private var status: ConnStatus {
+        guard let health else { return .unknown }
+        return health.isError ? .failing : .ok
     }
 }
 

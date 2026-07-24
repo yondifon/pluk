@@ -34,20 +34,19 @@ struct GroupDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
             tabBar
-            Divider()
+            Rectangle().fill(Color.hairline).frame(height: 0.5)
             switch tab {
             case .overview:
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: Space.xl) {
                         endpointSection
                         ConfigSnippetSection(mcpKey: group.mcpKey, mcpURL: group.mcpURL,
                                              title: group.name, id: group.id,
                                              toastCenter: store.toastCenter)
                         membersSection
                     }
-                    .padding(18)
+                    .padding(Space.xl)
                 }
             case .logs:
                 LogsTab(scope: .group(group), store: store)
@@ -59,56 +58,44 @@ struct GroupDetailView: View {
     // MARK: - Tab bar
 
     private var tabBar: some View {
-        HStack(spacing: 0) {
-            ForEach(GroupTab.allCases, id: \.self) { t in
-                Button { tab = t } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: t.icon).font(.system(size: 11))
-                        Text(t.rawValue).font(.dev(size: 12, weight: .medium))
-                    }
-                    .foregroundColor(tab == t ? .accentColor : .secondary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .overlay(alignment: .bottom) {
-                        if tab == t {
-                            Rectangle().fill(Color.accentColor).frame(height: 2)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 4)
-        .background(.clear)
+        PillTabs(tabs: GroupTab.allCases, title: \.rawValue, selection: $tab)
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .top, spacing: Space.md) {
             Image(systemName: "square.stack.3d.up.fill")
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 3) {
+                .frame(width: 34, height: 34)
+                .background(Color.controlFill, in: RoundedRectangle(cornerRadius: Radius.md - 2, style: .continuous))
+            VStack(alignment: .leading, spacing: Space.xs + 1) {
                 Text(group.name)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.uiTitle)
+                    .tracking(-0.2)
+                    .lineLimit(1)
                 Text(subtitle)
-                    .font(.dev(size: 11))
+                    .font(.uiCaption)
                     .foregroundColor(.secondary)
             }
-            Spacer()
+            Spacer(minLength: Space.md)
             Button("Edit", action: onEdit)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-            Button(role: .destructive, action: onDelete) {
-                Label("Delete", systemImage: "trash")
+            Menu {
+                Button("Delete…", role: .destructive, action: onDelete)
+            } label: {
+                Image(systemName: "ellipsis")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More actions")
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.horizontal, Space.xl)
+        .padding(.top, Space.lg)
+        .padding(.bottom, Space.md)
     }
 
     // MARK: - Endpoint
@@ -116,9 +103,9 @@ struct GroupDetailView: View {
     private var endpointSection: some View {
         DetailSection("MCP endpoint") {
             InspectorRow("URL") {
-                HStack(spacing: 8) {
+                HStack(spacing: Space.sm) {
                     Text(group.mcpURL)
-                        .font(.dev(size: 12))
+                        .font(.mono(12))
                         .foregroundColor(.primary)
                         .textSelection(.enabled)
                         .lineLimit(1)
@@ -142,38 +129,37 @@ struct GroupDetailView: View {
         DetailSection("Integrations") {
             if members.isEmpty {
                 Text("No integrations in this group. Click Edit to add some.")
-                    .font(.system(size: 12))
+                    .font(.uiLabel)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
+                    .padding(Space.md)
             } else {
                 VStack(spacing: 0) {
                     ForEach(members) { conn in
                         let overrides = group.member(conn.id)?.overrides ?? [:]
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 9) {
+                        VStack(alignment: .leading, spacing: Space.xs) {
+                            HStack(spacing: Space.sm + 2) {
                                 TypeBadge(type: conn.type)
-                                Text(conn.name).font(.system(size: 13))
+                                Text(conn.name).font(.uiBody)
                                 EnvTag(environment: conn.environment)
                                 Spacer()
+                                // The prefix every tool of this member carries
+                                // inside the group's namespace.
                                 Text("\(NamespaceFormat.slug(conn.name))__*")
-                                    .font(.dev(size: 10))
+                                    .font(.mono(10))
                                     .foregroundStyle(.tertiary)
                             }
                             if !overrides.isEmpty {
                                 Text(overrides.sorted { $0.key < $1.key }
                                         .map { "\($0.key) → \($0.value)" }
                                         .joined(separator: "   "))
-                                    .font(.dev(size: 10))
+                                    .font(.mono(10))
                                     .foregroundStyle(Color.accentColor)
-                                    .padding(.leading, 32)
+                                    .padding(.leading, Space.xxl)
                             }
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        if conn.id != members.last?.id {
-                            Divider().padding(.leading, 12)
-                        }
+                        .padding(.horizontal, Space.md)
+                        .padding(.vertical, Space.sm + 1)
                     }
                 }
             }

@@ -20,7 +20,7 @@ struct MarkdownResponseView: View {
     @State private var blocks: [MarkdownBlock] = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: max(10, lineSpacing * 3)) {
+        VStack(alignment: .leading, spacing: max(Space.md, lineSpacing * 3)) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .prose(let text):
@@ -140,7 +140,7 @@ private struct MarkdownCodeBlock: View {
     let language: String
     let code: String
     var embedded: Bool = false
-    var fontSize: CGFloat = 11
+    var fontSize: CGFloat = 12
     var lineSpacing: CGFloat = 2
 
     @State private var copied = false
@@ -157,7 +157,7 @@ private struct MarkdownCodeBlock: View {
             if !embedded { header }
 
             ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: 12) {
+                HStack(alignment: .top, spacing: Space.md) {
                     if !embedded {
                         Text(gutter)
                             .font(.system(size: fontSize, design: .monospaced))
@@ -172,8 +172,8 @@ private struct MarkdownCodeBlock: View {
                         .fixedSize(horizontal: true, vertical: false)
                         .textSelection(.enabled)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(.horizontal, Space.md)
+                .padding(.vertical, Space.sm)
             }
             .scrollIndicators(.visible)
         }
@@ -184,19 +184,19 @@ private struct MarkdownCodeBlock: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Space.sm) {
             Text(language.lowercased())
-                .font(.dev(size: 10, weight: .semibold))
+                .font(.mono(10, weight: .semibold))
                 .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
+            Spacer(minLength: Space.sm)
             Button(copied ? "Copied" : "Copy Code") { copyCode() }
                 .buttonStyle(.plain)
-                .font(.dev(size: 10, weight: .medium))
+                .font(.uiLabel)
                 .foregroundStyle(copied ? .green : Color.accentColor)
                 .accessibilityLabel(copied ? "Code copied" : "Copy code")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm)
         .overlay(alignment: .bottom) { Divider().opacity(0.7) }
     }
 
@@ -231,7 +231,7 @@ private struct CodeBlockChrome: ViewModifier {
         if embedded {
             content
         } else {
-            content.codeBlockSurface(cornerRadius: 6)
+            content.codeBlockSurface(cornerRadius: Radius.sm)
         }
     }
 }

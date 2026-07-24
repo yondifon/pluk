@@ -139,10 +139,19 @@ struct ContentView: View {
     private var appContent: some View {
         NavigationSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 300)
+                .navigationSplitViewColumnWidth(min: 220, ideal: 244, max: 320)
         } detail: {
             detailPanel
                 .frame(minWidth: 440, minHeight: 480)
+                // Both columns paint an opaque page fill, which buries the
+                // system split divider — draw the boundary ourselves so it
+                // stays a light hairline in dark mode instead of a black seam.
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.edge)
+                        .frame(width: 0.5)
+                        .ignoresSafeArea()
+                }
         }
         .navigationSplitViewStyle(.balanced)
         .glassWindowBackground()
@@ -239,23 +248,23 @@ struct ContentView: View {
     }
 
     private var searchRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Space.sm) {
             searchField
             filterButton
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
+        .padding(.horizontal, Space.md)
+        .padding(.top, Space.md)
+        .padding(.bottom, Space.sm)
     }
 
     private var searchField: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Space.sm - 2) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12))
+                .font(.uiLabel)
                 .foregroundStyle(.secondary)
             TextField("Filter integrations", text: $search)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
+                .font(.uiLabel)
                 .focused($searchFocused)
                 .onExitCommand { search = ""; searchFocused = false }
             if !search.isEmpty {
@@ -264,16 +273,16 @@ struct ContentView: View {
                     searchFocused = true
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 12))
+                        .font(.uiLabel)
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
                 .help("Clear")
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .padding(.horizontal, Space.sm)
+        .padding(.vertical, Space.sm - 1)
+        .background(Color.controlFill, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
     }
 
     // Funnel beside the search: opens a popover to narrow the list by adapter type
@@ -283,10 +292,10 @@ struct ContentView: View {
             showFilters.toggle()
         } label: {
             Image(systemName: filtersActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                .font(.system(size: 13))
+                .font(.uiBody)
                 .foregroundStyle(filtersActive ? Color.accentColor : .secondary)
-                .frame(width: 27, height: 27)
-                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .frame(width: 28, height: 28)
+                .background(Color.controlFill, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
         }
         .buttonStyle(.plain)
         .help("Filter by type and environment")
@@ -428,53 +437,62 @@ struct GroupRow: View {
     let group: ConnectionGroup
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: Space.sm + 2) {
             Image(systemName: "square.stack.3d.up.fill")
-                .font(.system(size: 12))
+                .font(.uiLabel)
                 .foregroundStyle(.secondary)
                 .frame(width: 24, height: 24)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(group.name)
-                    .font(.system(size: 13))
+                    .font(.uiBody)
                     .lineLimit(1)
                 Text("\(group.memberIds.count) integration\(group.memberIds.count == 1 ? "" : "s")")
-                    .font(.dev(size: 10))
+                    .font(.uiCaption)
                     .foregroundStyle(.tertiary)
             }
             Spacer()
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, Space.xs)
     }
 }
 
+// Row anatomy: adapter mark, name, and one quiet meta line answering "which
+// service, which environment" — the two facts that decide whether an agent
+// should be pointed at this integration. Health and read-only ride on the
+// trailing edge as marks, not words, so scanning the list stays fast.
 struct ConnectionRow: View {
     let conn: Connection
     var health: ConnHealth?
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: Space.sm + 2) {
             TypeBadge(type: conn.type)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(conn.name)
-                    .font(.system(size: 13))
+                    .font(.uiBody)
                     .lineLimit(1)
-                EnvTag(environment: conn.environment)
+                Text("\(conn.typeLabel) · \(conn.environment.label)")
+                    .font(.uiCaption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            Spacer()
-            if health?.isError == true {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 7, height: 7)
-                    .help(health?.error ?? "Connection failing")
-            }
+            Spacer(minLength: Space.sm)
             if conn.readOnly {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 9))
                     .foregroundStyle(.tertiary)
                     .help("Read-only")
             }
+            // Only when we actually know: an always-on dot would imply
+            // "connected" for integrations nobody has checked yet.
+            if let health {
+                Circle()
+                    .fill(health.isError ? Color.red : Color.green)
+                    .frame(width: 6, height: 6)
+                    .help(health.isError ? (health.error ?? "Connection failing") : "Healthy")
+            }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, Space.xs)
     }
 }
 
@@ -520,7 +538,7 @@ struct AdapterGlyph: View {
                 .foregroundColor(selected ? .white : color)
         } else {
             Text(AdapterStyle.abbrev(for: type))
-                .font(.dev(size: 9, weight: .semibold))
+                .font(.mono(9, weight: .semibold))
                 .foregroundColor(selected ? .white : color)
         }
     }
@@ -606,13 +624,12 @@ struct EnvTag: View {
     private var selected: Bool { prominence == .increased }
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Space.xs + 1) {
             Circle()
                 .fill(selected ? Color.white : environment.color.opacity(0.85))
                 .frame(width: 5, height: 5)
-            Text(environment.label.uppercased())
-                .font(.dev(size: 9, weight: .medium))
-                .tracking(0.4)
+            Text(environment.label)
+                .font(.uiCaption)
                 .foregroundStyle(.secondary)
         }
         .help("\(environment.label) environment")
@@ -637,7 +654,7 @@ private struct FilterPopover: View {
             header
             Divider()
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: Space.lg) {
                     if !types.isEmpty {
                         section("Type") {
                             ForEach(types, id: \.self) { type in
@@ -645,7 +662,7 @@ private struct FilterPopover: View {
                                     toggle(&typeFilter, type)
                                 } label: {
                                     TypeBadge(type: type, size: 18)
-                                    Text(label(type)).font(.system(size: 12))
+                                    Text(label(type)).font(.uiLabel)
                                 }
                             }
                         }
@@ -660,42 +677,41 @@ private struct FilterPopover: View {
                                         .fill(env.color.opacity(0.85))
                                         .frame(width: 7, height: 7)
                                         .frame(width: 18)
-                                    Text(env.label).font(.system(size: 12))
+                                    Text(env.label).font(.uiLabel)
                                 }
                             }
                         }
                     }
                 }
-                .padding(12)
+                .padding(Space.md)
             }
         }
-        .frame(width: 220)
+        .frame(width: 224)
         .frame(maxHeight: 360)
     }
 
     private var header: some View {
         HStack {
-            Text("Filters").font(.system(size: 12, weight: .semibold))
+            Text("Filters").font(.uiHeadline)
             Spacer()
             if active {
                 Button("Clear") { typeFilter = []; envFilter = [] }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11))
+                    .font(.uiCaption)
                     .foregroundStyle(Color.accentColor)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm + 2)
     }
 
     @ViewBuilder
     private func section<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title.uppercased())
-                .font(.dev(size: 9, weight: .semibold))
-                .tracking(0.45)
+        VStack(alignment: .leading, spacing: Space.sm - 2) {
+            Text(title)
+                .font(.uiSection)
                 .foregroundStyle(.tertiary)
-            VStack(alignment: .leading, spacing: 2) { content() }
+            VStack(alignment: .leading, spacing: Space.xxs) { content() }
         }
     }
 
@@ -711,11 +727,11 @@ private struct FilterRow<Label: View>: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: Space.sm) {
                 label()
-                Spacer(minLength: 4)
+                Spacer(minLength: Space.xs)
                 Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 12))
+                    .font(.uiLabel)
                     .foregroundStyle(isOn ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary))
             }
             .contentShape(Rectangle())
@@ -735,14 +751,14 @@ private struct ServerStatusBanner: View {
             if serverManager.status == .starting {
                 ProgressView().scaleEffect(0.7).frame(width: 12, height: 12)
                 Text("Server starting…")
-                    .font(.dev(size: 11))
+                    .font(.uiCaption)
                     .foregroundColor(.secondary)
             } else {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 11))
                     .foregroundColor(.orange)
                 Text("Server not running")
-                    .font(.dev(size: 11))
+                    .font(.uiCaption)
                     .foregroundColor(.secondary)
             }
             Spacer()
@@ -752,10 +768,10 @@ private struct ServerStatusBanner: View {
                     .controlSize(.small)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .padding(.horizontal, Space.lg)
+        .padding(.vertical, Space.sm)
         .background(Color.pageSurface)
-        .overlay(alignment: .top) { Divider() }
+        .overlay(alignment: .top) { Rectangle().fill(Color.hairline).frame(height: 0.5) }
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: serverManager.status == .stopped)
     }
@@ -773,14 +789,14 @@ private struct UpdateBanner: View {
             if updating {
                 ProgressView().scaleEffect(0.7).frame(width: 12, height: 12)
                 Text("Updating — rebuilding from source, app will relaunch (log: \(UpdateChecker.updateLogPath))")
-                    .font(.dev(size: 11))
+                    .font(.uiCaption)
                     .foregroundColor(.secondary)
             } else {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 11))
                     .foregroundColor(.accentColor)
                 Text("Update available — \(commit.map { String($0.prefix(7)) } ?? "new commit") on remote")
-                    .font(.dev(size: 11))
+                    .font(.uiCaption)
                     .foregroundColor(.secondary)
             }
             Spacer()
@@ -790,10 +806,10 @@ private struct UpdateBanner: View {
                     .controlSize(.small)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .padding(.horizontal, Space.lg)
+        .padding(.vertical, Space.sm)
         .background(Color.pageSurface)
-        .overlay(alignment: .top) { Divider() }
+        .overlay(alignment: .top) { Rectangle().fill(Color.hairline).frame(height: 0.5) }
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }
@@ -804,27 +820,24 @@ struct EmptyStateView: View {
     let onAdd: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("NO INTEGRATION SELECTED")
-                .font(.dev(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .tracking(0.45)
+        VStack(alignment: .leading, spacing: Space.md) {
             Text("Connect a service to get started")
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: 22, weight: .semibold))
+                .tracking(-0.3)
                 .textSelection(.disabled)
             Text("Add a database, Linear workspace, or another local MCP endpoint. Pluk keeps the server and policy controls on this Mac.")
-                .font(.system(size: 12))
+                .font(.uiBody)
                 .foregroundStyle(.secondary)
-                .lineSpacing(2)
-                .frame(maxWidth: 430, alignment: .leading)
+                .lineSpacing(3)
+                .frame(maxWidth: 420, alignment: .leading)
             Button("New Integration", action: onAdd)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
                 .keyboardShortcut("n", modifiers: .command)
-                .padding(.top, 6)
+                .padding(.top, Space.sm)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .padding(32)
+        .padding(Space.xxl)
     }
 }
 

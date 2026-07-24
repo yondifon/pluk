@@ -66,7 +66,7 @@ struct ToastOverlay: View {
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Space.sm) {
             ForEach(center.toasts) { toast in
                 ToastCard(toast: toast,
                           onRetry: { onRetry(toast.connectionId) },
@@ -74,8 +74,8 @@ struct ToastOverlay: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .padding(.top, 10)
-        .padding(.trailing, 14)
+        .padding(.top, Space.md)
+        .padding(.trailing, Space.lg)
         .frame(maxWidth: .infinity, alignment: .topTrailing)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: center.toasts)
         .allowsHitTesting(true)
@@ -91,24 +91,24 @@ private struct ToastCard: View {
     private var icon: String { toast.kind == .error ? "exclamationmark.triangle.fill" : "checkmark.circle.fill" }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: Space.md) {
             Image(systemName: icon)
                 .foregroundStyle(accent)
                 .font(.system(size: 14, weight: .semibold))
-                .padding(.top, 1)
+                .padding(.top, Space.xxs)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(toast.title)
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(.uiHeadline)
                 Text(toast.message)
-                    .font(.system(size: 11.5))
+                    .font(.uiCaption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if toast.kind == .error {
                     Button("Retry", action: onRetry)
                         .buttonStyle(.borderless)
                         .controlSize(.small)
-                        .padding(.top, 1)
+                        .padding(.top, Space.xxs)
                 }
             }
 
@@ -121,20 +121,20 @@ private struct ToastCard: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 11)
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.md)
         .frame(width: 320, alignment: .leading)
-        .background(.bar, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .background(.bar, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                 .strokeBorder(accent.opacity(0.35), lineWidth: 1)
         )
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 2)
                 .fill(accent)
                 .frame(width: 3)
-                .padding(.vertical, 8)
-                .padding(.leading, 2)
+                .padding(.vertical, Space.sm)
+                .padding(.leading, Space.xxs)
         }
         .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
     }

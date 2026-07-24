@@ -1,24 +1,17 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Developer-tool typography
+// Shared surfaces and rows. Design tokens (spacing, radii, type, fills) live in
+// Theme.swift — this file only composes them into the two structural pieces the
+// detail screens are built from: a titled section and a labeled row.
+
+// MARK: - Typography
 
 extension Font {
-    /// SF Mono at a given size/weight, mapped to scalable text styles so the
-    /// dense dev-tool UI still respects Dynamic Type. Used for config values,
-    /// code blocks, status text, labels, and any other surface that should read
-    /// like a developer tool rather than a consumer app.
+    /// Monospace, for machine data. Kept as the short name the dense screens
+    /// (logs, config values, code) already call; `.mono` is the same font.
     static func dev(size: CGFloat, weight: Weight = .regular) -> Font {
-        let style: Font.TextStyle
-        switch size {
-        case ..<10:  style = .caption2
-        case ..<11:  style = .caption
-        case ..<12:  style = .footnote
-        case ..<13:  style = .callout
-        case ..<14:  style = .subheadline
-        default:     style = .body
-        }
-        return .system(style, design: .monospaced, weight: weight)
+        .mono(size, weight: weight)
     }
 }
 
@@ -26,7 +19,7 @@ extension Font {
 struct GlassGroup<Content: View>: View {
     @ViewBuilder var content: Content
 
-    init(spacing: CGFloat = 10, @ViewBuilder content: () -> Content) {
+    init(spacing: CGFloat = Space.lg, @ViewBuilder content: () -> Content) {
         self.content = content()
     }
 
@@ -57,27 +50,19 @@ extension View {
     }
 }
 
-// MARK: - Shared surfaces & rows
+// MARK: - Shared surfaces
 
 extension View {
-    /// Section card — the uniform page fill delineated by a hairline, so groups
-    /// read as one surface with the rest of the app rather than a lighter slab.
-    func cardSurface(cornerRadius: CGFloat = 8) -> some View {
-        self
-            .background(
-                Color.pageSurface,
-                in: .rect(cornerRadius: min(cornerRadius, 5))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: min(cornerRadius, 5), style: .continuous)
-                    .stroke(Color.primary.opacity(0.10), lineWidth: 0.5)
-            )
+    /// Section card — a soft fill instead of a stroked box. Grouping comes from
+    /// the fill and the space around it, so the screen holds fewer lines.
+    func cardSurface(cornerRadius: CGFloat = Radius.md) -> some View {
+        card(radius: cornerRadius)
     }
 
     /// Projected surface for code / data blocks (config snippets, result tables)
     /// — a slight grey fill, no border, so the content reads as a recessed panel
     /// inside its card, never a card-in-a-card.
-    func codeBlockSurface(cornerRadius: CGFloat = 6) -> some View {
+    func codeBlockSurface(cornerRadius: CGFloat = Radius.sm) -> some View {
         self.background(
             Color.projectedSurface,
             in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -85,7 +70,8 @@ extension View {
     }
 }
 
-/// A titled inspector section: a restrained label over a flat group of rows.
+/// A titled inspector section: a quiet sentence-case header over a flat group of
+/// rows. The header is weight-and-color hierarchy, not uppercase tracking.
 struct DetailSection<Content: View>: View {
     let title: String
     let content: Content
@@ -96,12 +82,11 @@ struct DetailSection<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: Space.sm) {
             Text(title)
-                .font(.dev(size: 10, weight: .semibold))
-                .foregroundColor(.secondary)
-                .textCase(.uppercase)
-                .padding(.bottom, 6)
+                .font(.uiSection)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, Space.xs)
             VStack(spacing: 0) {
                 content
             }
@@ -110,45 +95,41 @@ struct DetailSection<Content: View>: View {
     }
 }
 
-/// A labeled row inside a `DetailSection`: a fixed-width label column, the value
-/// or editable control, and a hairline divider. `labelWidth`/`dividerInset` let
-/// the wider form rows reuse the same template as the read-only inspector rows.
+/// A labeled row inside a `DetailSection`: a fixed-width label column and the
+/// value or editable control. No separator — the card fill and the row rhythm
+/// carry the grouping, which keeps dense screens from turning into a grid of
+/// rules. `labelWidth`/`dividerInset` let the wider form rows reuse the same
+/// template as the read-only inspector rows.
 struct InspectorRow<Content: View>: View {
     let label: String
     let labelWidth: CGFloat
-    let dividerInset: CGFloat
     let content: Content
 
     init(_ label: String, value: String) where Content == Text {
         self.label = label
-        self.labelWidth = 86
-        self.dividerInset = 106
+        self.labelWidth = 88
         self.content = Text(value)
-            .font(.dev(size: 12))
-            .foregroundColor(.primary)
+            .font(.mono(12))
+            .foregroundStyle(.primary)
     }
 
-    init(_ label: String, labelWidth: CGFloat = 86, dividerInset: CGFloat = 106, @ViewBuilder content: () -> Content) {
+    init(_ label: String, labelWidth: CGFloat = 88, dividerInset: CGFloat = 0, @ViewBuilder content: () -> Content) {
         self.label = label
         self.labelWidth = labelWidth
-        self.dividerInset = dividerInset
         self.content = content()
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
             Text(label)
-                .font(.dev(size: 11, weight: .semibold))
-                .foregroundColor(.secondary)
-                .textCase(.uppercase)
+                .font(.uiLabel)
+                .foregroundStyle(.secondary)
                 .frame(width: labelWidth, alignment: .leading)
             content
+                .textSelection(.enabled)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .overlay(alignment: .bottom) {
-            Divider().padding(.leading, dividerInset)
-        }
+        .padding(.horizontal, Space.md)
+        .padding(.vertical, Space.sm + 1)
     }
 }
