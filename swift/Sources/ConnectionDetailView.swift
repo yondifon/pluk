@@ -60,6 +60,28 @@ enum MCPClient: String, CaseIterable, Identifiable {
 
     var configLanguage: String { self == .codex ? "toml" : "json" }
 
+    // Paths that mark the client as present on this machine — its state dir, its
+    // global config, or the app bundle. Any hit counts; a project file may not
+    // exist yet even when the client is installed.
+    var detectionPaths: [String] {
+        switch self {
+        case .opencode:    ["~/.config/opencode", "~/.local/share/opencode"]
+        case .codex:       ["~/.codex"]
+        case .claudeCode:  ["~/.claude", "~/.claude.json"]
+        case .cursor:      ["~/.cursor", "/Applications/Cursor.app"]
+        case .windsurf:    ["~/.codeium/windsurf", "/Applications/Windsurf.app"]
+        case .antigravity: ["~/.gemini", "/Applications/Antigravity.app"]
+        }
+    }
+
+    var isInstalled: Bool {
+        detectionPaths.contains {
+            FileManager.default.fileExists(atPath: ($0 as NSString).expandingTildeInPath)
+        }
+    }
+
+    static var installed: [MCPClient] { allCases.filter(\.isInstalled) }
+
     // The server's value object as written into a JSON config. Mirrors the shape
     // rendered by `snippet` below — keep the two in sync. (Codex is TOML; the
     // injector writes its `url = "…"` block directly.)
@@ -137,6 +159,48 @@ enum MCPClient: String, CaseIterable, Identifiable {
     }
 }
 
+// What the client picker holds: one client, or every client detected on this
+// machine. "All" fans the write out instead of making the user repeat it per
+// tool — global writes each client's user-level file, project writes the
+// per-repo file of every client that has one.
+enum ClientChoice: Hashable, Identifiable {
+    case all
+    case one(MCPClient)
+
+    var id: String {
+        switch self {
+        case .all: "all"
+        case .one(let client): client.rawValue
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .all: "All detected"
+        case .one(let client): client.label
+        }
+    }
+
+    // Clients this choice writes to for a scope. "All" keeps only detected
+    // clients that actually own a file at that scope, so Project skips the
+    // global-only ones (Codex, Windsurf, Antigravity).
+    func targets(scope: ConfigScope) -> [MCPClient] {
+        switch self {
+        case .one(let client): [client]
+        case .all: MCPClient.installed.filter { $0.supportedScopes.contains(scope) }
+        }
+    }
+
+    var supportedScopes: [ConfigScope] {
+        switch self {
+        case .one(let client): client.supportedScopes
+        case .all: ConfigScope.allCases
+        }
+    }
+
+    static var allChoices: [ClientChoice] { [.all] + MCPClient.allCases.map(ClientChoice.one) }
+}
+
 // MARK: - Config snippet section
 
 // Shared "Config" card for integration and group detail views: client picker +
@@ -150,17 +214,22 @@ struct ConfigSnippetSection: View {
     let id: String
     let toastCenter: ToastCenter?
 
-    @State private var selectedClient: MCPClient = .opencode
+    @State private var selectedChoice: ClientChoice = .one(.opencode)
     @State private var selectedScope: ConfigScope = .project
     @State private var copied = false
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var snippet: String {
-        selectedClient.snippet(key: mcpKey, url: mcpURL)
+    // The single client a snippet can be shown/copied for. Nil under "All".
+    private var singleClient: MCPClient? {
+        if case .one(let client) = selectedChoice { return client }
+        return nil
     }
 
-    private var snippetMarkdown: String {
-        "```\(selectedClient.configLanguage)\n\(snippet)\n```"
+    private var targets: [MCPClient] { selectedChoice.targets(scope: selectedScope) }
+
+    private var snippetMarkdown: String? {
+        guard let client = singleClient else { return nil }
+        return "```\(client.configLanguage)\n\(client.snippet(key: mcpKey, url: mcpURL))\n```"
     }
 
     var body: some View {
@@ -169,23 +238,23 @@ struct ConfigSnippetSection: View {
                 Text("Client")
                     .font(.uiLabel)
                     .foregroundColor(.secondary)
-                Picker("", selection: $selectedClient) {
-                    ForEach(MCPClient.allCases) { client in
-                        Text(client.label).tag(client)
+                Picker("", selection: $selectedChoice) {
+                    ForEach(ClientChoice.allChoices) { choice in
+                        Text(choice.label).tag(choice)
                     }
                 }
                 .pickerStyle(.menu)
                 .fixedSize()
-                .onChange(of: selectedClient) { _, client in
+                .onChange(of: selectedChoice) { _, choice in
                     // Keep the scope valid when switching to a global-only client.
-                    if !client.supportedScopes.contains(selectedScope) {
-                        selectedScope = client.supportedScopes.first ?? .global
+                    if !choice.supportedScopes.contains(selectedScope) {
+                        selectedScope = choice.supportedScopes.first ?? .global
                     }
                 }
-                // Only offer a scope choice when the client has more than one.
-                if selectedClient.supportedScopes.count > 1 {
+                // Only offer a scope choice when the selection has more than one.
+                if selectedChoice.supportedScopes.count > 1 {
                     Picker("", selection: $selectedScope) {
-                        ForEach(selectedClient.supportedScopes) { scope in
+                        ForEach(selectedChoice.supportedScopes) { scope in
                             Text(scope.label).tag(scope)
                         }
                     }
@@ -196,75 +265,144 @@ struct ConfigSnippetSection: View {
                 Button("Add") { addToConfig() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                Button(copied ? "Copied!" : "Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(snippet, forType: .string)
-                    copied = true
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(1.5))
-                        copied = false
+                    .disabled(targets.isEmpty)
+                if let client = singleClient {
+                    Button(copied ? "Copied!" : "Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(
+                            client.snippet(key: mcpKey, url: mcpURL), forType: .string)
+                        copied = true
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(1.5))
+                            copied = false
+                        }
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(copied ? .green : nil)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: copied)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(copied ? .green : nil)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: copied)
             }
             .padding(.horizontal, Space.md)
             .padding(.top, Space.md)
             .padding(.bottom, Space.sm)
 
             VStack(alignment: .leading, spacing: Space.sm) {
-                HStack(spacing: Space.xs + 1) {
-                    Text("Add to")
-                        .font(.uiCaption)
-                        .foregroundColor(.secondary)
-                    Text(selectedClient.configPath(selectedScope))
-                        .font(.mono(11))
-                        .textSelection(.enabled)
-                }
+                if let markdown = snippetMarkdown, let client = singleClient {
+                    HStack(spacing: Space.xs + 1) {
+                        Text("Add to")
+                            .font(.uiCaption)
+                            .foregroundColor(.secondary)
+                        Text(client.configPath(selectedScope))
+                            .font(.mono(11))
+                            .textSelection(.enabled)
+                    }
 
-                MarkdownResponseView(markdown: snippetMarkdown, embedded: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(Space.md)
-                    .codeBlockSurface(cornerRadius: Radius.sm)
+                    MarkdownResponseView(markdown: markdown, embedded: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Space.md)
+                        .codeBlockSurface(cornerRadius: Radius.sm)
+                } else {
+                    allTargetList
+                }
             }
             .padding(.horizontal, Space.md)
             .padding(.bottom, Space.md)
         }
     }
 
+    // Under "All", the snippet is replaced by exactly what Add will touch — one
+    // line per detected client, so the fan-out is never a blind write.
+    private var allTargetList: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            Text(targets.isEmpty ? "No AI clients detected" : "Add to")
+                .font(.uiCaption)
+                .foregroundColor(.secondary)
+
+            if !targets.isEmpty {
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    ForEach(targets) { client in
+                        HStack(spacing: Space.sm) {
+                            Text(client.label)
+                                .font(.uiLabel)
+                            Text(client.configPath(selectedScope))
+                                .font(.mono(11))
+                                .foregroundColor(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Space.md)
+                .codeBlockSurface(cornerRadius: Radius.sm)
+            }
+        }
+    }
+
     // Write the entry into the selected client's config. Project scope asks for
     // the repo folder first; global writes straight to the user-level file.
     private func addToConfig() {
+        let clients = targets
+        guard !clients.isEmpty else { return }
         guard selectedScope != .project else {
             let panel = NSOpenPanel()
             panel.canChooseDirectories = true
             panel.canChooseFiles = false
             panel.allowsMultipleSelection = false
             panel.prompt = "Add Here"
-            panel.message = "Choose the project folder for \(selectedClient.label)"
+            panel.message = clients.count == 1
+                ? "Choose the project folder for \(clients[0].label)"
+                : "Choose the project folder for \(clients.count) clients"
             guard panel.runModal() == .OK, let dir = panel.url?.path else { return }
-            inject(projectDir: dir)
+            inject(clients: clients, projectDir: dir)
             return
         }
-        inject(projectDir: nil)
+        inject(clients: clients, projectDir: nil)
     }
 
-    private func inject(projectDir: String?) {
-        do {
-            let result = try MCPConfigInjector.inject(
-                client: selectedClient, scope: selectedScope,
-                projectDir: projectDir, key: mcpKey, url: mcpURL)
-            switch result {
-            case .added(let path):
-                presentToast(.success, "Added \(mcpKey) to \(pretty(path))")
-            case .skipped(let path):
-                presentToast(.success, "\(mcpKey) already in \(pretty(path)) — left unchanged")
+    // One write per client, then a single toast. A client that fails doesn't
+    // stop the others — its error is reported alongside what did land.
+    private func inject(clients: [MCPClient], projectDir: String?) {
+        var added: [String] = []
+        var skipped: [String] = []
+        var failed: [String] = []
+        var lastPath = ""
+
+        for client in clients {
+            do {
+                let result = try MCPConfigInjector.inject(
+                    client: client, scope: selectedScope,
+                    projectDir: projectDir, key: mcpKey, url: mcpURL)
+                switch result {
+                case .added(let path):
+                    added.append(client.label)
+                    lastPath = path
+                case .skipped(let path):
+                    skipped.append(client.label)
+                    lastPath = path
+                }
+            } catch {
+                failed.append("\(client.label): \(error.localizedDescription)")
             }
-        } catch {
-            presentToast(.error, error.localizedDescription)
         }
+
+        // Single client keeps the path-first wording it always had.
+        if clients.count == 1 {
+            if let error = failed.first {
+                presentToast(.error, error)
+            } else if added.isEmpty {
+                presentToast(.success, "\(mcpKey) already in \(pretty(lastPath)) — left unchanged")
+            } else {
+                presentToast(.success, "Added \(mcpKey) to \(pretty(lastPath))")
+            }
+            return
+        }
+
+        var parts: [String] = []
+        if !added.isEmpty { parts.append("Added \(mcpKey) to \(added.joined(separator: ", "))") }
+        if !skipped.isEmpty { parts.append("already in \(skipped.joined(separator: ", "))") }
+        if !failed.isEmpty { parts.append("failed: \(failed.joined(separator: "; "))") }
+        presentToast(failed.isEmpty ? .success : .error, parts.joined(separator: " · "))
     }
 
     private func presentToast(_ kind: Toast.Kind, _ message: String) {
