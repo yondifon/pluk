@@ -13,6 +13,7 @@ agent gets. Pluk ships with six types across four categories.
 | [`sentry`](#sentry) | observability | action | 5 |
 | [`ssh`](#ssh) | infrastructure | action | 2 |
 | [`herd`](#laravel-herd) | local‑dev | action | 3 |
+| [`spark`](#spark-mail) | email | action | 22 |
 
 The **Policy** column is how Pluk decides whether a given call is allowed:
 
@@ -221,6 +222,75 @@ are best‑effort — a link that's already gone is reported, not fatal.
 
 Both sides of a feature site share one database. Migrations run from a worktree
 hit the app's DB.
+
+---
+
+## Spark Mail
+
+The user's mail, calendar, contacts and meetings, through the `spark` CLI that
+ships with [Spark Desktop](https://sparkmailapp.com). **Action policy** — reads
+are on by default; drafts, comments and actions are write; deleting an event is
+delete; sending a draft is admin.
+
+*Agent hint: run `accounts` first — it lists the accounts, calendars and each
+one's access level.*
+
+`spark` is a thin IPC client for the running Spark Desktop app: no credentials,
+no network, no config of its own, so this integration has nothing to
+authenticate. Spark Desktop must be running with its CLI server enabled, and the
+adapter shells out with an argv array — a subject or filter never reaches a
+shell.
+
+**Two gates, not one.** Spark enforces its own per‑account access level —
+`read-only`, `triage` (drafts, comments, actions) or `send` (sending drafts, the
+whole `event` command) — set in *Spark Desktop → Settings → AI Agents*, and a
+shared inbox can differ from its parent account. What an agent can do is the
+intersection: this integration's enabled tools **and** the account's level. A
+tool enabled here still fails on a read‑only account, with the CLI's own
+instructions on how to raise it.
+
+| Field | Notes |
+| --- | --- |
+| `spark_bin` | The `spark` binary; defaults to `/usr/local/bin/spark`. |
+| `timeout_seconds` | How long one command may run. Default 30. |
+| `default_account` | From address used when a draft doesn't name one. |
+| `default_folder` | Folder `list_emails` uses when none is given. |
+| `default_team` | Team used for comments and team actions. |
+| `max_page_size` | Hard cap on rows per call. Default 25 — Spark prints full bodies, so an uncapped page is a token bomb. |
+
+| Tool | Access | What it does |
+| --- | --- | --- |
+| `accounts` | read | Accounts, calendars, teams, shared inboxes, access levels. |
+| `folders` | read | Folders and labels with counts and qualified ids. |
+| `list_emails` | read | Browse a folder, Gmail‑style filters, paged. |
+| `search_emails` | read | Keyword + semantic search across every folder; returns bodies. |
+| `read_thread` | read | Full conversation — headers, bodies, attachments, labels. |
+| `read_attachment` | read | One attachment's metadata, downloading it if needed. |
+| `list_events` | read | Calendar events for a range. |
+| `availability` | read | Free slots, own or mutual with attendees. |
+| `find_contacts` | read | Search contacts by name, email or domain. |
+| `team_info` | read | Team members, shared inboxes, assignments. |
+| `list_meetings` / `read_meeting` | read | Meeting transcripts, summary, notes. |
+| `list_templates` / `read_template` | read | Saved templates and their placeholders. |
+| `draft` | write | Create or edit a draft — new, reply, forward, from a template. Never sends. |
+| `comment` | write | Post or edit a team comment on a thread. |
+| `email_action` | write | archive, pin, snooze, move, label, categorize, share, assign, … |
+| `contact_action` | write | Block or accept a sender or domain, recategorize, toggle priority. |
+| `event_write` | write | Create or update an event, or RSVP to an invitation. |
+| `delete_event` | delete | Delete an event; attendees get a cancellation. |
+| `send_draft` | admin | Send a draft now, or schedule it. |
+| `unschedule_draft` | admin | Cancel a scheduled send, back to drafts. |
+
+Sending is deliberately split from drafting. `draft` composes and returns a deep
+link for the user to review; only `send_draft` puts mail on the wire, and it is
+`admin` — so a write‑enabled integration still can't send until that one tool is
+turned on. `read_attachment` returns metadata only: the CLI's `--stream` mode
+emits raw bytes, which an MCP text response can't carry.
+
+Spark answers in text tables, not JSON, so tool output is passed through
+verbatim — that is the shape the CLI's own agent skill (`spark skill`) is written
+against. Those responses are message bodies, and the activity log snapshots
+them like any other result.
 
 ---
 
