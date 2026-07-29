@@ -71,27 +71,24 @@ struct GroupDetailView: View {
                 .frame(width: 34, height: 34)
                 .background(Color.controlFill, in: RoundedRectangle(cornerRadius: Radius.md - 2, style: .continuous))
             VStack(alignment: .leading, spacing: Space.xs + 1) {
-                Text(group.name)
-                    .font(.uiTitle)
-                    .tracking(-0.2)
-                    .lineLimit(1)
+                HStack(alignment: .center, spacing: Space.md) {
+                    Text(group.name)
+                        .font(.uiTitle)
+                        .tracking(-0.2)
+                        .lineLimit(1)
+                    Spacer(minLength: Space.md)
+                    Button("Edit", action: onEdit)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .frame(height: Control.height)
+                    OverflowMenu {
+                        Button("Delete…", role: .destructive, action: onDelete)
+                    }
+                }
                 Text(subtitle)
                     .font(.uiCaption)
                     .foregroundColor(.secondary)
             }
-            Spacer(minLength: Space.md)
-            Button("Edit", action: onEdit)
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            Menu {
-                Button("Delete…", role: .destructive, action: onDelete)
-            } label: {
-                Image(systemName: "ellipsis")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("More actions")
         }
         .padding(.horizontal, Space.xl)
         .padding(.top, Space.lg)

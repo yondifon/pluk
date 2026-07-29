@@ -27,6 +27,14 @@ enum Radius {
     static let lg: CGFloat = 14
 }
 
+/// Inline controls that sit shoulder to shoulder — status chip, small button,
+/// icon menu. One declared height is what makes a cluster read as a single row:
+/// left to their intrinsic sizes they differ by a few points each, which is
+/// enough for the row to look ragged even when it is perfectly centered.
+enum Control {
+    static let height: CGFloat = 22
+}
+
 // MARK: - Typography
 
 extension Font {
@@ -146,7 +154,7 @@ struct StatusChip: View {
             }
         }
         .padding(.horizontal, Space.sm)
-        .padding(.vertical, Space.xs)
+        .frame(height: Control.height)
         .background(Color.controlFill, in: Capsule())
         .help(detail ?? status.label)
         .accessibilityElement(children: .combine)
@@ -160,6 +168,30 @@ struct StatusChip: View {
         if seconds < 3600 { return "\(seconds / 60)m ago" }
         if seconds < 86_400 { return "\(seconds / 3600)h ago" }
         return "\(seconds / 86_400)d ago"
+    }
+}
+
+/// The "…" overflow beside a primary action. Borderless so it stays quiet next
+/// to a real button, but squared to `Control.height` so it occupies a control's
+/// worth of space and centers with its neighbours — a bare glyph is a few points
+/// tall and drifts off the row. The square is also the hit target; `.fixedSize()`
+/// alone leaves one barely wider than the dots.
+struct OverflowMenu<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        Menu {
+            content
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.uiLabel)
+                .frame(width: Control.height, height: Control.height)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: Control.height, height: Control.height)
+        .help("More actions")
     }
 }
 

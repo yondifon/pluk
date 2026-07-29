@@ -327,14 +327,23 @@ struct ConnectionDetailView: View {
     // line answers the questions someone pointing an agent at this integration
     // actually asks — what service, which environment, can it write, how much
     // of its tool surface is exposed — without needing a trip to another tab.
+    // The controls ride inside the title row, not alongside the whole block. Sat
+    // in the outer HStack they were top-aligned against a 34pt badge and a
+    // two-line text stack, so chip, button and menu each landed at a different
+    // height; here they simply centre on the title line.
     private var header: some View {
         HStack(alignment: .top, spacing: Space.md) {
             TypeBadge(type: conn.type, size: 34)
             VStack(alignment: .leading, spacing: Space.xs + 1) {
-                Text(conn.name)
-                    .font(.uiTitle)
-                    .tracking(-0.2)
-                    .lineLimit(1)
+                HStack(alignment: .center, spacing: Space.md) {
+                    Text(conn.name)
+                        .font(.uiTitle)
+                        .tracking(-0.2)
+                        .lineLimit(1)
+                    Spacer(minLength: Space.md)
+                    StatusChip(status: status, checkedAt: health?.at, detail: health?.error)
+                    headerActions
+                }
                 HStack(spacing: Space.sm - 2) {
                     Text(metaLine)
                         .font(.uiCaption)
@@ -345,9 +354,6 @@ struct ConnectionDetailView: View {
                     }
                 }
             }
-            Spacer(minLength: Space.md)
-            StatusChip(status: status, checkedAt: health?.at, detail: health?.error)
-            headerActions
         }
         .padding(.horizontal, Space.xl)
         .padding(.top, Space.lg)
@@ -364,20 +370,14 @@ struct ConnectionDetailView: View {
     // One primary action plus an overflow: Test is the thing people press, the
     // rest are occasional and don't need to sit on screen as four equal buttons.
     private var headerActions: some View {
-        HStack(spacing: Space.sm - 2) {
+        HStack(alignment: .center, spacing: Space.sm - 2) {
             headerTestButton
-            Menu {
+            OverflowMenu {
                 Button("Edit…", action: onEdit)
                 Button("Duplicate", action: onDuplicate)
                 Divider()
                 Button("Delete…", role: .destructive, action: onDelete)
-            } label: {
-                Image(systemName: "ellipsis")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("More actions")
         }
     }
 
@@ -498,7 +498,7 @@ struct ConnectionDetailView: View {
     // delivered as a toast, so no message crowds the header.
     @ViewBuilder
     private var headerTestButton: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
             switch testStatus {
             case .idle:
                 EmptyView()
@@ -518,6 +518,7 @@ struct ConnectionDetailView: View {
             Button("Test", action: runTest)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .frame(height: Control.height)
                 .disabled(isTesting)
         }
     }
