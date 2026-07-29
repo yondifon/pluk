@@ -557,6 +557,7 @@ enum AdapterStyle {
         case "github":   Color(red: 0.22, green: 0.25, blue: 0.30) // GitHub near-black slate
         case "redis":    Color(red: 0.78, green: 0.25, blue: 0.18) // muted Redis red #D82C20
         case "slack":    Color(red: 0.46, green: 0.18, blue: 0.45) // Slack aubergine #4A154B
+        case "spark":    Color(red: 0.85, green: 0.33, blue: 0.22) // muted Spark red-orange
         default:         Color(red: 0.40, green: 0.42, blue: 0.50) // neutral
         }
     }

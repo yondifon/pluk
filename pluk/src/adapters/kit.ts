@@ -118,7 +118,8 @@ export interface ActionTool {
   settings?: ConfigField[];
   /** Log line for this call. Defaults to the tool name. */
   detail?: (args: Record<string, unknown>) => string;
-  /** Fetch the data; the returned value is JSON-stringified for the agent + log.
+  /** Fetch the data; the returned value is JSON-stringified for the agent + log,
+   *  except a string, which is passed through as-is (CLI-backed adapters).
    *  Receives the tool's resolved settings (from the integration's config). */
   run: (args: Record<string, unknown>, settings: Record<string, unknown>) => Promise<unknown>;
 }
@@ -140,6 +141,9 @@ export interface ActionAdapterSpec<C> {
   client: (conn: Integration, sessionIdRef: { value: string }) => C;
   testConnection: (conn: Integration) => Promise<void>;
   tools: (conn: Integration, client: C) => ActionTool[];
+  /** Turn a raw failure into something the user can act on (shown by the UI on a
+   *  failed connection test), when the service's own errors need translating. */
+  humanizeError?: (error: unknown) => string;
 }
 
 /**
@@ -209,7 +213,9 @@ export function actionAdapter<C>(spec: ActionAdapterSpec<C>): Adapter {
           async () => {
             const data = await tool.run(args, settings);
             const rows = Array.isArray(data) ? data : [data];
-            const text = JSON.stringify(data, null, 2);
+            // A tool that already speaks text (a CLI's own output) passes through
+            // verbatim; anything structured is rendered as JSON for the agent.
+            const text = typeof data === "string" ? data : JSON.stringify(data, null, 2);
             return { text, result: { rows }, responseText: text };
           },
           {
@@ -237,6 +243,7 @@ export function actionAdapter<C>(spec: ActionAdapterSpec<C>): Adapter {
     toolSpecs,
     configFields: spec.configFields,
     testConnection: spec.testConnection,
+    humanizeError: spec.humanizeError,
     instructions,
     register,
   };

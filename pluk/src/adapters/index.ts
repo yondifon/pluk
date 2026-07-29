@@ -9,6 +9,7 @@ import { githubAdapter } from "./github/index.js";
 import { redisAdapter } from "./redis/index.js";
 import { slackAdapter } from "./slack/index.js";
 import { herdAdapter } from "./herd/index.js";
+import { sparkAdapter } from "./spark/index.js";
 
 // The adapter registry. To add a service: build an Adapter module and register
 // it here. Nothing else (store, MCP transport, REST layer, UI) needs editing.
@@ -22,7 +23,7 @@ function register(adapters: Adapter[]): void {
 }
 
 register(sqlAdapters);
-register([linearAdapter, sentryAdapter, sshAdapter, githubAdapter, redisAdapter, slackAdapter, herdAdapter]);
+register([linearAdapter, sentryAdapter, sshAdapter, githubAdapter, redisAdapter, slackAdapter, herdAdapter, sparkAdapter]);
 
 export function getAdapter(type: string): Adapter | undefined {
   return registry.get(type);
