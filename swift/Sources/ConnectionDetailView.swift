@@ -214,7 +214,7 @@ struct ConfigSnippetSection: View {
     let id: String
     let toastCenter: ToastCenter?
 
-    @State private var selectedChoice: ClientChoice = .one(.opencode)
+    @State private var selectedChoice: ClientChoice = .all
     @State private var selectedScope: ConfigScope = .project
     @State private var copied = false
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
