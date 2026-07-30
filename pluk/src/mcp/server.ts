@@ -1,87 +1,70 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { openSession, closeSession } from "./pool.js";
+import { createMcpHandler, type McpHttpHandler, type McpServer } from "@modelcontextprotocol/server";
+import { openOwner, closeOwner } from "./pool.js";
 import { logError } from "../log.js";
 
-// MCP streamable-HTTP transport + session registry. Target-agnostic: the caller
-// supplies a factory that builds the McpServer (a single integration's adapter
-// server, or a group's aggregated server). Adapter-owned pools subscribe to
-// session close hooks in pool.ts.
+// MCP HTTP entry, protocol revision 2026-07-28. The revision is stateless: no
+// initialize handshake, no Mcp-Session-Id, one fresh server per request built by
+// the factory. `legacy: "reject"` makes this endpoint modern-only — a 2025-era
+// client is answered with the unsupported-protocol-version error naming what we
+// serve, rather than silently getting a different protocol.
+//
+// Target-agnostic: the caller supplies a factory that builds the McpServer (a
+// single integration's adapter server, or a group's aggregated server). Long-lived
+// resources (driver pools, SSH tunnels, forwards) are keyed by owner id in pool.ts,
+// since a stateless request carries no identity of its own.
 
-interface Session {
-  transport: WebStandardStreamableHTTPServerTransport;
-  server: McpServer;
-  // The integration or group id this session serves, so edits to it can reset
-  // just its sessions (a standalone integration and the same integration inside
-  // a group are different owners → different sessions → isolated connections).
-  ownerId: string;
+interface Owner {
+  handler: McpHttpHandler;
+  // Replaced on every request so each per-request server is built from current DB
+  // state: the handler is cached per owner, the config it bakes in is not.
+  makeServer: ServerFactory;
 }
 
-const sessions = new Map<string, Session>();
+const owners = new Map<string, Owner>();
 
-/** Build the MCP server for a new session. `sessionIdRef` is filled once the
- *  session id is assigned, so tool handlers can key the driver pool by it. */
-export type ServerFactory = (sessionIdRef: { value: string }) => McpServer;
+/** Build the MCP server for one request. */
+export type ServerFactory = () => McpServer;
 
 /**
- * Drop live MCP sessions so config edits take effect (servers bake in config —
- * incl. group member overrides — and policy at build time; the next client
- * request re-initializes from current DB state). With `ownerId`, resets only the
- * sessions for that integration/group; without it, resets all. Returns the count.
+ * Drop an owner's pooled resources so credential/config edits take effect: aborts
+ * in-flight calls and evicts the adapter-owned drivers, tunnels and forwards keyed
+ * to it (a standalone integration and the same integration inside a group are
+ * different owners → different pools → isolated connections). With `ownerId`,
+ * resets only that integration/group; without it, resets all. Returns the count.
  */
-export async function resetSessions(ownerId?: string): Promise<number> {
-  const ids = [...sessions.keys()].filter(
-    (sid) => !ownerId || sessions.get(sid)?.ownerId === ownerId
-  );
-  for (const sid of ids) {
-    const session = sessions.get(sid);
-    sessions.delete(sid);
-    closeSession(sid); // abort in-flight calls + notify adapter-owned pools
-    try { await session?.server.close(); } catch { /* best-effort */ }
+export async function resetOwners(ownerId?: string): Promise<number> {
+  const ids = [...owners.keys()].filter((id) => !ownerId || id === ownerId);
+  for (const id of ids) {
+    const owner = owners.get(id);
+    owners.delete(id);
+    closeOwner(id); // abort in-flight calls + notify adapter-owned pools
+    try { await owner?.handler.close(); } catch { /* best-effort */ }
   }
   return ids.length;
 }
 
 export async function handleMcpRequest(req: Request, ownerId: string, makeServer: ServerFactory): Promise<Response> {
-  const sessionId = req.headers.get("Mcp-Session-Id");
-
-  // Route to existing session
-  if (sessionId) {
-    const session = sessions.get(sessionId);
-    if (!session) return new Response("Session not found", { status: 404 });
-    try {
-      return await session.transport.handleRequest(req);
-    } catch (err) {
-      logError("MCP request failed", err, { ownerId: session.ownerId, sessionId });
-      return new Response("MCP request failed; session kept alive", { status: 500 });
-    }
+  let owner = owners.get(ownerId);
+  if (owner) {
+    owner.makeServer = makeServer;
+  } else {
+    const created: Owner = {
+      makeServer,
+      handler: createMcpHandler(() => created.makeServer(), {
+        legacy: "reject",
+        onerror: (err) => logError("MCP request failed", err, { ownerId }),
+      }),
+    };
+    owners.set(ownerId, created);
+    owner = created;
   }
 
-  // New session — sessionIdRef lets tool handlers look up the pool by session
-  const sessionIdRef = { value: "" };
-  let session!: Session;
-
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: () => crypto.randomUUID(),
-    onsessioninitialized: (sid) => {
-      sessionIdRef.value = sid;
-      sessions.set(sid, session);
-      openSession(sid);
-    },
-    onsessionclosed: (sid) => {
-      sessions.delete(sid);
-      closeSession(sid);
-    },
-  });
-
-  const server = makeServer(sessionIdRef);
-  session = { transport, server, ownerId };
-  await server.connect(transport);
+  openOwner(ownerId);
 
   try {
-    return await transport.handleRequest(req);
+    return await owner.handler.fetch(req);
   } catch (err) {
-    logError("MCP request failed during session init", err, { ownerId });
-    return new Response("MCP request failed during session init", { status: 500 });
+    logError("MCP request failed", err, { ownerId });
+    return new Response("MCP request failed", { status: 500 });
   }
 }

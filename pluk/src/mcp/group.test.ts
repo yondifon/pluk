@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { namespacedHost, slug } from "./namespace.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { namespacedHost, toolHost, slug, type ToolHost } from "./namespace.js";
 import { applyOverrides } from "./group.js";
 import { registerSqlServer } from "../adapters/sql/server.js";
 import type { ConfigField } from "../adapters/index.js";
@@ -18,7 +18,7 @@ test("namespacedHost prefixes tool/prompt names and resource URIs", () => {
     tool: (n: string) => calls.push(`tool:${n}`),
     prompt: (n: string) => calls.push(`prompt:${n}`),
     resource: (n: string, uri: string) => calls.push(`res:${n}:${uri}`),
-  } as unknown as McpServer;
+  } as unknown as ToolHost;
 
   const host = namespacedHost(fake, "metrics_db") as unknown as {
     tool: (n: string, cb: () => void) => void;
@@ -90,9 +90,9 @@ test("two same-type members register on one server without colliding", () => {
 
   // Both expose a "query" tool, "schema://full" resource, etc. Without
   // namespacing the second registration throws "already registered".
-  registerSqlServer(namespacedHost(server, "metrics"), fakeSqlite("a", "Metrics"), { value: "" });
+  registerSqlServer(namespacedHost(toolHost(server), "metrics"), fakeSqlite("a", "Metrics"), "");
   expect(() =>
-    registerSqlServer(namespacedHost(server, "analytics"), fakeSqlite("b", "Analytics"), { value: "" })
+    registerSqlServer(namespacedHost(toolHost(server), "analytics"), fakeSqlite("b", "Analytics"), "")
   ).not.toThrow();
 
   const tools = (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools;
@@ -102,7 +102,7 @@ test("two same-type members register on one server without colliding", () => {
 
 test("SQL query tool accepts sql and query args", async () => {
   const server = new McpServer({ name: "DB Production", version: "1.0.0" });
-  registerSqlServer(server, { ...fakeSqlite("a", "Metrics"), environment: "production" }, { value: "" });
+  registerSqlServer(toolHost(server), { ...fakeSqlite("a", "Metrics"), environment: "production" }, "");
 
   const tool = (server as unknown as { _registeredTools: Record<string, { inputSchema: { safeParse: (v: unknown) => { success: boolean } }; handler: (v: unknown) => Promise<{ isError?: boolean }> }> })._registeredTools.query;
   if (!tool) throw new Error("query tool was not registered");

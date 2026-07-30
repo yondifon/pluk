@@ -1,6 +1,6 @@
 import { getIntegrationByToken, getIntegrationById } from "./store/integrations.js";
 import { getGroupByToken } from "./store/groups.js";
-import { handleMcpRequest, resetSessions } from "./mcp/server.js";
+import { handleMcpRequest, resetOwners } from "./mcp/server.js";
 import { buildGroupServer } from "./mcp/group.js";
 import { allHealth, recordHealth } from "./mcp/health.js";
 import { getAdapter, listAdapters, buildAdapterServer } from "./adapters/index.js";
@@ -62,14 +62,14 @@ const server = Bun.serve({
       }
     }
 
-    // POST /api/reload?id=<integration|group id> — drop live MCP sessions so
-    // config/override edits in the UI take effect on the next agent request
-    // (sessions bake in config at build time). Scoped to the given owner id when
-    // provided, so editing one group/integration doesn't disturb the others.
+    // POST /api/reload?id=<integration|group id> — drop an owner's pooled drivers,
+    // tunnels and forwards so credential/override edits in the UI take effect on
+    // the next agent request. Scoped to the given owner id when provided, so
+    // editing one group/integration doesn't disturb the others.
     if (path === "/api/reload" && req.method === "POST") {
       const id = url.searchParams.get("id") ?? undefined;
-      const count = await resetSessions(id);
-      logInfo("reloaded MCP sessions", { count, id: id ?? "all" });
+      const count = await resetOwners(id);
+      logInfo("reloaded MCP owners", { count, id: id ?? "all" });
       return Response.json({ ok: true, count });
     }
 
@@ -97,11 +97,11 @@ const server = Bun.serve({
       if (conn) {
         const adapter = getAdapter(conn.type);
         if (!adapter) return new Response(`No adapter for type: ${conn.type}`, { status: 400 });
-        return handleMcpRequest(req, conn.id, (ref) => buildAdapterServer(adapter, conn, ref));
+        return handleMcpRequest(req, conn.id, () => buildAdapterServer(adapter, conn, conn.id));
       }
 
       const group = getGroupByToken(token);
-      if (group) return handleMcpRequest(req, group.id, (ref) => buildGroupServer(group, ref));
+      if (group) return handleMcpRequest(req, group.id, () => buildGroupServer(group, group.id));
 
       return new Response("Integration not found", { status: 404 });
     }

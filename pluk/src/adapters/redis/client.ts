@@ -3,14 +3,14 @@
 // as methods but NOT keys/scan/type/info — those go through `client.send(CMD, args)`.
 // Reference: https://bun.sh/docs/api/redis (Redis 7.2+)
 //
-// Connections (and any SSH tunnel) are cached per (session, integration) and reused
-// across a session's tool calls, then torn down on session close — same lifecycle
+// Connections (and any SSH tunnel) are cached per (owner, integration) and reused
+// across an owner's tool calls, then torn down when the owner is reset — same lifecycle
 // as the SSH command adapter and the DB driver pool. This keeps a tunnel's agent
-// confirm (1Password) to once per session and avoids leaking listeners.
+// confirm (1Password) to once per owner and avoids leaking listeners.
 
 import { RedisClient } from "bun";
 import type { Integration } from "../../store/integrations.js";
-import { onSessionClose } from "../../mcp/pool.js";
+import { onOwnerClose } from "../../mcp/pool.js";
 import { openSSHTunnel, type Tunnel } from "../../db/ssh.js";
 
 const IDLE_MS = 5 * 60 * 1000;
@@ -80,7 +80,7 @@ interface Resource {
 }
 
 /** Open a client (and an SSH tunnel if configured). The caller owns teardown. */
-async function open(cfg: RedisCfg, sessionId?: string, onFatal?: () => void): Promise<Resource> {
+async function open(cfg: RedisCfg, ownerId?: string, onFatal?: () => void): Promise<Resource> {
   if (cfg.url && !cfg.ssh) return { client: new RedisClient(cfg.url) };
 
   if (cfg.ssh) {
@@ -95,7 +95,7 @@ async function open(cfg: RedisCfg, sessionId?: string, onFatal?: () => void): Pr
         remoteHost: cfg.host,
         remotePort: cfg.port,
       },
-      sessionId,
+      ownerId,
       onFatal,
     );
     // The local hop to the forwarded port is plaintext; Redis AUTH still applies.
@@ -107,7 +107,7 @@ async function open(cfg: RedisCfg, sessionId?: string, onFatal?: () => void): Pr
   return { client: new RedisClient(url) };
 }
 
-// ── Session-scoped connection cache ────────────────────────────────────────────
+// ── Owner-scoped connection cache ────────────────────────────────────────────
 
 interface Entry {
   resource: Promise<Resource>;
@@ -116,8 +116,8 @@ interface Entry {
 
 const pool = new Map<string, Entry>();
 
-function key(sessionId: string, integrationId: string): string {
-  return `${sessionId}::${integrationId}`;
+function key(ownerId: string, integrationId: string): string {
+  return `${ownerId}::${integrationId}`;
 }
 
 function evictByKey(k: string): void {
@@ -128,8 +128,8 @@ function evictByKey(k: string): void {
   entry.resource.then(({ client, tunnel }) => { client.close(); tunnel?.close(); }).catch(() => {});
 }
 
-function getResource(sessionId: string, conn: Integration): Promise<Resource> {
-  const k = key(sessionId, conn.id);
+function getResource(ownerId: string, conn: Integration): Promise<Resource> {
+  const k = key(ownerId, conn.id);
   const existing = pool.get(k);
   if (existing) {
     clearTimeout(existing.idleTimer);
@@ -137,31 +137,31 @@ function getResource(sessionId: string, conn: Integration): Promise<Resource> {
     return existing.resource;
   }
   // Self-heal: a dropped SSH tunnel evicts the entry so the next call rebuilds it.
-  const resource = open(redisConfig(conn), sessionId, () => { if (pool.get(k) === entry) evictByKey(k); });
+  const resource = open(redisConfig(conn), ownerId, () => { if (pool.get(k) === entry) evictByKey(k); });
   const entry: Entry = { resource, idleTimer: setTimeout(() => evictByKey(k), IDLE_MS) };
   pool.set(k, entry);
   resource.catch(() => { if (pool.get(k) === entry) { clearTimeout(entry.idleTimer); pool.delete(k); } });
   return resource;
 }
 
-/** Close all cached Redis connections/tunnels for a session (on session close). */
-export function closeSessionClients(sessionId: string): void {
+/** Close all cached Redis connections/tunnels for an owner (on reset). */
+export function closeOwnerClients(ownerId: string): void {
   for (const k of [...pool.keys()]) {
-    if (k.startsWith(`${sessionId}::`)) evictByKey(k);
+    if (k.startsWith(`${ownerId}::`)) evictByKey(k);
   }
 }
 
-// Tie Redis connection + tunnel cleanup to the shared session lifecycle.
-onSessionClose(closeSessionClients);
+// Tie Redis connection + tunnel cleanup to the shared owner lifecycle.
+onOwnerClose(closeOwnerClients);
 
-/** A lazy, session-scoped handle to the connection. Tools await `get()`; the tunnel
- *  (if any) is opened on first use and reused across the session's calls. */
+/** A lazy, owner-scoped handle to the connection. Tools await `get()`; the tunnel
+ *  (if any) is opened on first use and reused across the owner's calls. */
 export interface RedisAccessor {
   get(): Promise<RedisClient>;
 }
 
-export function redisAccessor(conn: Integration, sessionIdRef: { value: string }): RedisAccessor {
-  return { get: async () => (await getResource(sessionIdRef.value, conn)).client };
+export function redisAccessor(conn: Integration, ownerId: string): RedisAccessor {
+  return { get: async () => (await getResource(ownerId, conn)).client };
 }
 
 /** Run a command Bun doesn't expose as a method (SCAN/KEYS/TYPE/INFO). */

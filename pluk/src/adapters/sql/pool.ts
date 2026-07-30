@@ -1,7 +1,7 @@
 import type { Integration } from "../../store/integrations.js";
 import { createDriver, type Driver } from "../../db/index.js";
 import { recordHealth } from "../../mcp/health.js";
-import { onSessionClose, sessionSignal } from "../../mcp/pool.js";
+import { onOwnerClose, ownerSignal } from "../../mcp/pool.js";
 import {
   SSH_CONNECT_RESPAWN_MS,
   SSH_CONNECT_WAIT_MS,
@@ -63,14 +63,14 @@ const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 // share a driver: a call for `db=a` must not be served the pool built for
 // `db=b` (or the connection's default). Empty segment = the connection's
 // configured/default database.
-function driverKey(sessionId: string, integrationId: string, database?: string): string {
-  return `${sessionId}::${integrationId}::${database ?? ""}`;
+function driverKey(ownerId: string, integrationId: string, database?: string): string {
+  return `${ownerId}::${integrationId}::${database ?? ""}`;
 }
 
-export function registerQueryAbort(logId: number, sessionId: string): AbortController {
+export function registerQueryAbort(logId: number, ownerId: string): AbortController {
   const ac = new AbortController();
   queryAborts.set(logId, ac);
-  const signal = sessionSignal(sessionId);
+  const signal = ownerSignal(ownerId);
   if (signal) {
     if (signal.aborted) ac.abort();
     else signal.addEventListener("abort", () => ac.abort(), { once: true });
@@ -89,8 +89,8 @@ export function cancelQuery(logId: number): boolean {
   return true;
 }
 
-export async function getDriver(sessionId: string, integration: Integration, database?: string): Promise<Driver> {
-  const key = driverKey(sessionId, integration.id, database);
+export async function getDriver(ownerId: string, integration: Integration, database?: string): Promise<Driver> {
+  const key = driverKey(ownerId, integration.id, database);
   const existing = driverPool.get(key);
   if (existing) {
     resetIdleTimer(key, existing);
@@ -107,7 +107,7 @@ export async function getDriver(sessionId: string, integration: Integration, dat
         return awaitConnect(key, existing);
       }
       evictDriverByKey(key);
-      return awaitConnect(key, createDriverEntry(key, sessionId, integration, database));
+      return awaitConnect(key, createDriverEntry(key, ownerId, integration, database));
     }
 
     const idleFor = Date.now() - existing.lastUsed;
@@ -116,11 +116,11 @@ export async function getDriver(sessionId: string, integration: Integration, dat
       return existing.driver;
     }
 
-    existing.validating ??= validateOrRebuild(key, sessionId, integration, existing, database);
+    existing.validating ??= validateOrRebuild(key, ownerId, integration, existing, database);
     return existing.validating;
   }
 
-  return awaitConnect(key, createDriverEntry(key, sessionId, integration, database));
+  return awaitConnect(key, createDriverEntry(key, ownerId, integration, database));
 }
 
 // Bound a tool call's wait on an in-flight SSH connect. The connect itself
@@ -141,13 +141,13 @@ function awaitConnect(key: string, entry: DriverEntry): Promise<Driver> {
   ]);
 }
 
-function createDriverEntry(key: string, sessionId: string, integration: Integration, database?: string): DriverEntry {
+function createDriverEntry(key: string, ownerId: string, integration: Integration, database?: string): DriverEntry {
   const useSsh = integration.config.use_ssh === true || integration.config.use_ssh === "true";
   const connectTimeout = useSsh ? CONNECT_TIMEOUT_SSH_MS : CONNECT_TIMEOUT_DIRECT_MS;
-  const created = createDriver(integration, sessionId, () => {
+  const created = createDriver(integration, ownerId, () => {
     if (driverPool.get(key) === entry) {
       evictDriverByKey(key);
-      scheduleReconnect(key, sessionId, integration, database);
+      scheduleReconnect(key, ownerId, integration, database);
     }
   }, database);
   const driver = withTimeout(created, connectTimeout, "connect");
@@ -192,7 +192,7 @@ function resetIdleTimer(key: string, entry: DriverEntry): void {
 // retry forever).
 function scheduleReconnect(
   key: string,
-  sessionId: string,
+  ownerId: string,
   integration: Integration,
   database?: string,
   attempt = 0,
@@ -203,11 +203,11 @@ function scheduleReconnect(
   const timer = setTimeout(() => {
     reconnectTimers.delete(key);
     if (driverPool.has(key)) return; // a query already rebuilt it
-    createDriverEntry(key, sessionId, integration, database).driver.then(
+    createDriverEntry(key, ownerId, integration, database).driver.then(
       () => console.log(`[pluk] auto-reconnected ${integration.name} after tunnel loss`),
       (e) => {
         const authFailed = classifySqlError(e).category === "auth_failed";
-        scheduleReconnect(key, sessionId, integration, database, attempt + 1, authFailed ? RECONNECT_AUTH_DELAY_MS : undefined);
+        scheduleReconnect(key, ownerId, integration, database, attempt + 1, authFailed ? RECONNECT_AUTH_DELAY_MS : undefined);
       }
     );
   }, delay);
@@ -223,7 +223,7 @@ function cancelReconnect(key: string): void {
 
 async function validateOrRebuild(
   key: string,
-  sessionId: string,
+  ownerId: string,
   integration: Integration,
   entry: DriverEntry,
   database?: string
@@ -240,10 +240,10 @@ async function validateOrRebuild(
     const current = driverPool.get(key);
     if (current === entry) {
       evictDriverByKey(key);
-      const fresh = createDriverEntry(key, sessionId, integration, database);
+      const fresh = createDriverEntry(key, ownerId, integration, database);
       // Immediate rebuild counts as attempt 0; keep retrying in the background
       // if it also fails (e.g. agent still locked).
-      fresh.driver.catch(() => scheduleReconnect(key, sessionId, integration, database, 1));
+      fresh.driver.catch(() => scheduleReconnect(key, ownerId, integration, database, 1));
       return awaitConnect(key, fresh);
     }
     if (current) return current.driver;
@@ -262,11 +262,11 @@ function evictDriverByKey(key: string): void {
 }
 
 // Force-drop every cached driver and pending reconnect for an integration
-// across ALL live sessions. The manual Test button calls this so a stuck or
+// across ALL owners. The manual Test button calls this so a stuck or
 // pending-approval connection is torn down and the next call connects from
 // scratch — re-triggering the 1Password/agent prompt. This is the app's
 // equivalent of re-running a git command to force a fresh SSH auth.
-// Match a `session::integration::database` key by its integration segment. The
+// Match a `owner::integration::database` key by its integration segment. The
 // database segment is validated (`[A-Za-z0-9_$-]`), so a plain split is safe.
 function keyIntegrationId(key: string): string | undefined {
   return key.split("::")[1];
@@ -281,11 +281,11 @@ export function evictDriverEverywhere(integrationId: string): void {
   }
 }
 
-export function evictDriver(sessionId: string, integrationId?: string): void {
+export function evictDriver(ownerId: string, integrationId?: string): void {
   if (integrationId) {
-    // Drop every per-database driver for this connection in this session, not
+    // Drop every per-database driver for this connection for this owner, not
     // just the default-database one.
-    const prefix = `${sessionId}::${integrationId}::`;
+    const prefix = `${ownerId}::${integrationId}::`;
     for (const key of [...driverPool.keys()]) {
       if (key.startsWith(prefix)) { cancelReconnect(key); evictDriverByKey(key); }
     }
@@ -295,11 +295,11 @@ export function evictDriver(sessionId: string, integrationId?: string): void {
     return;
   }
   for (const key of [...driverPool.keys()]) {
-    if (key.startsWith(`${sessionId}::`)) evictDriverByKey(key);
+    if (key.startsWith(`${ownerId}::`)) evictDriverByKey(key);
   }
   for (const key of [...reconnectTimers.keys()]) {
-    if (key.startsWith(`${sessionId}::`)) cancelReconnect(key);
+    if (key.startsWith(`${ownerId}::`)) cancelReconnect(key);
   }
 }
 
-onSessionClose((sessionId) => evictDriver(sessionId));
+onOwnerClose((ownerId) => evictDriver(ownerId));

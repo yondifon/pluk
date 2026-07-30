@@ -14,7 +14,7 @@ function redisConn(enable?: string[]): Integration {
 
 function toolNames(conn: Integration): string[] {
   const adapter = getAdapter("redis")!;
-  const server = buildAdapterServer(adapter, conn, { value: "" });
+  const server = buildAdapterServer(adapter, conn, "");
   return Object.keys((server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools).sort();
 }
 

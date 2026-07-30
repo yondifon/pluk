@@ -98,7 +98,7 @@ export interface Driver {
 
 export async function createDriver(
   integration: Integration,
-  sessionId?: string,
+  ownerId?: string,
   onFatal?: () => void,
   databaseOverride?: string
 ): Promise<Driver> {
@@ -126,7 +126,7 @@ export async function createDriver(
       passphrase: cfg.ssh_password,
       remoteHost: effectiveHost,
       remotePort: effectivePort,
-    }, sessionId, onFatal);
+    }, ownerId, onFatal);
     tunnel = t;
     effectiveHost = "127.0.0.1";
     effectivePort = t.localPort;
@@ -151,7 +151,7 @@ export async function createDriver(
       case "sqlite": {
         if (useSsh) {
           const { createRemoteSqliteDriver } = await import("./sqliteRemote.js");
-          driver = createRemoteSqliteDriver(cfg, sessionId ?? `test:${integration.id}`);
+          driver = createRemoteSqliteDriver(cfg, ownerId ?? `test:${integration.id}`);
         } else {
           const { createSqliteDriver } = await import("./sqlite.js");
           driver = createSqliteDriver(cfg.filename!);

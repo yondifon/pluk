@@ -3,16 +3,16 @@ import { Server, utils as sshUtils } from "ssh2";
 import type { AddressInfo } from "net";
 import { createConnection } from "net";
 import type { Integration } from "../../store/integrations.js";
-import { openForward, listForwards, closeForward, closeSessionClients } from "./client.js";
+import { openForward, listForwards, closeForward, closeOwnerClients } from "./client.js";
 
 // Exercises the ssh -L forwarding the adapter exposes, against an in-process
 // ssh2 server that echoes any direct-tcpip (forwardOut) channel — no real host.
 
 let server: Server | undefined;
-const SESSION = "fwd-test-session";
+const OWNER = "fwd-test-owner";
 
 afterEach(async () => {
-  closeSessionClients(SESSION);
+  closeOwnerClients(OWNER);
   await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
   server = undefined;
 });
@@ -56,29 +56,29 @@ function roundTrip(localPort: number, payload: string): Promise<string> {
 
 test("open_forward tunnels a local port to the remote target and carries bytes", async () => {
   const conn = makeConn(await startServer());
-  const fwd = await openForward(SESSION, conn, "localhost", 5432);
+  const fwd = await openForward(OWNER, conn, "localhost", 5432);
 
   expect(fwd.id).toBe("localhost:5432");
   expect(fwd.localPort).toBeGreaterThan(0);
   expect(await roundTrip(fwd.localPort, "ping")).toBe("ping");
-  expect(listForwards(SESSION, conn).map((f) => f.id)).toEqual(["localhost:5432"]);
+  expect(listForwards(OWNER, conn).map((f) => f.id)).toEqual(["localhost:5432"]);
 });
 
 test("open_forward is idempotent per remote target — reuses the same local port", async () => {
   const conn = makeConn(await startServer());
-  const a = await openForward(SESSION, conn, "localhost", 6379);
-  const b = await openForward(SESSION, conn, "localhost", 6379);
+  const a = await openForward(OWNER, conn, "localhost", 6379);
+  const b = await openForward(OWNER, conn, "localhost", 6379);
 
   expect(b.localPort).toBe(a.localPort);
-  expect(listForwards(SESSION, conn)).toHaveLength(1);
+  expect(listForwards(OWNER, conn)).toHaveLength(1);
 });
 
 test("close_forward tears the listener down; unknown id returns false", async () => {
   const conn = makeConn(await startServer());
-  const fwd = await openForward(SESSION, conn, "localhost", 5432);
+  const fwd = await openForward(OWNER, conn, "localhost", 5432);
 
-  expect(closeForward(SESSION, conn, fwd.id)).toBe(true);
-  expect(listForwards(SESSION, conn)).toHaveLength(0);
+  expect(closeForward(OWNER, conn, fwd.id)).toBe(true);
+  expect(listForwards(OWNER, conn)).toHaveLength(0);
   await expect(roundTrip(fwd.localPort, "ping")).rejects.toBeDefined();
-  expect(closeForward(SESSION, conn, "nope:1")).toBe(false);
+  expect(closeForward(OWNER, conn, "nope:1")).toBe(false);
 });

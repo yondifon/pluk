@@ -1,4 +1,5 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { toolHost } from "../mcp/namespace.js";
 import type { Integration } from "../store/integrations.js";
 import type { Adapter } from "./types.js";
 import { sqlAdapters } from "./sql/index.js";
@@ -35,19 +36,19 @@ export function listAdapters(): Adapter[] {
 
 /**
  * Build a standalone MCP server for a single integration: a bare McpServer
- * carrying the adapter's session instructions, with its surface registered onto
+ * carrying the adapter's instructions, with its surface registered onto
  * it. Group endpoints register members onto a shared (namespaced) host instead.
  */
 export function buildAdapterServer(
   adapter: Adapter,
   integration: Integration,
-  sessionIdRef: { value: string },
+  ownerId: string,
 ): McpServer {
   const server = new McpServer(
     { name: integration.name, version: "1.0.0" },
     { instructions: adapter.instructions(integration) },
   );
-  adapter.register(server, integration, sessionIdRef);
+  adapter.register(toolHost(server), integration, ownerId);
   return server;
 }
 

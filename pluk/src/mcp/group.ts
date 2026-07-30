@@ -1,8 +1,8 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { getAdapter, type Adapter, type ConfigField } from "../adapters/index.js";
 import { resolveMembers, type Group } from "../store/groups.js";
 import type { Integration } from "../store/integrations.js";
-import { namespacedHost, slug } from "./namespace.js";
+import { namespacedHost, toolHost, slug } from "./namespace.js";
 import { logError } from "../log.js";
 
 // Merge a member's per-group overrides into its config, coercing each value to the
@@ -31,7 +31,7 @@ export function applyOverrides(
 // (prefix = slug of the member name) so identically-named tools across members
 // (e.g. two SQL DBs each exposing "query") don't collide. Per-member overrides
 // are merged into the integration's config before registration.
-export function buildGroupServer(group: Group, sessionIdRef: { value: string }): McpServer {
+export function buildGroupServer(group: Group, ownerId: string): McpServer {
   const members = resolveMembers(group);
   const used = new Map<string, number>();
 
@@ -61,7 +61,7 @@ export function buildGroupServer(group: Group, sessionIdRef: { value: string }):
   );
 
   for (const { ns, adapter, scoped } of resolved) {
-    adapter.register(namespacedHost(server, ns), scoped, sessionIdRef);
+    adapter.register(namespacedHost(toolHost(server), ns), scoped, ownerId);
   }
 
   return server;

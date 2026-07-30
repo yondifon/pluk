@@ -1,10 +1,10 @@
 import type { Integration } from "../store/integrations.js";
 
-// One consistent, agent-facing guidance block for an MCP server. It is returned
-// in the MCP `initialize` handshake (ServerOptions.instructions), so a connecting
+// One consistent, agent-facing guidance block for an MCP server. It is returned in
+// the server's discovery result (ServerOptions.instructions), so a connecting
 // agent auto-discovers — without guessing from tool names — what the integration
 // is, how it is constrained *right now*, and which tools to reach for first.
-// Built per session from live config + policy, so it always reflects the current
+// Built per request from live config + policy, so it always reflects the current
 // state. Kept terse: agents read this verbatim, so every line must earn its place.
 
 export interface InstructionParts {

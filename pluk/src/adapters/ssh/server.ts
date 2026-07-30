@@ -80,7 +80,7 @@ export function sshToolSpecs(): ToolSpec[] {
   ];
 }
 
-export function registerSshServer(server: ToolHost, conn: Integration, sessionIdRef: { value: string }): void {
+export function registerSshServer(server: ToolHost, conn: Integration, ownerId: string): void {
   const gate = toolGate(conn.query_policy);
   // Every SSH tool is individually toggleable. The default-on state is the single
   // source of truth in sshToolSpecs(); a disabled tool is not registered, so the
@@ -103,7 +103,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
       conn,
       { category: "command", action: toolName, detail },
       async () => {
-        const { stdout, stderr, code, truncated } = await runCommand(sessionIdRef.value, conn, finalCommand);
+        const { stdout, stderr, code, truncated } = await runCommand(ownerId, conn, finalCommand);
         const text = formatResult(stdout, stderr, code, truncated);
         const result = { rows: [{ exit_code: code }] };
         return code === 0
@@ -209,7 +209,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
 
   if (on("open_forward")) server.tool(
     "open_forward",
-    "Open a local port forward (ssh -L) over this connection so a service reachable from the remote host becomes available at localhost on this machine. Returns the local port to connect to (e.g. `psql -h localhost -p <port>`). The forward stays open for the session until closed.",
+    "Open a local port forward (ssh -L) over this connection so a service reachable from the remote host becomes available at localhost on this machine. Returns the local port to connect to (e.g. `psql -h localhost -p <port>`). The forward stays open until closed.",
     {
       remote_port: z.number().int().min(1).max(MAX_PORT).describe("Port on the remote side to forward, e.g. 5432 for Postgres or 6379 for Redis"),
       remote_host: z.string().optional().describe("Host to reach from the remote side. Defaults to `localhost` (a service running on the SSH host itself); set this to reach another host on the remote network."),
@@ -223,7 +223,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
         conn,
         { category: "forward", action: "open_forward", detail },
         async () => {
-          const fwd = await openForward(sessionIdRef.value, conn, remoteHost, remote_port, local_port);
+          const fwd = await openForward(ownerId, conn, remoteHost, remote_port, local_port);
           const text =
             `Forward open: localhost:${fwd.localPort} → ${fwd.remoteHost}:${fwd.remotePort} (id "${fwd.id}").\n` +
             `Connect to it at 127.0.0.1:${fwd.localPort} on this machine. Close it with close_forward "${fwd.id}".`;
@@ -242,7 +242,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
     "List the open local port forwards for this connection (local port → remote target).",
     { readOnlyHint: true, openWorldHint: false } as const,
     async () => {
-      const forwards = listForwards(sessionIdRef.value, conn).map(forwardRow);
+      const forwards = listForwards(ownerId, conn).map(forwardRow);
       if (forwards.length === 0) return ok("No open forwards for this connection.");
       return ok(JSON.stringify(forwards, null, 2));
     },
@@ -254,7 +254,7 @@ export function registerSshServer(server: ToolHost, conn: Integration, sessionId
     { id: z.string().describe('Forward id, e.g. "localhost:5432"') },
     FORWARD_ANNOTATIONS,
     ({ id }) => {
-      const closed = closeForward(sessionIdRef.value, conn, id);
+      const closed = closeForward(ownerId, conn, id);
       return Promise.resolve(closed ? ok(`Closed forward "${id}".`) : err(`No open forward with id "${id}".`));
     },
   );

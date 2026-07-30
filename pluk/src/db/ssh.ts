@@ -173,12 +173,12 @@ async function openOpenSSHTunnel(
 
 export async function openSSHTunnel(
   config: SSHTunnelConfig,
-  sessionIdOrFatal?: string | (() => void),
+  ownerIdOrFatal?: string | (() => void),
   maybeOnFatal?: () => void
 ): Promise<Tunnel> {
   const sshConfig = parseSSHConfig(config.host);
   const username = config.user || sshConfig.user || userInfo().username;
-  const onFatal = typeof sessionIdOrFatal === "function" ? sessionIdOrFatal : maybeOnFatal;
+  const onFatal = typeof ownerIdOrFatal === "function" ? ownerIdOrFatal : maybeOnFatal;
 
   // Route agent/key tunnels through the system `ssh` binary. The in-process ssh2
   // forwardOut channel opens but silently fails to pass data under Bun: the

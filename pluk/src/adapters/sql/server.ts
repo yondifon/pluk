@@ -44,7 +44,7 @@ export function sqlAgentHint(type: string): string {
     : `Use this to query and inspect a ${db} database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT for production data.`;
 }
 
-// Live, per-session guidance handed to connecting agents (see instructions.ts).
+// Live, per-request guidance handed to connecting agents (see instructions.ts).
 // Reflects the current query policy, so a read-only DB and an unrestricted one
 // announce different constraints.
 export function sqlInstructions(conn: Integration): string {
@@ -114,7 +114,7 @@ export function sqlToolSpecs(): ToolSpec[] {
 
 // Register the SQL surface onto a host (a bare McpServer for a single endpoint,
 // or a namespaced host when aggregated into a group).
-export function registerSqlServer(server: ToolHost, conn: Integration, sessionIdRef: { value: string }): void {
+export function registerSqlServer(server: ToolHost, conn: Integration, ownerId: string): void {
   const gate = toolGate(conn.query_policy);
   // The SQL policy (mode + guards) lives as the `query` tool's settings and
   // governs every statement-running tool (query / export_query / run_saved_query).
@@ -213,16 +213,15 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
   // Introspection statements are recorded by the driver layer, so there is no
   // tool-level log entry here (only the gated query tools below create one).
   async function introspect(label: string, fn: (driver: Driver) => Promise<string>, database?: string): Promise<ToolResult> {
-    const sid = sessionIdRef.value;
     try {
-      const driver = await getDriver(sid, conn, database);
+      const driver = await getDriver(ownerId, conn, database);
       return await withToolTimeout((async (): Promise<ToolResult> => ok(await fn(driver)))(), label);
     } catch (e) {
       // A connect awaiting an interactive approval isn't broken — evicting it
       // would close the tunnel the moment the user approves. Leave it in the
       // pool so the approval lands and the next retry succeeds.
       if (!isSshPending(e)) {
-        evictDriver(sid, conn.id);
+        evictDriver(ownerId, conn.id);
         logError(`tool ${label} failed`, e, { integration: conn.name, type: conn.type });
       }
       return err(formatSqlError(e));
@@ -334,7 +333,7 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
     classifyError: (msg: string) => (msg.includes("cancelled") ? "cancelled" : "error") as "cancelled" | "error",
     onError: (e: unknown) => {
       if (isSshPending(e)) return;
-      evictDriver(sessionIdRef.value, conn.id);
+      evictDriver(ownerId, conn.id);
       logError("query tool failed", e, { integration: conn.name, type: conn.type });
     },
     formatError: (e: unknown) => formatSqlError(e),
@@ -349,10 +348,9 @@ export function registerSqlServer(server: ToolHost, conn: Integration, sessionId
       conn,
       { category: verdict.categories, action: source, detail: sql, database: database ?? pinnedDb },
       async (logId) => {
-        const sid = sessionIdRef.value;
-        const queryAc = registerQueryAbort(logId, sid);
+        const queryAc = registerQueryAbort(logId, ownerId);
         try {
-          const driver = await getDriver(sid, conn, database);
+          const driver = await getDriver(ownerId, conn, database);
           const block = await costBlock(driver, sql, params);
           if (block) return { blocked: block };
 
@@ -411,15 +409,14 @@ ${sql}` } },
     "schema://full",
     { mimeType: "text/plain", description: "Full database schema: tables, columns, primary keys, foreign keys" },
     async () => {
-      const sid = sessionIdRef.value;
       try {
-        const driver = await getDriver(sid, conn);
+        const driver = await getDriver(ownerId, conn);
         return await withToolTimeout((async () => {
           const text = await driver.getFullSchema();
           return { contents: [{ uri: "schema://full", mimeType: "text/plain", text }] };
         })(), "schema_resource");
       } catch (err) {
-        if (!isSshPending(err)) evictDriver(sid, conn.id);
+        if (!isSshPending(err)) evictDriver(ownerId, conn.id);
         return { contents: [{ uri: "schema://full", mimeType: "text/plain", text: `Error: ${(err as Error).message}` }] };
       }
     }
@@ -574,10 +571,9 @@ ${sql}` } },
         conn,
         { category: verdict.categories, action: "export_query", detail: statement, database: r.db ?? pinnedDb },
         async (logId) => {
-          const sid = sessionIdRef.value;
-          const queryAc = registerQueryAbort(logId, sid);
+          const queryAc = registerQueryAbort(logId, ownerId);
           try {
-            const driver = await getDriver(sid, conn, r.db);
+            const driver = await getDriver(ownerId, conn, r.db);
             const result = await runStatement<QueryRows>(driver, statement, queryAc.signal, "export_query", timeoutMs, params);
 
             const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);

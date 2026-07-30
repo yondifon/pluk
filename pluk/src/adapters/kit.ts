@@ -134,11 +134,11 @@ export interface ActionAdapterSpec<C> {
   /** Optional discovery hint: which tools to reach for first. */
   start?: string;
   configFields: ConfigField[];
-  /** Build the per-connection client/config once, reused across tools. Receives
-   *  the session's `sessionIdRef` (its `.value` is filled at session init, not at
-   *  register time) so a client can scope session-lived resources — e.g. an SSH
-   *  tunnel opened lazily on first tool call and torn down on session close. */
-  client: (conn: Integration, sessionIdRef: { value: string }) => C;
+  /** Build the per-connection client/config once, reused across tools. Receives the
+   *  `ownerId` (the integration or group the endpoint fronts) so a client can scope
+   *  long-lived resources to it — e.g. an SSH tunnel opened lazily on first tool
+   *  call and torn down when the owner is reset. */
+  client: (conn: Integration, ownerId: string) => C;
   testConnection: (conn: Integration) => Promise<void>;
   tools: (conn: Integration, client: C) => ActionTool[];
   /** Turn a raw failure into something the user can act on (shown by the UI on a
@@ -161,7 +161,7 @@ export function actionAdapter<C>(spec: ActionAdapterSpec<C>): Adapter {
   const toolSpecs: ToolSpec[] = ((): ToolSpec[] => {
     const dummyConn = { config: {} } as Integration;
     let dummyClient: C | undefined;
-    try { dummyClient = spec.client(dummyConn, { value: "" }); } catch { dummyClient = undefined; }
+    try { dummyClient = spec.client(dummyConn, ""); } catch { dummyClient = undefined; }
     try {
       return spec.tools(dummyConn, dummyClient as C).map((t) => ({
         name: t.name,
@@ -190,8 +190,8 @@ export function actionAdapter<C>(spec: ActionAdapterSpec<C>): Adapter {
     });
   };
 
-  const register = (host: ToolHost, conn: Integration, sessionIdRef: { value: string }): void => {
-    const client = spec.client(conn, sessionIdRef);
+  const register = (host: ToolHost, conn: Integration, ownerId: string): void => {
+    const client = spec.client(conn, ownerId);
     const gate = toolGate(conn.query_policy);
 
     for (const tool of spec.tools(conn, client)) {

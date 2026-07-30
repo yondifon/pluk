@@ -29,12 +29,12 @@ mock.module("../db/index.js", () => ({
 }));
 
 const { getDriver, evictDriver } = await import("../adapters/sql/pool.js");
-const { closeSession } = await import("./pool.js");
+const { closeOwner } = await import("./pool.js");
 
 const integration = { id: "i1", name: "DB", type: "postgres", config: {} } as never;
 
 afterEach(() => {
-  closeSession("s1");
+  closeOwner("s1");
   setSystemTime(); // restore real clock
   healthOk = true;
   holdHealthcheck = false;
@@ -92,7 +92,7 @@ test("each target database gets its own isolated driver; same database reuses", 
   expect(b.id).not.toBe(a.id);
   expect(createCount).toBe(2);
 
-  // Same (session, connection, database) reuses its driver — no rebuild.
+  // Same (owner, connection, database) reuses its driver — no rebuild.
   const a2 = (await getDriver("s1", integration, "billing")) as unknown as { id: number };
   expect(a2.id).toBe(a.id);
   expect(createCount).toBe(2);

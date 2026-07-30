@@ -54,7 +54,7 @@ function fakeDriver(): Driver {
 }
 
 mock.module("../../db/index.js", () => ({
-  createDriver: async (_integration: Integration, _sessionId?: string, onFatal?: () => void) => {
+  createDriver: async (_integration: Integration, _ownerId?: string, onFatal?: () => void) => {
     connectCalls++;
     capturedOnFatal = onFatal;
     if (connectBehavior === "agent-error") throw new Error("communication with agent failed");
@@ -148,14 +148,14 @@ test("in-flight connect: bounded wait, no duplicate spawn, approval lands for th
 });
 
 // Force-refresh (the Test button): tear down a live pooled driver across
-// sessions so the next call reconnects from scratch — re-triggering the SSH
+// owners so the next call reconnects from scratch — re-triggering the SSH
 // prompt instead of reusing a poisoned/pending entry.
 test("evictDriverEverywhere forces the next call to reconnect fresh", async () => {
   connectBehavior = "ok";
   await getDriver("s-refresh", integration);
   const calls = connectCalls;
 
-  // Same session reuses the pooled driver — no new connect.
+  // Same owner reuses the pooled driver — no new connect.
   await getDriver("s-refresh", integration);
   expect(connectCalls).toBe(calls);
 

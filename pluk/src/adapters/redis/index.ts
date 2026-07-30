@@ -9,7 +9,7 @@ const AGENT_HINT = "Use this to inspect and edit a Redis datastore — list keys
 // Redis tools. Each declares its policy category, log line, and command; gating,
 // logging, and response shaping are handled by actionAdapter. The accessor opens
 // the connection (and SSH tunnel, if configured) lazily on first use and reuses it
-// across the session's calls.
+// across the owner's calls.
 function redisTools(acc: RedisAccessor): ActionTool[] {
   return [
     {
@@ -119,7 +119,7 @@ export const redisAdapter = actionAdapter<RedisAccessor>({
     "Read keys and values (scan/get/type/ttl/info); set/expire/delete when write is permitted. Every action is policy-checked and recorded in the activity log.",
   start: "scan",
   configFields: redisFields,
-  client: (conn, sessionIdRef) => redisAccessor(conn, sessionIdRef),
+  client: (conn, ownerId) => redisAccessor(conn, ownerId),
   testConnection: (conn: Integration) => testRedis(conn),
   tools: (_conn, acc) => redisTools(acc),
 });

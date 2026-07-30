@@ -3,7 +3,7 @@ import type { ConnectConfig } from "ssh2";
 import { readFileSync, existsSync } from "fs";
 import { homedir, userInfo } from "os";
 import { Duplex } from "stream";
-import { onSessionClose } from "../mcp/pool.js";
+import { onOwnerClose } from "../mcp/pool.js";
 import {
   SSH_CONNECT_RESPAWN_MS,
   SSH_CONNECT_WAIT_MS,
@@ -135,13 +135,13 @@ interface Entry {
 
 const pool = new Map<string, Entry>();
 
-function sharedKey(sessionId: string, p: SSHParams): string {
+function sharedKey(ownerId: string, p: SSHParams): string {
   const sshConfig = parseSSHConfig(p.host);
   const host = sshConfig.hostName ?? p.host;
   const port = sshConfig.port ?? p.port;
   const username = p.user || sshConfig.user || userInfo().username;
   return [
-    sessionId,
+    ownerId,
     host,
     port,
     username,
@@ -151,8 +151,8 @@ function sharedKey(sessionId: string, p: SSHParams): string {
   ].join("::");
 }
 
-export function getSharedSSHClient(sessionId: string, p: SSHParams): Promise<Client> {
-  const key = sharedKey(sessionId, p);
+export function getSharedSSHClient(ownerId: string, p: SSHParams): Promise<Client> {
+  const key = sharedKey(ownerId, p);
   const existing = pool.get(key);
   if (existing) {
     // A connect pending past the respawn window is doomed — its approval
@@ -194,8 +194,8 @@ function awaitReady(key: string, entry: Entry): Promise<Client> {
   ]);
 }
 
-export function evictSharedSSHClient(sessionId: string, p: SSHParams): void {
-  evictByKey(sharedKey(sessionId, p));
+export function evictSharedSSHClient(ownerId: string, p: SSHParams): void {
+  evictByKey(sharedKey(ownerId, p));
 }
 
 function evictByKey(key: string): void {
@@ -205,10 +205,10 @@ function evictByKey(key: string): void {
   entry.client.then((c) => c.end()).catch(() => {});
 }
 
-export function closeSessionSSHClients(sessionId: string): void {
+export function closeOwnerSSHClients(ownerId: string): void {
   for (const key of [...pool.keys()]) {
-    if (key.startsWith(`${sessionId}::`)) evictByKey(key);
+    if (key.startsWith(`${ownerId}::`)) evictByKey(key);
   }
 }
 
-onSessionClose(closeSessionSSHClients);
+onOwnerClose(closeOwnerSSHClients);

@@ -66,10 +66,10 @@ export interface Adapter {
   handleApi?(integration: Integration, req: Request, subpath: string): Promise<Response | null>;
   handleGlobalApi?(req: Request, path: string): Promise<Response | null> | Response | null;
   /**
-   * Agent-facing guidance for this integration, built per session from live
-   * config + policy (see mcp/instructions.ts). Returned in the MCP `initialize`
-   * handshake by the standalone server, and embedded per member by group
-   * endpoints so the group's instructions reflect each member's real policy.
+   * Agent-facing guidance for this integration, built per request from live
+   * config + policy (see mcp/instructions.ts). Returned in the discovery result by
+   * the standalone server, and embedded per member by group endpoints so the
+   * group's instructions reflect each member's real policy.
    */
   instructions(integration: Integration): string;
   /**
@@ -77,5 +77,5 @@ export interface Adapter {
    * by group endpoints to aggregate several integrations under one server; pass a
    * namespaced host to avoid name collisions across members.
    */
-  register(host: ToolHost, integration: Integration, sessionIdRef: { value: string }): void;
+  register(host: ToolHost, integration: Integration, ownerId: string): void;
 }

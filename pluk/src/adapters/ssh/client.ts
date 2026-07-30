@@ -2,13 +2,13 @@ import { Client } from "ssh2";
 import { createServer, type Server } from "net";
 import { userInfo } from "os";
 import type { Integration } from "../../store/integrations.js";
-import { onSessionClose } from "../../mcp/pool.js";
+import { onOwnerClose } from "../../mcp/pool.js";
 import { connectSSH, evictSharedSSHClient, getSharedSSHClient, type SSHParams } from "../../ssh/client.js";
 import { isSshPending } from "../../ssh/pending.js";
 
 // Remote command execution over SSH for the ssh adapter. Connections are cached
-// per (session, integration) and reused across tool calls, so an agent-confirm
-// (1Password) happens once per session rather than once per command — same idea
+// per (owner, integration) and reused across tool calls, so an agent-confirm
+// (1Password) happens once per owner rather than once per command — same idea
 // as the DB driver pool, kept self-contained here.
 
 const IDLE_MS = 5 * 60 * 1000;
@@ -73,10 +73,10 @@ function execOnce(client: Client, command: string, timeoutMs: number): Promise<E
   });
 }
 
-// ── Session-scoped connection cache ────────────────────────────────────────────
+// ── Owner-scoped connection cache ────────────────────────────────────────────
 
 // A live `ssh -L` local port forward: a local listener whose connections are
-// tunneled to remoteHost:remotePort through the session's SSH connection.
+// tunneled to remoteHost:remotePort through the owner's SSH connection.
 interface Forward {
   id: string;
   remoteHost: string;
@@ -94,8 +94,8 @@ interface Entry {
 
 const pool = new Map<string, Entry>();
 
-function key(sessionId: string, integrationId: string): string {
-  return `${sessionId}::${integrationId}`;
+function key(ownerId: string, integrationId: string): string {
+  return `${ownerId}::${integrationId}`;
 }
 
 // (Re)arm idle eviction. Active forwards pin the connection open — an idle
@@ -117,15 +117,15 @@ function evictByKey(k: string): void {
   entry.forwards.clear();
 }
 
-async function getClient(sessionId: string, conn: Integration): Promise<Client> {
-  const k = key(sessionId, conn.id);
+async function getClient(ownerId: string, conn: Integration): Promise<Client> {
+  const k = key(ownerId, conn.id);
   const existing = pool.get(k);
   if (existing) {
     armIdle(k);
     return existing.client;
   }
   const p = params(conn);
-  const client = getSharedSSHClient(sessionId, p);
+  const client = getSharedSSHClient(ownerId, p);
   const entry: Entry = { client, idleTimer: null, forwards: new Map() };
   pool.set(k, entry);
   armIdle(k);
@@ -135,16 +135,16 @@ async function getClient(sessionId: string, conn: Integration): Promise<Client> 
   return client;
 }
 
-/** Run a command on the session's cached SSH connection. */
+/** Run a command on the owner's cached SSH connection. */
 export async function runCommand(
-  sessionId: string,
+  ownerId: string,
   conn: Integration,
   command: string,
   timeoutMs = DEFAULT_EXEC_TIMEOUT_MS,
 ): Promise<ExecResult> {
-  const k = key(sessionId, conn.id);
+  const k = key(ownerId, conn.id);
   try {
-    const client = await getClient(sessionId, conn);
+    const client = await getClient(ownerId, conn);
     return await execOnce(client, command, timeoutMs);
   } catch (err) {
     // A command timeout leaves the SSH connection healthy — keep it so the next
@@ -154,21 +154,21 @@ export async function runCommand(
     // may mean a dead connection, so evict and reconnect next time.
     if (!(err instanceof CommandTimeoutError) && !isSshPending(err)) {
       evictByKey(k);
-      evictSharedSSHClient(sessionId, params(conn));
+      evictSharedSSHClient(ownerId, params(conn));
     }
     throw err;
   }
 }
 
-/** Close all cached SSH connections for a session (called on session close). */
-export function closeSessionClients(sessionId: string): void {
+/** Close all cached SSH connections for an owner (called on reset). */
+export function closeOwnerClients(ownerId: string): void {
   for (const k of [...pool.keys()]) {
-    if (k.startsWith(`${sessionId}::`)) evictByKey(k);
+    if (k.startsWith(`${ownerId}::`)) evictByKey(k);
   }
 }
 
-// Tie SSH connection cleanup to the shared session lifecycle (close/reload).
-onSessionClose(closeSessionClients);
+// Tie SSH connection cleanup to the shared owner lifecycle (reload).
+onOwnerClose(closeOwnerClients);
 
 // ── Local port forwarding (ssh -L) ─────────────────────────────────────────────
 
@@ -216,20 +216,20 @@ function listenForward(client: Client, remoteHost: string, remotePort: number, l
 }
 
 /**
- * Open an `ssh -L` local port forward over the session's cached SSH connection,
+ * Open an `ssh -L` local port forward over the owner's cached SSH connection,
  * so localhost:<localPort> on this machine reaches remoteHost:remotePort from the
  * remote side. Idempotent per remote target; the forward lives until it is closed
- * or the session ends. Omit `requestedLocalPort` to auto-assign a free port.
+ * or the owner is reset. Omit `requestedLocalPort` to auto-assign a free port.
  */
 export async function openForward(
-  sessionId: string,
+  ownerId: string,
   conn: Integration,
   remoteHost: string,
   remotePort: number,
   requestedLocalPort?: number,
 ): Promise<ForwardInfo> {
-  const k = key(sessionId, conn.id);
-  const client = await getClient(sessionId, conn);
+  const k = key(ownerId, conn.id);
+  const client = await getClient(ownerId, conn);
   const entry = pool.get(k);
   if (!entry) throw new Error("SSH connection closed before the forward could open.");
 
@@ -255,16 +255,16 @@ export async function openForward(
   return forwardInfo(fwd);
 }
 
-/** List the open local port forwards for this session's connection. */
-export function listForwards(sessionId: string, conn: Integration): ForwardInfo[] {
-  const entry = pool.get(key(sessionId, conn.id));
+/** List the open local port forwards for this owner's connection. */
+export function listForwards(ownerId: string, conn: Integration): ForwardInfo[] {
+  const entry = pool.get(key(ownerId, conn.id));
   if (!entry) return [];
   return [...entry.forwards.values()].map(forwardInfo);
 }
 
 /** Close one forward by id (`remoteHost:remotePort`). Returns false if unknown. */
-export function closeForward(sessionId: string, conn: Integration, id: string): boolean {
-  const k = key(sessionId, conn.id);
+export function closeForward(ownerId: string, conn: Integration, id: string): boolean {
+  const k = key(ownerId, conn.id);
   const entry = pool.get(k);
   const fwd = entry?.forwards.get(id);
   if (!entry || !fwd) return false;

@@ -63,14 +63,14 @@ function exec(client: Client, command: string, timeoutMs: number): Promise<strin
   });
 }
 
-export function createRemoteSqliteDriver(cfg: SSHConfig, sessionId: string): Driver {
+export function createRemoteSqliteDriver(cfg: SSHConfig, ownerId: string): Driver {
   const params = sshParams(cfg);
   const filename = cfg.filename;
   if (!filename) throw new Error("SQLite path is missing. Set the remote database file path.");
   const remotePath = filename;
 
   async function runJson(sql: string, timeoutMs = DEFAULT_TIMEOUT_MS, readonly = false): Promise<Record<string, unknown>[]> {
-    const client = await getSharedSSHClient(sessionId, params);
+    const client = await getSharedSSHClient(ownerId, params);
     // -readonly opens the database file read-only, so the sqlite3 process itself
     // refuses any write — the engine-level guard for read-only connections.
     const command = `sqlite3 ${readonly ? "-readonly " : ""}-json ${shellQuote(remotePath)} ${shellQuote(sql)}`;
@@ -80,7 +80,7 @@ export function createRemoteSqliteDriver(cfg: SSHConfig, sessionId: string): Dri
     } catch (err) {
       // A connect awaiting an interactive approval stays pooled — evicting it
       // would close the connection the moment the user approves.
-      if (!isSshPending(err)) evictSharedSSHClient(sessionId, params);
+      if (!isSshPending(err)) evictSharedSSHClient(ownerId, params);
       throw err;
     }
   }
@@ -205,7 +205,7 @@ export function createRemoteSqliteDriver(cfg: SSHConfig, sessionId: string): Dri
     },
 
     async close() {
-      evictSharedSSHClient(sessionId, params);
+      evictSharedSSHClient(ownerId, params);
     },
   };
 }
