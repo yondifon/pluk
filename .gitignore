@@ -6,3 +6,8 @@
 skills-lock.json
 .claude/
 dist/*
+.build/
+*.bun-build
+
+# Local MCP client config: carries a live endpoint token.
+opencode.jsonc
