@@ -2,11 +2,12 @@ import { createMcpHandler, type McpHttpHandler, type McpServer } from "@modelcon
 import { openOwner, closeOwner } from "./pool.js";
 import { logError } from "../log.js";
 
-// MCP HTTP entry, protocol revision 2026-07-28. The revision is stateless: no
-// initialize handshake, no Mcp-Session-Id, one fresh server per request built by
-// the factory. `legacy: "reject"` makes this endpoint modern-only — a 2025-era
-// client is answered with the unsupported-protocol-version error naming what we
-// serve, rather than silently getting a different protocol.
+// MCP HTTP entry. Preferred revision is 2026-07-28: stateless — no initialize
+// handshake, no Mcp-Session-Id, one fresh server per request built by the
+// factory. `legacy: "stateless"` also serves the 2025 era off the same factory,
+// per-request rather than session-bound, because no shipped client speaks
+// 2026-07-28 yet (Claude Code tops out at 2025-11-25); modern-only would mean
+// no client can connect at all. Drop back to "reject" once clients catch up.
 //
 // Target-agnostic: the caller supplies a factory that builds the McpServer (a
 // single integration's adapter server, or a group's aggregated server). Long-lived
@@ -51,7 +52,7 @@ export async function handleMcpRequest(req: Request, ownerId: string, makeServer
     const created: Owner = {
       makeServer,
       handler: createMcpHandler(() => created.makeServer(), {
-        legacy: "reject",
+        legacy: "stateless",
         onerror: (err) => logError("MCP request failed", err, { ownerId }),
       }),
     };

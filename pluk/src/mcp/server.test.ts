@@ -5,10 +5,10 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { handleMcpRequest, resetOwners } from "./server.js";
 import { toolHost } from "./namespace.js";
 
-// The endpoint serves protocol revision 2026-07-28 only. These tests pin the two
-// halves of that promise: a modern client works end to end (through the positional
-// ToolHost shim the adapters register with), and a 2025-era client is refused
-// rather than quietly served a different protocol.
+// The endpoint prefers protocol revision 2026-07-28 and also serves the 2025 era.
+// These tests pin both halves: a modern client works end to end (through the
+// positional ToolHost shim the adapters register with), and a 2025-era client
+// negotiates its own revision and reaches the same tools.
 
 const OWNER = "owner-under-test";
 
@@ -64,27 +64,26 @@ test("serves the 2026-07-28 revision: tools registered through ToolHost are list
   }
 });
 
-test("a 2025-era request is rejected, not served a different protocol", async () => {
-  const response = await serve(
-    new Request("http://test.local/mcp", {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2025-06-18",
-          capabilities: {},
-          clientInfo: { name: "legacy-client", version: "1.0.0" },
-        },
-      }),
+test("a 2025-era client negotiates its own era and reaches the same tools", async () => {
+  const client = new Client(
+    { name: "legacy-client", version: "1.0.0" },
+    { versionNegotiation: { mode: "legacy" } },
+  );
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL("http://test.local/mcp"), {
+      fetch: (url, init) => serve(new Request(url, init)),
     }),
   );
+  try {
+    expect(client.getProtocolEra()).toBe("legacy");
 
-  const body = await response.json() as { result?: unknown; error?: { message?: string } };
-  expect(body.result).toBeUndefined();
-  expect(body.error).toBeDefined();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual(["echo", "ping"]);
 
-  await resetOwners(OWNER);
+    const result = await client.callTool({ name: "echo", arguments: { value: "hi" } });
+    expect(result.content).toEqual([{ type: "text", text: "hi" }]);
+  } finally {
+    await client.close();
+    await resetOwners(OWNER);
+  }
 });
