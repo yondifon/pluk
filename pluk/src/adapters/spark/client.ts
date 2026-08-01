@@ -70,6 +70,48 @@ export function assertMessageId(value: unknown, what = "message id"): string {
   return v;
 }
 
+// ── Account scope ────────────────────────────────────────────────────────────
+
+/** Every mailbox identifier names its mailbox first: `account`, `account:Folder`,
+ *  `"Team Name[:Folder]"` or a shared-inbox address. A bare name (`Inbox`,
+ *  `Archive`) is Spark's *unified* folder, which spans every account. */
+const mailboxOf = (id: string): string => {
+  const colon = id.indexOf(":");
+  return colon === -1 ? id : id.slice(0, colon);
+};
+
+const outOfScope = (account: string, what: string, value: string): Error =>
+  new Error(
+    `This integration is scoped to ${account}; ${what} "${value}" is another mailbox. Omit it to use ${account}, or clear the integration's Account setting to reach every mailbox.`,
+  );
+
+/**
+ * Confine a folder, search scope or calendar to the configured account. A bare
+ * name is *qualified* with it — left alone Spark would read the cross-account
+ * unified folder — and anything naming another account, shared inbox or team is
+ * refused rather than quietly redirected, so an agent that asks for the wrong
+ * mailbox is told instead of handed someone else's mail. No account configured,
+ * or no value: unchanged.
+ */
+export function scoped(cfg: SparkCfg, value: unknown, what = "folder"): string {
+  const v = str(value);
+  if (!v || !cfg.account) return v;
+  if (mailboxOf(v).toLowerCase() === cfg.account.toLowerCase()) return v;
+  if (!v.includes(":") && !v.includes("@")) return `${cfg.account}:${v}`;
+  throw outOfScope(cfg.account, what, v);
+}
+
+/** The account-only form, for arguments that are a bare address (`folders`, a
+ *  draft's from address): nothing to qualify, so it either matches the scope or
+ *  is out of it. Empty falls back to the configured account. */
+export function sameAccount(cfg: SparkCfg, value: unknown, what = "account"): string {
+  const v = str(value);
+  if (!cfg.account) return v;
+  if (!v) return cfg.account;
+  if (v.toLowerCase() !== cfg.account.toLowerCase()) throw outOfScope(cfg.account, what, v);
+  return v;
+}
+
 /** Normalize an argument that may arrive as a single string or a list. */
 export function list(value: unknown): string[] {
   const items = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { assertMessageId, assertPositional, paging, range, sparkConfig, humanizeSparkError } from "./client.js";
+import { assertMessageId, assertPositional, paging, range, sameAccount, scoped, sparkConfig, humanizeSparkError } from "./client.js";
 import { sparkAdapter } from "./index.js";
 import type { Integration } from "../../store/integrations.js";
 
@@ -40,6 +40,45 @@ test("assertMessageId accepts Spark ids and deep links, nothing else", () => {
   expect(assertMessageId("https://sparkmailapp.com/dpl/bl?token=A")).toBe("https://sparkmailapp.com/dpl/bl?token=A");
   expect(assertMessageId("readdle-spark://bl=A")).toBe("readdle-spark://bl=A");
   for (const bad of ["", "--date", "12; rm -rf /", "abc"]) expect(() => assertMessageId(bad)).toThrow();
+});
+
+test("scoped qualifies a bare folder so it can't span every account", () => {
+  const cfg = sparkConfig(conn({ default_account: "me@co.com" }));
+  // A bare name is Spark's *unified* folder — the whole point of the scope.
+  expect(scoped(cfg, "Inbox")).toBe("me@co.com:Inbox");
+  expect(scoped(cfg, "Archive")).toBe("me@co.com:Archive");
+  // Already this account, in either form: left alone.
+  expect(scoped(cfg, "me@co.com")).toBe("me@co.com");
+  expect(scoped(cfg, "ME@CO.COM:Archive")).toBe("ME@CO.COM:Archive");
+});
+
+test("scoped refuses another mailbox instead of redirecting it", () => {
+  const cfg = sparkConfig(conn({ default_account: "me@co.com" }));
+  for (const other of ["you@co.com", "you@co.com:Inbox", "support@co.com:Inbox", "Team Name:Sent"]) {
+    expect(() => scoped(cfg, other)).toThrow(/scoped to me@co\.com/);
+  }
+});
+
+test("scoped and sameAccount are inert without an account, so nothing narrows by surprise", () => {
+  const cfg = sparkConfig(conn());
+  expect(scoped(cfg, "Inbox")).toBe("Inbox");
+  expect(scoped(cfg, "you@co.com:Archive")).toBe("you@co.com:Archive");
+  expect(scoped(cfg, undefined)).toBe("");
+  expect(sameAccount(cfg, "")).toBe("");
+  expect(sameAccount(cfg, "you@co.com")).toBe("you@co.com");
+});
+
+test("sameAccount fills in the scope and rejects a different from address", () => {
+  const cfg = sparkConfig(conn({ default_account: "me@co.com" }));
+  expect(sameAccount(cfg, "")).toBe("me@co.com");
+  expect(sameAccount(cfg, "Me@Co.com")).toBe("Me@Co.com");
+  expect(() => sameAccount(cfg, "you@co.com", "from address")).toThrow(/from address "you@co\.com"/);
+});
+
+test("an out-of-scope folder is refused before it can be qualified into safety", () => {
+  const cfg = sparkConfig(conn({ default_account: "me@co.com" }));
+  // A flag-shaped value must still be caught: qualifying it would hide the "-".
+  expect(() => scoped(cfg, assertPositional("--filter", "folder"))).toThrow(/must not start with/);
 });
 
 test("paging clamps the page size to the integration's cap", () => {

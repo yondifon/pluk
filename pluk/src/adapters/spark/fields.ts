@@ -14,12 +14,12 @@ export const sparkFields: ConfigField[] = [
   {
     key: "default_account", label: "Account", type: "text", group: "Defaults",
     placeholder: "you@example.com",
-    help: "Used as the from address when a draft doesn't name one.",
+    help: "Confines every folder, search and calendar to this account and drafts from it; blank reaches all accounts. Tools that take a message id are not confined.",
   },
   {
     key: "default_folder", label: "Folder", type: "text", group: "Defaults",
     placeholder: "Inbox",
-    help: "Folder listed by list_emails when none is given, e.g. you@example.com:Archive.",
+    help: "Folder listed by list_emails when none is given. A bare name like Archive means that folder inside the account above, or the cross-account unified one when no account is set.",
   },
   {
     key: "default_team", label: "Team", type: "text", group: "Defaults",

@@ -12,6 +12,8 @@ import {
   paging,
   range,
   runSpark,
+  sameAccount,
+  scoped,
   sparkConfig,
   testSpark,
   toggle,
@@ -19,7 +21,7 @@ import {
 } from "./client.js";
 
 const AGENT_HINT =
-  "Use this for the user's mail, calendar, contacts and meetings in Spark. accounts first to see accounts, calendars and each one's access level; list_emails to browse a folder, search_emails to answer questions (it returns bodies), read_thread for the whole conversation. Spark itself gates writes per account (read-only / triage / send) on top of this integration's tools.";
+  "Use this for the user's mail, calendar, contacts and meetings in Spark. accounts first to see accounts, calendars and each one's access level; list_emails to browse a folder, search_emails to answer questions (it returns bodies), read_thread for the whole conversation. When this integration names an account every folder, scope and calendar is confined to it — a bare folder name means that account's folder, and another account, shared inbox or team is refused, not silently redirected. Spark itself gates writes per account (read-only / triage / send) on top of this integration's tools.";
 
 const ACCESS =
   "Reads mail, calendar, contacts, meetings and teams from the Spark Desktop running on this machine; drafts, comments, email and contact actions, and calendar writes only when those tools are enabled. Sending a draft and deleting an event are separate tools, off by default. Every call is policy-checked and recorded in the activity log — including the message bodies Spark returns.";
@@ -75,9 +77,13 @@ function readTools(cfg: () => SparkCfg): ActionTool[] {
       name: "folders",
       description: "List folders and labels with message counts. Returns the qualified identifiers other tools take.",
       category: "read",
-      schema: { accounts: z.array(z.string()).optional().describe("Account or shared-inbox addresses; all accounts when omitted") },
+      schema: { accounts: z.array(z.string()).optional().describe("Account or shared-inbox addresses; the integration's account, or all of them when it names none, when omitted") },
       detail: (a) => `folders ${list(a.accounts).join(" ") || "all"}`,
-      run: (a) => spark(["folders", ...list(a.accounts).map((v) => assertPositional(v, "account"))]),
+      run: (a) => {
+        const c = cfg();
+        const asked = list(a.accounts).map((v) => sameAccount(c, assertPositional(v, "account")));
+        return spark(["folders", ...(asked.length ? asked : list(c.account))]);
+      },
     },
     {
       name: "list_emails",
@@ -85,7 +91,7 @@ function readTools(cfg: () => SparkCfg): ActionTool[] {
         "List emails in a folder — id, account, sender, date, subject, flags. Browsing only: use search_emails to find mail across every folder.",
       category: "read",
       schema: {
-        folders: z.array(z.string()).optional().describe('Folder ids from `folders`, e.g. "you@co.com:Archive". Unified Inbox when omitted'),
+        folders: z.array(z.string()).optional().describe('Folder ids from `folders`, e.g. "you@co.com:Archive". The integration\'s inbox — or the cross-account Unified Inbox when it names no account — when omitted'),
         filter: FILTER,
         order: z.enum(["ascending", "descending"]).optional(),
         new_senders: z.boolean().optional().describe("Only mail from senders GateKeeper is holding back"),
@@ -95,8 +101,11 @@ function readTools(cfg: () => SparkCfg): ActionTool[] {
       detail: (a) => `list_emails ${list(a.folders).join(" ") || "inbox"}${a.filter ? ` [${a.filter}]` : ""}`,
       run: (a) => {
         const c = cfg();
-        const folders = list(a.folders).length ? list(a.folders) : list(c.folder);
-        const args = ["emails", ...folders.map((v) => assertPositional(v, "folder"))];
+        const asked = list(a.folders).length ? list(a.folders) : list(c.folder);
+        // Nothing named anywhere: the scoped account's own inbox, since the
+        // bare default (Unified Inbox) would span every account.
+        const folders = asked.length ? asked : list(c.account);
+        const args = ["emails", ...folders.map((v) => scoped(c, assertPositional(v, "folder")))];
         flag(args, "--filter", a.filter);
         flag(args, "--order", a.order);
         toggle(args, "--new-senders", a.new_senders);
@@ -112,18 +121,21 @@ function readTools(cfg: () => SparkCfg): ActionTool[] {
       schema: {
         about: z.string().optional().describe("Topic to search for; omit to list by filter instead"),
         filter: FILTER,
-        in: z.string().optional().describe('Scope: account, "Team Name", shared inbox or a qualified folder. All folders when omitted'),
+        in: z.string().optional().describe('Scope: account, "Team Name", shared inbox or a qualified folder. The integration\'s account — or every folder when it names none — when omitted'),
         order: z.enum(["ascending", "descending"]).optional().describe("List mode only"),
         page: PAGE,
         page_size: PAGE_SIZE,
       },
       detail: (a) => `search_emails ${(a.about as string) ?? ""}${a.filter ? ` [${a.filter}]` : ""}`.trim(),
       run: (a) => {
+        const c = cfg();
         const args = ["search"];
         flag(args, "--filter", a.filter);
-        flag(args, "--in", a.in);
+        // Scoping the search also opts it into that account's Trash and Spam,
+        // which an unscoped `search` leaves out.
+        flag(args, "--in", scoped(c, a.in, "scope") || c.account);
         flag(args, "--order", a.order);
-        paging(args, cfg(), a);
+        paging(args, c, a);
         const about = String(a.about ?? "").trim();
         if (about) args.push(assertPositional(about, "search topic"));
         return spark(args);
@@ -162,13 +174,14 @@ function readTools(cfg: () => SparkCfg): ActionTool[] {
         range: RANGE,
         start: START,
         end: END,
-        in: z.string().optional().describe('Account or calendar, e.g. "you@co.com:Work"'),
+        in: z.string().optional().describe('Account or calendar, e.g. "you@co.com:Work". The integration\'s account — or every calendar when it names none — when omitted'),
       },
       detail: (a) => `list_events ${(a.range as string) ?? `${a.start ?? ""}..${a.end ?? ""}`}`,
       run: (a) => {
+        const c = cfg();
         const args = ["events"];
         range(args, a);
-        flag(args, "--in", a.in);
+        flag(args, "--in", scoped(c, a.in, "calendar") || c.account);
         return spark(args);
       },
     },
@@ -289,7 +302,7 @@ function writeTools(cfg: () => SparkCfg): ActionTool[] {
         bcc: z.array(z.string()).optional(),
         subject: z.string().optional(),
         body: z.string().optional().describe("Body in markdown; required for a new draft unless a template supplies one"),
-        account: z.string().optional().describe("From address; the integration's default account when omitted"),
+        account: z.string().optional().describe("From address; the integration's account when omitted, and refused when it names a different one"),
         edit: z.string().optional().describe("Message id of an existing draft to update"),
         reply_to: z.string().optional().describe("Message id to reply to — required to stay in an existing thread"),
         forward: z.string().optional().describe("Message id to forward"),
@@ -306,7 +319,7 @@ function writeTools(cfg: () => SparkCfg): ActionTool[] {
         flagEach(args, "--bcc", a.bcc);
         flag(args, "--subject", a.subject);
         flag(args, "--body", a.body);
-        flag(args, "--account", String(a.account ?? "").trim() || cfg().account);
+        flag(args, "--account", sameAccount(cfg(), a.account, "from address"));
         if (a.edit !== undefined) flag(args, "--edit", assertMessageId(a.edit, "draft id"));
         if (a.reply_to !== undefined) flag(args, "--reply-to", assertMessageId(a.reply_to));
         if (a.forward !== undefined) flag(args, "--forward", assertMessageId(a.forward));
@@ -356,10 +369,11 @@ function writeTools(cfg: () => SparkCfg): ActionTool[] {
       },
       detail: (a) => `${a.action} ${ids(a).join(" ")}`,
       run: (a) => {
+        const c = cfg();
         const args = ["action", String(a.action), ...ids(a)];
         flag(args, "--date", a.date);
-        flag(args, "--folder", a.folder);
-        flag(args, "--team", String(a.team ?? "").trim() || cfg().team);
+        flag(args, "--folder", scoped(c, a.folder));
+        flag(args, "--team", String(a.team ?? "").trim() || c.team);
         flagEach(args, "--user", a.user);
         flag(args, "--assignee", a.assignee);
         flag(args, "--comment", a.comment);
@@ -396,7 +410,7 @@ function writeTools(cfg: () => SparkCfg): ActionTool[] {
         all_day: z.boolean().optional(),
         description: z.string().optional(),
         location: z.string().optional(),
-        calendar: z.string().optional().describe('Target calendar for create: "you@co.com" or "you@co.com:Work"'),
+        calendar: z.string().optional().describe('Target calendar for create: "you@co.com" or "you@co.com:Work". The integration\'s account when omitted'),
         video_conference: z.enum(["auto", "meet", "zoom", "teams"]).optional(),
         alerts: z.string().optional().describe("Comma-separated offsets in seconds (300s,600s) or absolute dates"),
         add: z.array(z.string()).optional().describe("Attendees to invite — they receive an invitation"),
@@ -404,6 +418,7 @@ function writeTools(cfg: () => SparkCfg): ActionTool[] {
       },
       detail: (a) => `event ${a.mode} ${(a.event_id as string) ?? (a.title as string) ?? ""}`.trim(),
       run: (a) => {
+        const c = cfg();
         const mode = String(a.mode);
         const args = ["event"];
         flag(args, "--title", a.title);
@@ -412,7 +427,7 @@ function writeTools(cfg: () => SparkCfg): ActionTool[] {
         toggle(args, "--all-day", a.all_day);
         flag(args, "--description", a.description);
         flag(args, "--location", a.location);
-        flag(args, "--calendar", a.calendar);
+        flag(args, "--calendar", scoped(c, a.calendar, "calendar") || c.account);
         flag(args, "--video-conference", a.video_conference);
         flag(args, "--alerts", a.alerts);
         flagEach(args, "--add", a.add);
