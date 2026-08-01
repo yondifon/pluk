@@ -1,25 +1,21 @@
-// Shared handling for SSH connects that are blocked on an interactive approval
-// (1Password confirm, agent unlock, proxy browser login). A tool call waits
-// SSH_CONNECT_WAIT_MS on an in-flight connect, then surfaces this error while
-// the connect keeps running in the background — so the user's approval still
-// lands and the next retry succeeds instantly. A connect still pending after
-// SSH_CONNECT_RESPAWN_MS is doomed (its prompt expired unseen): callers kill it
-// and spawn a fresh attempt, which triggers a fresh prompt.
+// Shared handling for SSH connects that take longer than a tool call should
+// wait. A caller waits SSH_CONNECT_WAIT_MS on an in-flight connect, then gets
+// this error while the connect keeps running in the background — so an approval
+// the user still has to give can land, and the next retry finds it connected.
 //
-// "Waiting for approval" is a guess: from the outside, a connect blocked on a
-// 1Password prompt looks exactly like one hanging on a dead tunnel or an
-// unreachable host. So the guess is rationed per connect episode — the run of
-// attempts for one pool key that has yet to produce a working connection. After
-// SSH_PENDING_MAX_REPORTS pending answers with nothing connecting, the guess is
-// wrong: callers get the last real connect error, the doomed attempt is torn
-// down, and the next call starts a brand-new connection instead of the pool
-// answering "waiting for approval" forever.
+// Why the connect is slow is NOT knowable from here: from the outside, a connect
+// blocked on an agent approval looks exactly like one hanging on a dead tunnel
+// or an unreachable host. So this message describes the state (still connecting)
+// and names an approval only as one possibility — it must never send the user
+// hunting for a prompt that was never shown. The report is also rationed per
+// connect episode — the run of attempts for one pool key that has yet to produce
+// a working connection. After SSH_PENDING_MAX_REPORTS answers with nothing
+// connecting, callers get the last real connect error instead.
 
 export const SSH_PENDING_CODE = "SSH_CONNECT_PENDING";
 export const SSH_STALLED_CODE = "SSH_CONNECT_STALLED";
 
 export const SSH_CONNECT_WAIT_MS = 25_000;
-export const SSH_CONNECT_RESPAWN_MS = 60_000;
 export const SSH_PENDING_MAX_REPORTS = 2;
 
 interface Episode {
@@ -66,7 +62,7 @@ function coded(code: string, message: string): Error {
 export function sshPendingError(): Error {
   return coded(
     SSH_PENDING_CODE,
-    "SSH connection is waiting for approval (1Password/SSH agent prompt or proxy login). Approve it, then retry — connecting continues in the background."
+    "SSH connect is still running — authenticating, or waiting on an SSH agent or proxy approval. It continues in the background; retry in a moment. If it keeps repeating, check for a pending agent (e.g. 1Password) prompt."
   );
 }
 

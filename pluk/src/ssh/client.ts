@@ -5,7 +5,6 @@ import { homedir, userInfo } from "os";
 import { Duplex } from "stream";
 import { onOwnerClose } from "../mcp/pool.js";
 import {
-  SSH_CONNECT_RESPAWN_MS,
   SSH_CONNECT_WAIT_MS,
   clearConnectEpisode,
   connectWaitError,
@@ -154,15 +153,10 @@ function sharedKey(ownerId: string, p: SSHParams): string {
 export function getSharedSSHClient(ownerId: string, p: SSHParams): Promise<Client> {
   const key = sharedKey(ownerId, p);
   const existing = pool.get(key);
-  if (existing) {
-    // A connect pending past the respawn window is doomed — its approval
-    // prompt expired unseen. Kill it and fall through to a fresh connect so a
-    // fresh prompt can appear. Otherwise reuse it under the bounded wait.
-    if (existing.settled || Date.now() - existing.startedAt <= SSH_CONNECT_RESPAWN_MS) {
-      return awaitReady(key, existing);
-    }
-    evictByKey(key);
-  }
+  // Wait on the attempt already running rather than racing a second one beside
+  // it: eviction can't cancel an unsettled connect (its close only fires once
+  // the promise settles), so falling through here used to stack connections.
+  if (existing) return awaitReady(key, existing);
 
   const client = connectSSH(p);
   const entry: Entry = { client, startedAt: Date.now(), settled: false, interactive: p.authType !== "password" };

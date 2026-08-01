@@ -2,7 +2,7 @@ import { Client, utils as sshUtils } from "ssh2";
 import { createConnection, createServer } from "net";
 import { spawn } from "child_process";
 import { Duplex } from "stream";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, mkdirSync } from "fs";
 import { homedir, userInfo } from "os";
 import type { ConnectConfig } from "ssh2";
 import {
@@ -34,6 +34,19 @@ export interface Tunnel {
 // confirm or Cloudflare browser approval), but still bounded.
 const HANDSHAKE_TIMEOUT_MS = 180_000;
 const FAST_RETRY_WINDOW_MS = 10_000;
+
+// Connection multiplexing. Every tunnel to the same host+port+user rides one
+// persistent master, so authentication — and with it the agent signature the
+// 1Password prompt guards — happens once per CONTROL_PERSIST window instead of
+// once per tunnel. `%C` hashes (local host, host, port, user) to 40 chars; the
+// whole path must stay under the 104-byte sun_path limit, which rules out the
+// longer `%h-%p-%r` template. pluk keeps its own socket rather than joining the
+// user's (~/.ssh/control-*) so it never tears down an interactive session.
+const CONTROL_DIR = `${homedir()}/.pluk`;
+const CONTROL_PATH = `${CONTROL_DIR}/cm-%C`;
+const CONTROL_PERSIST = "10m";
+const CONTROL_CMD_TIMEOUT_MS = 10_000;
+const MASTER_POLL_MS = 30_000;
 
 class TunnelReadinessTimeout extends Error {}
 
@@ -85,6 +98,101 @@ function waitForPort(port: number, timeoutMs = 15_000): Promise<void> {
   });
 }
 
+/** Run a short-lived ssh command to completion, capturing stderr. Used for the
+ *  master's own lifecycle (`-O check` / `-O forward` / `-O cancel`) and for
+ *  starting it — none of these hold a tunnel, so all of them terminate. */
+function runSSHCommand(args: string[], timeoutMs: number): Promise<{ code: number; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn("ssh", args, { stdio: ["ignore", "ignore", "pipe"], env: process.env });
+    const chunks: Buffer[] = [];
+    child.stderr.on("data", (d: Buffer) => chunks.push(d));
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    const done = (code: number, extra?: string) => {
+      clearTimeout(timer);
+      const stderr = [Buffer.concat(chunks).toString().trim(), extra]
+        .filter((l): l is string => Boolean(l))
+        .join("\n")
+        .split(/\r?\n/)
+        // SSH's "closed by UNKNOWN" noise buries the real cause.
+        .filter((l) => l && !/closed by UNKNOWN/i.test(l))
+        .join("\n");
+      resolve({ code, stderr });
+    };
+    child.on("close", (code) => done(code ?? 1));
+    child.on("error", (e) => done(1, (e as Error).message));
+  });
+}
+
+/** The args that identify one master: they feed `%C`, so every command that has
+ *  to find the same socket — start, check, forward, cancel — must pass them. */
+function masterTarget(config: SSHTunnelConfig, sshConfig: SSHConfigEntry, username: string): string[] {
+  const args = ["-o", `ControlPath=${CONTROL_PATH}`];
+  if (username) args.push("-l", username);
+  args.push("-p", String(sshConfig.port ?? config.port));
+  return args;
+}
+
+const masterStarts = new Map<string, Promise<void>>();
+
+/** Bring up the shared master, or confirm the running one. This is the only step
+ *  that authenticates, so it is the only step that can block on a 1Password
+ *  approval — once per CONTROL_PERSIST window rather than once per tunnel. */
+async function ensureMaster(
+  config: SSHTunnelConfig,
+  target: string[],
+  timeoutMs: number,
+): Promise<void> {
+  const key = [...target, config.host].join(" ");
+  const inFlight = masterStarts.get(key);
+  // Two tunnels opening at once must not both try to own the socket.
+  if (inFlight) return inFlight;
+
+  const start = (async () => {
+    mkdirSync(CONTROL_DIR, { recursive: true });
+    const check = await runSSHCommand(["-O", "check", ...target, config.host], CONTROL_CMD_TIMEOUT_MS);
+    if (check.code === 0) return; // already up: no auth, no prompt, no wait
+
+    // ControlMaster=auto + ControlPersist makes ssh fork the master into the
+    // background and exit once it is ready, so this command returns when the
+    // master is usable. `auto` (not `-M`) keeps it idempotent if another process
+    // won the race: it attaches, finds nothing to run under -N, and exits 0.
+    const args = [
+      "-N", "-f",
+      "-o", "ControlMaster=auto",
+      "-o", `ControlPersist=${CONTROL_PERSIST}`,
+      "-o", "ServerAliveInterval=30",
+      "-o", "ServerAliveCountMax=3",
+      ...target,
+    ];
+    if (config.authType === "key" && config.keyPath) args.push("-i", expandHome(config.keyPath));
+
+    // Point ssh at the resolved agent (IdentityAgent from ~/.ssh/config, e.g. the
+    // 1Password socket, else SSH_AUTH_SOCK) explicitly. A GUI-launched app inherits
+    // the empty macOS launchd agent in SSH_AUTH_SOCK; without this, ssh would query
+    // that keyless agent and fail with "communication with agent failed" instead of
+    // using the 1Password keys. -o overrides config/env, so the agent is deterministic.
+    if (config.authType === "agent") {
+      const agentSock = resolveAgentSocket(config.host);
+      // ssh parses the -o value with its own tokenizer, so a socket path with
+      // spaces (e.g. 1Password's "~/Library/Group Containers/…/agent.sock") must
+      // be quoted inside the option string or ssh errors "extra arguments".
+      if (agentSock) args.push("-o", `IdentityAgent="${agentSock}"`);
+    }
+    args.push(config.host);
+
+    console.log(`[pluk] OpenSSH master: ssh ${args.join(" ")}`);
+    const started = await runSSHCommand(args, timeoutMs);
+    if (started.code !== 0) throw new Error(started.stderr || `ssh master failed (exit ${started.code})`);
+  })();
+
+  masterStarts.set(key, start);
+  try {
+    await start;
+  } finally {
+    masterStarts.delete(key);
+  }
+}
+
 async function openOpenSSHTunnel(
   config: SSHTunnelConfig,
   sshConfig: SSHConfigEntry,
@@ -92,80 +200,50 @@ async function openOpenSSHTunnel(
   readinessTimeoutMs: number,
   onFatal?: () => void
 ): Promise<Tunnel> {
+  const target = masterTarget(config, sshConfig, username);
+  const started = Date.now();
+  await ensureMaster(config, target, readinessTimeoutMs);
+
   const localPort = await reserveLocalPort();
-  const args = [
-    "-N",
-    "-S", "none",
-    "-o", "ControlMaster=no",
-    "-o", "ControlPath=none",
-    "-o", "ControlPersist=no",
-    "-o", "ExitOnForwardFailure=yes",
-    "-o", "ServerAliveInterval=30",
-    "-o", "ServerAliveCountMax=3",
-    "-L", `127.0.0.1:${localPort}:${config.remoteHost}:${config.remotePort}`,
-  ];
+  const spec = `127.0.0.1:${localPort}:${config.remoteHost}:${config.remotePort}`;
 
-  if (username) args.push("-l", username);
-  args.push("-p", String(sshConfig.port ?? config.port));
-  if (config.authType === "key" && config.keyPath) args.push("-i", expandHome(config.keyPath));
+  // The forward belongs to the master, not to a child of ours: it outlives any
+  // single ssh invocation and is removed by `-O cancel`, never by killing a pid.
+  const fwd = await runSSHCommand(["-O", "forward", "-L", spec, ...target, config.host], CONTROL_CMD_TIMEOUT_MS);
+  if (fwd.code !== 0) throw new Error(fwd.stderr || `ssh -O forward failed (exit ${fwd.code})`);
 
-  // Point ssh at the resolved agent (IdentityAgent from ~/.ssh/config, e.g. the
-  // 1Password socket, else SSH_AUTH_SOCK) explicitly. A GUI-launched app inherits
-  // the empty macOS launchd agent in SSH_AUTH_SOCK; without this, ssh would query
-  // that keyless agent and fail with "communication with agent failed" instead of
-  // using the 1Password keys. -o overrides config/env, so the agent is deterministic.
-  if (config.authType === "agent") {
-    const agentSock = resolveAgentSocket(config.host);
-    // ssh parses the -o value with its own tokenizer, so a socket path with
-    // spaces (e.g. 1Password's "~/Library/Group Containers/…/agent.sock") must
-    // be quoted inside the option string or ssh errors "extra arguments".
-    if (agentSock) args.push("-o", `IdentityAgent="${agentSock}"`);
-  }
-
-  args.push(config.host);
-
-  console.log(`[pluk] OpenSSH tunnel: ssh ${args.join(" ")}`);
-
-  const child = spawn("ssh", args, {
-    stdio: ["ignore", "ignore", "pipe"],
-    env: process.env,
-  });
-
-  // Collect stderr asynchronously; child may still write after kill()
-  const stderrChunks: Buffer[] = [];
-  child.stderr.on("data", (data: Buffer) => stderrChunks.push(data));
-
-  const childClosed = new Promise<void>((res) => child.on("close", () => res()));
-
+  const remaining = Math.max(1_000, readinessTimeoutMs - (Date.now() - started));
   try {
-    // ProxyCommand auth (e.g. Cloudflare Access) can require an interactive
-    // browser confirm on first use. Short-circuit if ssh dies first, but don't
-    // kill a live auth prompt before the shared SSH setup deadline.
-    const childDied = childClosed.then(() => { throw new Error("ssh process exited before tunnel was ready"); });
-    await Promise.race([waitForPort(localPort, readinessTimeoutMs), childDied]);
+    await waitForPort(localPort, remaining);
   } catch (err) {
-    child.kill();
-    // Wait up to 1s for the child to flush all stderr before reading it
-    await Promise.race([childClosed, new Promise<void>((r) => setTimeout(r, 1000))]);
-    const stderr = Buffer.concat(stderrChunks).toString().trim();
-    // Filter out SSH's unhelpful "closed by UNKNOWN" noise; surface proxy errors first
-    const lines = stderr.split(/\r?\n/).filter(l => l && !/closed by UNKNOWN/i.test(l));
-    const message = lines.join("\n") || (err as Error).message;
-    if (err instanceof TunnelReadinessTimeout) throw new TunnelReadinessTimeout(message);
-    throw new Error(message);
+    await runSSHCommand(["-O", "cancel", "-L", spec, ...target, config.host], CONTROL_CMD_TIMEOUT_MS);
+    throw err;
   }
 
   console.log(`[pluk] tunnel ready on localhost:${localPort}`);
 
-  // Self-heal: if the ssh process dies after the tunnel is up (server idle
-  // disconnect, dropped NAT mapping, network loss), notify so the driver is
-  // rebuilt instead of leaving a dead local listener that hangs every query.
-  let intentional = false;
-  childClosed.then(() => { if (!intentional) onFatal?.(); });
+  // Self-heal: a master that dies (server idle disconnect, dropped NAT mapping,
+  // network loss) takes every forward with it, and there is no child exit to
+  // watch any more — poll it so the driver is rebuilt instead of left with a
+  // dead local listener that hangs every query.
+  let closed = false;
+  const poll = setInterval(async () => {
+    if (closed) return;
+    const alive = await runSSHCommand(["-O", "check", ...target, config.host], CONTROL_CMD_TIMEOUT_MS);
+    if (closed || alive.code === 0) return;
+    clearInterval(poll);
+    onFatal?.();
+  }, MASTER_POLL_MS);
+  poll.unref?.();
 
   return {
     localPort,
-    close: () => { intentional = true; child.kill(); },
+    close: () => {
+      closed = true;
+      clearInterval(poll);
+      // Drop just this forward; the master stays up for the next tunnel.
+      void runSSHCommand(["-O", "cancel", "-L", spec, ...target, config.host], CONTROL_CMD_TIMEOUT_MS);
+    },
   };
 }
 

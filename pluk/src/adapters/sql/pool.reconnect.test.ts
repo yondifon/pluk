@@ -196,9 +196,14 @@ test("repeated pending stops after the ration and reports the real failure", asy
   expect(connectCalls).toBe(calls + 1);
 });
 
-// Regression: a connect stuck past the respawn window (its prompt expired
-// unseen) must be killed and respawned so a fresh prompt can appear.
-test("connect stuck past the respawn window is replaced by a fresh attempt", async () => {
+// Regression: retries must never stack SSH connections. Evicting an unsettled
+// entry cannot cancel its connect — the close only runs once the promise settles
+// — so respawning "to trigger a fresh prompt" left the original ssh running and
+// started a second one beside it, one more pending agent request per retry.
+// However long a connect has been stuck, later calls wait on that same attempt;
+// it is bounded by the connect timeout, after which the entry drops itself and
+// the next call connects from scratch.
+test("a connect stuck for minutes is waited on, never duplicated", async () => {
   connectBehavior = "hang";
   const first = getDriver("s3", integration);
   first.catch(() => {});
@@ -211,7 +216,7 @@ test("connect stuck past the respawn window is replaced by a fresh attempt", asy
     const retry = getDriver("s3", integration);
     retry.catch(() => {});
     await settle();
-    expect(connectCalls).toBe(calls + 1);
+    expect(connectCalls).toBe(calls);
   } finally {
     Date.now = realNow;
   }

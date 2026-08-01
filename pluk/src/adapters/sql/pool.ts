@@ -3,7 +3,6 @@ import { createDriver, type Driver } from "../../db/index.js";
 import { recordHealth } from "../../mcp/health.js";
 import { onOwnerClose, ownerSignal } from "../../mcp/pool.js";
 import {
-  SSH_CONNECT_RESPAWN_MS,
   SSH_CONNECT_WAIT_MS,
   clearConnectEpisode,
   connectWaitError,
@@ -95,19 +94,18 @@ export async function getDriver(ownerId: string, integration: Integration, datab
   if (existing) {
     resetIdleTimer(key, existing);
 
-    // An SSH connect still in flight is usually blocked on an interactive
-    // approval (1Password confirm, proxy browser login). Don't weld this call
-    // — and every retry — to it for the whole connect budget: wait briefly,
-    // then surface a "waiting for approval" error while the connect keeps
-    // going. A connect pending past the respawn window is doomed (its prompt
-    // expired unseen), so kill it and spawn fresh to trigger a fresh prompt.
+    // An SSH connect still in flight may be blocked on an interactive approval
+    // (agent confirm, proxy browser login). Don't weld this call — and every
+    // retry — to it for the whole connect budget: wait briefly, then report
+    // while the connect keeps going. Always wait on the attempt already
+    // running; evicting here cannot cancel it (the close only fires once the
+    // promise settles), so it would orphan that ssh and spawn a second one
+    // beside it, stacking connections instead of replacing them. The attempt is
+    // bounded by CONNECT_TIMEOUT_SSH_MS, after which the entry drops itself and
+    // the next call connects fresh.
     if (existing.useSsh && !existing.settled) {
-      if (Date.now() - existing.startedAt <= SSH_CONNECT_RESPAWN_MS) {
-        existing.lastUsed = Date.now();
-        return awaitConnect(key, existing);
-      }
-      evictDriverByKey(key);
-      return awaitConnect(key, createDriverEntry(key, ownerId, integration, database));
+      existing.lastUsed = Date.now();
+      return awaitConnect(key, existing);
     }
 
     const idleFor = Date.now() - existing.lastUsed;
