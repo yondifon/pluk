@@ -52,7 +52,7 @@ struct GroupDetailView: View {
                 LogsTab(scope: .group(group), store: store)
             }
         }
-        .background(.clear)
+        .background(Surface.content)
     }
 
     // MARK: - Tab bar
@@ -69,11 +69,11 @@ struct GroupDetailView: View {
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
                 .frame(width: 34, height: 34)
-                .background(Color.controlFill, in: RoundedRectangle(cornerRadius: Radius.md - 2, style: .continuous))
+                .background(Color.controlFill, in: RoundedRectangle(cornerRadius: Radius.medium - 2, style: .continuous))
             VStack(alignment: .leading, spacing: Space.xs + 1) {
                 HStack(alignment: .center, spacing: Space.md) {
                     Text(group.name)
-                        .font(.uiTitle)
+                        .scaledFont(.title2, weight: .semibold)
                         .tracking(-0.2)
                         .lineLimit(1)
                     Spacer(minLength: Space.md)
@@ -86,7 +86,7 @@ struct GroupDetailView: View {
                     }
                 }
                 Text(subtitle)
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundColor(.secondary)
             }
         }
@@ -126,7 +126,7 @@ struct GroupDetailView: View {
         DetailSection("Integrations") {
             if members.isEmpty {
                 Text("No integrations in this group. Click Edit to add some.")
-                    .font(.uiLabel)
+                    .scaledFont(.callout)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(Space.md)
@@ -137,7 +137,7 @@ struct GroupDetailView: View {
                         VStack(alignment: .leading, spacing: Space.xs) {
                             HStack(spacing: Space.sm + 2) {
                                 TypeBadge(type: conn.type)
-                                Text(conn.name).font(.uiBody)
+                                Text(conn.name).scaledFont(.body)
                                 EnvTag(environment: conn.environment)
                                 Spacer()
                                 // The prefix every tool of this member carries

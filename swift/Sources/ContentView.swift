@@ -154,7 +154,7 @@ struct ContentView: View {
                 }
         }
         .navigationSplitViewStyle(.balanced)
-        .glassWindowBackground()
+        .background(Surface.content.ignoresSafeArea())
         .frame(minWidth: 720, minHeight: 520)
         .overlay(alignment: .top) {
             ToastOverlay(center: toastCenter) { connId in store.test(connectionId: connId) }
@@ -218,7 +218,7 @@ struct ContentView: View {
             searchRow
             sidebarList
         }
-        .background(Color.pageSurface)
+        .background(Surface.sidebar)
         // Hidden ⌘F shortcut focuses the filter field (searchFocused binding on
         // .searchable is macOS 15+; this custom field keeps ⌘F working on 14).
         .background(
@@ -260,11 +260,11 @@ struct ContentView: View {
     private var searchField: some View {
         HStack(spacing: Space.sm - 2) {
             Image(systemName: "magnifyingglass")
-                .font(.uiLabel)
+                .scaledFont(.callout)
                 .foregroundStyle(.secondary)
             TextField("Filter integrations", text: $search)
                 .textFieldStyle(.plain)
-                .font(.uiLabel)
+                .scaledFont(.callout)
                 .focused($searchFocused)
                 .onExitCommand { search = ""; searchFocused = false }
             if !search.isEmpty {
@@ -273,7 +273,7 @@ struct ContentView: View {
                     searchFocused = true
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.uiLabel)
+                        .scaledFont(.callout)
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
@@ -282,7 +282,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, Space.sm)
         .padding(.vertical, Space.sm - 1)
-        .background(Color.controlFill, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+        .background(Color.controlFill, in: RoundedRectangle(cornerRadius: Radius.small, style: .continuous))
     }
 
     // Funnel beside the search: opens a popover to narrow the list by adapter type
@@ -292,10 +292,10 @@ struct ContentView: View {
             showFilters.toggle()
         } label: {
             Image(systemName: filtersActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                .font(.uiBody)
+                .scaledFont(.body)
                 .foregroundStyle(filtersActive ? Color.accentColor : .secondary)
                 .frame(width: 28, height: 28)
-                .background(Color.controlFill, in: RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+                .background(Color.controlFill, in: RoundedRectangle(cornerRadius: Radius.small, style: .continuous))
         }
         .buttonStyle(.plain)
         .help("Filter by type and environment")
@@ -343,7 +343,7 @@ struct ContentView: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        .background(Color.pageSurface)
+        .background(Surface.sidebar)
         .overlay {
             if noMatches {
                 if query.isEmpty {
@@ -439,15 +439,15 @@ struct GroupRow: View {
     var body: some View {
         HStack(spacing: Space.sm + 2) {
             Image(systemName: "square.stack.3d.up.fill")
-                .font(.uiLabel)
+                .scaledFont(.callout)
                 .foregroundStyle(.secondary)
                 .frame(width: 24, height: 24)
             VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(group.name)
-                    .font(.uiBody)
+                    .scaledFont(.body)
                     .lineLimit(1)
                 Text("\(group.memberIds.count) integration\(group.memberIds.count == 1 ? "" : "s")")
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundStyle(.tertiary)
             }
             Spacer()
@@ -469,10 +469,10 @@ struct ConnectionRow: View {
             TypeBadge(type: conn.type)
             VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(conn.name)
-                    .font(.uiBody)
+                    .scaledFont(.body)
                     .lineLimit(1)
                 Text("\(conn.typeLabel) · \(conn.environment.label)")
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -630,7 +630,7 @@ struct EnvTag: View {
                 .fill(selected ? Color.white : environment.color.opacity(0.85))
                 .frame(width: 5, height: 5)
             Text(environment.label)
-                .font(.uiCaption)
+                .scaledFont(.caption)
                 .foregroundStyle(.secondary)
         }
         .help("\(environment.label) environment")
@@ -663,7 +663,7 @@ private struct FilterPopover: View {
                                     toggle(&typeFilter, type)
                                 } label: {
                                     TypeBadge(type: type, size: 18)
-                                    Text(label(type)).font(.uiLabel)
+                                    Text(label(type)).scaledFont(.callout)
                                 }
                             }
                         }
@@ -678,7 +678,7 @@ private struct FilterPopover: View {
                                         .fill(env.color.opacity(0.85))
                                         .frame(width: 7, height: 7)
                                         .frame(width: 18)
-                                    Text(env.label).font(.uiLabel)
+                                    Text(env.label).scaledFont(.callout)
                                 }
                             }
                         }
@@ -693,12 +693,12 @@ private struct FilterPopover: View {
 
     private var header: some View {
         HStack {
-            Text("Filters").font(.uiHeadline)
+            Text("Filters").scaledFont(.headline)
             Spacer()
             if active {
                 Button("Clear") { typeFilter = []; envFilter = [] }
                     .buttonStyle(.plain)
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundStyle(Color.accentColor)
             }
         }
@@ -710,7 +710,7 @@ private struct FilterPopover: View {
     private func section<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: Space.sm - 2) {
             Text(title)
-                .font(.uiSection)
+                .scaledFont(.caption, weight: .semibold)
                 .foregroundStyle(.tertiary)
             VStack(alignment: .leading, spacing: Space.xxs) { content() }
         }
@@ -732,7 +732,7 @@ private struct FilterRow<Label: View>: View {
                 label()
                 Spacer(minLength: Space.xs)
                 Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-                    .font(.uiLabel)
+                    .scaledFont(.callout)
                     .foregroundStyle(isOn ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary))
             }
             .contentShape(Rectangle())
@@ -752,14 +752,14 @@ private struct ServerStatusBanner: View {
             if serverManager.status == .starting {
                 ProgressView().scaleEffect(0.7).frame(width: 12, height: 12)
                 Text("Server starting…")
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundColor(.secondary)
             } else {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 11))
                     .foregroundColor(.orange)
                 Text("Server not running")
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundColor(.secondary)
             }
             Spacer()
@@ -771,7 +771,7 @@ private struct ServerStatusBanner: View {
         }
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.sm)
-        .background(Color.pageSurface)
+        .background(Surface.content)
         .overlay(alignment: .top) { Rectangle().fill(Color.hairline).frame(height: 0.5) }
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: serverManager.status == .stopped)
@@ -790,14 +790,14 @@ private struct UpdateBanner: View {
             if updating {
                 ProgressView().scaleEffect(0.7).frame(width: 12, height: 12)
                 Text("Updating — rebuilding from source, app will relaunch (log: \(UpdateChecker.updateLogPath))")
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundColor(.secondary)
             } else {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 11))
                     .foregroundColor(.accentColor)
                 Text("Update available — \(commit.map { String($0.prefix(7)) } ?? "new commit") on remote")
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundColor(.secondary)
             }
             Spacer()
@@ -809,7 +809,7 @@ private struct UpdateBanner: View {
         }
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.sm)
-        .background(Color.pageSurface)
+        .background(Surface.content)
         .overlay(alignment: .top) { Rectangle().fill(Color.hairline).frame(height: 0.5) }
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
@@ -827,7 +827,7 @@ struct EmptyStateView: View {
                 .tracking(-0.3)
                 .textSelection(.disabled)
             Text("Add a database, Linear workspace, or another local MCP endpoint. Pluk keeps the server and policy controls on this Mac.")
-                .font(.uiBody)
+                .scaledFont(.body)
                 .foregroundStyle(.secondary)
                 .lineSpacing(3)
                 .frame(maxWidth: 420, alignment: .leading)

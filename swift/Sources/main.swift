@@ -2,12 +2,13 @@ import Cocoa
 import SwiftUI
 
 @MainActor
-class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
     private var window: NSWindow!
     private var serverManager = ServerManager()
     private var store = ConnectionStore()
     private var updateChecker = UpdateChecker()
+    private let zoom = AppZoom()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar app: no dock icon until the window is explicitly opened
@@ -71,6 +72,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = editMenu
+
+        let viewItem = NSMenuItem()
+        mainMenu.addItem(viewItem)
+        let viewMenu = NSMenu(title: "View")
+        viewMenu.addItem(zoomItem("Zoom In", #selector(zoomIn), key: "+"))
+        viewMenu.addItem(zoomItem("Zoom In", #selector(zoomIn), key: "=", hidden: true))
+        viewMenu.addItem(zoomItem("Zoom Out", #selector(zoomOut), key: "-"))
+        viewMenu.addItem(zoomItem("Actual Size", #selector(zoomReset), key: "0"))
+        viewItem.submenu = viewMenu
 
         let windowItem = NSMenuItem()
         mainMenu.addItem(windowItem)
@@ -152,13 +162,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.isOpaque = true
-        window.backgroundColor = .textBackgroundColor
+        window.backgroundColor = Surface.contentColor
         window.delegate = self
-        // Don't let the window shrink below the toolbar's intrinsic width, or its
-        // trailing actions clip off-screen with no way to scroll to them.
         window.contentMinSize = NSSize(width: 720, height: 520)
         window.contentViewController = NSHostingController(
-            rootView: ContentView(store: store, serverManager: serverManager, updateChecker: updateChecker)
+            rootView: RootView(store: store, serverManager: serverManager, updateChecker: updateChecker, zoom: zoom)
         )
         // Restore the user's last size/position; center only on first-ever launch.
         window.setFrameAutosaveName("PlukMainWindow")
@@ -197,6 +205,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // so drop the dock icon then too.
     func windowWillClose(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+    }
+
+    // MARK: - Zoom
+
+    private func zoomItem(_ title: String, _ action: Selector, key: String, hidden: Bool = false) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        if hidden {
+            item.isHidden = true
+            item.allowsKeyEquivalentWhenHidden = true
+        }
+        return item
+    }
+
+    @objc private func zoomIn() { zoom.zoomIn() }
+    @objc private func zoomOut() { zoom.zoomOut() }
+    @objc private func zoomReset() { zoom.reset() }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(zoomIn): return zoom.canZoomIn
+        case #selector(zoomOut): return zoom.canZoomOut
+        case #selector(zoomReset):
+            item.title = zoom.isDefault ? "Actual Size" : "Actual Size (\(zoom.label))"
+            return !zoom.isDefault
+        default: return true
+        }
     }
 }
 

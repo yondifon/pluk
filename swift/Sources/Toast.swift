@@ -99,9 +99,9 @@ private struct ToastCard: View {
 
             VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(toast.title)
-                    .font(.uiHeadline)
+                    .scaledFont(.headline)
                 Text(toast.message)
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if toast.kind == .error {
@@ -124,9 +124,9 @@ private struct ToastCard: View {
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.md)
         .frame(width: 320, alignment: .leading)
-        .background(.bar, in: RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+        .background(Surface.panel, in: RoundedRectangle(cornerRadius: Radius.medium, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+            RoundedRectangle(cornerRadius: Radius.medium, style: .continuous)
                 .strokeBorder(accent.opacity(0.35), lineWidth: 1)
         )
         .overlay(alignment: .leading) {

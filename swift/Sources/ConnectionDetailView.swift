@@ -236,7 +236,7 @@ struct ConfigSnippetSection: View {
         DetailSection("Config") {
             HStack(spacing: Space.sm) {
                 Text("Client")
-                    .font(.uiLabel)
+                    .scaledFont(.callout)
                     .foregroundColor(.secondary)
                 Picker("", selection: $selectedChoice) {
                     ForEach(ClientChoice.allChoices) { choice in
@@ -291,7 +291,7 @@ struct ConfigSnippetSection: View {
                 if let markdown = snippetMarkdown, let client = singleClient {
                     HStack(spacing: Space.xs + 1) {
                         Text("Add to")
-                            .font(.uiCaption)
+                            .scaledFont(.caption)
                             .foregroundColor(.secondary)
                         Text(client.configPath(selectedScope))
                             .font(.mono(11))
@@ -301,7 +301,7 @@ struct ConfigSnippetSection: View {
                     MarkdownResponseView(markdown: markdown, embedded: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(Space.md)
-                        .codeBlockSurface(cornerRadius: Radius.sm)
+                        .codeBlockSurface(cornerRadius: Radius.small)
                 } else {
                     allTargetList
                 }
@@ -316,7 +316,7 @@ struct ConfigSnippetSection: View {
     private var allTargetList: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             Text(targets.isEmpty ? "No AI clients detected" : "Add to")
-                .font(.uiCaption)
+                .scaledFont(.caption)
                 .foregroundColor(.secondary)
 
             if !targets.isEmpty {
@@ -324,7 +324,7 @@ struct ConfigSnippetSection: View {
                     ForEach(targets) { client in
                         HStack(spacing: Space.sm) {
                             Text(client.label)
-                                .font(.uiLabel)
+                                .scaledFont(.callout)
                             Text(client.configPath(selectedScope))
                                 .font(.mono(11))
                                 .foregroundColor(.secondary)
@@ -334,7 +334,7 @@ struct ConfigSnippetSection: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(Space.md)
-                .codeBlockSurface(cornerRadius: Radius.sm)
+                .codeBlockSurface(cornerRadius: Radius.small)
             }
         }
     }
@@ -456,7 +456,7 @@ struct ConnectionDetailView: View {
             tabContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(.clear)
+        .background(Surface.content)
     }
 
     // MARK: - Header
@@ -475,7 +475,7 @@ struct ConnectionDetailView: View {
             VStack(alignment: .leading, spacing: Space.xs + 1) {
                 HStack(alignment: .center, spacing: Space.md) {
                     Text(conn.name)
-                        .font(.uiTitle)
+                        .scaledFont(.title2, weight: .semibold)
                         .tracking(-0.2)
                         .lineLimit(1)
                     Spacer(minLength: Space.md)
@@ -484,7 +484,7 @@ struct ConnectionDetailView: View {
                 }
                 HStack(spacing: Space.sm - 2) {
                     Text(metaLine)
-                        .font(.uiCaption)
+                        .scaledFont(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     if conn.readOnly {
@@ -728,7 +728,7 @@ struct ConnectionDetailView: View {
                 if tools.isEmpty {
                     DetailSection("Tools") {
                         Text("Tool list unavailable — the local pluk server isn't responding.")
-                            .font(.uiLabel)
+                            .scaledFont(.callout)
                             .foregroundColor(.secondary)
                             .padding(.horizontal, Space.md)
                             .padding(.vertical, Space.md)
@@ -767,7 +767,7 @@ struct ConnectionDetailView: View {
                     ToolCategoryTag(category: tool.category)
                 }
                 if enabled, let summary = settingsSummary(tool) {
-                    Text(summary).font(.uiCaption).foregroundColor(.secondary)
+                    Text(summary).scaledFont(.caption).foregroundColor(.secondary)
                 }
             }
             Spacer(minLength: 0)

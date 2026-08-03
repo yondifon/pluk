@@ -113,7 +113,7 @@ struct LogsTab: View {
                     .foregroundColor(.secondary)
                 TextField(scope.isGroup ? "Filter SQL, tool, integration…" : "Filter SQL or tool…", text: $search)
                     .textFieldStyle(.plain)
-                    .font(.uiLabel)
+                    .scaledFont(.callout)
                     .lineLimit(1)
                 if !search.isEmpty {
                     Button { search = "" } label: {
@@ -137,7 +137,7 @@ struct LogsTab: View {
                 ForEach(VerdictFilter.allCases, id: \.self) { f in
                     Button { filter = f } label: {
                         Text(f.rawValue)
-                            .font(.uiLabel)
+                            .scaledFont(.callout)
                             .fontWeight(filter == f ? .semibold : .regular)
                             .foregroundColor(filter == f ? .accentColor : .secondary)
                             .lineLimit(1)
@@ -181,7 +181,7 @@ struct LogsTab: View {
                         .font(.system(size: 10))
                     let days = store.logRetentionDays
                     Text(days == 0 ? "Forever" : "\(days)d")
-                        .font(.uiLabel)
+                        .scaledFont(.callout)
                 }
                 .foregroundColor(.secondary)
             }
@@ -209,7 +209,7 @@ struct LogsTab: View {
                 .font(.mono(11, weight: .semibold))
                 .foregroundColor(color == .secondary ? .primary : color)
             Text(label)
-                .font(.uiCaption)
+                .scaledFont(.caption)
                 .foregroundColor(.secondary)
         }
     }
@@ -222,10 +222,10 @@ struct LogsTab: View {
                 .font(.system(size: 28))
                 .foregroundColor(.secondary.opacity(0.4))
             Text(emptyTitle)
-                .font(.uiBody)
+                .scaledFont(.body)
                 .foregroundColor(.secondary)
             Text(emptySubtitle)
-                .font(.uiCaption)
+                .scaledFont(.caption)
                 .foregroundColor(.secondary.opacity(0.7))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 280)
@@ -338,7 +338,7 @@ private struct LogEntryRow: View {
 
                         if let cats = entry.categories, !cats.isEmpty {
                             Text(cats)
-                                .font(.uiCaption)
+                                .scaledFont(.caption)
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
                         }
@@ -348,7 +348,7 @@ private struct LogEntryRow: View {
                         if entry.verdict == "pending" {
                             Button(action: onStop) {
                                 Label("Stop", systemImage: "stop.fill")
-                                    .font(.uiLabel)
+                                    .scaledFont(.callout)
                                     .fontWeight(.medium)
                             }
                             .buttonStyle(.plain)
@@ -367,7 +367,7 @@ private struct LogEntryRow: View {
                     if isExpanded {
                         VStack(alignment: .leading, spacing: Space.xs) {
                             Text("Query")
-                                .font(.uiSection)
+                                .scaledFont(.caption, weight: .semibold)
                                 .foregroundColor(.secondary)
                             Text(entry.sql)
                                 .font(.mono(12))
@@ -375,7 +375,7 @@ private struct LogEntryRow: View {
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(Space.sm)
-                                .codeBlockSurface(cornerRadius: Radius.sm)
+                                .codeBlockSurface(cornerRadius: Radius.small)
                         }
                     } else {
                         Text(entry.sql)
@@ -394,7 +394,7 @@ private struct LogEntryRow: View {
                                     .font(.system(size: 10))
                                     .foregroundColor(verdictColor)
                                 Text(reason)
-                                    .font(.uiCaption)
+                                    .scaledFont(.caption)
                                     .foregroundColor(.secondary)
                             }
                             .padding(.top, Space.xxs)
@@ -450,7 +450,7 @@ private struct LogEntryRow: View {
     private func copyButton(_ title: String, copied: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: copied ? "checkmark" : "doc.on.doc")
-                .font(.uiLabel)
+                .scaledFont(.callout)
                 .fontWeight(.medium)
         }
         .buttonStyle(.bordered)
@@ -628,7 +628,7 @@ private struct ResultPreview: View {
                                 .background(Color.controlFill)
                         }
                     }
-                    .clipShape(.rect(cornerRadius: Radius.sm, style: .continuous))
+                    .clipShape(.rect(cornerRadius: Radius.small, style: .continuous))
 
                     // Data rows
                     ForEach(p.rows) { row in
@@ -657,7 +657,7 @@ private struct ResultPreview: View {
                             .padding(.top, Space.xxs)
                     }
                 }
-                .codeBlockSurface(cornerRadius: Radius.sm)
+                .codeBlockSurface(cornerRadius: Radius.small)
             }
         }
     }
@@ -685,13 +685,13 @@ private struct ResponseTextBlock: View {
         VStack(alignment: .leading, spacing: Space.xs) {
             HStack {
                 Text("Response")
-                    .font(.uiSection)
+                    .scaledFont(.caption, weight: .semibold)
                     .foregroundColor(.secondary)
                 Spacer()
                 if moreToShow {
                     Button(action: onOpen) {
                         Label("Open", systemImage: "arrow.up.left.and.arrow.down.right")
-                            .font(.uiLabel)
+                            .scaledFont(.callout)
                             .fontWeight(.medium)
                     }
                     .buttonStyle(.plain)
@@ -702,10 +702,10 @@ private struct ResponseTextBlock: View {
             MarkdownResponseView(markdown: preview, embedded: true)
                 .padding(Space.sm)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .codeBlockSurface(cornerRadius: Radius.sm)
+                .codeBlockSurface(cornerRadius: Radius.small)
             if moreToShow {
                 Text("Preview truncated — Open for the full, formatted response")
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundColor(.secondary)
             }
         }
@@ -739,7 +739,7 @@ private struct ResponseSheet: View {
         VStack(spacing: 0) {
             HStack(spacing: Space.md) {
                 VStack(alignment: .leading, spacing: Space.xxs) {
-                    Text("Response").font(.uiHeadline)
+                    Text("Response").scaledFont(.headline)
                     Text(title)
                         .font(.mono(10))
                         .foregroundColor(.secondary)
@@ -780,7 +780,7 @@ private struct ResponseSheet: View {
         }
         .frame(minWidth: 560, idealWidth: 780, maxWidth: .infinity,
                minHeight: 460, idealHeight: 660, maxHeight: .infinity)
-        .glassPanelBackground()
+        .background(Surface.content.ignoresSafeArea())
         .task {
             guard display.isEmpty else { return }
             // Off the main actor: pretty-printing a large payload must not block
@@ -810,7 +810,7 @@ private struct ResponseSheet: View {
             Stepper(value: $fontSize, in: 10...24, step: 1) {
                 HStack(spacing: Space.xxs) {
                     Image(systemName: "textformat.size").font(.system(size: 10))
-                    Text("\(Int(fontSize))").font(.uiLabel).monospacedDigit()
+                    Text("\(Int(fontSize))").scaledFont(.callout).monospacedDigit()
                 }
             }
             .controlSize(.small)

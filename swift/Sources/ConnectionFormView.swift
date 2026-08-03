@@ -49,7 +49,7 @@ struct ConnectionFormView: View {
             Divider()
             formFooter
         }
-        .glassPanelBackground()
+        .background(Surface.content.ignoresSafeArea())
         .onAppear {
             resolveInitialManifest()
         }
@@ -82,9 +82,9 @@ struct ConnectionFormView: View {
         HStack {
             VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(editingConn != nil ? "Edit Integration" : "New Integration")
-                    .font(.uiTitle)
+                    .scaledFont(.title2, weight: .semibold)
                 Text(draft.name.isEmpty ? "Integration settings" : draft.name)
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
             }
@@ -110,7 +110,7 @@ struct ConnectionFormView: View {
     private var loadingView: some View {
         VStack(spacing: Space.sm) {
             ProgressView()
-            Text("Loading adapters…").font(.uiCaption).foregroundColor(.secondary)
+            Text("Loading adapters…").scaledFont(.caption).foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, minHeight: 200)
     }
@@ -121,9 +121,9 @@ struct ConnectionFormView: View {
                 .font(.system(size: 24, weight: .light))
                 .foregroundStyle(.secondary)
             Text("Couldn't load adapters")
-                .font(.uiHeadline)
+                .scaledFont(.headline)
             Text("The local pluk server isn't responding. Make sure it's running, then retry.")
-                .font(.uiCaption)
+                .scaledFont(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
             Button("Retry", action: onRetryAdapters)
@@ -145,7 +145,7 @@ struct ConnectionFormView: View {
                         Button { choose(adapter) } label: {
                             HStack(spacing: Space.md) {
                                 TypeBadge(type: adapter.id)
-                                Text(adapter.label).font(.uiBody)
+                                Text(adapter.label).scaledFont(.body)
                                 Spacer()
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 10, weight: .semibold))
@@ -204,7 +204,7 @@ struct ConnectionFormView: View {
                 row("Type") {
                     TypeBadge(type: draft.type)
                     Text(manifest?.label ?? draft.type.capitalized)
-                        .font(.uiLabel)
+                        .scaledFont(.callout)
                     Spacer()
                     Button("Change") { picking = true }
                         .buttonStyle(.bordered)
@@ -257,12 +257,12 @@ struct ConnectionFormView: View {
                 Picker("", selection: textBinding(f.key)) {
                     ForEach(f.options ?? [], id: \.value) { opt in
                         Text(opt.label)
-                            .font(.uiLabel)
+                            .scaledFont(.callout)
                             .tag(opt.value)
                     }
                 }
                 .pickerStyle(.menu)
-                .font(.uiLabel)
+                .scaledFont(.callout)
                 .frame(maxWidth: 200, alignment: .leading)
             }
         case "file":
@@ -318,7 +318,7 @@ struct ConnectionFormView: View {
         return DetailSection("Tools") {
             VStack(alignment: .leading, spacing: 0) {
                 Text("\(enabledCount) of \(draft.tools.count) on. Enable tools to give the agent more, disable to shrink what it sees. Expand an enabled tool to configure it.")
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -335,10 +335,10 @@ struct ConnectionFormView: View {
                         .padding(.top, Space.xs)
                     VStack(alignment: .leading, spacing: Space.xxs) {
                         Text("More tools")
-                            .font(.uiSection)
+                            .scaledFont(.caption, weight: .semibold)
                             .foregroundColor(.primary)
                         Text("Off by default — enable the ones you need.")
-                            .font(.uiCaption)
+                            .scaledFont(.caption)
                             .foregroundColor(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -389,7 +389,7 @@ struct ConnectionFormView: View {
                         }
                     }
                     Text(tool.description)
-                        .font(.uiCaption)
+                        .scaledFont(.caption)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -420,14 +420,14 @@ struct ConnectionFormView: View {
                 let isOn = (draft.toolConfig[tool.name]?.settings[setting.key] ?? def) == "true"
                 Toggle(setting.label, isOn: settingBoolBinding(tool, setting.key))
                     .toggleStyle(.checkbox)
-                    .font(.uiLabel)
+                    .scaledFont(.callout)
                     .foregroundColor(setting.danger == true && isOn ? .red : .primary)
             case "select":
                 HStack {
-                    Text(setting.label).font(.uiLabel).frame(width: 120, alignment: .leading)
+                    Text(setting.label).scaledFont(.callout).frame(width: 120, alignment: .leading)
                     Picker("", selection: settingTextBinding(tool, setting.key, default: def)) {
                         ForEach(setting.options ?? [], id: \.value) { opt in
-                            Text(opt.label).font(.uiLabel).tag(opt.value)
+                            Text(opt.label).scaledFont(.callout).tag(opt.value)
                         }
                     }
                     .pickerStyle(.menu).labelsHidden().frame(maxWidth: 240, alignment: .leading)
@@ -435,21 +435,21 @@ struct ConnectionFormView: View {
                 }
             case "number":
                 HStack {
-                    Text(setting.label).font(.uiLabel).frame(width: 120, alignment: .leading)
+                    Text(setting.label).scaledFont(.callout).frame(width: 120, alignment: .leading)
                     TextField(def, text: settingTextBinding(tool, setting.key, default: def))
                         .textFieldStyle(.plain).font(.mono(12)).frame(width: 90)
                     Spacer(minLength: 0)
                 }
             default: // text / password
                 HStack {
-                    Text(setting.label).font(.uiLabel).frame(width: 120, alignment: .leading)
+                    Text(setting.label).scaledFont(.callout).frame(width: 120, alignment: .leading)
                     TextField(setting.placeholder ?? "", text: settingTextBinding(tool, setting.key, default: def))
                         .textFieldStyle(.plain).font(.mono(12))
                 }
             }
             if let help = setting.help {
                 Text(help)
-                    .font(.uiCaption)
+                    .scaledFont(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, setting.type == "toggle" ? Space.xl : 124)
@@ -557,7 +557,7 @@ struct ToolCategoryTag: View {
 
     var body: some View {
         Text(category)
-            .font(.uiCaption)
+            .scaledFont(.caption)
             .foregroundColor(color)
             .padding(.horizontal, Space.xs)
             .padding(.vertical, Space.xxs)

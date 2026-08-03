@@ -39,7 +39,7 @@ struct GroupFormView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Edit Group").font(.uiTitle)
+                Text("Edit Group").scaledFont(.title2, weight: .semibold)
                 Spacer()
             }
             .padding(.horizontal, Space.xl)
@@ -66,7 +66,7 @@ struct GroupFormView: View {
                     field("Integrations") {
                         if connections.isEmpty {
                             Text("No integrations yet.")
-                                .font(.uiLabel)
+                                .scaledFont(.callout)
                                 .foregroundColor(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, Space.md)
@@ -100,7 +100,7 @@ struct GroupFormView: View {
             .padding(.horizontal, Space.xl)
             .padding(.vertical, Space.lg)
         }
-        .glassPanelBackground()
+        .background(Surface.content.ignoresSafeArea())
         .frame(width: 480, height: 580)
     }
 
@@ -115,10 +115,10 @@ struct GroupFormView: View {
             } label: {
                 HStack(spacing: Space.sm + 1) {
                     Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                        .font(.uiBody)
+                        .scaledFont(.body)
                         .foregroundStyle(on ? Color.accentColor : Color.secondary)
                     TypeBadge(type: conn.type)
-                    Text(conn.name).font(.uiBody).lineLimit(1)
+                    Text(conn.name).scaledFont(.body).lineLimit(1)
                     EnvTag(environment: conn.environment)
                     Spacer()
                 }
@@ -131,12 +131,12 @@ struct GroupFormView: View {
             if on && !fields.isEmpty {
                 VStack(alignment: .leading, spacing: Space.sm) {
                     Text("Overrides for this group (blank = inherit)")
-                        .font(.uiCaption)
+                        .scaledFont(.caption)
                         .foregroundStyle(.tertiary)
                     ForEach(fields) { f in
                         HStack(spacing: Space.sm) {
                             Text(f.label)
-                                .font(.uiCaption)
+                                .scaledFont(.caption)
                                 .foregroundColor(.secondary)
                                 .frame(width: 110, alignment: .leading)
                             TextField(inheritPlaceholder(conn, f), text: binding(conn.id, f.key))
@@ -195,7 +195,7 @@ struct GroupFormView: View {
     private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
         HStack(alignment: .top, spacing: Space.md) {
             Text(label)
-                .font(.uiSection)
+                .scaledFont(.caption, weight: .semibold)
                 .foregroundColor(.secondary)
                 .frame(width: 90, alignment: .leading)
                 .padding(.top, Space.xxs)

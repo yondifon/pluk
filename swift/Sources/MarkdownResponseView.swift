@@ -191,7 +191,7 @@ private struct MarkdownCodeBlock: View {
             Spacer(minLength: Space.sm)
             Button(copied ? "Copied" : "Copy Code") { copyCode() }
                 .buttonStyle(.plain)
-                .font(.uiLabel)
+                .scaledFont(.callout)
                 .foregroundStyle(copied ? .green : Color.accentColor)
                 .accessibilityLabel(copied ? "Code copied" : "Copy code")
         }
@@ -231,7 +231,7 @@ private struct CodeBlockChrome: ViewModifier {
         if embedded {
             content
         } else {
-            content.codeBlockSurface(cornerRadius: Radius.sm)
+            content.codeBlockSurface(cornerRadius: Radius.small)
         }
     }
 }
