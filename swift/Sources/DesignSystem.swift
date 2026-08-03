@@ -174,7 +174,7 @@ extension Font {
 }
 
 private struct ScaledFont: ViewModifier {
-    @Environment(\.uiScale) private var uiScale
+    @SwiftUI.Environment(\.uiScale) private var uiScale
 
     let style: Font.TextStyle
     let weight: Font.Weight?
@@ -219,7 +219,7 @@ struct IconButton: View {
     var rotation: Angle = .zero
     let action: () -> Void
 
-    @Environment(\.uiScale) private var uiScale
+    @SwiftUI.Environment(\.uiScale) private var uiScale
 
     var body: some View {
         Button(action: action) {
