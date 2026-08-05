@@ -52,7 +52,6 @@ enum Surface {
 extension Color {
     static let cardFill = Color.primary.opacity(0.035)
     static let hairline = Color.primary.opacity(0.07)
-    static let edge = Color.primary.opacity(0.13)
     static let controlFill = Color.primary.opacity(0.05)
 }
 
@@ -80,6 +79,46 @@ extension View {
             in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         )
     }
+}
+
+// MARK: - Split view divider
+
+// NavigationSplitView exposes no macOS modifier for the NSSplitView divider it
+// draws, so silencing it means reaching the NSSplitView through AppKit and
+// swapping its runtime class for one that reports a clear divider color.
+private final class ClearDividerSplitView: NSSplitView {
+    override var dividerColor: NSColor { .clear }
+}
+
+private final class SplitViewDividerHiderView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        hideDivider()
+    }
+
+    private func hideDivider() {
+        var candidate = superview
+        while let view = candidate {
+            if let splitView = view as? NSSplitView {
+                if object_getClass(splitView) != ClearDividerSplitView.self {
+                    object_setClass(splitView, ClearDividerSplitView.self)
+                }
+                splitView.needsDisplay = true
+                return
+            }
+            candidate = view.superview
+        }
+    }
+}
+
+/// Placed in the background of a `NavigationSplitView` pane, this hides the
+/// system divider line while leaving its drag-to-resize hit area untouched.
+struct SplitViewDividerHider: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        SplitViewDividerHiderView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 struct GlassGroup<Content: View>: View {

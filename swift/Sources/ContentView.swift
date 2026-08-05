@@ -143,15 +143,7 @@ struct ContentView: View {
         } detail: {
             detailPanel
                 .frame(minWidth: 440, minHeight: 480)
-                // Both columns paint an opaque page fill, which buries the
-                // system split divider — draw the boundary ourselves so it
-                // stays a light hairline in dark mode instead of a black seam.
-                .overlay(alignment: .leading) {
-                    Rectangle()
-                        .fill(Color.edge)
-                        .frame(width: 0.5)
-                        .ignoresSafeArea()
-                }
+                .background(SplitViewDividerHider())
         }
         .navigationSplitViewStyle(.balanced)
         .background(Surface.content.ignoresSafeArea())
