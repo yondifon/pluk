@@ -86,8 +86,12 @@ extension View {
 // NavigationSplitView exposes no macOS modifier for the NSSplitView divider it
 // draws, so silencing it means reaching the NSSplitView through AppKit and
 // swapping its runtime class for one that reports a clear divider color.
+// NSSplitView paints the divider inside drawDivider(in:) rather than filling
+// the divider rect with dividerColor, so both overrides are required: the
+// color override alone leaves the line visible.
 private final class ClearDividerSplitView: NSSplitView {
     override var dividerColor: NSColor { .clear }
+    override func drawDivider(in rect: NSRect) {}
 }
 
 private final class SplitViewDividerHiderView: NSView {
@@ -104,7 +108,6 @@ private final class SplitViewDividerHiderView: NSView {
                     object_setClass(splitView, ClearDividerSplitView.self)
                 }
                 splitView.needsDisplay = true
-                return
             }
             candidate = view.superview
         }
