@@ -16,8 +16,8 @@ import {
   parseSSHConfig,
   expandProxyCommand,
   spawnProxySocket,
-  resolveAgentSocket,
 } from "./config.js";
+import { agentUnreachableError, resolveLiveAgent } from "./agent.js";
 import type { SSHConfigEntry } from "./config.js";
 
 const READY_TIMEOUT_MS = 180_000;
@@ -56,9 +56,15 @@ function parseableKey(path: string, passphrase?: string): Buffer | null {
   return ok ? data : null;
 }
 
-export function connectSSH(p: SSHParams): Promise<Client> {
+export async function connectSSH(p: SSHParams): Promise<Client> {
+  if (!p.host) throw new Error("SSH host is missing. Set it in the integration config.");
+
+  // Probe up front for an agent socket that can actually sign (see ssh/agent.ts);
+  // a dead socket can neither sign nor pop an approval prompt, so it is never
+  // offered as an auth method.
+  const liveAgent = p.authType === "password" ? undefined : await resolveLiveAgent(p.host);
+
   return new Promise((resolve, reject) => {
-    if (!p.host) return reject(new Error("SSH host is missing. Set it in the integration config."));
 
     const sshConfig = parseSSHConfig(p.host);
     const host = sshConfig.hostName ?? p.host;
@@ -104,7 +110,7 @@ export function connectSSH(p: SSHParams): Promise<Client> {
       cfg.tryKeyboard = true;
       client.on("keyboard-interactive", (_n, _i, _l, prompts, finish) => finish(prompts.map(() => p.password ?? "")));
     } else {
-      const agent = resolveAgentSocket(p.host);
+      const agent = liveAgent?.socket;
       const keys = keyFileCandidates(p, sshConfig)
         .map((path) => parseableKey(path, p.password))
         .filter((k): k is Buffer => k !== null);
@@ -116,7 +122,9 @@ export function connectSSH(p: SSHParams): Promise<Client> {
       if (agentMethod && p.authType !== "agent") methods.push(agentMethod);
 
       if (methods.length === 1) {
-        return fail(new Error("No SSH agent or usable private key found. Add a key in the connection settings or load one into your agent."));
+        return fail(p.authType === "agent"
+          ? agentUnreachableError()
+          : new Error("No SSH agent or usable private key found. Add a key in the connection settings or load one into your agent."));
       }
       cfg.authHandler = methods as ConnectConfig["authHandler"];
     }

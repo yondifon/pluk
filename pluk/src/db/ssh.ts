@@ -13,6 +13,8 @@ import {
   resolveAgentSocket,
   type SSHConfigEntry,
 } from "../ssh/config.js";
+import { agentUnreachableError, resolveLiveAgent } from "../ssh/agent.js";
+import { isSshAuthError } from "../ssh/pending.js";
 
 export interface SSHTunnelConfig {
   host: string;
@@ -49,13 +51,6 @@ const CONTROL_CMD_TIMEOUT_MS = 10_000;
 const MASTER_POLL_MS = 30_000;
 
 class TunnelReadinessTimeout extends Error {}
-
-// Auth/agent failures are deterministic — a retry or a longer wait can't fix a
-// missing key, a locked agent, or a rejected pubkey. Detect them so the tunnel
-// fails fast and loud instead of burning the retry loop / handshake budget.
-function isAuthError(message: string): boolean {
-  return /permission denied|communication with agent failed|signing failed|publickey|no supported authentication|authentication failed|too many authentication failures/i.test(message);
-}
 
 // ── SSH config helpers ────────────────────────────────────────────────────────
 // (parseSSHConfig, ProxyCommand, agent resolution) live in ../ssh/config.js,
@@ -166,17 +161,23 @@ async function ensureMaster(
     ];
     if (config.authType === "key" && config.keyPath) args.push("-i", expandHome(config.keyPath));
 
-    // Point ssh at the resolved agent (IdentityAgent from ~/.ssh/config, e.g. the
-    // 1Password socket, else SSH_AUTH_SOCK) explicitly. A GUI-launched app inherits
-    // the empty macOS launchd agent in SSH_AUTH_SOCK; without this, ssh would query
-    // that keyless agent and fail with "communication with agent failed" instead of
-    // using the 1Password keys. -o overrides config/env, so the agent is deterministic.
+    // Point ssh at a probed, live agent socket explicitly. A GUI-launched app
+    // inherits whatever SSH_AUTH_SOCK launchd set — often an empty or stale
+    // agent — so trusting the env means ssh queries a socket that can never
+    // sign or prompt. The probe walks IdentityAgent from ~/.ssh/config, then
+    // SSH_AUTH_SOCK, then the well-known 1Password sockets, and the probe's own
+    // agent request is what wakes a locked 1Password into showing its unlock
+    // window. No live socket at all is a hard auth failure: fail now, before
+    // ssh burns the handshake budget waiting on a prompt that cannot appear.
+    // -o overrides config/env, so the agent is deterministic.
     if (config.authType === "agent") {
-      const agentSock = resolveAgentSocket(config.host);
+      const agent = await resolveLiveAgent(config.host);
+      if (!agent) throw agentUnreachableError();
+      console.log(`[pluk] SSH agent socket: ${agent.socket} (${agent.probe.state})`);
       // ssh parses the -o value with its own tokenizer, so a socket path with
       // spaces (e.g. 1Password's "~/Library/Group Containers/…/agent.sock") must
       // be quoted inside the option string or ssh errors "extra arguments".
-      if (agentSock) args.push("-o", `IdentityAgent="${agentSock}"`);
+      args.push("-o", `IdentityAgent="${agent.socket}"`);
     }
     args.push(config.host);
 
@@ -279,7 +280,7 @@ export async function openSSHTunnel(
       } catch (err) {
         lastErr = err as Error;
         // An auth/agent failure won't clear on retry — surface it now.
-        if (isAuthError(lastErr.message)) break;
+        if (isSshAuthError(lastErr)) break;
         const failedFast = Date.now() - started < FAST_RETRY_WINDOW_MS;
         if (attempt < attempts && failedFast && !(lastErr instanceof TunnelReadinessTimeout)) {
           console.warn(`[pluk] OpenSSH tunnel attempt ${attempt} failed: ${lastErr.message}. Retrying in 2s…`);

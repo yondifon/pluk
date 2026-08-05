@@ -2,16 +2,19 @@ import type { ConfigField } from "../types.js";
 
 export const herdFields: ConfigField[] = [
   {
-    key: "app_path", label: "App Path", type: "text", group: "App", required: true,
-    placeholder: "/Users/you/Herd/app",
-    help: "The Laravel app's git repository — the folder Herd already serves.",
+    key: "site", label: "Base Site", type: "text", group: "App",
+    placeholder: "the Herd site name, e.g. shop",
+    help: "The site Herd already serves the app on. Feature sites are served at <feature>.<site>.<tld>. Blank works when Herd serves a single app.",
   },
   {
-    key: "site", label: "Base Site", type: "text", group: "App",
-    placeholder: "defaults to the app folder name",
-    help: "Feature sites are served at <feature>.<site>.<tld>.",
+    key: "app_path", label: "App Path", type: "text", group: "App",
+    placeholder: "found from the site above",
+    help: "Override the folder behind the site — only needed when Herd doesn't serve the app.",
   },
-  { key: "tld", label: "TLD", type: "text", group: "App", default: "test" },
+  {
+    key: "tld", label: "TLD", type: "text", group: "App",
+    placeholder: "defaults to Herd's TLD",
+  },
   { key: "secure", label: "Serve over HTTPS", type: "toggle", group: "App", default: true },
 
   {

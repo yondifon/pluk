@@ -1,4 +1,4 @@
-import { existsSync } from "fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "fs";
 import { mkdir, readFile, symlink, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { basename, dirname, isAbsolute, join, sep } from "path";
@@ -16,6 +16,11 @@ import type { Integration } from "../../store/integrations.js";
  */
 
 const DEFAULT_HERD_BIN = `${homedir()}/Library/Application Support/Herd/bin/herd`;
+
+/** Herd keeps a Valet-shaped config here: the TLD, the parked paths, and a `Sites`
+ *  folder of `herd link` symlinks. Reading it is how an integration finds the app
+ *  without being told a path. */
+const HERD_CONFIG_ROOT = `${homedir()}/Library/Application Support/Herd/config/valet`;
 
 export interface HerdConfig {
   appPath: string;
@@ -53,18 +58,111 @@ export function parseLinkPaths(raw: unknown): string[] {
     });
 }
 
-export function herdConfig(conn: Integration): HerdConfig {
-  const c = conn.config;
-  const appPath = expandHome(String(c.app_path ?? "").trim()).replace(/\/+$/, "");
-  if (!appPath) throw new Error("App path is missing.");
+// ── Discovery ────────────────────────────────────────────────────────────────
 
-  const root = String(c.worktree_root ?? "").trim();
+/** An app Herd already serves: the site name it answers on and the folder behind it. */
+export interface HerdSite {
+  site: string;
+  path: string;
+}
+
+interface ValetConfig {
+  tld?: string;
+  paths?: string[];
+}
+
+function readValet(root: string): ValetConfig {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(root, "config.json"), "utf8"));
+    return parsed && typeof parsed === "object" ? (parsed as ValetConfig) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Folder names in `dir`, symlinks included — a linked site is a symlink. Sorted,
+ *  so the discovered order doesn't depend on the filesystem. */
+function folders(dir: string): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => !e.name.startsWith(".") && (e.isDirectory() || e.isSymbolicLink()))
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+const realpath = (p: string): string | null => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return null;
+  }
+};
+
+/** Every app Herd serves: the `herd link`ed sites first, then the folders inside
+ *  each parked path. A linked name wins — it's the name Herd actually answers on. */
+export function discoverSites(root: string = HERD_CONFIG_ROOT): HerdSite[] {
+  const sitesDir = join(root, "Sites");
+  const found = new Map<string, string>();
+
+  for (const name of folders(sitesDir)) {
+    const target = realpath(join(sitesDir, name));
+    if (target) found.set(name, target);
+  }
+  for (const parked of readValet(root).paths ?? []) {
+    const dir = String(parked).replace(/\/+$/, "");
+    if (!dir || realpath(dir) === realpath(sitesDir)) continue;
+    for (const name of folders(dir)) {
+      const target = realpath(join(dir, name));
+      if (target && !found.has(name)) found.set(name, target);
+    }
+  }
+  return [...found].map(([site, path]) => ({ site, path }));
+}
+
+const isRepo = (p: string): boolean => existsSync(join(p, ".git"));
+
+const nameList = (sites: HerdSite[]): string => {
+  const names = sites.map((s) => s.site).sort();
+  return `${names.slice(0, 12).join(", ")}${names.length > 12 ? `, … (${names.length} total)` : ""}`;
+};
+
+/** Find the app when the config names no path: by site name when one is given,
+ *  otherwise only when Herd serves a single repository — anything else is a guess. */
+export function resolveApp(site: string, root: string = HERD_CONFIG_ROOT): HerdSite {
+  const sites = discoverSites(root);
+  if (!sites.length) throw new Error("Herd serves no sites — set the app path.");
+
+  if (site) {
+    const wanted = site.toLowerCase();
+    const hit = sites.find((s) => s.site.toLowerCase() === wanted);
+    if (!hit) throw new Error(`Herd serves no site called "${site}". Sites: ${nameList(sites)}.`);
+    return hit;
+  }
+
+  const repos = sites.filter((s) => isRepo(s.path));
+  if (repos.length === 1) return repos[0]!;
+  if (!repos.length) throw new Error("None of Herd's sites is a git repository — set the app path.");
+  throw new Error(`Herd serves ${repos.length} apps — set the base site to one of them, or set the app path. Sites: ${nameList(repos)}.`);
+}
+
+/** `root` is the Herd config folder; tests point it at a fixture. */
+export function herdConfig(conn: Integration, root: string = HERD_CONFIG_ROOT): HerdConfig {
+  const c = conn.config;
+  const explicit = expandHome(String(c.app_path ?? "").trim()).replace(/\/+$/, "");
+  const chosen = String(c.site ?? "").trim();
+  const app = explicit ? { site: chosen || basename(explicit), path: explicit } : resolveApp(chosen, root);
+  const appPath = app.path;
+
+  const wtRoot = String(c.worktree_root ?? "").trim();
   return {
     appPath,
-    site: String(c.site ?? "").trim() || basename(appPath),
-    tld: String(c.tld ?? "").trim() || "test",
+    site: app.site,
+    tld: String(c.tld ?? "").trim() || readValet(root).tld || "test",
     secure: c.secure !== false,
-    worktreeRoot: root ? expandHome(root).replace(/\/+$/, "") : `${dirname(appPath)}/${basename(appPath)}-worktrees`,
+    worktreeRoot: wtRoot ? expandHome(wtRoot).replace(/\/+$/, "") : `${dirname(appPath)}/${basename(appPath)}-worktrees`,
     linkPaths: parseLinkPaths(c.link_paths ?? "vendor, node_modules, public/build"),
     envFile: String(c.env_file ?? ".env").trim(),
     herdBin: expandHome(String(c.herd_bin ?? "").trim()) || DEFAULT_HERD_BIN,

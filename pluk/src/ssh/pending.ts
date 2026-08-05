@@ -43,10 +43,24 @@ export function recordConnectFailure(key: string, err: unknown): void {
   episode(key).lastError = err instanceof Error ? err : new Error(String(err));
 }
 
-// Error for a caller whose bounded wait on an in-flight connect ran out: the
-// pending guess while it's still plausible, then the real failure.
+// Auth and agent failures are deterministic: a locked or unreachable agent and
+// a rejected pubkey won't clear while a caller waits, so "still connecting,
+// maybe approving" must never mask one that already happened.
+export function isSshAuthError(err: unknown): boolean {
+  const msg = (err as { message?: string } | null)?.message ?? "";
+  return /permission denied|communication with agent failed|signing failed|publickey|no supported authentication|authentication failed|too many authentication failures|SSH key agent/i.test(msg);
+}
+
+// Error for a caller whose bounded wait on an in-flight connect ran out. An
+// earlier attempt that died on auth is the real story — report it, not the
+// pending guess. Otherwise: the guess while it's still plausible, then the
+// last real failure.
 export function connectWaitError(key: string): Error {
   const ep = episode(key);
+  if (ep.lastError && isSshAuthError(ep.lastError)) {
+    episodes.delete(key);
+    return ep.lastError;
+  }
   ep.pendingReports++;
   if (ep.pendingReports <= SSH_PENDING_MAX_REPORTS) return sshPendingError();
   episodes.delete(key);

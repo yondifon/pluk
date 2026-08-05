@@ -26,3 +26,18 @@ test("postgres auth code -> auth_failed", () => {
 test("unknown error is query_failed", () => {
   expect(classifySqlError(new Error("boom"))).toMatchObject({ category: "query_failed", message: "boom" });
 });
+
+test("agent-unreachable code maps to auth_failed even without a matching message", () => {
+  const err = Object.assign(new Error("anything"), { code: "SSH_AGENT_UNREACHABLE" });
+  expect(classifySqlError(err)).toMatchObject({ category: "auth_failed", code: "SSH_AGENT_UNREACHABLE" });
+});
+
+test.each([
+  new Error('sign_and_send_pubkey: signing failed for ED25519 "" from agent: communication with agent failed'),
+  new Error("malico@host: Permission denied (publickey)."),
+  new Error("unexpected EOF"),
+  new Error("Timed out after 30s (connect)"),
+  new Error("boom"),
+])("every classification carries a code: %s", (err) => {
+  expect(classifySqlError(err).code).toBeTruthy();
+});
