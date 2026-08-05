@@ -12,13 +12,13 @@ struct GroupDetailView: View {
     let onDelete: () -> Void
 
     @State private var urlCopied = false
-    @State private var tab: GroupTab = .overview
+    @State private var tab: GroupTab = .logs
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum GroupTab: String, CaseIterable {
-        case overview = "Overview"
         case logs = "Logs"
-        var icon: String { self == .overview ? "square.stack.3d.up" : "list.bullet.rectangle" }
+        case overview = "Overview"
+        var icon: String { self == .overview ? "square.stack.3d.up" : "list.bullet" }
     }
 
     private var members: [Connection] {
@@ -37,6 +37,8 @@ struct GroupDetailView: View {
             tabBar
             Rectangle().fill(Color.hairline).frame(height: 0.5)
             switch tab {
+            case .logs:
+                LogsTab(scope: .group(group), store: store)
             case .overview:
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.xl) {
@@ -48,8 +50,6 @@ struct GroupDetailView: View {
                     }
                     .padding(Space.xl)
                 }
-            case .logs:
-                LogsTab(scope: .group(group), store: store)
             }
         }
         .background(Surface.content)
@@ -58,7 +58,7 @@ struct GroupDetailView: View {
     // MARK: - Tab bar
 
     private var tabBar: some View {
-        PillTabs(tabs: GroupTab.allCases, title: \.rawValue, selection: $tab)
+        PillTabs(tabs: GroupTab.allCases, title: \.rawValue, icon: \.icon, selection: $tab)
     }
 
     // MARK: - Header

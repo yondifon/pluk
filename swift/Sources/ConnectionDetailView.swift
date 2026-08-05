@@ -419,15 +419,15 @@ struct ConfigSnippetSection: View {
 // MARK: - Detail tabs
 
 private enum DetailTab: String, CaseIterable {
-    case overview = "Overview"
     case logs     = "Logs"
+    case overview = "Overview"
     case policy   = "Tools"
 
     var icon: String {
         switch self {
+        case .logs:     "list.bullet"
         case .overview: "link"
-        case .logs:     "list.bullet.rectangle"
-        case .policy:   "wrench.and.screwdriver"
+        case .policy:   "wrench.adjustable"
         }
     }
 }
@@ -441,7 +441,7 @@ struct ConnectionDetailView: View {
     let onDelete: () -> Void
     let onDuplicate: () -> Void
 
-    @State private var selectedTab: DetailTab = .overview
+    @State private var selectedTab: DetailTab = .logs
     @State private var urlCopied = false
     @State private var testStatus: TestStatus = .idle
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -522,7 +522,7 @@ struct ConnectionDetailView: View {
     // MARK: - Tab bar
 
     private var tabBar: some View {
-        PillTabs(tabs: DetailTab.allCases, title: \.rawValue, selection: $selectedTab)
+        PillTabs(tabs: DetailTab.allCases, title: \.rawValue, icon: \.icon, selection: $selectedTab)
     }
 
     // MARK: - Tab content
@@ -530,8 +530,8 @@ struct ConnectionDetailView: View {
     @ViewBuilder
     private var tabContent: some View {
         switch selectedTab {
-        case .overview: overviewTab
         case .logs:     LogsTab(scope: .connection(conn), store: store)
+        case .overview: overviewTab
         case .policy:   policyTab
         }
     }

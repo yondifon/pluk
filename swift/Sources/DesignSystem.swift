@@ -342,32 +342,54 @@ struct OverflowMenu<Content: View>: View {
 struct PillTabs<T: Hashable>: View {
     let tabs: [T]
     let title: (T) -> String
+    let icon: (T) -> String
     @Binding var selection: T
 
+    @Namespace private var pillNamespace
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @SwiftUI.Environment(\.uiScale) private var uiScale
+
     var body: some View {
-        HStack(spacing: Space.xs) {
+        HStack(spacing: 2 * uiScale) {
             ForEach(tabs, id: \.self) { tab in
-                Button { selection = tab } label: {
-                    Text(title(tab))
-                        .scaledFont(.callout)
-                        .fontWeight(selection == tab ? .semibold : .regular)
-                        .foregroundStyle(selection == tab ? Color.primary : .secondary)
-                        .padding(.horizontal, Space.md - 2)
-                        .padding(.vertical, Space.xs + 1)
-                        .background {
-                            if selection == tab {
-                                RoundedRectangle(cornerRadius: Radius.small, style: .continuous)
-                                    .fill(Color.controlFill)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                tabButton(tab)
             }
-            Spacer()
         }
+        .padding(2 * uiScale)
+        .background(Surface.sunken, in: RoundedRectangle(cornerRadius: Radius.medium, style: .continuous))
+        .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 1), value: selection)
+        // The track sizes to its pills, so widening happens after the background.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Space.xl - Space.xs)
         .padding(.bottom, Space.sm)
+    }
+
+    private func tabButton(_ tab: T) -> some View {
+        let selected = selection == tab
+        return Button {
+            withAnimation(.easeOut(duration: 0.2)) { selection = tab }
+        } label: {
+            HStack(spacing: Space.xs) {
+                Image(systemName: icon(tab))
+                    .font(.system(size: 11 * uiScale, weight: .regular))
+                Text(title(tab))
+                    .scaledFont(.callout)
+                    .fontWeight(selected ? .semibold : .regular)
+            }
+            .foregroundStyle(selected ? Color.primary : .secondary)
+            .padding(.horizontal, Space.md - 2)
+            .padding(.vertical, Space.xs + 1)
+            .background {
+                if selected {
+                    RoundedRectangle(cornerRadius: Radius.small, style: .continuous)
+                        .fill(Surface.panel)
+                        .matchedGeometryEffect(id: "pillTabsSelection", in: pillNamespace)
+                }
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }
 
