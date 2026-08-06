@@ -131,38 +131,25 @@ Host app4-ssh-infra.example.com
 
 ## Contributing
 
-Contributions are welcome. The fastest loop:
+Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for dev
+setup, tests, and code style. Fork and clone as usual:
 
-1. Fork and clone:
+```bash
+git clone git@github.com:yondifon/pluk.git
+cd pluk
+```
 
-   ```bash
-   git clone git@github.com:yondifon/pluk.git
-   cd pluk
-   ```
-
-2. Install server dependencies and run the test suite:
-
-   ```bash
-   cd pluk
-   bun install
-   bun test
-   ```
-
-3. Hack on the relevant side:
-   - **Adapters** (add a new service) → `pluk/src/adapters/` — implement the `Adapter` contract (`types.ts`) and register it in `adapters/index.ts`. The DB family lives in `adapters/sql/`, Linear in `adapters/linear/`. Declaring `configFields` is enough for the macOS form to render it; nothing else needs editing.
-   - **Server / MCP / policy** → `pluk/src/` (SQL policy in `mcp/policy.ts`, action policy in `mcp/actionPolicy.ts`, drivers in `pluk/src/db/`)
-   - **App / UI** → `swift/Sources/`
-
-4. Verify your change end to end with `make dev`.
-
-5. Open a pull request against `main` with a clear description of the change and why it matters.
-
-Conventions:
-
-- Use **Bun**, not `npm`/`yarn`/`pnpm` (`bun install`, `bun test`, `bun run`).
-- Keep changes surgical and match the surrounding style.
-- Add tests for policy and driver behavior — these guard what agents are allowed to run.
+Server-side work lives in `pluk/src/` (adapters in `pluk/src/adapters/`, policy
+in `pluk/src/mcp/`, drivers in `pluk/src/db/`); app/UI work lives in
+`swift/Sources/`. Verify a change end to end with `make dev`, then open a pull
+request against `main` with a clear description of the change and why it
+matters.
 
 ## License
 
-Copyright © 2025 Pluk. See the repository for license details.
+pluk is licensed under the [GNU Affero General Public License v3.0](LICENSE.md).
+You may use, modify, and share it freely. If you modify pluk and offer it to
+others over a network, you must publish your modified source under the same
+license.
+
+Contact: `yong@malico.me`

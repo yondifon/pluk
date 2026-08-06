@@ -97,19 +97,44 @@ private final class ClearDividerSplitView: NSSplitView {
 private final class SplitViewDividerHiderView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        hideDivider()
+        hideEnclosingSplitViewDividers()
     }
 
-    private func hideDivider() {
-        var candidate = superview
-        while let view = candidate {
-            if let splitView = view as? NSSplitView {
-                if object_getClass(splitView) != ClearDividerSplitView.self {
-                    object_setClass(splitView, ClearDividerSplitView.self)
-                }
-                splitView.needsDisplay = true
+    override func layout() {
+        super.layout()
+        hideEnclosingSplitViewDividers()
+    }
+}
+
+private extension NSView {
+    // Reached two ways because neither alone is enough: walking up covers a
+    // view already parented under the split view, and sweeping down from the
+    // window's root covers first layout, where the view is not yet in that
+    // hierarchy and an upward walk finds nothing at all.
+    func hideEnclosingSplitViewDividers() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            var view: NSView? = self
+            while let current = view {
+                Self.hideDividers(in: current)
+                view = current.superview
             }
-            candidate = view.superview
+            if let root = self.window?.contentView {
+                Self.hideDividers(in: root)
+            }
+        }
+    }
+
+    // Once a split view carries ClearDividerSplitView the swap is skipped, so
+    // re-running this on every layout pass costs a walk and nothing more.
+    static func hideDividers(in view: NSView) {
+        if let splitView = view as? NSSplitView,
+           object_getClass(splitView) !== ClearDividerSplitView.self {
+            object_setClass(splitView, ClearDividerSplitView.self)
+            splitView.needsDisplay = true
+        }
+        for subview in view.subviews {
+            hideDividers(in: subview)
         }
     }
 }
@@ -121,7 +146,9 @@ struct SplitViewDividerHider: NSViewRepresentable {
         SplitViewDividerHiderView()
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.hideEnclosingSplitViewDividers()
+    }
 }
 
 struct GlassGroup<Content: View>: View {

@@ -185,11 +185,17 @@ only look.
 
 *Agent hint: run `list_sites` to see what's already up.*
 
+The app is found from Herd's own config
+(`~/Library/Application Support/Herd/config/valet`) — the `herd link` symlinks in
+`Sites/` first, then the folders inside each parked path. Name the site and Pluk
+resolves its folder; leave everything blank and it works when Herd serves exactly
+one git repository. When several apps match, the error lists the site names.
+
 | Field | Notes |
 | --- | --- |
-| `app_path` | The Laravel app's git repository — the folder Herd already serves (required). |
-| `site` | Base site name; defaults to the app folder name. |
-| `tld` | Default `test`. |
+| `site` | The Herd site serving the app, e.g. `shop`. Blank works when Herd serves a single repository. |
+| `app_path` | Override the folder behind the site; found from Herd's own config otherwise. |
+| `tld` | Defaults to Herd's TLD (`test` when Herd isn't installed). |
 | `secure` | Serve feature sites over HTTPS. Default on. |
 | `worktree_root` | Where worktrees are created; defaults to `../<app>-worktrees`. |
 | `link_paths` | Untracked paths symlinked from the app (comma separated). Default `vendor, node_modules, public/build`. |

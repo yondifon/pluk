@@ -1,7 +1,8 @@
 {
   "name": "pluk",
   "type": "module",
-  "private": true,
+  "license": "AGPL-3.0-only",
+  "author": "Desmond Yong <yong@malico.me>",
   "scripts": {
     "server": "bun run src/server.ts"
   },
