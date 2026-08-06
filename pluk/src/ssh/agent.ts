@@ -66,9 +66,9 @@ function wellKnownAgentSockets(): string[] {
   ].filter(existsSync);
 }
 
-function agentSocketCandidates(host: string): string[] {
+export function agentSocketCandidates(host: string): string[] {
   const fromConfig = parseSSHConfig(host).identityAgent;
-  const all = [fromConfig, process.env.SSH_AUTH_SOCK, ...wellKnownAgentSockets()]
+  const all = [fromConfig, ...wellKnownAgentSockets(), process.env.SSH_AUTH_SOCK]
     .filter((p): p is string => Boolean(p));
   return [...new Set(all)];
 }
@@ -79,17 +79,25 @@ export interface LiveAgent {
 }
 
 // Pick the agent socket most likely to complete a signature: one that lists
-// keys beats one that answers but is mute (a locked 1Password — the probe just
-// asked it to unlock), which beats one that answers with no keys at all. A
-// socket that is dead can neither sign nor prompt, so it is skipped entirely.
+// keys wins immediately. Otherwise a mute one (a locked 1Password — the probe
+// just asked it to unlock) is worth waiting on, since signing can still wake
+// it into prompting. An agent that answered with zero keys can never sign, so
+// it is never picked over nothing — a dead one can neither sign nor prompt.
+export function pickLiveAgent(probed: LiveAgent[]): LiveAgent | undefined {
+  return probed.find((p) => p.probe.state === "mute");
+}
+
 export async function resolveLiveAgent(host: string): Promise<LiveAgent | undefined> {
   const probed: LiveAgent[] = [];
   for (const socket of agentSocketCandidates(host)) {
     const probe = await probeAgentSocket(socket);
+    console.log(
+      `[pluk] SSH agent probe: ${socket} -> ${probe.state}${probe.state === "dead" ? ` (${probe.error})` : ""}`
+    );
     if (probe.state === "keys") return { socket, probe };
     if (probe.state !== "dead") probed.push({ socket, probe });
   }
-  return probed.find((p) => p.probe.state === "mute") ?? probed[0];
+  return pickLiveAgent(probed);
 }
 
 export function agentUnreachableError(): Error {

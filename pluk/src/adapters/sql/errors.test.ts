@@ -32,6 +32,18 @@ test("agent-unreachable code maps to auth_failed even without a matching message
   expect(classifySqlError(err)).toMatchObject({ category: "auth_failed", code: "SSH_AGENT_UNREACHABLE" });
 });
 
+test("agent refused operation -> distinct SSH_AGENT_DENIED code", () => {
+  const raw = "sign_and_send_pubkey: signing failed: agent refused operation";
+  expect(classifySqlError(new Error(raw))).toMatchObject({ category: "auth_failed", code: "SSH_AGENT_DENIED" });
+});
+
+test.each([
+  "No reply from server",
+  'sign_and_send_pubkey: could not open a connection to your authentication agent',
+])("genuinely unreachable agent keeps SSH_AGENT_UNREACHABLE: %s", (raw) => {
+  expect(classifySqlError(new Error(raw))).toMatchObject({ category: "auth_failed", code: "SSH_AGENT_UNREACHABLE" });
+});
+
 test.each([
   new Error('sign_and_send_pubkey: signing failed for ED25519 "" from agent: communication with agent failed'),
   new Error("malico@host: Permission denied (publickey)."),

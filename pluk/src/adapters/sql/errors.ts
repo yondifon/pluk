@@ -3,6 +3,10 @@ import { SSH_AGENT_UNREACHABLE_CODE } from "../../ssh/agent.js";
 
 export type SqlErrorCategory = "auth_failed" | "tunnel_failed" | "query_failed" | "connection_failed" | "pending_approval";
 
+// Distinct from SSH_AGENT_UNREACHABLE: this fires when a live agent answered
+// but declined to sign, most often 1Password waiting on an approval it never got.
+export const SSH_AGENT_DENIED_CODE = "SSH_AGENT_DENIED";
+
 export interface SqlErrorInfo {
   category: SqlErrorCategory;
   message: string;
@@ -35,7 +39,16 @@ export function classifySqlError(err: unknown): SqlErrorInfo {
     };
   }
 
-  if (code === SSH_AGENT_UNREACHABLE_CODE || /communication with agent failed|agent refused operation|signing failed .* agent|SSH_AUTH_SOCK|open agent|could not open a connection to your authentication agent|No reply from server/i.test(msg)) {
+  if (code === SSH_AGENT_DENIED_CODE || /agent refused operation|signing failed .* agent/i.test(msg)) {
+    return {
+      category: "auth_failed",
+      message: "Your SSH agent refused to sign.",
+      hint: "Check 1Password for a pending approval, or unlock it, then retry.",
+      code: SSH_AGENT_DENIED_CODE,
+    };
+  }
+
+  if (code === SSH_AGENT_UNREACHABLE_CODE || /communication with agent failed|SSH_AUTH_SOCK|open agent|could not open a connection to your authentication agent|No reply from server/i.test(msg)) {
     return {
       category: "auth_failed",
       message: "Can't reach your SSH key agent.",
