@@ -309,6 +309,7 @@ struct ContentView: View {
                     ForEach(filteredGroups) { group in
                         GroupRow(group: group)
                             .tag(group.id)
+                            .listRowBackground(selectedID == group.id ? Surface.selection : Color.clear)
                             .contextMenu {
                                 Button("Delete", role: .destructive) {
                                     pendingDelete = .group(group)
@@ -323,6 +324,7 @@ struct ContentView: View {
                     ForEach(filteredConnections) { conn in
                         ConnectionRow(conn: conn, health: store.health[conn.id])
                             .tag(conn.id)
+                            .listRowBackground(selectedID == conn.id ? Surface.selection : Color.clear)
                             .contextMenu {
                                 Button("Duplicate") { selectedID = store.duplicate(conn) }
                                 Button("Delete", role: .destructive) {
@@ -336,6 +338,8 @@ struct ContentView: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .background(Surface.sidebar)
+        .background(TableSelectionHider())
+        .background(ScrollerHider())
         .overlay {
             if noMatches {
                 if query.isEmpty {
@@ -645,7 +649,7 @@ private struct FilterPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider()
+                .background(Surface.panel)
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
                     if !types.isEmpty {
@@ -763,8 +767,7 @@ private struct ServerStatusBanner: View {
         }
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.sm)
-        .background(Surface.content)
-        .overlay(alignment: .top) { Rectangle().fill(Color.hairline).frame(height: 0.5) }
+        .background(Surface.panel)
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: serverManager.status == .stopped)
     }
@@ -801,8 +804,7 @@ private struct UpdateBanner: View {
         }
         .padding(.horizontal, Space.lg)
         .padding(.vertical, Space.sm)
-        .background(Surface.content)
-        .overlay(alignment: .top) { Rectangle().fill(Color.hairline).frame(height: 0.5) }
+        .background(Surface.panel)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }
@@ -815,7 +817,7 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
             Text("Connect a service to get started")
-                .font(.system(size: 22, weight: .semibold))
+                .scaledFont(.title, weight: .semibold)
                 .tracking(-0.3)
                 .textSelection(.disabled)
             Text("Add a database, Linear workspace, or another local MCP endpoint. Pluk keeps the server and policy controls on this Mac.")

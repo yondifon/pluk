@@ -2,14 +2,14 @@
 
 Each integration is one **type**, backed by a pluggable **adapter**. The type
 determines the config form, how the policy layer treats it, and which tools the
-agent gets. Pluk ships with six types across four categories.
+agent gets. Pluk ships with eight types across four categories.
 
 | Type | Category | Policy | Tools |
 | --- | --- | --- | --- |
 | [`postgres`](#postgres) | database | SQL | 12 |
 | [`mysql`](#mysql) | database | SQL | 12 |
 | [`sqlite`](#sqlite) | database | SQL | 12 |
-| [`linear`](#linear) | issue‑tracker | action | 6 |
+| [`linear`](#linear) | issue‑tracker | action | 14 |
 | [`sentry`](#sentry) | observability | action | 5 |
 | [`ssh`](#ssh) | infrastructure | action | 2 |
 | [`herd`](#laravel-herd) | local‑dev | action | 3 |
@@ -96,13 +96,21 @@ Issue tracker over the Linear GraphQL API. **Action policy.**
 | Tool | Access | What it does |
 | --- | --- | --- |
 | `list_issues` | read | List issues, optionally scoped to a team. |
-| `get_issue` | read | Get one issue by id or identifier (e.g. `ENG-123`). |
+| `my_issues` | read | Issues assigned to you; open only by default. |
+| `get_issue` | read | One issue by id or identifier (e.g. `ENG-123`). |
 | `search_issues` | read | Search issues by text in title or description. |
+| `list_comments` | read | An issue's comment thread, replies nested. |
+| `inbox` | read | Notifications — replies, mentions, assignments, status changes. |
 | `list_teams` | read | List teams (id, name, key). |
-| `create_issue` | write | Create an issue (needs a team id). |
-| `comment` | write | Add a comment to an issue. |
+| `list_states` | read | A team's workflow states (id, name, type). |
+| `list_projects` | read | Projects with state, progress, and issue counts. |
+| `project_updates` | read | A project's status‑update log. |
+| `create_issue` | write | Create an issue — team by key or name, assignee by email or display name, state and labels by name. |
+| `update_issue` | write | Update an issue — state, assignee (or unassign), title, description, priority, labels. |
+| `comment` | write | Add a comment or reply to a thread. |
+| `link_url` | write | Attach a URL to an issue. |
 
-Read‑only blocks `create_issue` and `comment`.
+Read‑only blocks `create_issue`, `update_issue`, `comment`, and `link_url`.
 
 ---
 
@@ -151,7 +159,7 @@ allowlist on top.
 
 | Tool | Access | What it does |
 | --- | --- | --- |
-| `run_command` | read/write | Run a shell command; checked against the allowlist first. |
+| `run_command` | read/write | Run a shell command; checked against the allowlist first. Pass `timeout` (seconds, max 600) to allow long-running commands. |
 | `list_allowed_commands` | read | Show which commands this integration may run. |
 
 Read commands (e.g. `docker compose ps`) need read access; state‑changing ones

@@ -58,7 +58,6 @@ struct LogsTab: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-            Divider()
             if filtered.isEmpty {
                 emptyState
             } else {
@@ -95,13 +94,13 @@ struct LogsTab: View {
         HStack(spacing: Space.md) {
             // Stats pills
             HStack(spacing: Space.md) {
-                statPill(entries.count, label: "total", color: .secondary)
-                statPill(stats.allowed, label: "ok", color: .green)
+                statPill(entries.count, label: "total")
+                statPill(stats.allowed, label: "ok")
                 if stats.blocked > 0 {
-                    statPill(stats.blocked, label: "blocked", color: .red)
+                    statPill(stats.blocked, label: "blocked")
                 }
                 if stats.error > 0 {
-                    statPill(stats.error, label: "err", color: .orange)
+                    statPill(stats.error, label: "err")
                 }
             }
             .fixedSize()
@@ -155,8 +154,6 @@ struct LogsTab: View {
             .clipShape(.capsule)
             .fixedSize()
 
-            Divider().frame(height: 14)
-
             // Retention
             Menu {
                 let options = [7, 14, 30, 60, 90, 0]
@@ -201,13 +198,14 @@ struct LogsTab: View {
         }
         .padding(.horizontal, Space.xl)
         .padding(.vertical, Space.sm)
+        .background(Surface.panel)
     }
 
-    private func statPill(_ count: Int, label: String, color: Color) -> some View {
+    private func statPill(_ count: Int, label: String) -> some View {
         HStack(spacing: Space.xxs) {
             Text("\(count)")
-                .font(.mono(11, weight: .semibold))
-                .foregroundColor(color == .secondary ? .primary : color)
+                .font(.mono(11, weight: .medium))
+                .foregroundColor(.primary)
             Text(label)
                 .scaledFont(.caption)
                 .foregroundColor(.secondary)
@@ -251,7 +249,7 @@ struct LogsTab: View {
 
     private var logList: some View {
         ScrollView {
-            LazyVStack(spacing: 0, pinnedViews: []) {
+            LazyVStack(spacing: Space.xs, pinnedViews: []) {
                 ForEach(filtered) { entry in
                     let expanded = expandedId == entry.id
                     LogEntryRow(
@@ -261,7 +259,6 @@ struct LogsTab: View {
                         onToggle: { expandedId = expanded ? nil : entry.id },
                         onStop: { stopQuery(entry) }
                     )
-                    Rectangle().fill(Color.hairline).frame(height: 0.5).padding(.leading, Space.xl)
                 }
             }
         }
@@ -317,23 +314,17 @@ private struct LogEntryRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: Space.md) {
-                // Verdict indicator bar
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(verdictColor)
-                    .frame(width: 3)
-                    .frame(minHeight: 36)
-
                 VStack(alignment: .leading, spacing: Space.xs) {
                     // Top row: badge + member/tool chips + SQL preview
                     HStack(spacing: Space.sm) {
                         VerdictBadge(verdict: entry.verdict)
 
                         if showConnection {
-                            chip(entry.connectionName, system: "circle.grid.2x2", color: .accentColor)
+                            chip(entry.connectionName, system: "circle.grid.2x2")
                         }
 
                         if let source = entry.source, !source.isEmpty {
-                            chip(source, system: "wrench.and.screwdriver", color: .secondary)
+                            chip(source, system: "wrench.and.screwdriver")
                         }
 
                         if let cats = entry.categories, !cats.isEmpty {
@@ -431,7 +422,7 @@ private struct LogEntryRow: View {
                         .padding(.top, Space.sm)
                     }
                 }
-                .padding(.vertical, Space.md)
+                .padding(.vertical, Space.lg)
                 .padding(.trailing, Space.xl)
             }
             .padding(.leading, Space.xl)
@@ -440,7 +431,7 @@ private struct LogEntryRow: View {
         .onTapGesture { onToggle() }
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default) { onToggle() }
-        .background(isExpanded ? Color.accentColor.opacity(0.04) : .clear)
+        .background(isExpanded ? Surface.sunken : .clear)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.12), value: isExpanded)
         .sheet(isPresented: $showResponseSheet) {
             ResponseSheet(title: entry.sql, text: fullResponse ?? "")
@@ -458,17 +449,13 @@ private struct LogEntryRow: View {
         .tint(copied ? .green : nil)
     }
 
-    // Compact monospace tag for the member integration / originating tool.
-    private func chip(_ text: String, system: String, color: Color) -> some View {
+    // Plain monospace tag for the member integration / originating tool.
+    private func chip(_ text: String, system: String) -> some View {
         HStack(spacing: Space.xxs) {
             Image(systemName: system).font(.system(size: 8))
             Text(text).font(.mono(10, weight: .medium)).lineLimit(1)
         }
-        .foregroundColor(color)
-        .padding(.horizontal, Space.sm)
-        .padding(.vertical, Space.xxs)
-        .background(color.opacity(0.1))
-        .clipShape(.capsule)
+        .foregroundColor(.secondary)
     }
 
     private func flash(_ flag: Binding<Bool>) {
@@ -481,11 +468,11 @@ private struct LogEntryRow: View {
 
     private var verdictColor: Color {
         switch entry.verdict {
-        case "allowed":   return .green
-        case "blocked":   return .red
-        case "cancelled": return Color(nsColor: .systemPurple)
+        case "allowed":   return .green.opacity(0.7)
+        case "blocked":   return .orange
+        case "cancelled": return .secondary
         case "pending":   return .secondary
-        default:          return .orange
+        default:          return .red.opacity(0.9)
         }
     }
 
@@ -528,44 +515,55 @@ private struct LogEntryRow: View {
 private struct VerdictBadge: View {
     let verdict: String
 
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulsing = false
+
     var body: some View {
-        if verdict == "pending" {
-            HStack(spacing: Space.xs) {
-                ProgressView().scaleEffect(0.55).frame(width: 10, height: 10)
-                Text("RUNNING")
-                    .font(.mono(9, weight: .bold))
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, Space.sm)
-            .padding(.vertical, Space.xxs)
-            .background(Color.controlFill)
-            .clipShape(.capsule)
-        } else {
+        HStack(spacing: Space.xs) {
+            dot
             Text(label)
-                .font(.mono(9, weight: .bold))
-                .foregroundColor(.white)
-                .padding(.horizontal, Space.sm)
-                .padding(.vertical, Space.xxs)
-                .background(color)
-                .clipShape(.capsule)
+                .scaledFont(.caption, weight: .medium)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var dot: some View {
+        if verdict == "pending" {
+            Circle()
+                .fill(Color.secondary)
+                .frame(width: 6, height: 6)
+                .scaleEffect(pulsing ? 0.72 : 1)
+                .opacity(pulsing ? 0.3 : 1)
+                .onAppear {
+                    guard !reduceMotion else { return }
+                    withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+                        pulsing = true
+                    }
+                }
+        } else {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
         }
     }
 
     private var label: String {
         switch verdict {
-        case "allowed":   return "OK"
-        case "blocked":   return "BLOCKED"
-        case "cancelled": return "CANCELLED"
-        default:          return "ERROR"
+        case "allowed":   return "ok"
+        case "blocked":   return "blocked"
+        case "cancelled": return "cancelled"
+        case "pending":   return "running"
+        default:          return "error"
         }
     }
 
     private var color: Color {
         switch verdict {
-        case "allowed":   return .green
-        case "blocked":   return .red
-        case "cancelled": return Color(nsColor: .systemPurple)
-        default:          return .orange
+        case "allowed":   return .green.opacity(0.7)
+        case "blocked":   return .orange
+        case "cancelled": return .secondary
+        default:          return .red.opacity(0.9)
         }
     }
 }
@@ -643,7 +641,6 @@ private struct ResultPreview: View {
                                     .padding(.vertical, Space.xxs)
                             }
                         }
-                        Rectangle().fill(Color.hairline).frame(height: 0.5)
                     }
 
                     // Footer: row counts
@@ -760,7 +757,7 @@ private struct ResponseSheet: View {
             }
             .padding(.horizontal, Space.lg)
             .padding(.vertical, Space.md)
-            Divider()
+            .background(Surface.panel)
             Group {
                 if display.isEmpty {
                     ProgressView("Formatting…")

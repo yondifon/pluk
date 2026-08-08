@@ -2,15 +2,52 @@ import { z } from "zod";
 import type { Integration } from "../../store/integrations.js";
 import { actionAdapter, type ActionTool } from "../kit.js";
 import { sentryFields } from "./fields.js";
-import { sentryConfig, sentryRequest, type SentryConfig } from "./client.js";
+import { sentryConfig, sentryRequest, sentryRequestText, type SentryConfig } from "./client.js";
 
 const LOG_FIELDS = ["timestamp", "severity", "message", "trace_id", "project"];
 
-const AGENT_HINT = "Use this for Sentry error monitoring and logs — list/read issues, pull latest issue events, query structured logs, and inspect project error events. Start with list_issues + latest_event for issue debugging, or query_logs for log search.";
+const TEXT_MIMES = new Set([
+  "application/json",
+  "application/ld+json",
+  "application/xml",
+  "application/xhtml+xml",
+  "application/javascript",
+  "application/x-javascript",
+  "image/svg+xml",
+]);
+
+function isTextMime(mime: string): boolean {
+  return mime.startsWith("text/") || TEXT_MIMES.has(mime);
+}
+
+export async function resolveIssueProject(cfg: SentryConfig, issueId: string): Promise<string | undefined> {
+  const issue = await sentryRequest<Record<string, unknown>>(cfg, "GET", `/organizations/${cfg.org}/issues/${encodeURIComponent(issueId)}/`);
+  const project = issue.project as Record<string, unknown> | undefined;
+  return project && typeof project === "object" ? String(project.slug ?? "") : undefined;
+}
+
+export async function resolveLatestEventId(cfg: SentryConfig, issueId: string): Promise<string> {
+  const event = await sentryRequest<Record<string, unknown>>(cfg, "GET", `/issues/${encodeURIComponent(issueId)}/events/latest/`);
+  const eventId = event.eventID;
+  if (!eventId) throw new Error(`No event found for issue ${issueId}`);
+  return String(eventId);
+}
+
+/** Slice a text attachment at an offset/limit, appending a truncation marker when text remains. */
+export function formatTextChunk(body: string, offset: number, limit: number): string {
+  if (offset >= body.length) return `Offset ${offset} is past the end of ${body.length} characters.`;
+  const chunk = body.slice(offset, offset + limit);
+  if (offset + chunk.length >= body.length) return chunk;
+  return `${chunk}\n\n[…truncated: showing characters ${offset + 1}–${offset + chunk.length} of ${body.length}. Read on with offset=${offset + chunk.length}.]`;
+}
+
+const NO_PROJECT = "No project given. Pass project or set project_slug in the integration config.";
+
+const AGENT_HINT = "Use this for Sentry error monitoring and logs — list/read issues, pull latest issue events, inspect event attachments, and query structured logs. Start with list_issues + latest_event for issue debugging, list_event_attachments to see what an event captured, or query_logs for log search.";
 
 // Sentry's tools. Each declares its policy category, log line, and REST call;
 // gating, logging, and response shaping are handled by actionAdapter.
-function sentryTools(cfg: SentryConfig): ActionTool[] {
+export function sentryTools(cfg: SentryConfig): ActionTool[] {
   return [
     {
       name: "list_projects",
@@ -55,6 +92,52 @@ function sentryTools(cfg: SentryConfig): ActionTool[] {
       schema: { id: z.string().describe("Issue id (numeric) or short id") },
       detail: (a) => `latest_event ${a.id}`,
       run: (a) => sentryRequest(cfg, "GET", `/issues/${encodeURIComponent(String(a.id))}/events/latest/`),
+    },
+    {
+      name: "list_event_attachments",
+      description: "List an event's attachments (id, name, content type, size, created time). Defaults to the issue's latest event unless event_id is given.",
+      category: "read",
+      schema: {
+        id: z.string().describe("Issue id (numeric) or short id"),
+        event_id: z.string().optional().describe("Event id (hex). Omit to use the issue's latest event."),
+        project: z.string().optional().describe("Project slug. Defaults to the integration's project, else derived from the issue."),
+      },
+      detail: (a) => `list_event_attachments ${a.id}${a.event_id ? ` event=${a.event_id}` : ""}`,
+      run: async (a) => {
+        const issueId = String(a.id);
+        const project = (a.project as string | undefined) ?? cfg.project ?? (await resolveIssueProject(cfg, issueId));
+        if (!project) throw new Error(NO_PROJECT);
+        const eventId = (a.event_id as string | undefined) ?? (await resolveLatestEventId(cfg, issueId));
+        const attachments = await sentryRequest<Record<string, unknown>[]>(cfg, "GET", `/projects/${cfg.org}/${encodeURIComponent(project)}/events/${encodeURIComponent(eventId)}/attachments/`);
+        return Array.isArray(attachments) ? attachments.map((att) => ({ ...att, project })) : attachments;
+      },
+    },
+    {
+      name: "read_event_attachment",
+      description: "Fetch one attachment's contents by id. Text attachments come back as text, truncated at `limit` characters — pass `offset` to read further. Non-text attachments report their type and size only.",
+      category: "read",
+      schema: {
+        project: z.string().optional().describe("Project slug. Defaults to the integration's project."),
+        event_id: z.string().describe("Event id (hex) — returned by list_event_attachments."),
+        attachment_id: z.string().describe("Attachment id — returned by list_event_attachments."),
+        limit: z.number().int().min(1).max(100000).default(20000).describe("Max characters of text to return."),
+        offset: z.number().int().min(0).default(0).describe("Character offset to start from; used to read past the first chunk."),
+      },
+      detail: (a) => `read_event_attachment ${a.attachment_id} event=${a.event_id}`,
+      run: async (a) => {
+        const project = (a.project as string | undefined) ?? cfg.project;
+        if (!project) throw new Error(NO_PROJECT);
+        const res = await sentryRequestText(cfg, "GET", `/projects/${cfg.org}/${encodeURIComponent(project)}/events/${encodeURIComponent(String(a.event_id))}/attachments/${encodeURIComponent(String(a.attachment_id))}/`, { download: 1 });
+        const contentType = (res.contentType ?? "").split(";")[0]?.trim() ?? "";
+        if (contentType && !isTextMime(contentType)) {
+          const size = res.contentLength ?? String(res.text.length);
+          return `Attachment #${a.attachment_id} is ${contentType} (${size} bytes) — not text, contents cannot be shown.`;
+        }
+        const offset = a.offset as number;
+        const limit = a.limit as number;
+        const header = `Attachment #${a.attachment_id} (${contentType || "unknown"}, ${res.text.length} characters)`;
+        return `${header}\n\n${formatTextChunk(res.text, offset, limit)}`;
+      },
     },
     {
       name: "list_events",

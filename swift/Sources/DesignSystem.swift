@@ -6,7 +6,6 @@ import SwiftUI
 enum Radius {
     static let small: CGFloat = 6
     static let medium: CGFloat = 10
-    static let large: CGFloat = 14
 }
 
 // MARK: - Spacing
@@ -35,8 +34,14 @@ enum Surface {
     static let panel = Color(nsColor: panelColor)
     static let sunken = Color.primary.opacity(0.05)
 
-    static let sidebarColor = neutral(light: 0.925, dark: 0.105)
-    static let contentColor = neutral(light: 0.965, dark: 0.140)
+    // Row selection stays neutral so row text, not a tint, reads as loudest.
+    static let selection = Color(nsColor: NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return isDark ? NSColor.white.withAlphaComponent(0.16) : NSColor.black.withAlphaComponent(0.09)
+    })
+
+    static let sidebarColor = neutral(light: 0.957, dark: 0.118)
+    static let contentColor = neutral(light: 0.980, dark: 0.150)
     static let panelColor = neutral(light: 1.000, dark: 0.180)
 
     private static func neutral(light: CGFloat, dark: CGFloat) -> NSColor {
@@ -51,22 +56,12 @@ enum Surface {
 
 extension Color {
     static let cardFill = Color.primary.opacity(0.035)
-    static let hairline = Color.primary.opacity(0.07)
     static let controlFill = Color.primary.opacity(0.05)
 }
 
 extension View {
     func card(radius: CGFloat = Radius.medium) -> some View {
         background(Color.cardFill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-    }
-
-    func rowSeparator(inset: CGFloat = Space.md) -> some View {
-        overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.hairline)
-                .frame(height: 0.5)
-                .padding(.leading, inset)
-        }
     }
 
     func cardSurface(cornerRadius: CGFloat = Radius.medium) -> some View {
@@ -151,6 +146,110 @@ struct SplitViewDividerHider: NSViewRepresentable {
     }
 }
 
+// MARK: - Sidebar list selection
+
+private final class TableSelectionHiderView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        hideEnclosingSelectionHighlight()
+    }
+
+    override func layout() {
+        super.layout()
+        hideEnclosingSelectionHighlight()
+    }
+}
+
+private extension NSView {
+    func hideEnclosingSelectionHighlight() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            var view: NSView? = self
+            while let current = view {
+                Self.hideSelection(in: current)
+                view = current.superview
+            }
+            if let root = self.window?.contentView {
+                Self.hideSelection(in: root)
+            }
+        }
+    }
+
+    static func hideSelection(in view: NSView) {
+        if let tableView = view as? NSTableView, tableView.selectionHighlightStyle != .none {
+            tableView.selectionHighlightStyle = .none
+        }
+        for subview in view.subviews {
+            hideSelection(in: subview)
+        }
+    }
+}
+
+/// Placed in the background of a sidebar `List`, this turns off AppKit's own
+/// row highlight so selection reads only through `.listRowBackground`.
+struct TableSelectionHider: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        TableSelectionHiderView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.hideEnclosingSelectionHighlight()
+    }
+}
+
+// MARK: - Scroll indicator
+
+private final class ScrollerHiderView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        hideEnclosingScrollers()
+    }
+
+    override func layout() {
+        super.layout()
+        hideEnclosingScrollers()
+    }
+}
+
+private extension NSView {
+    func hideEnclosingScrollers() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            var view: NSView? = self
+            while let current = view {
+                Self.hideScrollers(in: current)
+                view = current.superview
+            }
+            if let root = self.window?.contentView {
+                Self.hideScrollers(in: root)
+            }
+        }
+    }
+
+    static func hideScrollers(in view: NSView) {
+        if let scrollView = view as? NSScrollView {
+            scrollView.hasVerticalScroller = false
+            scrollView.hasHorizontalScroller = false
+        }
+        for subview in view.subviews {
+            hideScrollers(in: subview)
+        }
+    }
+}
+
+/// Placed in the background of a scrollable pane, this hides the enclosing
+/// `NSScrollView`'s scroller entirely while leaving scrolling itself (wheel,
+/// trackpad) untouched — only the indicator is turned off, not the behavior.
+struct ScrollerHider: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        ScrollerHiderView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.hideEnclosingScrollers()
+    }
+}
+
 struct GlassGroup<Content: View>: View {
     @ViewBuilder var content: Content
 
@@ -163,14 +262,24 @@ struct GlassGroup<Content: View>: View {
 
 // MARK: - Typeface
 
+/// IBM Plex Sans for prose, IBM Plex Mono for machine strings. No `.ttf`
+/// files are bundled yet, so `resolvedName` always falls back to nil and
+/// callers render in the system face until fonts are added to the bundle.
 enum Typeface {
-    case data
-    case mono
+    static let sansFamily = "IBM Plex Sans"
+    static let monoFamily = "IBM Plex Mono"
 
-    static let current: Typeface = .data
+    private static let didRegister: Bool = {
+        guard let fontsURL = Bundle.main.url(forResource: "Fonts", withExtension: nil) else { return false }
+        var error: Unmanaged<CFError>?
+        return CTFontManagerRegisterFontsForURL(fontsURL as CFURL, .process, &error)
+    }()
 
-    static func design(_ requested: Font.Design) -> Font.Design {
-        current == .mono ? .monospaced : requested
+    static func resolvedName(for design: Font.Design) -> String? {
+        _ = didRegister
+        let family = design == .monospaced ? monoFamily : sansFamily
+        guard NSFontManager.shared.availableMembers(ofFontFamily: family) != nil else { return nil }
+        return family
     }
 }
 
@@ -190,23 +299,28 @@ extension EnvironmentValues {
 private enum TextStyleSize {
     static func base(_ style: Font.TextStyle) -> CGFloat {
         switch style {
-        case .largeTitle: 26
-        case .title: 22
+        case .largeTitle: 25
+        case .title: 21
         case .title2: 17
         case .title3: 15
-        case .headline: 13
+        case .headline: 14
         case .body: 13
         case .callout: 12
-        case .subheadline: 11
-        case .footnote: 10
+        case .subheadline: 11.5
+        case .footnote: 11
         case .caption: 10
-        case .caption2: 10
+        case .caption2: 9
         @unknown default: 13
         }
     }
 
     static func weight(_ style: Font.TextStyle) -> Font.Weight {
-        style == .headline ? .semibold : .regular
+        switch style {
+        case .largeTitle, .title, .title2: .bold
+        case .title3, .headline: .semibold
+        case .subheadline: .medium
+        default: .regular
+        }
     }
 }
 
@@ -217,14 +331,17 @@ extension Font {
         weight: Font.Weight? = nil,
         design: Font.Design = .default
     ) -> Font {
-        .system(
-            size: TextStyleSize.base(style) * scale,
-            weight: weight ?? TextStyleSize.weight(style),
-            design: Typeface.design(design)
-        )
+        let size = TextStyleSize.base(style) * scale
+        if let name = Typeface.resolvedName(for: design) {
+            return .custom(name, size: size)
+        }
+        return .system(size: size, weight: weight ?? TextStyleSize.weight(style), design: design)
     }
 
     static func dev(size: CGFloat, weight: Weight = .regular) -> Font {
+        if let name = Typeface.resolvedName(for: .monospaced) {
+            return .custom(name, size: size)
+        }
         let style: Font.TextStyle
         switch size {
         case ..<10: style = .caption2
@@ -265,6 +382,18 @@ extension View {
         monospacedDigit: Bool = false
     ) -> some View {
         modifier(ScaledFont(style: style, weight: weight, design: design, monospacedDigit: monospacedDigit))
+    }
+}
+
+/// The one stroke the design system allows: a leading-edge accent for a
+/// quoted or flagged block. Color carries the meaning; nothing else does.
+struct AccentRule: View {
+    var color: Color = .secondary
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 1)
+            .fill(color)
+            .frame(width: 2)
     }
 }
 
@@ -521,7 +650,7 @@ struct InspectorRow<Content: View>: View {
             .foregroundStyle(.primary)
     }
 
-    init(_ label: String, labelWidth: CGFloat = 88, dividerInset: CGFloat = 0, @ViewBuilder content: () -> Content) {
+    init(_ label: String, labelWidth: CGFloat = 88, @ViewBuilder content: () -> Content) {
         self.label = label
         self.labelWidth = labelWidth
         self.content = content()

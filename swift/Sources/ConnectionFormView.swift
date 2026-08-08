@@ -36,7 +36,7 @@ struct ConnectionFormView: View {
     var body: some View {
         VStack(spacing: 0) {
             formHeader
-            Divider()
+                .background(Surface.panel)
             Group {
                 if adapters.isEmpty {
                     if adaptersLoadFailed { adapterErrorView } else { loadingView }
@@ -46,8 +46,8 @@ struct ConnectionFormView: View {
                     ScrollView { formBody.padding(.horizontal, Space.xl).padding(.vertical, Space.lg) }
                 }
             }
-            Divider()
             formFooter
+                .background(Surface.panel)
         }
         .background(Surface.content.ignoresSafeArea())
         .onAppear {
@@ -154,12 +154,6 @@ struct ConnectionFormView: View {
                             .padding(.horizontal, Space.md)
                             .padding(.vertical, Space.sm)
                             .contentShape(Rectangle())
-                            .overlay(alignment: .bottom) {
-                                Rectangle()
-                                    .fill(Color.hairline)
-                                    .frame(height: 0.5)
-                                    .padding(.leading, 44)
-                            }
                         }
                         .buttonStyle(.plain)
                     }
@@ -329,10 +323,6 @@ struct ConnectionFormView: View {
                 toolRows(defaults)
 
                 if !extras.isEmpty {
-                    Rectangle()
-                        .fill(Color.hairline)
-                        .frame(height: 0.5)
-                        .padding(.top, Space.xs)
                     VStack(alignment: .leading, spacing: Space.xxs) {
                         Text("More tools")
                             .scaledFont(.caption, weight: .semibold)
@@ -353,17 +343,10 @@ struct ConnectionFormView: View {
         }
     }
 
-    // A tool list with hairline dividers between rows (no trailing divider).
     @ViewBuilder
     private func toolRows(_ tools: [AdapterToolDef]) -> some View {
         ForEach(tools) { tool in
             toolRow(tool)
-            if tool.id != tools.last?.id {
-                Rectangle()
-                    .fill(Color.hairline)
-                    .frame(height: 0.5)
-                    .padding(.leading, Space.xxl)
-            }
         }
     }
 
@@ -521,7 +504,7 @@ struct ConnectionFormView: View {
     // Form rows are wider than the read-only inspector rows; reuse the shared
     // template (Glass.swift) so the layout stays in one place.
     private func row<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {
-        InspectorRow(label, labelWidth: 104, dividerInset: 124, content: content)
+        InspectorRow(label, labelWidth: 104, content: content)
     }
 
     private func browseButton(title: String, types: [String], onPick: @escaping (String) -> Void) -> some View {

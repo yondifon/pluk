@@ -95,3 +95,44 @@ export function isSshPending(err: unknown): boolean {
 export function isSshStalled(err: unknown): boolean {
   return (err as { code?: string } | null)?.code === SSH_STALLED_CODE;
 }
+
+// Both codes are transient: an approval is in flight or the agent has not yet
+// responded. They are not permanent failures — the operation succeeds on the
+// next attempt once the approval lands. All other codes are deterministic and
+// must not be retried.
+export function isTransientSshError(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  return code === SSH_PENDING_CODE || code === "SSH_AGENT_DENIED";
+}
+
+// Retry delays: 3s then 6s. Human approval takes at least a few seconds
+// (reaching for a phone or 1Password), so a shorter first delay is useless.
+// Two retries cover the alternating DENIED/PENDING pattern seen in practice.
+// Total wait (~9s) stays well inside the 25s connect budget and any caller
+// timeout. Back off rather than hammer: each attempt can itself trigger a
+// new agent prompt.
+const RETRY_DELAYS_MS = [3_000, 6_000];
+
+export async function withSshApprovalRetry<T>(fn: () => Promise<T>): Promise<T> {
+  const start = Date.now();
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isTransientSshError(err)) throw err;
+      if (attempt < RETRY_DELAYS_MS.length) {
+        await new Promise<void>((res) => setTimeout(res, RETRY_DELAYS_MS[attempt]!));
+        continue;
+      }
+      const elapsed = Math.round((Date.now() - start) / 1000);
+      const original = err as { message?: string; code?: string; hint?: string };
+      const tagged = new Error(
+        `${original.message ?? String(err)} (retried ${attempt} time${attempt === 1 ? "" : "s"} over ${elapsed}s — no further automatic retry)`
+      );
+      (tagged as typeof tagged & { code?: string }).code = original.code;
+      (tagged as typeof tagged & { hint?: string }).hint = original.hint;
+      throw tagged;
+    }
+  }
+  throw new Error("unreachable");
+}

@@ -197,7 +197,6 @@ private struct MarkdownCodeBlock: View {
         }
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.sm)
-        .overlay(alignment: .bottom) { Divider().opacity(0.7) }
     }
 
     private func rebuild() async {

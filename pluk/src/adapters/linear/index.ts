@@ -3,6 +3,7 @@ import type { Integration } from "../../store/integrations.js";
 import { actionAdapter, type ActionTool } from "../kit.js";
 import { linearGraphQL } from "./client.js";
 import { linearFields } from "./fields.js";
+import { resolveLabels, resolveState, resolveTeam, resolveUser } from "./resolve.js";
 
 const AGENT_HINT = "Use this for Linear issue tracking — start with my_issues for the work assigned to you, or list_issues / search_issues / list_projects to look wider. Read a thread with list_comments and check who replied to you with inbox. Check project progress and issue counts with list_projects and a project's status-update log with project_updates. Create issues, comment or reply, move an issue with update_issue, and attach a pull request with link_url when write is permitted. Read before writing.";
 
@@ -53,10 +54,7 @@ export function threadComments(nodes: Record<string, unknown>[]): Record<string,
   return roots;
 }
 
-// Linear's tools. `apiKey`/`defaultTeam` are captured from the connection; each
-// tool just declares its policy category, log line, and GraphQL call — gating,
-// logging, and response shaping are handled by actionAdapter.
-function linearTools(apiKey: string, defaultTeam: string | undefined): ActionTool[] {
+export function linearTools(apiKey: string, defaultTeam: string | undefined): ActionTool[] {
   return [
     {
       name: "list_issues",
@@ -177,7 +175,7 @@ function linearTools(apiKey: string, defaultTeam: string | undefined): ActionToo
     },
     {
       name: "list_teams",
-      description: "List teams (id, name, key). Use a team id to create issues.",
+      description: "List teams (id, name, key).",
       category: "read",
       defaultEnabled: false,
       run: async () => {
@@ -187,7 +185,7 @@ function linearTools(apiKey: string, defaultTeam: string | undefined): ActionToo
     },
     {
       name: "list_states",
-      description: "List a team's workflow states (id, name, type). Use a state id with update_issue to move an issue.",
+      description: "List a team's workflow states (id, name, type). Use a state name with update_issue to move an issue.",
       category: "read",
       defaultEnabled: false,
       schema: {
@@ -248,19 +246,30 @@ function linearTools(apiKey: string, defaultTeam: string | undefined): ActionToo
     },
     {
       name: "create_issue",
-      description: "Create a new issue. Needs a team id (see list_teams).",
+      description: "Create a new issue. Team by key or name, assignee by email or display name, state and labels by name.",
       category: "write",
       schema: {
-        team_id: z.string().describe("Team id (UUID) from list_teams"),
+        team: z.string().describe("Team key or name, e.g. ENG or Engineering"),
         title: z.string().describe("Issue title"),
         description: z.string().optional().describe("Issue description (markdown)"),
+        assignee: z.string().optional().describe("Assignee's email or display name; omit to leave unassigned"),
+        state: z.string().optional().describe("Initial workflow state name, e.g. In Progress"),
+        priority: z.number().int().min(0).max(4).optional().describe("0 none, 1 urgent, 2 high, 3 normal, 4 low"),
+        labels: z.array(z.string()).optional().describe("Label names to apply"),
       },
-      detail: (a) => `create_issue team=${a.team_id} "${a.title}"`,
+      detail: (a) => `create_issue team=${a.team} "${a.title}"`,
       run: async (a) => {
+        const team = await resolveTeam(apiKey, a.team as string);
+        const input: Record<string, unknown> = { teamId: team.id, title: a.title };
+        if (a.description !== undefined) input.description = a.description;
+        if (a.assignee !== undefined) input.assigneeId = (await resolveUser(apiKey, a.assignee as string)).id;
+        if (a.state !== undefined) input.stateId = (await resolveState(apiKey, team.key, a.state as string)).id;
+        if (a.priority !== undefined) input.priority = a.priority;
+        if (a.labels !== undefined) input.labelIds = await resolveLabels(apiKey, a.labels as string[]);
         const data = await linearGraphQL<{ issueCreate: { success: boolean; issue: unknown } }>(
           apiKey,
-          `mutation($input:IssueCreateInput!){ issueCreate(input:$input){ success issue { id identifier title url } } }`,
-          { input: { teamId: a.team_id, title: a.title, description: a.description } },
+          `mutation($input:IssueCreateInput!){ issueCreate(input: $input){ success issue { id identifier title url } } }`,
+          { input },
         );
         return data.issueCreate;
       },
@@ -286,26 +295,39 @@ function linearTools(apiKey: string, defaultTeam: string | undefined): ActionToo
     },
     {
       name: "update_issue",
-      description: "Update an issue — move it to another state, reassign it, or change priority, estimate, title or description. Get state ids from list_states.",
+      description: "Update an issue — move it to another state, reassign or unassign, or change title, description, priority, estimate or labels. State by name, assignee by email or display name, labels by name.",
       category: "write",
       schema: {
         id: z.string().describe("Issue id or identifier (e.g. ENG-123)"),
-        state_id: z.string().optional().describe("Workflow state id from list_states"),
-        assignee_id: z.string().optional().describe("User id to assign the issue to"),
+        state: z.string().optional().describe("New workflow state name, e.g. Done"),
+        assignee: z.string().nullable().optional().describe("Assignee's email or display name; pass null to unassign"),
         priority: z.number().int().min(0).max(4).optional().describe("0 none, 1 urgent, 2 high, 3 normal, 4 low"),
         estimate: z.number().int().min(0).optional().describe("Estimate points"),
         title: z.string().optional().describe("New title"),
         description: z.string().optional().describe("New description (markdown); replaces the existing one"),
+        labels: z.array(z.string()).optional().describe("Label names; replaces the issue's current labels"),
       },
       detail: (a) => `update_issue ${a.id} ${Object.keys(a).filter((k) => k !== "id" && a[k] !== undefined).join(",")}`,
       run: async (a) => {
         const input: Record<string, unknown> = {};
-        if (a.state_id !== undefined) input.stateId = a.state_id;
-        if (a.assignee_id !== undefined) input.assigneeId = a.assignee_id;
+        if (a.state !== undefined) {
+          const issue = await linearGraphQL<{ issue: { team: { key: string } } | null }>(
+            apiKey,
+            `query($id:String!){ issue(id:$id){ team { key } } }`,
+            { id: a.id },
+          );
+          if (!issue.issue) throw new Error(`Issue "${a.id}" not found.`);
+          input.stateId = (await resolveState(apiKey, issue.issue.team.key, a.state as string)).id;
+        }
+        if (a.assignee !== undefined) {
+          const assignee = a.assignee as string | null;
+          input.assigneeId = assignee === null ? null : (await resolveUser(apiKey, assignee)).id;
+        }
         if (a.priority !== undefined) input.priority = a.priority;
         if (a.estimate !== undefined) input.estimate = a.estimate;
         if (a.title !== undefined) input.title = a.title;
         if (a.description !== undefined) input.description = a.description;
+        if (a.labels !== undefined) input.labelIds = await resolveLabels(apiKey, a.labels as string[]);
         if (!Object.keys(input).length) throw new Error("update_issue needs at least one field to change.");
         const data = await linearGraphQL<{ issueUpdate: { success: boolean; issue: unknown } }>(
           apiKey,

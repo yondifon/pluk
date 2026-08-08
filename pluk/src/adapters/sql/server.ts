@@ -24,7 +24,7 @@ import { buildInstructions } from "../../mcp/instructions.js";
 import { ok, err, runGated, type ToolResult, type LogSnapshot } from "../kit.js";
 import type { ToolHost } from "../../mcp/namespace.js";
 import { formatSqlError } from "./errors.js";
-import { isSshPending } from "../../ssh/pending.js";
+import { isSshPending, withSshApprovalRetry } from "../../ssh/pending.js";
 
 // Human label for a SQL adapter id — single source for the manifest and the
 // agent-facing instructions so they never drift.
@@ -214,7 +214,7 @@ export function registerSqlServer(server: ToolHost, conn: Integration, ownerId: 
   // tool-level log entry here (only the gated query tools below create one).
   async function introspect(label: string, fn: (driver: Driver) => Promise<string>, database?: string): Promise<ToolResult> {
     try {
-      const driver = await getDriver(ownerId, conn, database);
+      const driver = await withSshApprovalRetry(() => getDriver(ownerId, conn, database));
       return await withToolTimeout((async (): Promise<ToolResult> => ok(await fn(driver)))(), label);
     } catch (e) {
       // A connect awaiting an interactive approval isn't broken — evicting it
@@ -247,7 +247,6 @@ export function registerSqlServer(server: ToolHost, conn: Integration, ownerId: 
   type QueryRows = { rows: unknown[]; fields?: string[] };
   type SqlResultMeta = {
     env: string;
-    host: string;
     connection: string;
     type: string;
     database?: string;
@@ -268,7 +267,6 @@ export function registerSqlServer(server: ToolHost, conn: Integration, ownerId: 
   function resultWithMeta(result: QueryRows, rows: unknown[], truncated: boolean, rowCap: number | null, database?: string): SqlResultMeta {
     return {
       env: conn.environment ?? "development",
-      host: String(conn.config.host ?? conn.config.filename ?? "localhost"),
       connection: conn.name,
       type: conn.type,
       database: effectiveDb(database),
@@ -350,7 +348,7 @@ export function registerSqlServer(server: ToolHost, conn: Integration, ownerId: 
       async (logId) => {
         const queryAc = registerQueryAbort(logId, ownerId);
         try {
-          const driver = await getDriver(ownerId, conn, database);
+          const driver = await withSshApprovalRetry(() => getDriver(ownerId, conn, database));
           const block = await costBlock(driver, sql, params);
           if (block) return { blocked: block };
 
@@ -410,7 +408,7 @@ ${sql}` } },
     { mimeType: "text/plain", description: "Full database schema: tables, columns, primary keys, foreign keys" },
     async () => {
       try {
-        const driver = await getDriver(ownerId, conn);
+        const driver = await withSshApprovalRetry(() => getDriver(ownerId, conn));
         return await withToolTimeout((async () => {
           const text = await driver.getFullSchema();
           return { contents: [{ uri: "schema://full", mimeType: "text/plain", text }] };
@@ -573,7 +571,7 @@ ${sql}` } },
         async (logId) => {
           const queryAc = registerQueryAbort(logId, ownerId);
           try {
-            const driver = await getDriver(ownerId, conn, r.db);
+            const driver = await withSshApprovalRetry(() => getDriver(ownerId, conn, r.db));
             const result = await runStatement<QueryRows>(driver, statement, queryAc.signal, "export_query", timeoutMs, params);
 
             const { rows, truncated, limit } = capRows(result.rows, policy.maxRows);

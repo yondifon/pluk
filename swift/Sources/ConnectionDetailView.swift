@@ -452,7 +452,6 @@ struct ConnectionDetailView: View {
         VStack(spacing: 0) {
             header
             tabBar
-            Rectangle().fill(Color.hairline).frame(height: 0.5)
             tabContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

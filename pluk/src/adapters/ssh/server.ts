@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Integration } from "../../store/integrations.js";
 import { getSavedCommand, listSavedCommands } from "../../store/savedCommands.js";
-import { runCommand, openForward, listForwards, closeForward } from "./client.js";
+import { runCommand, openForward, listForwards, closeForward, MAX_COMMAND_TIMEOUT_S } from "./client.js";
 import { logError } from "../../log.js";
 import { humanizeSshError } from "./errors.js";
 import { buildInstructions } from "../../mcp/instructions.js";
@@ -92,18 +92,19 @@ export function registerSshServer(server: ToolHost, conn: Integration, ownerId: 
   // shaped MCP result. No allowlist or permission check — the command runs as-is;
   // confirmation by the client is the safeguard. Shared by every command tool so
   // logging stays consistent. A non-zero exit is logged "error" with `exit N`.
-  function runOne(command: string, workingDir: string | undefined, toolName: string): Promise<ToolResult> {
+  function runOne(command: string, workingDir: string | undefined, toolName: string, timeoutSeconds?: number): Promise<ToolResult> {
     const trimmed = command.trim();
     if (!trimmed) return Promise.resolve(err("Error: empty command."));
 
     const detail = workingDir ? `[${workingDir}] ${trimmed}` : trimmed;
     const finalCommand = workingDir ? `cd ${quoteDir(workingDir)} && ${trimmed}` : trimmed;
+    const timeoutMs = timeoutSeconds === undefined ? undefined : timeoutSeconds * 1000;
 
     return runGated(
       conn,
       { category: "command", action: toolName, detail },
       async () => {
-        const { stdout, stderr, code, truncated } = await runCommand(ownerId, conn, finalCommand);
+        const { stdout, stderr, code, truncated } = await runCommand(ownerId, conn, finalCommand, timeoutMs);
         const text = formatResult(stdout, stderr, code, truncated);
         const result = { rows: [{ exit_code: code }] };
         return code === 0
@@ -119,13 +120,14 @@ export function registerSshServer(server: ToolHost, conn: Integration, ownerId: 
 
   if (on("run_command")) server.tool(
     "run_command",
-    "Run a shell command on the remote host over SSH. The command runs unmodified as the connecting user — confirm before running, as it can change or destroy remote state.",
+    "Run a shell command on the remote host over SSH. The command runs unmodified as the connecting user — confirm before running, as it can change or destroy remote state. Commands time out after 60 seconds by default; pass `timeout` (up to 600 seconds) for long-running commands.",
     {
       command: z.string().describe("The command to run, e.g. `docker compose ps`"),
       working_dir: z.string().optional().describe("Directory to run in (e.g. /srv/app). Optional."),
+      timeout: z.number().int().positive().max(MAX_COMMAND_TIMEOUT_S).optional().describe("Max seconds to wait before aborting the command (default 60)."),
     },
     CONFIRM_ANNOTATIONS,
-    ({ command, working_dir }) => runOne(command, working_dir, "run_command"),
+    ({ command, working_dir, timeout }) => runOne(command, working_dir, "run_command", timeout),
   );
 
   if (on("run_batch")) server.tool(

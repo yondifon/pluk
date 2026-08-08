@@ -44,7 +44,7 @@ struct GroupFormView: View {
             }
             .padding(.horizontal, Space.xl)
             .padding(.vertical, Space.lg)
-            Divider()
+            .background(Surface.panel)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
@@ -76,9 +76,6 @@ struct GroupFormView: View {
                             VStack(spacing: 0) {
                                 ForEach(connections) { conn in
                                     memberRow(conn)
-                                    if conn.id != connections.last?.id {
-                                        Rectangle().fill(Color.hairline).frame(height: 0.5).padding(.leading, Space.xxl - 2)
-                                    }
                                 }
                             }
                             .cardSurface()
@@ -88,7 +85,6 @@ struct GroupFormView: View {
                 .padding(Space.xl)
             }
 
-            Divider()
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
@@ -99,6 +95,7 @@ struct GroupFormView: View {
             }
             .padding(.horizontal, Space.xl)
             .padding(.vertical, Space.lg)
+            .background(Surface.panel)
         }
         .background(Surface.content.ignoresSafeArea())
         .frame(width: 480, height: 580)

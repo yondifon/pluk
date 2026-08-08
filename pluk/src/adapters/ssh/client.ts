@@ -4,7 +4,7 @@ import { userInfo } from "os";
 import type { Integration } from "../../store/integrations.js";
 import { onOwnerClose } from "../../mcp/pool.js";
 import { connectSSH, evictSharedSSHClient, getSharedSSHClient, type SSHParams } from "../../ssh/client.js";
-import { isSshPending } from "../../ssh/pending.js";
+import { isSshPending, withSshApprovalRetry } from "../../ssh/pending.js";
 
 // Remote command execution over SSH for the ssh adapter. Connections are cached
 // per (owner, integration) and reused across tool calls, so an agent-confirm
@@ -13,6 +13,7 @@ import { isSshPending } from "../../ssh/pending.js";
 
 const IDLE_MS = 5 * 60 * 1000;
 const DEFAULT_EXEC_TIMEOUT_MS = 60_000;
+export const MAX_COMMAND_TIMEOUT_S = 600;
 
 export interface ExecResult {
   stdout: string;
@@ -28,7 +29,7 @@ const MAX_OUTPUT_BYTES = 1_000_000;
 // A command-level timeout means the *channel* gave up, not that the SSH
 // connection died — so the cached connection (and its agent auth) is still good
 // and must not be evicted. Tag the error so the caller can tell them apart.
-class CommandTimeoutError extends Error {}
+export class CommandTimeoutError extends Error {}
 
 function params(conn: Integration): SSHParams {
   const c = conn.config;
@@ -59,6 +60,9 @@ function execOnce(client: Client, command: string, timeoutMs: number): Promise<E
         return buf + chunk.toString();
       };
       const timer = setTimeout(() => {
+        // SIGKILL via sshd first, then close the channel — the remote process
+        // must not keep running on the host after the caller's limit.
+        stream.signal("KILL");
         stream.close();
         reject(new CommandTimeoutError(`Command timed out after ${Math.round(timeoutMs / 1000)}s`));
       }, timeoutMs);
@@ -143,21 +147,23 @@ export async function runCommand(
   timeoutMs = DEFAULT_EXEC_TIMEOUT_MS,
 ): Promise<ExecResult> {
   const k = key(ownerId, conn.id);
-  try {
-    const client = await getClient(ownerId, conn);
-    return await execOnce(client, command, timeoutMs);
-  } catch (err) {
-    // A command timeout leaves the SSH connection healthy — keep it so the next
-    // call doesn't trigger a fresh agent (1Password) confirm. A connect still
-    // waiting on an interactive approval must also stay pooled, or evicting it
-    // would kill the tunnel the moment the user approves. Any other failure
-    // may mean a dead connection, so evict and reconnect next time.
-    if (!(err instanceof CommandTimeoutError) && !isSshPending(err)) {
-      evictByKey(k);
-      evictSharedSSHClient(ownerId, params(conn));
+  return withSshApprovalRetry(async () => {
+    try {
+      const client = await getClient(ownerId, conn);
+      return await execOnce(client, command, timeoutMs);
+    } catch (err) {
+      // A command timeout leaves the SSH connection healthy — keep it so the next
+      // call doesn't trigger a fresh agent (1Password) confirm. A connect still
+      // waiting on an interactive approval must also stay pooled, or evicting it
+      // would kill the tunnel the moment the user approves. Any other failure
+      // may mean a dead connection, so evict and reconnect next time.
+      if (!(err instanceof CommandTimeoutError) && !isSshPending(err)) {
+        evictByKey(k);
+        evictSharedSSHClient(ownerId, params(conn));
+      }
+      throw err;
     }
-    throw err;
-  }
+  });
 }
 
 /** Close all cached SSH connections for an owner (called on reset). */

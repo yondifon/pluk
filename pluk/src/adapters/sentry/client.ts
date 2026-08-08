@@ -22,13 +22,15 @@ export function sentryConfig(conn: Integration): SentryConfig {
   return { baseUrl, token, org, project };
 }
 
-export async function sentryRequest<T>(
+type Query = Record<string, string | number | boolean | (string | number | boolean)[] | undefined>;
+
+async function request(
   cfg: SentryConfig,
   method: string,
   path: string,
-  query?: Record<string, string | number | boolean | (string | number | boolean)[] | undefined>,
+  query?: Query,
   body?: unknown,
-): Promise<T> {
+): Promise<Response> {
   if (!cfg.token) throw new Error("Sentry auth token is missing. Set it in the integration config.");
   if (!cfg.org) throw new Error("Sentry organization slug is missing. Set it in the integration config.");
 
@@ -66,6 +68,37 @@ export async function sentryRequest<T>(
     throw new Error(`Sentry API ${res.status}${detail}`);
   }
 
+  return res;
+}
+
+export async function sentryRequest<T>(
+  cfg: SentryConfig,
+  method: string,
+  path: string,
+  query?: Query,
+  body?: unknown,
+): Promise<T> {
+  const res = await request(cfg, method, path, query, body);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+export interface RawBody {
+  text: string;
+  contentType: string | null;
+  contentLength: string | null;
+}
+
+export async function sentryRequestText(
+  cfg: SentryConfig,
+  method: string,
+  path: string,
+  query?: Query,
+): Promise<RawBody> {
+  const res = await request(cfg, method, path, query);
+  return {
+    text: await res.text(),
+    contentType: res.headers.get("content-type"),
+    contentLength: res.headers.get("content-length"),
+  };
 }

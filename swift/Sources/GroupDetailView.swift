@@ -35,7 +35,6 @@ struct GroupDetailView: View {
         VStack(spacing: 0) {
             header
             tabBar
-            Rectangle().fill(Color.hairline).frame(height: 0.5)
             switch tab {
             case .logs:
                 LogsTab(scope: .group(group), store: store)
