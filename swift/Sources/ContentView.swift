@@ -649,7 +649,6 @@ private struct FilterPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .background(Surface.panel)
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.lg) {
                     if !types.isEmpty {

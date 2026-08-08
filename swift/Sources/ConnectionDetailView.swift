@@ -238,12 +238,23 @@ struct ConfigSnippetSection: View {
                 Text("Client")
                     .scaledFont(.callout)
                     .foregroundColor(.secondary)
-                Picker("", selection: $selectedChoice) {
+                Menu {
                     ForEach(ClientChoice.allChoices) { choice in
-                        Text(choice.label).tag(choice)
+                        Button { selectedChoice = choice } label: {
+                            Text(choice.label)
+                        }
                     }
+                } label: {
+                    HStack(spacing: Space.xs) {
+                        Text(selectedChoice.label)
+                            .scaledFont(.callout)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8))
+                    }
+                    .foregroundColor(.secondary)
                 }
-                .pickerStyle(.menu)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
                 .onChange(of: selectedChoice) { _, choice in
                     // Keep the scope valid when switching to a global-only client.
@@ -253,12 +264,23 @@ struct ConfigSnippetSection: View {
                 }
                 // Only offer a scope choice when the selection has more than one.
                 if selectedChoice.supportedScopes.count > 1 {
-                    Picker("", selection: $selectedScope) {
+                    Menu {
                         ForEach(selectedChoice.supportedScopes) { scope in
-                            Text(scope.label).tag(scope)
+                            Button { selectedScope = scope } label: {
+                                Text(scope.label)
+                            }
                         }
+                    } label: {
+                        HStack(spacing: Space.xs) {
+                            Text(selectedScope.label)
+                                .scaledFont(.callout)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 8))
+                        }
+                        .foregroundColor(.secondary)
                     }
-                    .pickerStyle(.menu)
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
                     .fixedSize()
                 }
                 Spacer()
@@ -320,21 +342,23 @@ struct ConfigSnippetSection: View {
                 .foregroundColor(.secondary)
 
             if !targets.isEmpty {
-                VStack(alignment: .leading, spacing: Space.xs) {
+                VStack(spacing: 0) {
                     ForEach(targets) { client in
-                        HStack(spacing: Space.sm) {
+                        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
                             Text(client.label)
                                 .scaledFont(.callout)
+                            Spacer(minLength: Space.md)
                             Text(client.configPath(selectedScope))
-                                .font(.mono(11))
+                                .font(.mono(10))
                                 .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                                 .textSelection(.enabled)
                         }
+                        .padding(.horizontal, Space.md)
+                        .padding(.vertical, Space.sm + 1)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(Space.md)
-                .codeBlockSurface(cornerRadius: Radius.small)
             }
         }
     }
@@ -422,14 +446,6 @@ private enum DetailTab: String, CaseIterable {
     case logs     = "Logs"
     case overview = "Overview"
     case policy   = "Tools"
-
-    var icon: String {
-        switch self {
-        case .logs:     "list.bullet"
-        case .overview: "link"
-        case .policy:   "wrench.adjustable"
-        }
-    }
 }
 
 // MARK: - Detail view
@@ -521,7 +537,11 @@ struct ConnectionDetailView: View {
     // MARK: - Tab bar
 
     private var tabBar: some View {
-        PillTabs(tabs: DetailTab.allCases, title: \.rawValue, icon: \.icon, selection: $selectedTab)
+        TextTabs(tabs: DetailTab.allCases, title: \.rawValue, selection: $selectedTab)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, Space.sm)
+            .padding(.horizontal, Space.xl - Space.xs)
+            .padding(.bottom, Space.sm)
     }
 
     // MARK: - Tab content

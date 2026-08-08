@@ -92,124 +92,123 @@ struct LogsTab: View {
 
     private var toolbar: some View {
         HStack(spacing: Space.md) {
-            // Stats pills
-            HStack(spacing: Space.md) {
-                statPill(entries.count, label: "total")
-                statPill(stats.allowed, label: "ok")
-                if stats.blocked > 0 {
-                    statPill(stats.blocked, label: "blocked")
-                }
-                if stats.error > 0 {
-                    statPill(stats.error, label: "err")
-                }
-            }
-            .fixedSize()
-
-            // Search — scan SQL / tool / member
-            HStack(spacing: Space.xs) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                TextField(scope.isGroup ? "Filter SQL, tool, integration…" : "Filter SQL or tool…", text: $search)
-                    .textFieldStyle(.plain)
-                    .scaledFont(.callout)
-                    .lineLimit(1)
-                if !search.isEmpty {
-                    Button { search = "" } label: {
-                        Image(systemName: "xmark.circle.fill").font(.system(size: 10))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.secondary)
-                }
-            }
-            .padding(.horizontal, Space.sm)
-            .padding(.vertical, Space.xs)
-            .background(Color.controlFill)
-            .clipShape(.capsule)
-            .frame(minWidth: 120, maxWidth: 240)
-            .layoutPriority(-1)
-
+            searchField
             Spacer(minLength: Space.sm)
-
-            // Verdict filter — segmented capsule track; labels never wrap
-            HStack(spacing: Space.xxs) {
-                ForEach(VerdictFilter.allCases, id: \.self) { f in
-                    Button { filter = f } label: {
-                        Text(f.rawValue)
-                            .scaledFont(.callout)
-                            .fontWeight(filter == f ? .semibold : .regular)
-                            .foregroundColor(filter == f ? .accentColor : .secondary)
-                            .lineLimit(1)
-                            .fixedSize()
-                            .padding(.horizontal, Space.sm)
-                            .padding(.vertical, Space.xs)
-                            .background(filter == f ? Color.accentColor.opacity(0.12) : .clear)
-                            .clipShape(.capsule)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(Space.xxs)
-            .background(Color.controlFill)
-            .clipShape(.capsule)
-            .fixedSize()
-
-            // Retention
-            Menu {
-                let options = [7, 14, 30, 60, 90, 0]
-                ForEach(options, id: \.self) { days in
-                    Button(days == 0 ? "Keep forever" : "Keep \(days) days") {
-                        store.logRetentionDays = days
-                        store.purgeOldLogs()
-                        reload()
-                    }
-                }
-                Divider()
-                Button(scope.isGroup ? "Clear all logs for this group" : "Clear all logs for this integration", role: .destructive) {
-                    switch scope {
-                    case .connection(let c): store.clearAllLogs(connectionId: c.id)
-                    case .group(let g): store.clearAllLogs(groupId: g.id)
-                    }
-                    reload()
-                }
-            } label: {
-                HStack(spacing: Space.xxs) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 10))
-                    let days = store.logRetentionDays
-                    Text(days == 0 ? "Forever" : "\(days)d")
-                        .scaledFont(.callout)
-                }
-                .foregroundColor(.secondary)
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("Log retention — how long to keep activity history")
-
-            Button {
-                reload()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11))
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(.secondary)
-            .help("Refresh")
+            verdictMenu
+            retentionMenu
+            refreshButton
         }
         .padding(.horizontal, Space.xl)
         .padding(.vertical, Space.sm)
         .background(Surface.panel)
     }
 
-    private func statPill(_ count: Int, label: String) -> some View {
-        HStack(spacing: Space.xxs) {
-            Text("\(count)")
-                .font(.mono(11, weight: .medium))
-                .foregroundColor(.primary)
-            Text(label)
-                .scaledFont(.caption)
+    private var searchField: some View {
+        HStack(spacing: Space.xs) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 10))
                 .foregroundColor(.secondary)
+            TextField(scope.isGroup ? "Filter SQL, tool, integration…" : "Filter SQL or tool…", text: $search)
+                .textFieldStyle(.plain)
+                .scaledFont(.callout)
+                .lineLimit(1)
+            if !search.isEmpty {
+                Button { search = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 10))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+            }
         }
+        .padding(.horizontal, Space.sm)
+        .padding(.vertical, Space.xs)
+        .background(Color.controlFill)
+        .clipShape(.capsule)
+        .frame(minWidth: 160, idealWidth: 280, maxWidth: 320)
+        .layoutPriority(1)
+    }
+
+    private var verdictMenu: some View {
+        Menu {
+            ForEach(VerdictFilter.allCases, id: \.self) { f in
+                Button { filter = f } label: {
+                    HStack(spacing: Space.xs) {
+                        Text(f.rawValue)
+                        Text(verdictCount(f))
+                            .font(.mono(10))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: Space.xs) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .font(.system(size: 10))
+                Text(filter.rawValue)
+                    .scaledFont(.callout)
+                Text("· \(verdictCount(filter))")
+                    .font(.mono(10))
+                    .foregroundStyle(.tertiary)
+            }
+            .foregroundColor(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Filter by verdict")
+    }
+
+    private func verdictCount(_ f: VerdictFilter) -> String {
+        switch f {
+        case .all:     "\(entries.count)"
+        case .allowed: "\(stats.allowed)"
+        case .blocked: "\(stats.blocked)"
+        case .error:   "\(stats.error)"
+        }
+    }
+
+    private var retentionMenu: some View {
+        Menu {
+            let options = [7, 14, 30, 60, 90, 0]
+            ForEach(options, id: \.self) { days in
+                Button(days == 0 ? "Keep forever" : "Keep \(days) days") {
+                    store.logRetentionDays = days
+                    store.purgeOldLogs()
+                    reload()
+                }
+            }
+            Divider()
+            Button(scope.isGroup ? "Clear all logs for this group" : "Clear all logs for this integration", role: .destructive) {
+                switch scope {
+                case .connection(let c): store.clearAllLogs(connectionId: c.id)
+                case .group(let g): store.clearAllLogs(groupId: g.id)
+                }
+                reload()
+            }
+        } label: {
+            HStack(spacing: Space.xxs) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 10))
+                let days = store.logRetentionDays
+                Text(days == 0 ? "Forever" : "\(days)d")
+                    .scaledFont(.callout)
+            }
+            .foregroundColor(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Log retention — how long to keep activity history")
+    }
+
+    private var refreshButton: some View {
+        Button {
+            reload()
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 11))
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(.secondary)
+        .help("Refresh")
     }
 
     // MARK: - Empty state

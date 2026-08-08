@@ -18,7 +18,6 @@ struct GroupDetailView: View {
     enum GroupTab: String, CaseIterable {
         case logs = "Logs"
         case overview = "Overview"
-        var icon: String { self == .overview ? "square.stack.3d.up" : "list.bullet" }
     }
 
     private var members: [Connection] {
@@ -57,7 +56,11 @@ struct GroupDetailView: View {
     // MARK: - Tab bar
 
     private var tabBar: some View {
-        PillTabs(tabs: GroupTab.allCases, title: \.rawValue, icon: \.icon, selection: $tab)
+        TextTabs(tabs: GroupTab.allCases, title: \.rawValue, selection: $tab)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, Space.sm)
+            .padding(.horizontal, Space.xl - Space.xs)
+            .padding(.bottom, Space.sm)
     }
 
     // MARK: - Header
@@ -133,26 +136,30 @@ struct GroupDetailView: View {
                 VStack(spacing: 0) {
                     ForEach(members) { conn in
                         let overrides = group.member(conn.id)?.overrides ?? [:]
-                        VStack(alignment: .leading, spacing: Space.xs) {
-                            HStack(spacing: Space.sm + 2) {
-                                TypeBadge(type: conn.type)
-                                Text(conn.name).scaledFont(.body)
-                                EnvTag(environment: conn.environment)
-                                Spacer()
-                                // The prefix every tool of this member carries
-                                // inside the group's namespace.
-                                Text("\(NamespaceFormat.slug(conn.name))__*")
-                                    .font(.mono(10))
-                                    .foregroundStyle(.tertiary)
+                        HStack(alignment: .top, spacing: Space.md) {
+                            TypeBadge(type: conn.type)
+                            VStack(alignment: .leading, spacing: Space.xs) {
+                                HStack(spacing: Space.sm + 2) {
+                                    Text(conn.name).scaledFont(.body)
+                                    EnvTag(environment: conn.environment)
+                                }
+                                if !overrides.isEmpty {
+                                    Text(overrides.sorted { $0.key < $1.key }
+                                            .map { "\($0.key) → \($0.value)" }
+                                            .joined(separator: "   "))
+                                        .font(.mono(10))
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                }
                             }
-                            if !overrides.isEmpty {
-                                Text(overrides.sorted { $0.key < $1.key }
-                                        .map { "\($0.key) → \($0.value)" }
-                                        .joined(separator: "   "))
-                                    .font(.mono(10))
-                                    .foregroundStyle(Color.accentColor)
-                                    .padding(.leading, Space.xxl)
-                            }
+                            Spacer(minLength: Space.sm)
+                            // The prefix every tool of this member carries
+                            // inside the group's namespace.
+                            Text("\(NamespaceFormat.slug(conn.name))__*")
+                                .font(.mono(10))
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 2)
                         }
                         .padding(.horizontal, Space.md)
                         .padding(.vertical, Space.sm + 1)
