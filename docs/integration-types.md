@@ -2,7 +2,7 @@
 
 Each integration is one **type**, backed by a pluggable **adapter**. The type
 determines the config form, how the policy layer treats it, and which tools the
-agent gets. Pluk ships with eight types across four categories.
+agent gets. Pluk ships with nine types across seven categories.
 
 | Type | Category | Policy | Tools |
 | --- | --- | --- | --- |
@@ -14,6 +14,7 @@ agent gets. Pluk ships with eight types across four categories.
 | [`ssh`](#ssh) | infrastructure | action | 2 |
 | [`herd`](#laravel-herd) | local‑dev | action | 3 |
 | [`spark`](#spark-mail) | email | action | 22 |
+| [`github-cli`](#github-cli) | code-host | action | 16 |
 
 The **Policy** column is how Pluk decides whether a given call is allowed:
 
@@ -305,6 +306,51 @@ Spark answers in text tables, not JSON, so tool output is passed through
 verbatim — that is the shape the CLI's own agent skill (`spark skill`) is written
 against. Those responses are message bodies, and the activity log snapshots
 them like any other result.
+
+---
+
+## GitHub CLI
+
+The user's GitHub account, through the locally installed `gh` CLI. **Action
+policy** — reads are on by default; comments, issues, PRs and releases are write.
+
+*Agent hint: start with `list_pull_requests` or `list_issues`; pass `cwd` when you
+mean a worktree.*
+
+`gh` brings its own credentials — Pluk stores nothing: the adapter runs the CLI
+with your login, so an integration is only as authenticated as the terminal
+where you ran `gh auth login`. Every operation runs in the working directory you
+pass as `cwd` (a git worktree, say), and `gh` infers the repository and current
+branch from it; pass `repo`, `base` or `head` explicitly to override.
+
+| Field | Notes |
+| --- | --- |
+| `gh_bin` | The `gh` executable; defaults to `gh` on PATH. |
+| `timeout_seconds` | How long one command may run. Default 30. |
+| `default_repo` | Optional default `owner/repo` when a call doesn't name one. |
+| `default_cwd` | Directory used when a call passes no `cwd`. |
+
+| Tool | Access | What it does |
+| --- | --- | --- |
+| `list_issues` | read | Open issues, newest first (pull requests excluded). |
+| `get_issue` | read | One issue by number, with its comments. |
+| `list_pull_requests` | read | Pull requests in a state. |
+| `get_pull_request` | read | One PR by number — title, body, state, mergeability. |
+| `pr_files` | read | A PR's changed files, with patches. |
+| `search_code` | read | GitHub code search. |
+| `get_file` | read | A file's contents at a branch, tag, or commit. |
+| `commit_status` | read | Combined commit status and check runs (CI state). |
+| `get_repo` | read | Repository metadata. |
+| `list_releases` / `get_release` | read | Releases, and one by tag. |
+| `add_comment` | write | Comment on an issue or pull request. |
+| `create_issue` | write | Open an issue. |
+| `create_pull_request` | write | Open a PR from the worktree's current branch into `base`; pass `repo`, `head` or `base` to override. |
+| `review_pull_request` | write | Approve, comment, or request changes on a PR. |
+| `create_release` | write | Publish a release for a tag. |
+
+Read-only blocks every write tool. The CLI's own failures surface as they are —
+a network outage or an expired login stays visible, with `gh`'s hint on how to
+fix it.
 
 ---
 

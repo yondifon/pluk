@@ -133,6 +133,10 @@ final class ConnectionStore {
             "ALTER TABLE query_log ADD COLUMN response_text TEXT",
         ]
         for sql in alters { exec(sql) } // silently ignores if column exists
+
+        // The GitHub REST adapter became the gh-CLI bridge; rekey existing rows
+        // so their connections keep resolving (pluk/src/store/integrations.ts mirrors this).
+        exec("UPDATE integrations SET type = 'github-cli' WHERE type = 'github'")
     }
 
     // MARK: - Settings
