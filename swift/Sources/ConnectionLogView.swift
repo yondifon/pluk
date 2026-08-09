@@ -100,7 +100,6 @@ struct LogsTab: View {
         }
         .padding(.horizontal, Space.xl)
         .padding(.vertical, Space.sm)
-        .background(Surface.panel)
     }
 
     private var searchField: some View {
@@ -756,7 +755,6 @@ private struct ResponseSheet: View {
             }
             .padding(.horizontal, Space.lg)
             .padding(.vertical, Space.md)
-            .background(Surface.panel)
             Group {
                 if display.isEmpty {
                     ProgressView("Formatting…")
