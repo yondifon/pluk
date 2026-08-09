@@ -359,7 +359,7 @@ private struct LogEntryRow: View {
                                 .scaledFont(.caption, weight: .semibold)
                                 .foregroundColor(.secondary)
                             Text(entry.sql)
-                                .font(.mono(12))
+                                .scaledFont(.body, design: .monospaced)
                                 .foregroundColor(.primary)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -368,8 +368,8 @@ private struct LogEntryRow: View {
                         }
                     } else {
                         Text(entry.sql)
-                            .font(.mono(12))
-                            .foregroundColor(.primary)
+                            .scaledFont(.footnote, design: .monospaced)
+                            .foregroundColor(.secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -429,7 +429,12 @@ private struct LogEntryRow: View {
         .onTapGesture { onToggle() }
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default) { onToggle() }
-        .background(isExpanded ? Surface.sunken : .clear)
+        .overlay(alignment: .leading) {
+            if isExpanded {
+                AccentRule(color: .secondary.opacity(0.25))
+                    .padding(.vertical, Space.lg)
+            }
+        }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.12), value: isExpanded)
         .sheet(isPresented: $showResponseSheet) {
             ResponseSheet(title: entry.sql, text: fullResponse ?? "")
@@ -615,7 +620,7 @@ private struct ResultPreview: View {
                     HStack(spacing: 0) {
                         ForEach(p.fields.prefix(6), id: \.self) { field in
                             Text(field)
-                                .font(.mono(10, weight: .semibold))
+                                .scaledFont(.footnote, weight: .semibold, design: .monospaced)
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -631,7 +636,7 @@ private struct ResultPreview: View {
                         HStack(spacing: 0) {
                             ForEach(row.cells.prefix(6)) { cell in
                                 Text(cell.text)
-                                    .font(.mono(10))
+                                    .scaledFont(.footnote, design: .monospaced)
                                     .foregroundColor(.primary.opacity(0.75))
                                     .lineLimit(1)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -646,7 +651,7 @@ private struct ResultPreview: View {
                     let showing = min(p.rows.count, 5)
                     if total > showing {
                         Text("\(showing) of \(total) rows")
-                            .font(.mono(10))
+                            .scaledFont(.footnote, design: .monospaced)
                             .foregroundColor(.secondary)
                             .padding(.horizontal, Space.sm)
                             .padding(.top, Space.xxs)
@@ -675,6 +680,7 @@ private struct ResponseTextBlock: View {
 
     @State private var preview = ""
     @State private var moreToShow = false
+    @SwiftUI.Environment(\.uiScale) private var uiScale
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
@@ -694,7 +700,7 @@ private struct ResponseTextBlock: View {
                     .help("Open the full response in a window")
                 }
             }
-            MarkdownResponseView(markdown: preview, embedded: true)
+            MarkdownResponseView(markdown: preview, embedded: true, fontSize: 13 * uiScale)
                 .padding(Space.sm)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .codeBlockSurface(cornerRadius: Radius.small)
