@@ -309,7 +309,12 @@ struct ContentView: View {
                     ForEach(filteredGroups) { group in
                         GroupRow(group: group)
                             .tag(group.id)
-                            .listRowBackground(selectedID == group.id ? Surface.selection : Color.clear)
+                            .listRowBackground(Color.clear)
+                            .overlay(alignment: .leading) {
+                                if selectedID == group.id {
+                                    AccentRule()
+                                }
+                            }
                             .contextMenu {
                                 Button("Delete", role: .destructive) {
                                     pendingDelete = .group(group)
@@ -324,7 +329,12 @@ struct ContentView: View {
                     ForEach(filteredConnections) { conn in
                         ConnectionRow(conn: conn, health: store.health[conn.id])
                             .tag(conn.id)
-                            .listRowBackground(selectedID == conn.id ? Surface.selection : Color.clear)
+                            .listRowBackground(Color.clear)
+                            .overlay(alignment: .leading) {
+                                if selectedID == conn.id {
+                                    AccentRule()
+                                }
+                            }
                             .contextMenu {
                                 Button("Duplicate") { selectedID = store.duplicate(conn) }
                                 Button("Delete", role: .destructive) {
@@ -440,7 +450,7 @@ struct GroupRow: View {
                 .frame(width: 24, height: 24)
             VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(group.name)
-                    .scaledFont(.body)
+                    .scaledFont(.callout)
                     .lineLimit(1)
                 Text("\(group.memberIds.count) integration\(group.memberIds.count == 1 ? "" : "s")")
                     .scaledFont(.caption)
@@ -465,11 +475,11 @@ struct ConnectionRow: View {
             TypeBadge(type: conn.type)
             VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(conn.name)
-                    .scaledFont(.body)
+                    .scaledFont(.callout)
                     .lineLimit(1)
                 Text("\(conn.typeLabel) · \(conn.environment.label)")
                     .scaledFont(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
             Spacer(minLength: Space.sm)

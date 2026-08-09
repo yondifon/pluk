@@ -207,7 +207,7 @@ private struct MarkdownCodeBlock: View {
         gutter = (1...n).map(String.init).joined(separator: "\n")
         // Highlighting scales with payload size; keep it off the main actor so a
         // large block never blocks scrolling or resizing.
-        highlighted = await Task.detached { SyntaxHighlighter.highlightAll(src, language: lang) }.value
+        highlighted = await Task.detached { CodeStyle.highlighted(src, language: lang) }.value
     }
 
     private func copyCode() {
@@ -235,76 +235,5 @@ private struct CodeBlockChrome: ViewModifier {
     }
 }
 
-private enum SyntaxHighlighter {
-    private static let pattern = #"(?<comment>//.*|#.*|/\*.*\*/)|(?<string>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`[^`]*`)|(?<number>\b\d+(?:\.\d+)?\b)|(?<keyword>\b(?:actor|async|await|break|case|catch|class|const|continue|def|else|enum|export|extension|false|final|for|func|function|guard|if|import|in|interface|let|match|new|null|private|protocol|public|return|self|static|struct|switch|throw|throws|true|try|type|var|void|while|with|yield)\b)"#
-
-    // Colors the whole block in one pass and joins with newlines, so the code
-    // renders as a single Text. Called once per source and cached by the view.
-    static func highlightAll(_ code: String, language: String) -> AttributedString {
-        let lines = code.components(separatedBy: "\n")
-        var result = AttributedString()
-        for (i, line) in lines.enumerated() {
-            result.append(highlight(line, language: language))
-            if i < lines.count - 1 { result.append(AttributedString("\n")) }
-        }
-        return result
-    }
-
-    // No font is set here — the hosting Text owns point size and design so the
-    // reader's chosen size wins. Only token colors are applied.
-    static func highlight(_ line: String, language _: String) -> AttributedString {
-        var result = AttributedString(line)
-
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return result
-        }
-
-        let range = NSRange(line.startIndex..., in: line)
-        regex.enumerateMatches(in: line, range: range) { match, _, _ in
-            guard let match else { return }
-            let kind: TokenKind
-            if match.range(withName: "comment").location != NSNotFound {
-                kind = .comment
-            } else if match.range(withName: "string").location != NSNotFound {
-                kind = .string
-            } else if match.range(withName: "number").location != NSNotFound {
-                kind = .number
-            } else {
-                kind = .keyword
-            }
-
-            let start = String.Index(utf16Offset: match.range.location, in: line)
-            let end = String.Index(utf16Offset: match.range.location + match.range.length, in: line)
-            guard let attributedStart = index(in: result, offset: line.distance(from: line.startIndex, to: start)),
-                  let attributedEnd = index(in: result, offset: line.distance(from: line.startIndex, to: end)) else {
-                return
-            }
-
-            result[attributedStart..<attributedEnd].foregroundColor = kind.color
-        }
-
-        return result
-    }
-
-    private static func index(in value: AttributedString, offset: Int) -> AttributedString.Index? {
-        var index = value.startIndex
-        for _ in 0..<offset {
-            guard index < value.endIndex else { return nil }
-            index = value.index(afterCharacter: index)
-        }
-        return index
-    }
-
-    private enum TokenKind {
-        case comment, string, number, keyword
-
-        var color: Color {
-            switch self {
-            case .comment: return .secondary
-            case .string: return .orange
-            case .number: return .purple
-            case .keyword: return .accentColor
-            }
-        }
-    }
-}
+// Highlighting lives in `CodeStyle` (SyntaxHighlight.swift): one scanner pass
+// for the whole block, colors only, so the hosting Text owns point size.

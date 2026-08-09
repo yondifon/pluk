@@ -358,7 +358,7 @@ private struct LogEntryRow: View {
                             Text("Query")
                                 .scaledFont(.caption, weight: .semibold)
                                 .foregroundColor(.secondary)
-                            Text(entry.sql)
+                            Text(CodeStyle.highlighted(entry.sql, language: .sql))
                                 .scaledFont(.body, design: .monospaced)
                                 .foregroundColor(.primary)
                                 .textSelection(.enabled)

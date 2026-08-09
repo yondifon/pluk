@@ -56,10 +56,11 @@ struct CodeTextView: NSViewRepresentable {
         guard let textView = context.coordinator.textView else { return }
         let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
 
-        // Re-run the regex only when the source changes. Font/leading tweaks just
-        // re-apply attributes over the cached colored string — no re-highlight.
+        // Re-run the scanner only when the source changes. Font/leading tweaks
+        // just re-apply attributes over the cached colored string — no
+        // re-highlight.
         if context.coordinator.lastCode != code {
-            context.coordinator.colored = CodeHighlighter.attributed(code)
+            context.coordinator.colored = CodeStyle.highlightedNS(code, language: language)
             context.coordinator.lastCode = code
         }
 
@@ -172,33 +173,8 @@ final class LineNumberRulerView: NSRulerView {
 
 // MARK: - Coloring
 
-/// Produces an `NSAttributedString` with token colors only (no font) so the
-/// caller can apply the reader's point size without re-running the regex.
-/// Mirrors the SwiftUI `SyntaxHighlighter` token rules.
-enum CodeHighlighter {
-    private static let pattern = #"(?<comment>//.*|#.*|/\*.*\*/)|(?<string>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`[^`]*`)|(?<number>\b\d+(?:\.\d+)?\b)|(?<keyword>\b(?:actor|async|await|break|case|catch|class|const|continue|def|else|enum|export|extension|false|final|for|func|function|guard|if|import|in|interface|let|match|new|null|private|protocol|public|return|self|static|struct|switch|throw|throws|true|try|type|var|void|while|with|yield)\b)"#
-
-    static func attributed(_ code: String) -> NSMutableAttributedString {
-        let result = NSMutableAttributedString(string: code)
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return result }
-        let range = NSRange(location: 0, length: (code as NSString).length)
-        regex.enumerateMatches(in: code, range: range) { match, _, _ in
-            guard let match else { return }
-            let color: NSColor
-            if match.range(withName: "comment").location != NSNotFound {
-                color = .secondaryLabelColor
-            } else if match.range(withName: "string").location != NSNotFound {
-                color = .systemOrange
-            } else if match.range(withName: "number").location != NSNotFound {
-                color = .systemPurple
-            } else {
-                color = .controlAccentColor
-            }
-            result.addAttribute(.foregroundColor, value: color, range: match.range)
-        }
-        return result
-    }
-}
+// Token colors come from `CodeStyle.highlightedNS` (SyntaxHighlight.swift) —
+// colors only, no font, so the reader's point size is applied here once.
 
 private extension NSString {
     var lineCount: Int {
