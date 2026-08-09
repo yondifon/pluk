@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { Integration } from "../../store/integrations.js";
 import { actionAdapter, type ActionTool } from "../kit.js";
 import { githubCliFields } from "./fields.js";
 import { ghConfig, ghJson, ghText, humanizeGhError, positional, repoFlag, resolveRepo, testGh, type GhConfig } from "./client.js";
