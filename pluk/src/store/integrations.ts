@@ -26,6 +26,10 @@ db.run(`
   )
 `);
 
+// Existing rows may carry the old REST adapter id; the gh-CLI bridge id is
+// 'github-cli' (mirrored in Swift's ConnectionStore.migrate).
+db.run("UPDATE integrations SET type = 'github-cli' WHERE type = 'github'");
+
 export type Environment = "production" | "staging" | "development" | "local";
 
 /** A configured service: a database, Linear, Sentry, … resolved to an adapter by `type`. */

@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { sqlToolSpecs } from "./sql/server.js";
 import { sshToolSpecs } from "./ssh/server.js";
-import { githubAdapter } from "./github/index.js";
+import { githubCliAdapter } from "./github-cli/index.js";
 import { redisAdapter } from "./redis/index.js";
 import { linearAdapter } from "./linear/index.js";
 import type { ToolSpec } from "./types.js";
@@ -37,11 +37,14 @@ test("SSH defaults to just run_command; batching/forwards/saved are opt-in", () 
 });
 
 test("action adapters: writes/deletes off, niche reads off, core reads on", () => {
-  const gh = new Map(githubAdapter.toolSpecs.map((t) => [t.name, t.defaultEnabled]));
+  const gh = new Map(githubCliAdapter.toolSpecs.map((t) => [t.name, t.defaultEnabled]));
   expect(gh.get("list_pull_requests")).toBe(true);
   expect(gh.get("search_code")).toBe(true);
+  expect(gh.get("get_repo")).toBe(true);
+  expect(gh.get("list_releases")).toBe(true);
   expect(gh.get("commit_status")).toBe(false);          // niche read, opted out
   expect(gh.get("create_pull_request")).toBe(false);    // write, always off
+  expect(gh.get("create_release")).toBe(false);         // write, always off
 
   const redis = new Map(redisAdapter.toolSpecs.map((t) => [t.name, t.defaultEnabled]));
   expect(redis.get("scan")).toBe(true);
@@ -56,7 +59,7 @@ test("action adapters: writes/deletes off, niche reads off, core reads on", () =
 });
 
 test("no state-changing tool is ever default-on", () => {
-  for (const adapter of [githubAdapter, redisAdapter, linearAdapter]) {
+  for (const adapter of [githubCliAdapter, redisAdapter, linearAdapter]) {
     for (const t of adapter.toolSpecs) {
       if (t.category !== "read" && t.category !== "inspect") {
         expect(t.defaultEnabled).toBe(false);

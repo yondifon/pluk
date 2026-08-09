@@ -560,7 +560,7 @@ enum AdapterStyle {
         case "linear":   Color(red: 0.37, green: 0.42, blue: 0.82) // Linear indigo #5E6AD2
         case "sentry":   Color(red: 0.49, green: 0.42, blue: 0.78) // Sentry purple
         case "ssh":      Color(red: 0.27, green: 0.55, blue: 0.45) // terminal teal
-        case "github":   Color(red: 0.22, green: 0.25, blue: 0.30) // GitHub near-black slate
+        case "github-cli": Color(red: 0.22, green: 0.25, blue: 0.30) // GitHub near-black slate
         case "redis":    Color(red: 0.78, green: 0.25, blue: 0.18) // muted Redis red #D82C20
         case "slack":    Color(red: 0.46, green: 0.18, blue: 0.45) // Slack aubergine #4A154B
         case "spark":    Color(red: 0.85, green: 0.33, blue: 0.22) // muted Spark red-orange

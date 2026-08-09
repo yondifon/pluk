@@ -16,8 +16,8 @@ bunx tsc --noEmit
 
 `bun test` (from `pluk/`) must pass. `bunx tsc --noEmit` must be clean.
 
-The suite covers the adapters (GitHub, Herd, Linear, Redis, Sentry, Slack, Spark,
-SSH, and the SQL family), the DB layer (SQLite, SSH tunneling and routing,
+The suite covers the adapters (GitHub CLI, Herd, Linear, Redis, Sentry, Slack,
+Spark, SSH, and the SQL family), the DB layer (SQLite, SSH tunneling and routing,
 timestamp handling), and the MCP transport (server, connection pool, integration
 grouping). The SQL policy engine (`mcp/policy.ts`) and the SSH command policy
 (`adapters/ssh/policy.ts`) get direct test coverage — they're what stands between
