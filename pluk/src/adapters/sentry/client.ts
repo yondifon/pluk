@@ -83,21 +83,21 @@ export async function sentryRequest<T>(
   return (await res.json()) as T;
 }
 
-export interface RawBody {
-  text: string;
+export interface RawBytes {
+  bytes: Uint8Array;
   contentType: string | null;
   contentLength: string | null;
 }
 
-export async function sentryRequestText(
+export async function sentryRequestBytes(
   cfg: SentryConfig,
   method: string,
   path: string,
   query?: Query,
-): Promise<RawBody> {
+): Promise<RawBytes> {
   const res = await request(cfg, method, path, query);
   return {
-    text: await res.text(),
+    bytes: new Uint8Array(await res.arrayBuffer()),
     contentType: res.headers.get("content-type"),
     contentLength: res.headers.get("content-length"),
   };
