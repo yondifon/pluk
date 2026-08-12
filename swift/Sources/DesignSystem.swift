@@ -90,14 +90,45 @@ private final class ClearDividerSplitView: NSSplitView {
 }
 
 private final class SplitViewDividerHiderView: NSView {
+    // The NSSplitView can be created after this view enters the window (first
+    // layout, restored frame, full-screen), so the swap re-runs on window
+    // geometry changes and once more after the initial layout settles.
+    private var geometryObserver: NSObjectProtocol?
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        stopObservingGeometry()
         hideEnclosingSplitViewDividers()
+        guard let window else { return }
+        geometryObserver = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification,
+            object: window.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.hideEnclosingSplitViewDividers()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.hideEnclosingSplitViewDividers()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self?.hideEnclosingSplitViewDividers()
+        }
     }
 
     override func layout() {
         super.layout()
         hideEnclosingSplitViewDividers()
+    }
+
+    deinit {
+        stopObservingGeometry()
+    }
+
+    private func stopObservingGeometry() {
+        if let geometryObserver {
+            NotificationCenter.default.removeObserver(geometryObserver)
+        }
+        geometryObserver = nil
     }
 }
 

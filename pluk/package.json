@@ -4,7 +4,8 @@
   "license": "AGPL-3.0-only",
   "author": "Desmond Yong <yong@malico.me>",
   "scripts": {
-    "server": "bun run src/server.ts"
+    "server": "bun run src/server.ts",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

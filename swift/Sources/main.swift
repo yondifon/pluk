@@ -20,6 +20,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItem
         setupStatusBar()
         setupWindow()
         serverManager.start()
+        store.startActivityStream()
         updateChecker.startPeriodicChecks()
     }
 
@@ -31,6 +32,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItem
 
     func applicationWillTerminate(_ notification: Notification) {
         serverManager.stop()
+        store.stopActivityStream()
     }
 
     private func setupMenu() {

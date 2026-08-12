@@ -48,7 +48,7 @@ test("create_issue resolves the team and returns the created issue", async () =>
     if (c.query.includes("issueCreate")) return CREATE;
     throw new Error(`unexpected query: ${c.query}`);
   });
-  const out = (await tool("create_issue").run({ team: "ENG", title: "Fix sign-in" }, {})) as {
+  const out = (await tool("create_issue").run({ team: "ENG", title: "Fix sign-in", only: ["*"] }, {})) as {
     success: boolean;
     issue: { identifier: string; url: string };
   };
@@ -207,6 +207,114 @@ test("resolveState reports an unknown state with the team's states", async () =>
 test("resolveLabels reports an unknown label", async () => {
   mockGraphQL(() => LABELS);
   await expect(resolveLabels("k", ["bug", "urgent"])).rejects.toThrow(/No label named "urgent"\. Existing labels: bug, api/);
+});
+
+// ── `only` field selection ───────────────────────────────────────────────────
+
+const ISSUE_NODE = { id: "iss-1", identifier: "ENG-42", title: "Fix sign-in", state: { name: "In Progress" }, assignee: { name: "Ada Lovelace" }, priority: 2, url: "https://linear.app/acme/issue/ENG-42", updatedAt: "2026-08-01" };
+
+test("list_issues defaults to identifier/title/state/assignee/updatedAt and drops id/url/priority", async () => {
+  mockGraphQL(() => ({ data: { issues: { nodes: [ISSUE_NODE] } } }));
+  const out = (await tool("list_issues").run({ limit: 25 }, {})) as Record<string, unknown>[];
+  expect(out).toEqual([{ identifier: "ENG-42", title: "Fix sign-in", state: { name: "In Progress" }, assignee: { name: "Ada Lovelace" }, updatedAt: "2026-08-01" }]);
+});
+
+test("list_issues only:['priority','url'] returns just those", async () => {
+  mockGraphQL(() => ({ data: { issues: { nodes: [ISSUE_NODE] } } }));
+  const out = (await tool("list_issues").run({ limit: 25, only: ["priority", "url"] }, {})) as Record<string, unknown>[];
+  expect(out).toEqual([{ priority: 2, url: "https://linear.app/acme/issue/ENG-42" }]);
+});
+
+test("get_issue defaults keep description and drop branchName/labels/team", async () => {
+  const issue = { id: "iss-1", identifier: "ENG-42", title: "Fix sign-in", description: "Repro steps", state: { name: "In Progress", type: "started" }, assignee: { name: "Ada Lovelace" }, priority: 2, estimate: 3, dueDate: "2026-09-01", branchName: "eng-42-fix-sign-in", url: "https://linear.app/acme/issue/ENG-42", createdAt: "2026-01-01", updatedAt: "2026-08-01", team: { key: "ENG" }, project: { name: "Auth" }, parent: null, labels: { nodes: [{ name: "bug" }] } };
+  mockGraphQL(() => ({ data: { issue } }));
+  const out = await tool("get_issue").run({ id: "ENG-42" }, {});
+  expect(out).toEqual({ identifier: "ENG-42", title: "Fix sign-in", description: "Repro steps", state: { name: "In Progress" }, assignee: { name: "Ada Lovelace" }, priority: 2, url: "https://linear.app/acme/issue/ENG-42" });
+});
+
+test("get_issue meta preset returns labels/project/parent/team/timestamps", async () => {
+  const issue = { identifier: "ENG-42", labels: { nodes: [{ name: "bug" }] }, project: { name: "Auth" }, parent: null, team: { key: "ENG" }, createdAt: "2026-01-01", updatedAt: "2026-08-01" };
+  mockGraphQL(() => ({ data: { issue } }));
+  const out = await tool("get_issue").run({ id: "ENG-42", only: ["meta"] }, {});
+  expect(out).toEqual({ labels: { nodes: [{ name: "bug" }] }, project: { name: "Auth" }, parent: null, team: { key: "ENG" }, createdAt: "2026-01-01", updatedAt: "2026-08-01" });
+});
+
+test("get_issue rejects an unrecognised only field and lists valid fields and presets", async () => {
+  mockGraphQL(() => ({ data: { issue: { identifier: "ENG-42" } } }));
+  await expect(tool("get_issue").run({ id: "ENG-42", only: ["bogus"] }, {})).rejects.toThrow(
+    /Unknown "only" field "bogus"\..*Presets: meta, planning, branch\./,
+  );
+});
+
+test("list_comments defaults drop id/url/resolvedAt/botActor per comment", async () => {
+  mockGraphQL(() => ({
+    data: {
+      issue: {
+        identifier: "ENG-42",
+        comments: {
+          nodes: [{ id: "c1", body: "hi", url: "https://x", createdAt: "2026-08-01", resolvedAt: null, parentId: null, user: { name: "Ada" }, botActor: null }],
+        },
+      },
+    },
+  }));
+  const out = await tool("list_comments").run({ issue_id: "ENG-42", limit: 50 }, {});
+  expect(out).toEqual({
+    issue: "ENG-42",
+    comments: [{ body: "hi", createdAt: "2026-08-01", user: { name: "Ada" }, replies: [] }],
+  });
+});
+
+test("inbox defaults drop the duplicate top-level title/url", async () => {
+  mockGraphQL(() => ({
+    data: {
+      notifications: {
+        nodes: [{ id: "n1", type: "issueCommentMention", title: "dup", subtitle: "Ada replied", url: "https://x", createdAt: "2026-08-01", readAt: null, actor: { name: "Ada" }, issue: { identifier: "ENG-42", title: "Fix sign-in", url: "https://y" }, comment: { body: "looks good", url: "https://z" }, parentComment: null }],
+      },
+    },
+  }));
+  const out = (await tool("inbox").run({ unread_only: true, limit: 25 }, {})) as Record<string, unknown>[];
+  expect(out).toEqual([{ type: "issueCommentMention", subtitle: "Ada replied", createdAt: "2026-08-01", actor: { name: "Ada" }, issue: { identifier: "ENG-42", title: "Fix sign-in" }, comment: { body: "looks good" } }]);
+});
+
+test("list_projects defaults drop url/startDate/targetDate/lead", async () => {
+  mockGraphQL(() => ({
+    data: {
+      projects: {
+        nodes: [{ id: "p1", name: "Auth", state: "started", url: "https://x", startDate: "2026-01-01", targetDate: "2026-09-01", lead: { name: "Ada" }, issueCountHistory: [1, 2, 5], completedIssueCountHistory: [0, 1, 2], progress: 0.4 }],
+      },
+    },
+  }));
+  const out = (await tool("list_projects").run({ limit: 25 }, {})) as Record<string, unknown>[];
+  expect(out).toEqual([{ id: "p1", name: "Auth", state: "started", total_issues: 5, completed_issues: 2, progress_percent: 40 }]);
+});
+
+test("list_projects dates preset returns startDate/targetDate", async () => {
+  mockGraphQL(() => ({
+    data: { projects: { nodes: [{ id: "p1", name: "Auth", startDate: "2026-01-01", targetDate: "2026-09-01", issueCountHistory: [], completedIssueCountHistory: [] }] } },
+  }));
+  const out = (await tool("list_projects").run({ limit: 25, only: ["dates"] }, {})) as Record<string, unknown>[];
+  expect(out).toEqual([{ startDate: "2026-01-01", targetDate: "2026-09-01" }]);
+});
+
+test("project_updates defaults drop the update url", async () => {
+  mockGraphQL(() => ({
+    data: { project: { name: "Auth", projectUpdates: { nodes: [{ body: "shipping soon", health: "onTrack", createdAt: "2026-08-01", url: "https://x", user: { name: "Ada" } }] } } },
+  }));
+  const out = await tool("project_updates").run({ project_id: "p1", limit: 10 }, {});
+  expect(out).toEqual({ project: "Auth", updates: [{ health: "onTrack", createdAt: "2026-08-01", user: { name: "Ada" }, body: "shipping soon" }] });
+});
+
+test("create_issue/comment/update_issue default to a write confirmation, not the full record", async () => {
+  mockGraphQL((c) => {
+    if (c.query.includes("nodes { id key name }")) return TEAMS;
+    if (c.query.includes("issueCreate")) return CREATE;
+    if (c.query.includes("commentCreate")) return { data: { commentCreate: { success: true, comment: { id: "c1", url: "https://x", parentId: null } } } };
+    if (c.query.includes("issueUpdate")) return UPDATE;
+    throw new Error(`unexpected query: ${c.query}`);
+  });
+  expect(await tool("create_issue").run({ team: "ENG", title: "Fix sign-in" }, {})).toEqual({ issue: { identifier: "ENG-42", url: "https://linear.app/acme/issue/ENG-42" } });
+  expect(await tool("comment").run({ issue_id: "ENG-42", body: "hi" }, {})).toEqual({ comment: { url: "https://x" } });
+  expect(await tool("update_issue").run({ id: "ENG-42", assignee: null }, {})).toEqual({ issue: { identifier: "ENG-42", state: { name: "Done" } } });
 });
 
 test("linearAdapter exposes the linear toolset", () => {

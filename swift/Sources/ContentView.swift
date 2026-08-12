@@ -309,12 +309,7 @@ struct ContentView: View {
                     ForEach(filteredGroups) { group in
                         GroupRow(group: group)
                             .tag(group.id)
-                            .listRowBackground(Color.clear)
-                            .overlay(alignment: .leading) {
-                                if selectedID == group.id {
-                                    AccentRule()
-                                }
-                            }
+                            .listRowBackground(selectionBackground(selectedID == group.id))
                             .contextMenu {
                                 Button("Delete", role: .destructive) {
                                     pendingDelete = .group(group)
@@ -329,12 +324,7 @@ struct ContentView: View {
                     ForEach(filteredConnections) { conn in
                         ConnectionRow(conn: conn, health: store.health[conn.id])
                             .tag(conn.id)
-                            .listRowBackground(Color.clear)
-                            .overlay(alignment: .leading) {
-                                if selectedID == conn.id {
-                                    AccentRule()
-                                }
-                            }
+                            .listRowBackground(selectionBackground(selectedID == conn.id))
                             .contextMenu {
                                 Button("Duplicate") { selectedID = store.duplicate(conn) }
                                 Button("Delete", role: .destructive) {
@@ -366,6 +356,14 @@ struct ContentView: View {
     }
 
     // MARK: - Detail
+
+    // Selected-row tint: inset from the row edges with the app's small radius,
+    // so selection reads as a quiet block instead of a full-bleed fill.
+    private func selectionBackground(_ selected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: Radius.small, style: .continuous)
+            .fill(selected ? Surface.selection : .clear)
+            .padding(.horizontal, Space.sm)
+    }
 
     @ViewBuilder
     private var detailPanel: some View {

@@ -50,7 +50,7 @@ enum MCPClient: String, CaseIterable, Identifiable {
             switch self {
             case .opencode: "~/.config/opencode/opencode.json"
             case .codex: "~/.codex/config.toml"
-            case .claudeCode: "~/.claude.json"
+            case .claudeCode: "~/.mcp.json"
             case .cursor: "~/.cursor/mcp.json"
             case .windsurf: "~/.codeium/windsurf/mcp_config.json"
             case .antigravity: "~/.gemini/config/mcp_config.json"
@@ -67,7 +67,7 @@ enum MCPClient: String, CaseIterable, Identifiable {
         switch self {
         case .opencode:    ["~/.config/opencode", "~/.local/share/opencode"]
         case .codex:       ["~/.codex"]
-        case .claudeCode:  ["~/.claude", "~/.claude.json"]
+        case .claudeCode:  ["~/.claude", "~/.mcp.json"]
         case .cursor:      ["~/.cursor", "/Applications/Cursor.app"]
         case .windsurf:    ["~/.codeium/windsurf", "/Applications/Windsurf.app"]
         case .antigravity: ["~/.gemini", "/Applications/Antigravity.app"]

@@ -16,10 +16,18 @@ struct LogsTab: View {
 
     @State private var entries: [QueryLogEntry] = []
     @State private var filter: VerdictFilter = .all
+    @State private var timeRange: TimeRange = .all
     @State private var search = ""
     @State private var expandedId: Int? = nil
     @State private var showRetentionPicker = false
     @State private var pollTimer: Timer? = nil
+    @State private var nextCursor: LogCursor?
+    @State private var hasMore = false
+    @State private var isLoading = false
+    @State private var loadedOlderPage = false
+    @State private var requestGeneration = 0
+    @State private var scrollPosition: Int?
+    @State private var refreshAfterLoad = false
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum VerdictFilter: String, CaseIterable {
@@ -29,7 +37,34 @@ struct LogsTab: View {
         case error = "Error"
     }
 
+    enum TimeRange: String, CaseIterable, Identifiable {
+        case lastHour = "hour"
+        case today
+        case last7Days = "7d"
+        case last30Days = "30d"
+        case all
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .lastHour: "Last hour"
+            case .today: "Today"
+            case .last7Days: "Last 7 days"
+            case .last30Days: "Last 30 days"
+            case .all: "All"
+            }
+        }
+    }
+
     private var hasPending: Bool { entries.contains { $0.verdict == "pending" } }
+
+    private var activityKey: String {
+        switch scope {
+        case .connection(let c): return ConnectionStore.activityKey(connection: c.id)
+        case .group(let g): return ConnectionStore.activityKey(group: g.id)
+        }
+    }
 
     // Free-text match across the fields an operator scans for: the SQL/command,
     // the originating tool, and (in group mode) the member name.
@@ -58,14 +93,14 @@ struct LogsTab: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-            if filtered.isEmpty {
+            if filtered.isEmpty && !isLoading && !hasMore {
                 emptyState
             } else {
                 logList
             }
         }
         .onAppear {
-            reload()
+            reload(reset: true)
             startPollingIfNeeded()
         }
         .onDisappear {
@@ -73,6 +108,12 @@ struct LogsTab: View {
         }
         .onChange(of: hasPending) { _, pending in
             pending ? startPollingIfNeeded() : stopPolling()
+        }
+        .onChange(of: store.activityRevision(for: activityKey).value) { _, _ in
+            reload()
+        }
+        .onChange(of: timeRange) { _, _ in
+            reload(reset: true)
         }
     }
 
@@ -94,6 +135,7 @@ struct LogsTab: View {
         HStack(spacing: Space.md) {
             searchField
             Spacer(minLength: Space.sm)
+            timeRangeMenu
             verdictMenu
             retentionMenu
             refreshButton
@@ -165,6 +207,27 @@ struct LogsTab: View {
         }
     }
 
+    private var timeRangeMenu: some View {
+        Menu {
+            ForEach(TimeRange.allCases) { range in
+                Button { timeRange = range } label: {
+                    Text(range.label)
+                }
+            }
+        } label: {
+            HStack(spacing: Space.xs) {
+                Image(systemName: "calendar")
+                    .font(.system(size: 10))
+                Text(timeRange.label)
+                    .scaledFont(.callout)
+            }
+            .foregroundColor(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Choose a time range")
+    }
+
     private var retentionMenu: some View {
         Menu {
             let options = [7, 14, 30, 60, 90, 0]
@@ -231,13 +294,15 @@ struct LogsTab: View {
 
     private var emptyTitle: String {
         if !search.trimmingCharacters(in: .whitespaces).isEmpty { return "No matches" }
-        return filter == .all ? "No activity yet" : "No \(filter.rawValue.lowercased()) activity"
+        if filter != .all { return "No \(filter.rawValue.lowercased()) activity" }
+        return timeRange == .all ? "No activity yet" : "No activity in this range"
     }
 
     private var emptySubtitle: String {
         if !search.trimmingCharacters(in: .whitespaces).isEmpty {
             return "No log entries match “\(search)”."
         }
+        if timeRange != .all { return "Try a wider time range." }
         return scope.isGroup
             ? "Activity from agents using this group's endpoint will appear here, across every integration."
             : "Activity from agents using this integration will appear here."
@@ -258,14 +323,129 @@ struct LogsTab: View {
                         onStop: { stopQuery(entry) }
                     )
                 }
+                loadOlderRow
             }
+            .scrollTargetLayout()
+        }
+        .scrollPosition(id: $scrollPosition)
+    }
+
+    private var loadOlderRow: some View {
+        Group {
+            if isLoading {
+                HStack(spacing: Space.xs) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading older entries…")
+                        .scaledFont(.callout)
+                }
+                .foregroundColor(.secondary)
+            } else if hasMore {
+                Button(action: loadMore) {
+                    Label("Load older entries", systemImage: "clock.arrow.down")
+                        .scaledFont(.callout)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+            } else {
+                Text("You’re viewing all activity")
+                    .scaledFont(.caption)
+                    .foregroundColor(.secondary.opacity(0.7))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Space.md)
+        .onAppear {
+            if hasMore && !isLoading { loadMore() }
         }
     }
 
-    private func reload() {
+    private func reload(reset: Bool = false) {
+        if isLoading && !reset {
+            refreshAfterLoad = true
+            return
+        }
+        requestGeneration += 1
+        let generation = requestGeneration
+        let range = timeRange.rawValue
+        if reset {
+            entries = []
+            nextCursor = nil
+            hasMore = false
+            loadedOlderPage = false
+            scrollPosition = nil
+            refreshAfterLoad = false
+        }
+        isLoading = true
+        Task {
+            let page = await fetchPage(range: range, cursor: nil)
+            guard generation == requestGeneration else { return }
+            guard let page else {
+                finishLoading()
+                return
+            }
+            merge(page.entries)
+            if reset || !loadedOlderPage {
+                nextCursor = page.nextCursor
+                hasMore = page.hasMore
+            }
+            if reset { scrollPosition = entries.first?.id }
+            finishLoading()
+        }
+    }
+
+    private func loadMore() {
+        guard !isLoading, hasMore, let cursor = nextCursor else { return }
+        let generation = requestGeneration
+        let range = timeRange.rawValue
+        isLoading = true
+        Task {
+            let page = await fetchPage(range: range, cursor: cursor)
+            guard generation == requestGeneration else { return }
+            guard let page else {
+                finishLoading()
+                return
+            }
+            merge(page.entries)
+            nextCursor = page.nextCursor
+            hasMore = page.hasMore
+            loadedOlderPage = true
+            finishLoading()
+        }
+    }
+
+    private func finishLoading() {
+        isLoading = false
+        guard refreshAfterLoad else { return }
+        refreshAfterLoad = false
+        reload()
+    }
+
+    private func fetchPage(range: String, cursor: LogCursor?) async -> LogPage? {
         switch scope {
-        case .connection(let c): entries = store.recentLog(connectionId: c.id)
-        case .group(let g): entries = store.recentLogForGroup(groupId: g.id)
+        case .connection(let connection):
+            return await store.fetchLogPage(
+                connectionId: connection.id,
+                groupId: nil,
+                range: range,
+                cursor: cursor
+            )
+        case .group(let group):
+            return await store.fetchLogPage(
+                connectionId: nil,
+                groupId: group.id,
+                range: range,
+                cursor: cursor
+            )
+        }
+    }
+
+    private func merge(_ incoming: [QueryLogEntry]) {
+        var byId = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+        for entry in incoming { byId[entry.id] = entry }
+        entries = byId.values.sorted {
+            if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+            return $0.id > $1.id
         }
     }
 

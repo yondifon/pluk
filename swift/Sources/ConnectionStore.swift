@@ -4,7 +4,7 @@ import SQLite3
 
 // MARK: - Query log entry (for audit viewer)
 
-struct QueryLogEntry: Identifiable {
+struct QueryLogEntry: Identifiable, Decodable {
     let id: Int
     let connectionId: String
     let connectionName: String
@@ -19,6 +19,17 @@ struct QueryLogEntry: Identifiable {
     let groupId: String?      // set when the call was routed through a group endpoint
     let groupName: String?    // group display name
     let createdAt: String
+}
+
+struct LogCursor: Decodable, Equatable {
+    let createdAt: String
+    let id: Int
+}
+
+struct LogPage: Decodable {
+    let entries: [QueryLogEntry]
+    let nextCursor: LogCursor?
+    let hasMore: Bool
 }
 
 /// Last-observed health of a connection, mirrored from the server's
@@ -44,6 +55,16 @@ final class ConnectionStore {
     @ObservationIgnored var toastCenter: ToastCenter?
 
     @ObservationIgnored private var db: OpaquePointer?
+
+    /// Highest activity-log row id the app has accounted for; the server cursor
+    /// the event feed resumes from across launches.
+    @ObservationIgnored private(set) var logCursor: Int = 0
+    @ObservationIgnored private var stream: ActivityStream?
+    @ObservationIgnored private var isStreamConnected = false
+    @ObservationIgnored private var reconcileTimer: Timer?
+    /// One revision box per feed (integration or group). Log views observe their
+    /// own box, so an event for one entity never invalidates the others.
+    @ObservationIgnored private var logRevisions: [String: LogRevision] = [:]
 
     init() {
         let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pluk").path
@@ -366,78 +387,33 @@ final class ConnectionStore {
 
     // MARK: - Query log
 
-    // Columns shared by every log query, kept in one place so the column indices
-    // used by `parseLogRows` stay in sync across the per-connection and per-group
-    // reads below.
-    private static let logColumns = """
-    id, connection_id, connection_name, sql, verdict, reason, categories,
-    source, result_json, row_count, response_text, group_id, group_name, created_at
-    """
-
-    /// Activity for a single integration (its own endpoint + any group routing).
-    func recentLog(connectionId: String, limit: Int = 200) -> [QueryLogEntry] {
-        var stmt: OpaquePointer?
-        let sql = """
-        SELECT \(Self.logColumns)
-        FROM query_log
-        WHERE connection_id = ?
-        ORDER BY id DESC
-        LIMIT ?
-        """
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
-        defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, connectionId)
-        sqlite3_bind_int(stmt, 2, Int32(limit))
-        return parseLogRows(stmt)
-    }
-
-    /// Activity for every member integration that was called through this group's
-    /// endpoint — the group view's single, aggregated activity feed.
-    func recentLogForGroup(groupId: String, limit: Int = 400) -> [QueryLogEntry] {
-        var stmt: OpaquePointer?
-        let sql = """
-        SELECT \(Self.logColumns)
-        FROM query_log
-        WHERE group_id = ?
-        ORDER BY id DESC
-        LIMIT ?
-        """
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
-        defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, groupId)
-        sqlite3_bind_int(stmt, 2, Int32(limit))
-        return parseLogRows(stmt)
-    }
-
-    private func parseLogRows(_ stmt: OpaquePointer?) -> [QueryLogEntry] {
-        var result: [QueryLogEntry] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            func str(_ i: Int32) -> String? {
-                guard let p = sqlite3_column_text(stmt, i) else { return nil }
-                return String(cString: p)
-            }
-            func optInt(_ i: Int32) -> Int? {
-                sqlite3_column_type(stmt, i) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, i))
-            }
-            guard let createdAt = str(13) else { continue }
-            result.append(QueryLogEntry(
-                id: Int(sqlite3_column_int(stmt, 0)),
-                connectionId: str(1) ?? "",
-                connectionName: str(2) ?? "",
-                sql: str(3) ?? "",
-                verdict: str(4) ?? "",
-                reason: str(5),
-                categories: str(6),
-                source: str(7),
-                resultJson: str(8),
-                rowCount: optInt(9),
-                responseText: str(10),
-                groupId: str(11),
-                groupName: str(12),
-                createdAt: createdAt
-            ))
+    func fetchLogPage(
+        connectionId: String?,
+        groupId: String?,
+        range: String,
+        cursor: LogCursor?
+    ) async -> LogPage? {
+        guard var components = URLComponents(string: PlukServer.api("logs")) else { return nil }
+        var queryItems = [URLQueryItem(name: "range", value: range)]
+        if let connectionId {
+            queryItems.append(URLQueryItem(name: "connectionId", value: connectionId))
+        } else if let groupId {
+            queryItems.append(URLQueryItem(name: "groupId", value: groupId))
         }
-        return result
+        if let cursor {
+            queryItems.append(URLQueryItem(name: "cursorTime", value: cursor.createdAt))
+            queryItems.append(URLQueryItem(name: "cursorId", value: String(cursor.id)))
+        }
+        components.queryItems = queryItems
+        guard let url = components.url else { return nil }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            return try JSONDecoder().decode(LogPage.self, from: data)
+        } catch {
+            return nil
+        }
     }
 
     func clearAllLogs(connectionId: String) {
@@ -454,6 +430,116 @@ final class ConnectionStore {
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, groupId)
         sqlite3_step(stmt)
+    }
+
+    // MARK: - Activity stream
+
+    /// Start the SSE feed (app launch). Reads the persisted cursor so a relaunch
+    /// resumes where the last session left off.
+    func startActivityStream() {
+        guard stream == nil else { return }
+        logCursor = Int(getSetting("log_cursor", default: "0")) ?? 0
+        let s = ActivityStream(store: self)
+        stream = s
+        s.start()
+        startReconcileTimer()
+    }
+
+    /// Stop the feed and reconciliation (app quit). The cursor itself survives
+    /// so the next launch resumes from here.
+    func stopActivityStream() {
+        stream?.stop()
+        stream = nil
+        reconcileTimer?.invalidate()
+        reconcileTimer = nil
+    }
+
+    /// Called on a successful connect. Every feed is re-read once on the
+    /// transition back to connected, so rows recorded while the connection was
+    /// down appear — never repeatedly while it stays connected.
+    func streamConnected() {
+        isStreamConnected = true
+        reconcileAllFeeds()
+    }
+
+    func streamDisconnected() {
+        isStreamConnected = false
+    }
+
+    /// The revision box for one feed (integration or group). Bumping it tells the
+    /// views showing that feed to re-read from the DB.
+    func activityRevision(for key: String) -> LogRevision {
+        if let box = logRevisions[key] { return box }
+        let box = LogRevision()
+        logRevisions[key] = box
+        return box
+    }
+
+    /// Handle one SSE frame. An `event` frame carries a row — advance the cursor
+    /// to its id and bump the feeds that row belongs to. Every other frame type
+    /// carries the server's high-water mark: one ahead of our cursor means rows
+    /// were missed while the connection looked healthy, so re-read every feed
+    /// once (the DB holds the truth).
+    func handleActivityFrame(name: String, data: String) {
+        guard let frame = try? JSONDecoder().decode(ActivityFrame.self, from: Data(data.utf8)) else { return }
+        if name == "event" {
+            guard let id = frame.id else { return }
+            advanceLogCursor(to: id)
+            if let connectionId = frame.connectionId {
+                bump(activityRevision(for: Self.activityKey(connection: connectionId)))
+            }
+            if let groupId = frame.groupId {
+                bump(activityRevision(for: Self.activityKey(group: groupId)))
+            }
+        } else if let cursor = frame.cursor, cursor > logCursor {
+            advanceLogCursor(to: cursor)
+            reconcileAllFeeds()
+        }
+    }
+
+    /// Raise the cursor (persisted) but never lower it — a frame arriving late
+    /// from a previous connection must not roll progress back.
+    private func advanceLogCursor(to cursor: Int) {
+        guard cursor > logCursor else { return }
+        logCursor = cursor
+        setSetting("log_cursor", value: String(cursor))
+    }
+
+    private func bump(_ box: LogRevision) {
+        box.value += 1
+    }
+
+    private func reconcileAllFeeds() {
+        for conn in connections { bump(activityRevision(for: Self.activityKey(connection: conn.id))) }
+        for group in groups { bump(activityRevision(for: Self.activityKey(group: group.id))) }
+    }
+
+    static func activityKey(connection id: String) -> String { "conn:\(id)" }
+    static func activityKey(group id: String) -> String { "group:\(id)" }
+
+    // MARK: - Activity stream: reconciliation
+
+    /// Slow backstop poll. While connected, if the DB already holds rows past
+    /// the cursor (a lost frame the feed never carried), re-read every feed once.
+    private func startReconcileTimer() {
+        guard reconcileTimer == nil else { return }
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.reconcileIfBehind() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        reconcileTimer = timer
+    }
+
+    private func reconcileIfBehind() {
+        guard isStreamConnected, let db else { return }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT MAX(id) FROM query_log", -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return }
+        let maxId = Int(sqlite3_column_int64(stmt, 0))
+        guard maxId > logCursor else { return }
+        advanceLogCursor(to: maxId)
+        reconcileAllFeeds()
     }
 
     // MARK: - Adapter catalog
@@ -678,4 +764,20 @@ final class ConnectionStore {
     private func bindInt(_ stmt: OpaquePointer?, _ idx: Int32, _ value: Int?) {
         if let value { sqlite3_bind_int(stmt, idx, Int32(value)) } else { sqlite3_bind_null(stmt, idx) }
     }
+}
+
+/// One feed's revision. A separate box per entity so bumping connection A only
+/// invalidates the views observing A — never every open log view.
+@Observable
+final class LogRevision {
+    var value = 0
+}
+
+/// A single SSE frame payload from the server's activity feed. Event frames
+/// carry the row's fields; ready/cursor/keepalive frames carry only `cursor`.
+private struct ActivityFrame: Decodable {
+    let cursor: Int?
+    let id: Int?
+    let connectionId: String?
+    let groupId: String?
 }

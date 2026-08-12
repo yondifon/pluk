@@ -59,6 +59,29 @@ to local clients you trust.
 Secrets (passwords, API keys, tokens) are stored in the local config and are
 never echoed back to the UI once saved.
 
+## How the activity log stays current
+
+Every agent call is written to the activity log in `~/.pluk/pluk.db` (see above).
+The app picks up new entries the moment they are recorded: the server keeps one
+connection per client open at `GET /api/events?after=<cursor>` and pushes each
+row as it is written, so a new entry appears without any user action. The manual
+refresh button still works — push adds a second path, it doesn't remove the pull
+one.
+
+- The **cursor** is a `query_log` row id. A client reconnects with the last id it
+  applied and the server replays exactly the rows written since — no gap, no
+  duplicates. A malformed `after` value is rejected with a `400`, never treated
+  as zero.
+- Frames are named `event` (one activity row), `ready` (sent on connect with the
+  current high‑water cursor), and `keepalive` (periodic, also carrying the
+  high‑water, so a client can tell it fell behind while the connection looked
+  healthy).
+- The app persists its cursor across launches, reconnects with exponential
+  backoff when the connection drops, and keeps a slow reconciliation re‑read as
+  a backstop. Detail that isn't needed to render a log row (result rows, raw
+  response text) stays in the shared DB and is fetched on demand when a row is
+  expanded.
+
 ## See also
 
 - The repository [`README.md`](../README.md) — install, build, and contribute.

@@ -2,7 +2,9 @@ import { Database } from "bun:sqlite";
 import { homedir } from "os";
 import { mkdirSync } from "fs";
 
-const DATA_DIR = `${homedir()}/.pluk`;
+// PLUK_DATA_DIR overrides where the DB lives, so tests can isolate from the
+// user's real ~/.pluk database.
+const DATA_DIR = process.env.PLUK_DATA_DIR ?? `${homedir()}/.pluk`;
 mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new Database(`${DATA_DIR}/pluk.db`);
@@ -35,6 +37,9 @@ for (const sql of [
 ]) {
   try { db.run(sql); } catch { /* column exists */ }
 }
+
+db.run("CREATE INDEX IF NOT EXISTS query_log_connection_time_id_idx ON query_log(connection_id, created_at DESC, id DESC)");
+db.run("CREATE INDEX IF NOT EXISTS query_log_group_time_id_idx ON query_log(group_id, created_at DESC, id DESC)");
 
 db.run(`
   CREATE TABLE IF NOT EXISTS settings (
@@ -123,6 +128,7 @@ export function createLogEntry(
     ).run(connectionId, connectionName, sql, verdict, reason ?? null, categories, source ?? null, group?.id ?? null, group?.name ?? null, database ?? null);
     const row = db.query("SELECT last_insert_rowid() as id").get() as { id: number };
     purgeOldLogs();
+    notifyActivity(row.id);
     return row.id;
   } catch {
     return -1;
@@ -149,7 +155,9 @@ export function logExecutedStatement(
       `INSERT INTO query_log (connection_id, connection_name, sql, verdict, reason, categories, row_count, source, group_id, group_name, database)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(connectionId, connectionName, sql, error ? "error" : "allowed", error ?? null, null, rowCount, source, group?.id ?? null, group?.name ?? null, database ?? null);
+    const row = db.query("SELECT last_insert_rowid() as id").get() as { id: number };
     purgeOldLogs();
+    notifyActivity(row.id);
   } catch {
     // Non-fatal
   }
@@ -170,6 +178,7 @@ export function updateLogEntry(
     db.query(
       `UPDATE query_log SET verdict=?, reason=?, result_json=?, row_count=?, response_text=? WHERE id=?`
     ).run(verdict, reason ?? null, resultJson, rowCount, packResponse(responseText), id);
+    notifyActivity(id);
   } catch {
     // Non-fatal
   }
@@ -191,4 +200,190 @@ export function logQuery(
 ): void {
   const id = createLogEntry(connectionId, connectionName, sql, verdict, categories, reason, source, group, database);
   if (id >= 0 && (result || responseText)) updateLogEntry(id, verdict, reason, result, responseText);
+}
+
+// ── Paged activity reads ──────────────────────────────────────────────────────
+
+export const LOG_PAGE_SIZE = 100;
+
+export type LogRange = "hour" | "today" | "7d" | "30d" | "all";
+
+export type LogCursor = {
+  createdAt: string;
+  id: number;
+};
+
+export type LogScope =
+  | { connectionId: string }
+  | { groupId: string };
+
+export type LogPageEntry = {
+  id: number;
+  connectionId: string;
+  connectionName: string;
+  sql: string;
+  verdict: string;
+  reason: string | null;
+  categories: string | null;
+  source: string | null;
+  resultJson: string | null;
+  rowCount: number | null;
+  responseText: string | null;
+  groupId: string | null;
+  groupName: string | null;
+  createdAt: string;
+};
+
+export type LogPage = {
+  entries: LogPageEntry[];
+  nextCursor: LogCursor | null;
+  hasMore: boolean;
+};
+
+const PAGE_COLUMNS = "id, connection_id, connection_name, sql, verdict, reason, categories, source, result_json, row_count, response_text, group_id, group_name, created_at" as const;
+
+const RANGE_CUTOFFS: Record<Exclude<LogRange, "all">, string> = {
+  hour: "datetime('now', '-1 hour')",
+  today: "datetime('now', 'localtime', 'start of day', 'utc')",
+  "7d": "datetime('now', '-7 days')",
+  "30d": "datetime('now', '-30 days')",
+};
+
+export function readLogPage(scope: LogScope, range: LogRange, cursor?: LogCursor): LogPage {
+  const scopeColumn = "connectionId" in scope ? "connection_id" : "group_id";
+  const scopeValue = "connectionId" in scope ? scope.connectionId : scope.groupId;
+  const conditions = [`${scopeColumn} = ?`];
+  const values: (string | number)[] = [scopeValue];
+
+  if (range !== "all") conditions.push(`created_at >= ${RANGE_CUTOFFS[range]}`);
+  if (cursor) {
+    conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");
+    values.push(cursor.createdAt, cursor.createdAt, cursor.id);
+  }
+
+  values.push(LOG_PAGE_SIZE + 1);
+  const rows = db.query(
+    `SELECT ${PAGE_COLUMNS}
+     FROM query_log
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY created_at DESC, id DESC
+     LIMIT ?`
+  ).all(...values) as Record<string, unknown>[];
+
+  const entries = rows
+    .slice(0, LOG_PAGE_SIZE)
+    .map(rowToPageEntry)
+    .filter((entry): entry is LogPageEntry => entry !== null);
+  const hasMore = rows.length > LOG_PAGE_SIZE;
+  const last = entries[entries.length - 1];
+
+  return {
+    entries,
+    hasMore,
+    nextCursor: hasMore && last ? { createdAt: last.createdAt, id: last.id } : null,
+  };
+}
+
+function rowToPageEntry(r: Record<string, unknown>): LogPageEntry | null {
+  const id = Number(r.id);
+  const createdAt = String(r.created_at ?? "");
+  if (!Number.isSafeInteger(id) || id <= 0 || !createdAt) return null;
+  return {
+    id,
+    connectionId: String(r.connection_id ?? ""),
+    connectionName: String(r.connection_name ?? ""),
+    sql: String(r.sql ?? ""),
+    verdict: String(r.verdict ?? ""),
+    reason: r.reason == null ? null : String(r.reason),
+    categories: r.categories == null ? null : String(r.categories),
+    source: r.source == null ? null : String(r.source),
+    resultJson: r.result_json == null ? null : String(r.result_json),
+    rowCount: r.row_count == null ? null : Number(r.row_count),
+    responseText: r.response_text == null ? null : String(r.response_text),
+    groupId: r.group_id == null ? null : String(r.group_id),
+    groupName: r.group_name == null ? null : String(r.group_name),
+    createdAt,
+  };
+}
+
+// ── Activity feed ─────────────────────────────────────────────────────────────
+//
+// Subscribers learn about every new or updated log row the moment it is written,
+// so the app can update its log views without polling. The feed is cursor-based:
+// the row id is monotonic, and a subscriber that comes in late can be caught up
+// with `logRowsAfter`. Heavy fields (result_json, response_text) stay in the
+// shared DB — the app re-reads rows from there; the feed carries only what a
+// collapsed log row needs.
+
+export type LogActivity = {
+  id: number;
+  connectionId: string;
+  connectionName: string;
+  sql: string;
+  verdict: string;
+  reason: string | null;
+  categories: string | null;
+  source: string | null;
+  groupId: string | null;
+  groupName: string | null;
+  database: string | null;
+  rowCount: number | null;
+  createdAt: string;
+};
+
+type ActivityHandler = (row: LogActivity) => void;
+
+const activityHandlers = new Set<ActivityHandler>();
+
+export function subscribeLogActivity(handler: ActivityHandler): () => void {
+  activityHandlers.add(handler);
+  return () => activityHandlers.delete(handler);
+}
+
+export function logHighWater(): number {
+  const row = db.query("SELECT COALESCE(MAX(id), 0) AS cursor FROM query_log").get() as { cursor: number };
+  return row.cursor;
+}
+
+export function logRowsAfter(after: number): LogActivity[] {
+  const rows = db.query(
+    `SELECT ${ROW_COLUMNS} FROM query_log WHERE id > ? ORDER BY id ASC`
+  ).all(after) as Record<string, unknown>[];
+  return rows.map(rowToActivity).filter((r): r is LogActivity => r !== null);
+}
+
+const ROW_COLUMNS = "id, connection_id, connection_name, sql, verdict, reason, categories, source, group_id, group_name, database, row_count, created_at" as const;
+
+function rowToActivity(r: Record<string, unknown>): LogActivity | null {
+  const id = r.id as number;
+  if (typeof id !== "number" || id <= 0) return null;
+  return {
+    id,
+    connectionId: String(r.connection_id ?? ""),
+    connectionName: String(r.connection_name ?? ""),
+    sql: String(r.sql ?? ""),
+    verdict: String(r.verdict ?? ""),
+    reason: r.reason == null ? null : String(r.reason),
+    categories: r.categories == null ? null : String(r.categories),
+    source: r.source == null ? null : String(r.source),
+    groupId: r.group_id == null ? null : String(r.group_id),
+    groupName: r.group_name == null ? null : String(r.group_name),
+    database: r.database == null ? null : String(r.database),
+    rowCount: r.row_count == null ? null : Number(r.row_count),
+    createdAt: String(r.created_at ?? ""),
+  };
+}
+
+function rowById(id: number): LogActivity | null {
+  const rows = db.query(
+    `SELECT ${ROW_COLUMNS} FROM query_log WHERE id = ?`
+  ).all(id) as Record<string, unknown>[];
+  return rowToActivity(rows[0] ?? {});
+}
+
+function notifyActivity(id: number): void {
+  if (id <= 0 || activityHandlers.size === 0) return;
+  const row = rowById(id);
+  if (!row) return;
+  for (const handler of activityHandlers) handler(row);
 }

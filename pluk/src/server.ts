@@ -4,6 +4,8 @@ import { handleMcpRequest, resetOwners } from "./mcp/server.js";
 import { buildGroupServer } from "./mcp/group.js";
 import { allHealth, recordHealth } from "./mcp/health.js";
 import { getAdapter, listAdapters, buildAdapterServer } from "./adapters/index.js";
+import { handleActivityEvents } from "./events.js";
+import { handleLogRequest } from "./logs.js";
 import { logInfo, logError, LOG_PATH } from "./log.js";
 
 const PORT = Number(process.env.PORT ?? 4242);
@@ -72,6 +74,15 @@ const server = Bun.serve({
       logInfo("reloaded MCP owners", { count, id: id ?? "all" });
       return Response.json({ ok: true, count });
     }
+
+    // GET /api/events?after=<cursor> — Server-Sent Events for the activity log.
+    // Held open; every new/updated log row is pushed so the app updates without
+    // polling. `after` is a query_log row id; a malformed cursor is rejected.
+    const eventResponse = handleActivityEvents(req, url);
+    if (eventResponse) return eventResponse;
+
+    const logResponse = handleLogRequest(req, url);
+    if (logResponse) return logResponse;
 
     for (const adapter of listAdapters()) {
       const response = await adapter.handleGlobalApi?.(req, path);

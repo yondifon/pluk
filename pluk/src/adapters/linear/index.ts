@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Integration } from "../../store/integrations.js";
 import { actionAdapter, type ActionTool } from "../kit.js";
+import { applyOnly, type FieldMap } from "../onlyProjection.js";
 import { linearGraphQL } from "./client.js";
 import { linearFields } from "./fields.js";
 import { resolveLabels, resolveState, resolveTeam, resolveUser } from "./resolve.js";
@@ -14,6 +15,66 @@ const COMMENT_FIELDS = `id body url createdAt parentId resolvedAt user { name } 
 // only exists on IssueNotification, so it comes in through an inline fragment.
 const NOTIFICATION_FIELDS = `id type title subtitle url createdAt readAt actor { name }
   ... on IssueNotification { issue { identifier title url } comment { body url } parentComment { id url } }`;
+
+// ── `only` field selection ───────────────────────────────────────────────────
+// Each tool's default output and its named shortcuts. `only` entries are
+// validated against `fields` and expanded through `presets`; see onlyProjection.ts.
+
+const ISSUE_LIST_MAP: FieldMap = {
+  fields: ["identifier", "title", "state", "assignee", "updatedAt", "id", "url", "priority"],
+  default: ["identifier", "title", "state.name", "assignee.name", "updatedAt"],
+  presets: { priority: ["priority"], url: ["url"], ids: ["id"] },
+};
+const MY_ISSUES_MAP: FieldMap = {
+  fields: ["identifier", "title", "state", "priority", "assignee", "id", "url", "updatedAt"],
+  default: ["identifier", "title", "state.name", "priority"],
+  presets: { priority: ["priority"], url: ["url"], ids: ["id"] },
+};
+const GET_ISSUE_MAP: FieldMap = {
+  fields: ["identifier", "title", "description", "state", "assignee", "priority", "url", "id", "branchName", "estimate", "dueDate", "createdAt", "updatedAt", "team", "project", "parent", "labels"],
+  default: ["identifier", "title", "description", "state.name", "assignee.name", "priority", "url"],
+  presets: {
+    meta: ["labels", "project", "parent", "team", "createdAt", "updatedAt"],
+    planning: ["estimate", "dueDate"],
+    branch: ["branchName"],
+  },
+};
+const LIST_COMMENTS_MAP: FieldMap = {
+  fields: ["issue", "comments"],
+  default: ["issue", "comments.body", "comments.user.name", "comments.createdAt", "comments.replies"],
+  presets: { refs: ["comments.id", "comments.url"] },
+};
+const INBOX_MAP: FieldMap = {
+  fields: ["type", "subtitle", "createdAt", "actor", "issue", "comment", "title", "url", "id", "readAt", "parentComment"],
+  default: ["type", "subtitle", "createdAt", "actor.name", "issue.identifier", "issue.title", "comment.body"],
+  presets: {
+    urls: ["url", "comment.url", "issue.url"],
+    thread: ["parentComment"],
+    read: ["readAt"],
+  },
+};
+const LIST_TEAMS_MAP: FieldMap = { fields: ["id", "name", "key"], default: ["id", "name", "key"] };
+const LIST_PROJECTS_MAP: FieldMap = {
+  fields: ["id", "name", "state", "progress_percent", "total_issues", "completed_issues", "url", "startDate", "targetDate", "lead"],
+  default: ["id", "name", "state", "progress_percent", "total_issues", "completed_issues"],
+  presets: { dates: ["startDate", "targetDate"], lead: ["lead.name"] },
+};
+const PROJECT_UPDATES_MAP: FieldMap = {
+  fields: ["project", "updates"],
+  default: ["project", "updates.health", "updates.createdAt", "updates.user.name", "updates.body"],
+  presets: { urls: ["updates.url"] },
+};
+const CREATE_ISSUE_MAP: FieldMap = { fields: ["success", "issue"], default: ["issue.identifier", "issue.url"] };
+const UPDATE_ISSUE_MAP: FieldMap = { fields: ["success", "issue"], default: ["issue.identifier", "issue.state.name"] };
+const COMMENT_MAP: FieldMap = { fields: ["success", "comment"], default: ["comment.url"] };
+
+function onlySchema(presetNames: string[]) {
+  const presetLine = presetNames.length ? ` Presets: ${presetNames.join(", ")}.` : "";
+  return z
+    .array(z.string())
+    .optional()
+    .describe(`Trim the response to just these fields — omit for a lighter default, pass ["*"] for the full payload. Entries are dot paths (e.g. "state.name") or presets.${presetLine}`);
+}
 
 // Linear reports a project's issue counts as a running history; the last sample
 // is the current total/completed. Flatten that (and drop the noisy arrays) into
@@ -63,6 +124,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
       schema: {
         team: z.string().optional().describe("Team key (e.g. ENG). Defaults to the integration's team if set."),
         limit: z.number().int().min(1).max(100).default(25).describe("Max issues to return"),
+        only: onlySchema(["priority", "url", "ids"]),
       },
       detail: (a) => `list_issues team=${(a.team as string) ?? defaultTeam ?? "*"} limit=${a.limit}`,
       run: async (a) => {
@@ -73,7 +135,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `query($first:Int!,$filter:IssueFilter){ issues(first:$first, filter:$filter){ nodes { ${ISSUE_FIELDS} } } }`,
           { first: a.limit, filter },
         );
-        return data.issues.nodes;
+        return applyOnly(data.issues.nodes, a.only as string[] | undefined, ISSUE_LIST_MAP);
       },
     },
     {
@@ -83,6 +145,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
       schema: {
         include_done: z.boolean().default(false).describe("Also return completed and canceled issues"),
         limit: z.number().int().min(1).max(100).default(25).describe("Max issues to return"),
+        only: onlySchema(["priority", "url", "ids"]),
       },
       detail: (a) => `my_issues include_done=${a.include_done} limit=${a.limit}`,
       run: async (a) => {
@@ -93,14 +156,17 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `query($first:Int!,$filter:IssueFilter){ issues(first:$first, filter:$filter){ nodes { ${ISSUE_FIELDS} } } }`,
           { first: a.limit, filter },
         );
-        return data.issues.nodes;
+        return applyOnly(data.issues.nodes, a.only as string[] | undefined, MY_ISSUES_MAP);
       },
     },
     {
       name: "get_issue",
       description: "Get a single issue by its id or identifier (e.g. ENG-123)",
       category: "read",
-      schema: { id: z.string().describe("Issue id or identifier") },
+      schema: {
+        id: z.string().describe("Issue id or identifier"),
+        only: onlySchema(["meta", "planning", "branch"]),
+      },
       detail: (a) => `get_issue ${a.id}`,
       run: async (a) => {
         const data = await linearGraphQL<{ issue: unknown }>(
@@ -108,7 +174,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `query($id:String!){ issue(id:$id){ id identifier title description state { name type } assignee { name } priority estimate dueDate branchName url createdAt updatedAt team { key } project { name } parent { identifier title } labels { nodes { name } } } }`,
           { id: a.id },
         );
-        return data.issue;
+        return applyOnly(data.issue, a.only as string[] | undefined, GET_ISSUE_MAP);
       },
     },
     {
@@ -118,6 +184,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
       schema: {
         query: z.string().describe("Search term"),
         limit: z.number().int().min(1).max(100).default(25).describe("Max issues to return"),
+        only: onlySchema(["priority", "url", "ids"]),
       },
       detail: (a) => `search_issues "${a.query}" limit=${a.limit}`,
       run: async (a) => {
@@ -127,7 +194,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `query($first:Int!,$filter:IssueFilter){ issues(first:$first, filter:$filter){ nodes { ${ISSUE_FIELDS} } } }`,
           { first: a.limit, filter },
         );
-        return data.issues.nodes;
+        return applyOnly(data.issues.nodes, a.only as string[] | undefined, ISSUE_LIST_MAP);
       },
     },
     {
@@ -137,6 +204,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
       schema: {
         issue_id: z.string().describe("Issue id or identifier (e.g. ENG-123)"),
         limit: z.number().int().min(1).max(100).default(50).describe("Max comments to fetch; replies count towards this"),
+        only: onlySchema(["refs"]),
       },
       detail: (a) => `list_comments ${a.issue_id} limit=${a.limit}`,
       run: async (a) => {
@@ -146,7 +214,8 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           { id: a.issue_id, first: a.limit },
         );
         if (!data.issue) throw new Error(`Issue "${a.issue_id}" not found.`);
-        return { issue: data.issue.identifier, comments: threadComments(data.issue.comments.nodes) };
+        const result = { issue: data.issue.identifier, comments: threadComments(data.issue.comments.nodes) };
+        return applyOnly(result, a.only as string[] | undefined, LIST_COMMENTS_MAP);
       },
     },
     {
@@ -156,6 +225,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
       schema: {
         unread_only: z.boolean().default(true).describe("Only notifications you have not read yet"),
         limit: z.number().int().min(1).max(50).default(25).describe("Max notifications to return"),
+        only: onlySchema(["urls", "thread", "read"]),
       },
       detail: (a) => `inbox unread_only=${a.unread_only} limit=${a.limit}`,
       run: async (a) => {
@@ -170,7 +240,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           { first },
         );
         const nodes = a.unread_only ? data.notifications.nodes.filter((n) => n.readAt == null) : data.notifications.nodes;
-        return nodes.slice(0, limit);
+        return applyOnly(nodes.slice(0, limit), a.only as string[] | undefined, INBOX_MAP);
       },
     },
     {
@@ -178,9 +248,10 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
       description: "List teams (id, name, key).",
       category: "read",
       defaultEnabled: false,
-      run: async () => {
+      schema: { only: onlySchema([]) },
+      run: async (a) => {
         const data = await linearGraphQL<{ teams: { nodes: unknown[] } }>(apiKey, `{ teams { nodes { id name key } } }`);
-        return data.teams.nodes;
+        return applyOnly(data.teams.nodes, a.only as string[] | undefined, LIST_TEAMS_MAP);
       },
     },
     {
@@ -211,6 +282,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
       schema: {
         query: z.string().optional().describe("Filter projects whose name contains this text"),
         limit: z.number().int().min(1).max(100).default(25).describe("Max projects to return"),
+        only: onlySchema(["dates", "lead"]),
       },
       detail: (a) => `list_projects query="${(a.query as string) ?? ""}" limit=${a.limit}`,
       run: async (a) => {
@@ -221,7 +293,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `query($first:Int!,$filter:ProjectFilter){ projects(first:$first, filter:$filter){ nodes { ${PROJECT_FIELDS} } } }`,
           { first: a.limit, filter },
         );
-        return data.projects.nodes.map(summarizeProject);
+        return applyOnly(data.projects.nodes.map(summarizeProject), a.only as string[] | undefined, LIST_PROJECTS_MAP);
       },
     },
     {
@@ -232,6 +304,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
       schema: {
         project_id: z.string().describe("Project id (UUID) from list_projects"),
         limit: z.number().int().min(1).max(50).default(10).describe("Max updates to return"),
+        only: onlySchema(["urls"]),
       },
       detail: (a) => `project_updates ${a.project_id} limit=${a.limit}`,
       run: async (a) => {
@@ -241,7 +314,8 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           { id: a.project_id, first: a.limit },
         );
         if (!data.project) throw new Error(`Project "${a.project_id}" not found.`);
-        return { project: data.project.name, updates: data.project.projectUpdates.nodes };
+        const result = { project: data.project.name, updates: data.project.projectUpdates.nodes };
+        return applyOnly(result, a.only as string[] | undefined, PROJECT_UPDATES_MAP);
       },
     },
     {
@@ -256,6 +330,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
         state: z.string().optional().describe("Initial workflow state name, e.g. In Progress"),
         priority: z.number().int().min(0).max(4).optional().describe("0 none, 1 urgent, 2 high, 3 normal, 4 low"),
         labels: z.array(z.string()).optional().describe("Label names to apply"),
+        only: onlySchema([]),
       },
       detail: (a) => `create_issue team=${a.team} "${a.title}"`,
       run: async (a) => {
@@ -271,7 +346,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `mutation($input:IssueCreateInput!){ issueCreate(input: $input){ success issue { id identifier title url } } }`,
           { input },
         );
-        return data.issueCreate;
+        return applyOnly(data.issueCreate, a.only as string[] | undefined, CREATE_ISSUE_MAP);
       },
     },
     {
@@ -282,6 +357,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
         issue_id: z.string().describe("Issue id or identifier"),
         body: z.string().describe("Comment body (markdown)"),
         parent_id: z.string().optional().describe("Comment id to reply to; omit to start a new thread"),
+        only: onlySchema([]),
       },
       detail: (a) => (a.parent_id ? `comment ${a.issue_id} reply-to=${a.parent_id}` : `comment ${a.issue_id}`),
       run: async (a) => {
@@ -290,7 +366,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `mutation($input:CommentCreateInput!){ commentCreate(input:$input){ success comment { id url parentId } } }`,
           { input: { issueId: a.issue_id, body: a.body, parentId: a.parent_id } },
         );
-        return data.commentCreate;
+        return applyOnly(data.commentCreate, a.only as string[] | undefined, COMMENT_MAP);
       },
     },
     {
@@ -306,6 +382,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
         title: z.string().optional().describe("New title"),
         description: z.string().optional().describe("New description (markdown); replaces the existing one"),
         labels: z.array(z.string()).optional().describe("Label names; replaces the issue's current labels"),
+        only: onlySchema([]),
       },
       detail: (a) => `update_issue ${a.id} ${Object.keys(a).filter((k) => k !== "id" && a[k] !== undefined).join(",")}`,
       run: async (a) => {
@@ -334,7 +411,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id, input:$input){ success issue { identifier title state { name } assignee { name } priority url } } }`,
           { id: a.id, input },
         );
-        return data.issueUpdate;
+        return applyOnly(data.issueUpdate, a.only as string[] | undefined, UPDATE_ISSUE_MAP);
       },
     },
     {
