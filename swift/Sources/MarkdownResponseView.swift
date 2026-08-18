@@ -161,7 +161,7 @@ private struct MarkdownCodeBlock: View {
                     if !embedded {
                         Text(gutter)
                             .font(.system(size: fontSize, design: .monospaced))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Surface.tertiaryLabel)
                             .lineSpacing(lineSpacing)
                             .multilineTextAlignment(.trailing)
                             .fixedSize()
@@ -186,11 +186,11 @@ private struct MarkdownCodeBlock: View {
     private var header: some View {
         HStack(spacing: Space.sm) {
             Text(language.lowercased())
-                .font(.mono(10, weight: .semibold))
+                .scaledFont(.caption, weight: .semibold, design: .monospaced)
                 .foregroundStyle(.secondary)
             Spacer(minLength: Space.sm)
             Button(copied ? "Copied" : "Copy Code") { copyCode() }
-                .buttonStyle(.plain)
+                .buttonStyle(.pointer)
                 .scaledFont(.callout)
                 .foregroundStyle(copied ? .green : Color.accentColor)
                 .accessibilityLabel(copied ? "Code copied" : "Copy code")

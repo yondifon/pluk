@@ -18,6 +18,7 @@ import { logError } from "../log.js";
 // ── MCP response shaping ─────────────────────────────────────────────────────
 
 export type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
+export type CommandOutput = { value: unknown; command: string };
 
 export const ok = (text: string): ToolResult => ({ content: [{ type: "text", text }] });
 export const err = (text: string): ToolResult => ({ content: [{ type: "text", text }], isError: true });
@@ -38,13 +39,14 @@ export interface LogSnapshot {
  */
 export type Outcome =
   | { blocked: string }
-  | { text: string; isError?: boolean; reason?: string; result?: LogSnapshot; responseText?: string };
+  | { text: string; isError?: boolean; reason?: string; result?: LogSnapshot; responseText?: string; command?: string };
 
 export interface GateMeta {
   category: string; // log category (action category, SQL statement categories, …)
   action: string;   // originating tool / operation (the log `source`)
   detail: string;   // human-readable line stored in the log (`sql` column)
   database?: string; // target database when the call selected one (multi-db SQL connections)
+  command?: string; // exact CLI command when the adapter shells out
 }
 
 export interface GateOpts {
@@ -74,11 +76,11 @@ export async function runGated(
 ): Promise<ToolResult> {
   const block = opts.precheck?.();
   if (block !== undefined) {
-    logQuery(conn.id, conn.name, meta.detail, "blocked", meta.category, block, undefined, meta.action, undefined, conn.viaGroup, meta.database);
+    logQuery(conn.id, conn.name, meta.command ?? meta.detail, "blocked", meta.category, block, undefined, meta.action, undefined, conn.viaGroup, meta.database);
     return err(`Blocked: ${block}`);
   }
 
-  const logId = createLogEntry(conn.id, conn.name, meta.detail, "pending", meta.category, undefined, meta.action, conn.viaGroup, meta.database);
+  const logId = createLogEntry(conn.id, conn.name, meta.command ?? meta.detail, "pending", meta.category, undefined, meta.action, conn.viaGroup, meta.database);
   try {
     const outcome = await run(logId);
     if ("blocked" in outcome) {
@@ -86,13 +88,13 @@ export async function runGated(
       return err(`Blocked: ${outcome.blocked}`);
     }
     const status: Verdict = outcome.isError ? "error" : "allowed";
-    updateLogEntry(logId, status, outcome.reason, outcome.result, outcome.responseText);
+    updateLogEntry(logId, status, outcome.reason, outcome.result, outcome.responseText, outcome.command);
     return outcome.isError ? err(outcome.text) : ok(outcome.text);
   } catch (e) {
     const msg = (e as Error).message;
     const status = opts.classifyError?.(msg) ?? "error";
     const text = opts.formatError?.(e, status) ?? `${status === "cancelled" ? "Cancelled" : "Error"}: ${msg}`;
-    updateLogEntry(logId, status, msg, undefined, text);
+    updateLogEntry(logId, status, msg, undefined, text, meta.command);
     if (status === "error") opts.onError?.(e);
     return err(text);
   }
@@ -118,10 +120,11 @@ export interface ActionTool {
   settings?: ConfigField[];
   /** Log line for this call. Defaults to the tool name. */
   detail?: (args: Record<string, unknown>) => string;
+  command?: (args: Record<string, unknown>, settings: Record<string, unknown>) => string;
   /** Fetch the data; the returned value is JSON-stringified for the agent + log,
    *  except a string, which is passed through as-is (CLI-backed adapters).
    *  Receives the tool's resolved settings (from the integration's config). */
-  run: (args: Record<string, unknown>, settings: Record<string, unknown>) => Promise<unknown>;
+  run: (args: Record<string, unknown>, settings: Record<string, unknown>) => Promise<unknown | CommandOutput>;
 }
 
 export interface ActionAdapterSpec<C> {
@@ -142,7 +145,7 @@ export interface ActionAdapterSpec<C> {
   testConnection: (conn: Integration) => Promise<void>;
   tools: (conn: Integration, client: C) => ActionTool[];
   /** Turn a raw failure into something the user can act on (shown by the UI on a
-   *  failed connection test), when the service's own errors need translating. */
+  *  failed connection test), when the service's own errors need translating. */
   humanizeError?: (error: unknown) => string;
 }
 
@@ -209,14 +212,21 @@ export function actionAdapter<C>(spec: ActionAdapterSpec<C>): Adapter {
             category: tool.category,
             action: tool.name,
             detail: tool.detail ? tool.detail(args) : tool.name,
+            command: tool.command?.(args, settings),
           },
           async () => {
-            const data = await tool.run(args, settings);
+            const output = await tool.run(args, settings);
+            const data = isCommandOutput(output) ? output.value : output;
             const rows = Array.isArray(data) ? data : [data];
             // A tool that already speaks text (a CLI's own output) passes through
             // verbatim; anything structured is rendered as JSON for the agent.
             const text = typeof data === "string" ? data : JSON.stringify(data, null, 2);
-            return { text, result: { rows }, responseText: text };
+            return {
+              text,
+              result: { rows },
+              responseText: text,
+              command: isCommandOutput(output) ? output.command : undefined,
+            };
           },
           {
             onError: (e) => logError(`${spec.id} ${tool.name} failed`, e, { integration: conn.name }),
@@ -247,6 +257,11 @@ export function actionAdapter<C>(spec: ActionAdapterSpec<C>): Adapter {
     instructions,
     register,
   };
+}
+
+function isCommandOutput(value: unknown): value is CommandOutput {
+  return typeof value === "object" && value !== null && "value" in value && "command" in value
+    && typeof value.command === "string";
 }
 
 // ── Shared config fields ─────────────────────────────────────────────────────

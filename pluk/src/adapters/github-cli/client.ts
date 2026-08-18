@@ -40,6 +40,11 @@ export function repoFlag(cfg: GhConfig, arg?: string): string[] {
   return spec ? ["--repo", spec] : [];
 }
 
+export function ghCommand(cfg: GhConfig, args: string[]): string {
+  const quote = (value: string): string => /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+  return [cfg.bin, ...args].map(quote).join(" ");
+}
+
 /** A positional value must not read as a flag. */
 export function positional(value: unknown, what: string): string {
   const v = String(value ?? "").trim();

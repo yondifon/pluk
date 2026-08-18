@@ -116,10 +116,10 @@ private struct ToastCard: View {
 
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Surface.tertiaryLabel)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pointer)
         }
         .padding(.horizontal, Space.md)
         .padding(.vertical, Space.md)

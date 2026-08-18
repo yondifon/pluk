@@ -102,14 +102,18 @@ export function registerSshServer(server: ToolHost, conn: Integration, ownerId: 
 
     return runGated(
       conn,
-      { category: "command", action: toolName, detail },
+      { category: "command", action: toolName, detail, command: finalCommand },
       async () => {
         const { stdout, stderr, code, truncated } = await runCommand(ownerId, conn, finalCommand, timeoutMs);
         const text = formatResult(stdout, stderr, code, truncated);
+        const output = `${stdout}${stderr}${truncated ? "\n[output truncated at 1 MB]" : ""}`;
+        // No output (empty grep, `true`) must still log a response; the formatted
+        // result always carries the exit code.
+        const response = output.trim() ? output : text;
         const result = { rows: [{ exit_code: code }] };
         return code === 0
-          ? { text, result, responseText: text }
-          : { text, isError: true, reason: `exit ${code}`, result, responseText: text };
+          ? { text, result, responseText: response }
+          : { text, isError: true, reason: `exit ${code}`, result, responseText: response };
       },
       {
         onError: (e) => logError(`ssh ${toolName} failed`, e, { integration: conn.name }),

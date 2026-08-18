@@ -184,6 +184,11 @@ export async function runSpark(cfg: SparkCfg, args: string[]): Promise<string> {
   }
 }
 
+export function sparkCommand(cfg: SparkCfg, args: string[]): string {
+  const quote = (value: string): string => /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+  return [cfg.bin, ...args].map(quote).join(" ");
+}
+
 /** Spark's own gate (read-only / triage / send, per account) and a stopped
  *  desktop are the two failures a user can actually fix — say how. */
 export function humanizeSparkError(error: unknown): string {

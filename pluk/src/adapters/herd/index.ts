@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { Integration } from "../../store/integrations.js";
-import { actionAdapter, type ActionTool } from "../kit.js";
+import { actionAdapter, type ActionTool, type CommandOutput } from "../kit.js";
 import { herdFields } from "./fields.js";
-import { assertFeature, createSite, destroySite, herdConfig, listSites, testHerd, type HerdConfig } from "./client.js";
+import { assertFeature, createSite, destroySite, herdConfig, listSites, testHerd, worktreePath, type HerdConfig } from "./client.js";
 
 const AGENT_HINT =
   "Use this to test a branch on its own local URL. create_site makes a git worktree of the app, links the untracked paths it needs to boot (vendor, node_modules, build output), copies .env with APP_URL repointed, and serves it from Herd at <feature>.<site>.<tld>. destroy_site tears the site down; the branch survives.";
@@ -12,12 +12,23 @@ const AGENT_HINT =
 type ConfigRef = () => HerdConfig;
 
 function herdTools(cfg: ConfigRef): ActionTool[] {
+  const command = (args: string[]): string => {
+    const quote = (value: string): string => /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+    return args.map(quote).join(" ");
+  };
+
   return [
     {
       name: "list_sites",
       description: "List the feature sites for this app — feature, branch, URL and worktree path.",
       category: "read",
-      run: () => listSites(cfg()),
+      run: async () => {
+        const c = cfg();
+        return {
+          value: await listSites(c),
+          command: command(["git", "-C", c.appPath, "worktree", "list", "--porcelain"]),
+        } satisfies CommandOutput;
+      },
     },
     {
       name: "create_site",
@@ -30,11 +41,18 @@ function herdTools(cfg: ConfigRef): ActionTool[] {
         base: z.string().optional().describe("Git ref to branch from when the branch is new. Defaults to HEAD"),
       },
       detail: (a) => `create_site ${a.feature}`,
-      run: (a) =>
-        createSite(cfg(), assertFeature(a.feature as string), {
-          branch: a.branch as string | undefined,
-          base: a.base as string | undefined,
-        }),
+      run: async (a) => {
+        const c = cfg();
+        const feature = assertFeature(a.feature as string);
+        const branch = (a.branch as string | undefined)?.trim() || feature;
+        return {
+          value: await createSite(c, feature, {
+            branch: a.branch as string | undefined,
+            base: a.base as string | undefined,
+          }),
+          command: command(["git", "-C", c.appPath, "worktree", "add", worktreePath(c, feature), branch]),
+        } satisfies CommandOutput;
+      },
     },
     {
       name: "destroy_site",
@@ -45,7 +63,14 @@ function herdTools(cfg: ConfigRef): ActionTool[] {
         force: z.boolean().default(false).describe("Remove the worktree even when it has uncommitted changes"),
       },
       detail: (a) => `destroy_site ${a.feature}`,
-      run: (a) => destroySite(cfg(), assertFeature(a.feature as string), a.force as boolean),
+      run: async (a) => {
+        const c = cfg();
+        const feature = assertFeature(a.feature as string);
+        return {
+          value: await destroySite(c, feature, a.force as boolean),
+          command: command(["git", "-C", c.appPath, "worktree", "remove", ...(a.force ? ["--force"] : []), worktreePath(c, feature)]),
+        } satisfies CommandOutput;
+      },
     },
   ];
 }

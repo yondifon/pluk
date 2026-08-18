@@ -249,7 +249,7 @@ struct ConfigSnippetSection: View {
                         Text(selectedChoice.label)
                             .scaledFont(.callout)
                         Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 8))
+                            .font(.system(size: 10))
                     }
                     .foregroundColor(.secondary)
                 }
@@ -275,7 +275,7 @@ struct ConfigSnippetSection: View {
                             Text(selectedScope.label)
                                 .scaledFont(.callout)
                             Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 8))
+                                .font(.system(size: 10))
                         }
                         .foregroundColor(.secondary)
                     }
@@ -316,7 +316,7 @@ struct ConfigSnippetSection: View {
                             .scaledFont(.caption)
                             .foregroundColor(.secondary)
                         Text(client.configPath(selectedScope))
-                            .font(.mono(11))
+                            .scaledFont(.caption, design: .monospaced)
                             .textSelection(.enabled)
                     }
 
@@ -349,7 +349,7 @@ struct ConfigSnippetSection: View {
                                 .scaledFont(.callout)
                             Spacer(minLength: Space.md)
                             Text(client.configPath(selectedScope))
-                                .font(.mono(10))
+                                .scaledFont(.caption, design: .monospaced)
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -577,7 +577,7 @@ struct ConnectionDetailView: View {
             InspectorRow("URL") {
                 HStack(spacing: Space.sm) {
                     Text(conn.mcpURL)
-                        .font(.mono(12))
+                        .scaledFont(.callout, design: .monospaced)
                         .foregroundColor(.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -781,7 +781,7 @@ struct ConnectionDetailView: View {
             VStack(alignment: .leading, spacing: Space.xxs) {
                 HStack(spacing: Space.sm - 2) {
                     Text(tool.name)
-                        .font(.mono(12))
+                        .scaledFont(.callout, design: .monospaced)
                         .foregroundColor(enabled ? .primary : .secondary)
                     ToolCategoryTag(category: tool.category)
                 }

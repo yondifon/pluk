@@ -153,7 +153,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItem
 
     private func setupWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 700, height: 540),
+            contentRect: NSRect(x: 0, y: 0, width: 1040, height: 660),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -174,6 +174,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItem
         window.setFrameAutosaveName("PlukMainWindow")
         if !window.setFrameUsingName("PlukMainWindow") {
             window.center()
+        }
+        // A restored frame below the content minimum lays the split view out in a
+        // window it does not fit, which leaves a gap until the first resize.
+        let size = window.contentRect(forFrameRect: window.frame).size
+        let minSize = window.contentMinSize
+        if size.width < minSize.width || size.height < minSize.height {
+            window.setContentSize(NSSize(
+                width: max(size.width, minSize.width),
+                height: max(size.height, minSize.height)
+            ))
         }
     }
 

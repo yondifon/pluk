@@ -37,12 +37,24 @@ enum Surface {
     // Row selection stays neutral so row text, not a tint, reads as loudest.
     static let selection = Color(nsColor: NSColor(name: nil) { appearance in
         let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        return isDark ? NSColor.white.withAlphaComponent(0.16) : NSColor.black.withAlphaComponent(0.09)
+        return isDark ? NSColor.white.withAlphaComponent(0.10) : NSColor.black.withAlphaComponent(0.06)
     })
 
     static let sidebarColor = neutral(light: 0.957, dark: 0.118)
     static let contentColor = neutral(light: 0.980, dark: 0.150)
     static let panelColor = neutral(light: 1.000, dark: 0.180)
+    static let sidebarLabel = Color(nsColor: NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return isDark ? NSColor.secondaryLabelColor : NSColor(white: 0.22, alpha: 1)
+    })
+    static let tertiaryLabel = Color(nsColor: NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return isDark ? NSColor.tertiaryLabelColor : NSColor(white: 0.45, alpha: 1)
+    })
+    static let sidebarTertiaryLabel = Color(nsColor: NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return isDark ? NSColor.tertiaryLabelColor : NSColor(white: 0.38, alpha: 1)
+    })
 
     private static func neutral(light: CGFloat, dark: CGFloat) -> NSColor {
         NSColor(name: nil) { appearance in
@@ -330,17 +342,17 @@ extension EnvironmentValues {
 private enum TextStyleSize {
     static func base(_ style: Font.TextStyle) -> CGFloat {
         switch style {
-        case .largeTitle: 25
-        case .title: 21
-        case .title2: 17
+        case .largeTitle: 22
+        case .title: 19
+        case .title2: 16
         case .title3: 15
         case .headline: 14
         case .body: 13
-        case .callout: 12
-        case .subheadline: 11.5
-        case .footnote: 11
-        case .caption: 10
-        case .caption2: 9
+        case .callout: 12.5
+        case .subheadline: 12
+        case .footnote: 12
+        case .caption: 11.5
+        case .caption2: 11
         @unknown default: 13
         }
     }
@@ -416,6 +428,40 @@ extension View {
     }
 }
 
+// MARK: - Pointer feedback
+
+extension View {
+    /// Pointing-hand cursor over a custom clickable area. SwiftUI leaves the
+    /// arrow on anything that is not a system control, so a plain button or a
+    /// tappable row gives no hover feedback without this.
+    func pointerCursor(_ enabled: Bool = true) -> some View {
+        onContinuousHover { phase in
+            guard enabled else { return }
+            switch phase {
+            case .active: NSCursor.pointingHand.set()
+            case .ended: NSCursor.arrow.set()
+            }
+        }
+    }
+}
+
+/// `.plain` plus the pointer and a press state, for every button the app draws
+/// itself.
+struct PointerButtonStyle: ButtonStyle {
+    @SwiftUI.Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.6 : 1)
+            .contentShape(Rectangle())
+            .pointerCursor(isEnabled)
+    }
+}
+
+extension ButtonStyle where Self == PointerButtonStyle {
+    static var pointer: PointerButtonStyle { PointerButtonStyle() }
+}
+
 /// The one stroke the design system allows: a leading-edge accent for a
 /// quoted or flagged block. Color carries the meaning; nothing else does.
 struct AccentRule: View {
@@ -433,9 +479,9 @@ struct SectionLabel: View {
 
     var body: some View {
         Text(text.uppercased())
-            .scaledFont(.caption2, weight: .semibold, design: .monospaced)
+            .scaledFont(.caption, weight: .semibold, design: .monospaced)
             .tracking(0.6)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(Surface.tertiaryLabel)
     }
 }
 
@@ -457,7 +503,7 @@ struct IconButton: View {
                 .frame(width: 24 * uiScale, height: 24 * uiScale)
                 .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pointer)
         .foregroundStyle(tint)
         .help(label)
         .accessibilityLabel(label)
@@ -525,8 +571,8 @@ struct StatusChip: View {
                 .foregroundStyle(status == .failing ? Color.red : .secondary)
             if let ago = relativeTime {
                 Text(ago)
-                    .font(.mono(10))
-                    .foregroundStyle(.tertiary)
+                    .scaledFont(.caption, design: .monospaced)
+                    .foregroundStyle(Surface.tertiaryLabel)
             }
         }
         .padding(.horizontal, Space.sm)
@@ -592,7 +638,7 @@ struct TextTabs<T: Hashable>: View {
                 .foregroundStyle(selected ? Color.primary : .secondary)
                 .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pointer)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }
@@ -606,7 +652,7 @@ struct Tag: View {
         HStack(spacing: Space.xs) {
             if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
             }
             Text(text)
                 .scaledFont(.caption)
@@ -643,17 +689,28 @@ struct DetailSection<Content: View>: View {
     }
 }
 
+// A row value that reads as data: monospaced, on the shared type ramp.
+struct MonospacedValue: View {
+    let value: String
+
+    init(_ value: String) { self.value = value }
+
+    var body: some View {
+        Text(value)
+            .scaledFont(.callout, design: .monospaced)
+            .foregroundStyle(.primary)
+    }
+}
+
 struct InspectorRow<Content: View>: View {
     let label: String
     let labelWidth: CGFloat
     let content: Content
 
-    init(_ label: String, value: String) where Content == Text {
+    init(_ label: String, value: String) where Content == MonospacedValue {
         self.label = label
         self.labelWidth = 88
-        self.content = Text(value)
-            .font(.mono(12))
-            .foregroundStyle(.primary)
+        self.content = MonospacedValue(value)
     }
 
     init(_ label: String, labelWidth: CGFloat = 88, @ViewBuilder content: () -> Content) {

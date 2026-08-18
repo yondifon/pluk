@@ -123,13 +123,13 @@ struct GroupFormView: View {
                 .padding(.horizontal, Space.md)
                 .padding(.vertical, Space.sm)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pointer)
 
             if on && !fields.isEmpty {
                 VStack(alignment: .leading, spacing: Space.sm) {
                     Text("Overrides for this group (blank = inherit)")
                         .scaledFont(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Surface.tertiaryLabel)
                     ForEach(fields) { f in
                         HStack(spacing: Space.sm) {
                             Text(f.label)
@@ -138,7 +138,7 @@ struct GroupFormView: View {
                                 .frame(width: 110, alignment: .leading)
                             TextField(inheritPlaceholder(conn, f), text: binding(conn.id, f.key))
                                 .textFieldStyle(.plain)
-                                .font(.mono(12))
+                                .scaledFont(.callout, design: .monospaced)
                         }
                     }
                 }

@@ -9,6 +9,7 @@ struct GroupDetailView: View {
     let group: ConnectionGroup
     let store: ConnectionStore
     let onEdit: () -> Void
+    let onEditConnection: (Connection) -> Void
     let onDelete: () -> Void
 
     @State private var urlCopied = false
@@ -104,7 +105,7 @@ struct GroupDetailView: View {
             InspectorRow("URL") {
                 HStack(spacing: Space.sm) {
                     Text(group.mcpURL)
-                        .font(.mono(12))
+                        .scaledFont(.callout, design: .monospaced)
                         .foregroundColor(.primary)
                         .textSelection(.enabled)
                         .lineLimit(1)
@@ -136,33 +137,41 @@ struct GroupDetailView: View {
                 VStack(spacing: 0) {
                     ForEach(members) { conn in
                         let overrides = group.member(conn.id)?.overrides ?? [:]
-                        HStack(alignment: .top, spacing: Space.md) {
-                            TypeBadge(type: conn.type)
-                            VStack(alignment: .leading, spacing: Space.xs) {
-                                HStack(spacing: Space.sm + 2) {
-                                    Text(conn.name).scaledFont(.body)
-                                    EnvTag(environment: conn.environment)
+                        Button {
+                            onEditConnection(conn)
+                        } label: {
+                            HStack(alignment: .top, spacing: Space.md) {
+                                TypeBadge(type: conn.type)
+                                VStack(alignment: .leading, spacing: Space.xs) {
+                                    HStack(spacing: Space.sm + 2) {
+                                        Text(conn.name).scaledFont(.body)
+                                        EnvTag(environment: conn.environment)
+                                    }
+                                    if !overrides.isEmpty {
+                                        Text(overrides.sorted { $0.key < $1.key }
+                                                .map { "\($0.key) → \($0.value)" }
+                                                .joined(separator: "   "))
+                                            .scaledFont(.caption, design: .monospaced)
+                                            .foregroundStyle(Surface.tertiaryLabel)
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                    }
                                 }
-                                if !overrides.isEmpty {
-                                    Text(overrides.sorted { $0.key < $1.key }
-                                            .map { "\($0.key) → \($0.value)" }
-                                            .joined(separator: "   "))
-                                        .font(.mono(10))
-                                        .foregroundStyle(.tertiary)
-                                        .lineLimit(1)
-                                        .truncationMode(.tail)
-                                }
+                                Spacer(minLength: Space.sm)
+                                Text("\(NamespaceFormat.slug(conn.name))__*")
+                                    .scaledFont(.caption, design: .monospaced)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.top, 2)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(Surface.tertiaryLabel)
+                                    .padding(.top, 3)
                             }
-                            Spacer(minLength: Space.sm)
-                            // The prefix every tool of this member carries
-                            // inside the group's namespace.
-                            Text("\(NamespaceFormat.slug(conn.name))__*")
-                                .font(.mono(10))
-                                .foregroundStyle(.secondary)
-                                .padding(.top, 2)
+                            .padding(.horizontal, Space.md)
+                            .padding(.vertical, Space.sm + 1)
+                            .contentShape(Rectangle())
                         }
-                        .padding(.horizontal, Space.md)
-                        .padding(.vertical, Space.sm + 1)
+                        .buttonStyle(.pointer)
                     }
                 }
             }
@@ -186,6 +195,7 @@ struct GroupDetailView: View {
         group: .sample,
         store: .preview,
         onEdit: {},
+        onEditConnection: { _ in },
         onDelete: {}
     )
 }

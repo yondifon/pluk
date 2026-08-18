@@ -12,6 +12,7 @@ import {
   paging,
   range,
   runSpark,
+  sparkCommand,
   sameAccount,
   scoped,
   sparkConfig,
@@ -64,7 +65,10 @@ const ids = (a: Record<string, unknown>, what = "message id"): string[] => {
 };
 
 function readTools(cfg: () => SparkCfg): ActionTool[] {
-  const spark = (args: string[]) => runSpark(cfg(), args);
+  const spark = async (args: string[]) => {
+    const c = cfg();
+    return { value: await runSpark(c, args), command: sparkCommand(c, args) };
+  };
 
   return [
     {
@@ -288,7 +292,10 @@ function readTools(cfg: () => SparkCfg): ActionTool[] {
 }
 
 function writeTools(cfg: () => SparkCfg): ActionTool[] {
-  const spark = (args: string[]) => runSpark(cfg(), args);
+  const spark = async (args: string[]) => {
+    const c = cfg();
+    return { value: await runSpark(c, args), command: sparkCommand(c, args) };
+  };
 
   return [
     {

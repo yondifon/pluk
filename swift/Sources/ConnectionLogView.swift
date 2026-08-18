@@ -83,6 +83,16 @@ struct LogsTab: View {
         }
     }
 
+    private func isTerminal(_ entry: QueryLogEntry) -> Bool {
+        let type: String?
+        switch scope {
+        case .connection(let connection): type = connection.type
+        case .group:
+            type = store.connections.first { $0.id == entry.connectionId }?.type
+        }
+        return CommandLog.isCommandAdapter(type)
+    }
+
     private var stats: (allowed: Int, blocked: Int, error: Int) {
         let a = entries.filter { $0.verdict == "allowed" }.count
         let b = entries.filter { $0.verdict == "blocked" }.count
@@ -157,7 +167,7 @@ struct LogsTab: View {
                 Button { search = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 10))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pointer)
                 .foregroundColor(.secondary)
             }
         }
@@ -176,8 +186,8 @@ struct LogsTab: View {
                     HStack(spacing: Space.xs) {
                         Text(f.rawValue)
                         Text(verdictCount(f))
-                            .font(.mono(10))
-                            .foregroundStyle(.tertiary)
+                            .scaledFont(.caption, design: .monospaced)
+                            .foregroundStyle(Surface.tertiaryLabel)
                     }
                 }
             }
@@ -188,8 +198,8 @@ struct LogsTab: View {
                 Text(filter.rawValue)
                     .scaledFont(.callout)
                 Text("· \(verdictCount(filter))")
-                    .font(.mono(10))
-                    .foregroundStyle(.tertiary)
+                    .scaledFont(.caption, design: .monospaced)
+                    .foregroundStyle(Surface.tertiaryLabel)
             }
             .foregroundColor(.secondary)
         }
@@ -266,9 +276,9 @@ struct LogsTab: View {
             reload()
         } label: {
             Image(systemName: "arrow.clockwise")
-                .font(.system(size: 11))
+                .font(.system(size: 10))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pointer)
         .foregroundColor(.secondary)
         .help("Refresh")
     }
@@ -318,6 +328,7 @@ struct LogsTab: View {
                     LogEntryRow(
                         entry: entry,
                         isExpanded: expanded,
+                        isTerminal: isTerminal(entry),
                         showConnection: scope.isGroup,
                         onToggle: { expandedId = expanded ? nil : entry.id },
                         onStop: { stopQuery(entry) }
@@ -345,7 +356,7 @@ struct LogsTab: View {
                     Label("Load older entries", systemImage: "clock.arrow.down")
                         .scaledFont(.callout)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pointer)
                 .foregroundColor(.secondary)
             } else {
                 Text("You’re viewing all activity")
@@ -466,12 +477,11 @@ struct LogsTab: View {
 private struct LogEntryRow: View {
     let entry: QueryLogEntry
     let isExpanded: Bool
+    let isTerminal: Bool
     let showConnection: Bool   // group view: label each row with its member integration
     let onToggle: () -> Void
     let onStop: () -> Void
 
-    @State private var copiedSQL = false
-    @State private var copiedResult = false
     @State private var showResponseSheet = false
     @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -484,52 +494,20 @@ private struct LogEntryRow: View {
         return nil
     }
 
-    private func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-    }
-
     var body: some View {
+        if isTerminal {
+            TerminalLogRow(
+                entry: entry,
+                isExpanded: isExpanded,
+                showConnection: showConnection,
+                onToggle: onToggle,
+                onStop: onStop
+            )
+        } else {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: Space.md) {
                 VStack(alignment: .leading, spacing: Space.xs) {
-                    // Top row: badge + member/tool chips + SQL preview
-                    HStack(spacing: Space.sm) {
-                        VerdictBadge(verdict: entry.verdict)
-
-                        if showConnection {
-                            chip(entry.connectionName, system: "circle.grid.2x2")
-                        }
-
-                        if let source = entry.source, !source.isEmpty {
-                            chip(source, system: "wrench.and.screwdriver")
-                        }
-
-                        if let cats = entry.categories, !cats.isEmpty {
-                            Text(cats)
-                                .scaledFont(.caption)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                        }
-
-                        Spacer()
-
-                        if entry.verdict == "pending" {
-                            Button(action: onStop) {
-                                Label("Stop", systemImage: "stop.fill")
-                                    .scaledFont(.callout)
-                                    .fontWeight(.medium)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(.red)
-                            .help("Cancel this running query")
-                        }
-
-                        Text(relativeTime(entry.createdAt))
-                            .font(.mono(10))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
+                    LogMetaLine(entry: entry, showConnection: showConnection, onStop: onStop)
 
                     // Query — a one-line preview when collapsed; a structured,
                     // selectable code block when expanded (mirrors the response).
@@ -539,7 +517,7 @@ private struct LogEntryRow: View {
                                 .scaledFont(.caption, weight: .semibold)
                                 .foregroundColor(.secondary)
                             Text(CodeStyle.highlighted(entry.sql, language: .sql))
-                                .scaledFont(.body, design: .monospaced)
+                                .scaledFont(.callout, design: .monospaced)
                                 .foregroundColor(.primary)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -548,8 +526,8 @@ private struct LogEntryRow: View {
                         }
                     } else {
                         Text(entry.sql)
-                            .scaledFont(.footnote, design: .monospaced)
-                            .foregroundColor(.secondary)
+                            .scaledFont(.callout, design: .monospaced)
+                            .foregroundColor(.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -558,15 +536,8 @@ private struct LogEntryRow: View {
                     // Expanded: reason + result preview + full timestamp
                     if isExpanded {
                         if let reason = entry.reason, !reason.isEmpty {
-                            HStack(spacing: Space.xs) {
-                                Image(systemName: "exclamationmark.circle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(verdictColor)
-                                Text(reason)
-                                    .scaledFont(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.top, Space.xxs)
+                            LogReasonLine(verdict: entry.verdict, reason: reason)
+                                .padding(.top, Space.xxs)
                         }
 
                         // Full response: raw tool output when stored, else the
@@ -579,22 +550,16 @@ private struct LogEntryRow: View {
                                 .padding(.top, Space.sm)
                         }
 
-                        Text(localTime(entry.createdAt))
-                            .font(.mono(10))
+                        Text(LogTime.local(entry.createdAt))
+                            .scaledFont(.caption, design: .monospaced)
                             .foregroundColor(.secondary.opacity(0.7))
                             .padding(.top, Space.xxs)
 
                         // Copy actions for the query and its response
                         HStack(spacing: Space.sm) {
-                            copyButton(copiedSQL ? "Copied!" : "Copy", copied: copiedSQL) {
-                                copy(entry.sql)
-                                flash($copiedSQL)
-                            }
+                            LogCopyButton(title: "Copy query", text: entry.sql)
                             if let response = fullResponse {
-                                copyButton(copiedResult ? "Copied!" : "Copy response", copied: copiedResult) {
-                                    copy(response)
-                                    flash($copiedResult)
-                                }
+                                LogCopyButton(title: "Copy response", text: response)
                             }
                         }
                         .padding(.top, Space.sm)
@@ -607,6 +572,7 @@ private struct LogEntryRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { onToggle() }
+        .pointerCursor()
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(.default) { onToggle() }
         .overlay(alignment: .leading) {
@@ -619,38 +585,84 @@ private struct LogEntryRow: View {
         .sheet(isPresented: $showResponseSheet) {
             ResponseSheet(title: entry.sql, text: fullResponse ?? "")
         }
-    }
-
-    private func copyButton(_ title: String, copied: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: copied ? "checkmark" : "doc.on.doc")
-                .scaledFont(.callout)
-                .fontWeight(.medium)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.mini)
-        .tint(copied ? .green : nil)
+    }
+}
+
+// MARK: - Shared row furniture
+
+// The context line every log row carries, whatever the integration speaks.
+private struct LogMetaLine: View {
+    let entry: QueryLogEntry
+    let showConnection: Bool
+    let onStop: () -> Void
+
+    var body: some View {
+        HStack(spacing: Space.sm) {
+            VerdictBadge(verdict: entry.verdict)
+
+            if showConnection {
+                chip(entry.connectionName, system: "circle.grid.2x2")
+            }
+
+            if let source = entry.source, !source.isEmpty {
+                chip(source, system: "wrench.and.screwdriver")
+            }
+
+            if let cats = entry.categories, !cats.isEmpty {
+                Text(cats)
+                    .scaledFont(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if entry.verdict == "pending" {
+                Button(action: onStop) {
+                    Label("Stop", systemImage: "stop.fill")
+                        .scaledFont(.callout)
+                        .fontWeight(.medium)
+                }
+                .buttonStyle(.pointer)
+                .foregroundColor(.red)
+                .help("Cancel this run")
+            }
+
+            Text(LogTime.relative(entry.createdAt))
+                .scaledFont(.caption, design: .monospaced)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
     }
 
     // Plain monospace tag for the member integration / originating tool.
     private func chip(_ text: String, system: String) -> some View {
         HStack(spacing: Space.xxs) {
-            Image(systemName: system).font(.system(size: 8))
-            Text(text).font(.mono(10, weight: .medium)).lineLimit(1)
+            Image(systemName: system).font(.system(size: 10))
+            Text(text).scaledFont(.caption, weight: .medium, design: .monospaced).lineLimit(1)
         }
-        .foregroundColor(.secondary)
+        .foregroundStyle(.secondary)
+    }
+}
+
+private struct LogReasonLine: View {
+    let verdict: String
+    let reason: String
+
+    var body: some View {
+        HStack(spacing: Space.xs) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 10))
+                .foregroundColor(color)
+            Text(reason)
+                .scaledFont(.caption)
+                .foregroundColor(.secondary)
+        }
     }
 
-    private func flash(_ flag: Binding<Bool>) {
-        flag.wrappedValue = true
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.5))
-            flag.wrappedValue = false
-        }
-    }
-
-    private var verdictColor: Color {
-        switch entry.verdict {
+    private var color: Color {
+        switch verdict {
         case "allowed":   return .green.opacity(0.7)
         case "blocked":   return .orange
         case "cancelled": return .secondary
@@ -658,12 +670,41 @@ private struct LogEntryRow: View {
         default:          return .red.opacity(0.9)
         }
     }
+}
 
+private struct LogCopyButton: View {
+    let title: String
+    let text: String
+
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copied = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.5))
+                copied = false
+            }
+        } label: {
+            Label(copied ? "Copied!" : title, systemImage: copied ? "checkmark" : "doc.on.doc")
+                .scaledFont(.callout)
+                .fontWeight(.medium)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.mini)
+        .tint(copied ? .green : nil)
+    }
+}
+
+private enum LogTime {
+    // SQLite datetime('now') is UTC
     private static let utcFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
         fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.timeZone = TimeZone(identifier: "UTC")  // SQLite datetime('now') is UTC
+        fmt.timeZone = TimeZone(identifier: "UTC")
         return fmt
     }()
 
@@ -676,8 +717,8 @@ private struct LogEntryRow: View {
     }()
 
     // "2 min ago" / "just now" / falls back to raw string for older entries
-    private func relativeTime(_ raw: String) -> String {
-        guard let date = Self.utcFormatter.date(from: raw) else { return raw }
+    static func relative(_ raw: String) -> String {
+        guard let date = utcFormatter.date(from: raw) else { return raw }
         let secs = Int(-date.timeIntervalSinceNow)
         if secs < 10  { return "just now" }
         if secs < 60  { return "\(secs)s ago" }
@@ -687,9 +728,143 @@ private struct LogEntryRow: View {
     }
 
     // Full UTC timestamp -> local time string
-    private func localTime(_ raw: String) -> String {
-        guard let date = Self.utcFormatter.date(from: raw) else { return raw }
-        return Self.localFormatter.string(from: date)
+    static func local(_ raw: String) -> String {
+        guard let date = utcFormatter.date(from: raw) else { return raw }
+        return localFormatter.string(from: date)
+    }
+}
+
+private enum CommandLog {
+    static func isCommandAdapter(_ type: String?) -> Bool {
+        type == "ssh" || type == "github-cli" || type == "spark" || type == "herd"
+    }
+}
+
+private struct TerminalLogRow: View {
+    let entry: QueryLogEntry
+    let isExpanded: Bool
+    let showConnection: Bool
+    let onToggle: () -> Void
+    let onStop: () -> Void
+
+    @State private var showOutputSheet = false
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var output: String? {
+        guard let raw = entry.responseText, !raw.isEmpty else { return nil }
+        return raw
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            LogMetaLine(entry: entry, showConnection: showConnection, onStop: onStop)
+
+            // Command and output share one surface, so an expanded row reads as
+            // the console session it was.
+            VStack(alignment: .leading, spacing: 0) {
+                commandLine
+                if isExpanded {
+                    Divider()
+                    if let output {
+                        ConsoleOutput(text: output) { showOutputSheet = true }
+                    } else {
+                        Text(entry.verdict == "pending" ? "Running…" : "No output")
+                            .scaledFont(.callout, design: .monospaced)
+                            .foregroundStyle(.secondary)
+                            .padding(Space.md)
+                    }
+                }
+            }
+            .codeBlockSurface(cornerRadius: Radius.small)
+
+            if isExpanded {
+                if let reason = entry.reason, !reason.isEmpty {
+                    LogReasonLine(verdict: entry.verdict, reason: reason)
+                }
+                Text(LogTime.local(entry.createdAt))
+                    .scaledFont(.caption, design: .monospaced)
+                    .foregroundColor(.secondary.opacity(0.7))
+                HStack(spacing: Space.sm) {
+                    LogCopyButton(title: "Copy command", text: entry.sql)
+                    if let output {
+                        LogCopyButton(title: "Copy output", text: output)
+                    }
+                }
+                .padding(.top, Space.xxs)
+            }
+        }
+        .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.sm)
+        .contentShape(Rectangle())
+        .onTapGesture { onToggle() }
+        .pointerCursor()
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(.default) { onToggle() }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.12), value: isExpanded)
+        .sheet(isPresented: $showOutputSheet) {
+            ResponseSheet(title: entry.sql, text: output ?? "")
+        }
+    }
+
+    private var commandLine: some View {
+        HStack(alignment: .top, spacing: Space.sm) {
+            Text("$")
+                .scaledFont(.callout, design: .monospaced)
+                .foregroundStyle(.secondary)
+            Text(CodeStyle.highlighted(entry.sql, language: .shell))
+                .scaledFont(.callout, design: .monospaced)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(Space.md)
+    }
+}
+
+// What the command printed, on the console surface with line-level tints.
+// Inline stays a capped slice: a `docker logs` dump can be megabytes, and
+// tinting all of it on expand would stall the row.
+private struct ConsoleOutput: View {
+    let text: String
+    let onOpen: () -> Void
+
+    private static let previewLines = 40
+    private static let previewChars = 6000
+
+    @State private var preview = AttributedString()
+    @State private var moreToShow = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            Text(preview)
+                .scaledFont(.callout, design: .monospaced)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if moreToShow {
+                Button(action: onOpen) {
+                    Label("Open full output", systemImage: "arrow.up.left.and.arrow.down.right")
+                        .scaledFont(.callout)
+                        .fontWeight(.medium)
+                }
+                .buttonStyle(.pointer)
+                .foregroundColor(.accentColor)
+            }
+        }
+        .padding(Space.md)
+        .task(id: text) { build() }
+    }
+
+    private func build() {
+        let lines = text.components(separatedBy: "\n")
+        let slice = lines.prefix(Self.previewLines).joined(separator: "\n")
+        let capped = String(slice.prefix(Self.previewChars))
+        moreToShow = lines.count > Self.previewLines || text.count > capped.count
+        preview = CodeStyle.console(capped)
     }
 }
 
@@ -706,7 +881,7 @@ private struct VerdictBadge: View {
             dot
             Text(label)
                 .scaledFont(.caption, weight: .medium)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -800,7 +975,7 @@ private struct ResultPreview: View {
                     HStack(spacing: 0) {
                         ForEach(p.fields.prefix(6), id: \.self) { field in
                             Text(field)
-                                .scaledFont(.footnote, weight: .semibold, design: .monospaced)
+                                .scaledFont(.caption, weight: .semibold, design: .monospaced)
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -816,7 +991,7 @@ private struct ResultPreview: View {
                         HStack(spacing: 0) {
                             ForEach(row.cells.prefix(6)) { cell in
                                 Text(cell.text)
-                                    .scaledFont(.footnote, design: .monospaced)
+                                    .scaledFont(.caption, design: .monospaced)
                                     .foregroundColor(.primary.opacity(0.75))
                                     .lineLimit(1)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -831,7 +1006,7 @@ private struct ResultPreview: View {
                     let showing = min(p.rows.count, 5)
                     if total > showing {
                         Text("\(showing) of \(total) rows")
-                            .scaledFont(.footnote, design: .monospaced)
+                            .scaledFont(.caption, design: .monospaced)
                             .foregroundColor(.secondary)
                             .padding(.horizontal, Space.sm)
                             .padding(.top, Space.xxs)
@@ -875,7 +1050,7 @@ private struct ResponseTextBlock: View {
                             .scaledFont(.callout)
                             .fontWeight(.medium)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pointer)
                     .foregroundColor(.accentColor)
                     .help("Open the full response in a window")
                 }
@@ -922,7 +1097,7 @@ private struct ResponseSheet: View {
                 VStack(alignment: .leading, spacing: Space.xxs) {
                     Text("Response").scaledFont(.headline)
                     Text(title)
-                        .font(.mono(10))
+                        .scaledFont(.caption, design: .monospaced)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -998,7 +1173,7 @@ private struct ResponseSheet: View {
             .help("Text size")
 
             Stepper(value: $lineHeight, in: 0...14, step: 1) {
-                Image(systemName: "arrow.up.and.down.text.horizontal").font(.system(size: 11))
+                Image(systemName: "arrow.up.and.down.text.horizontal").font(.system(size: 10))
             }
             .controlSize(.small)
             .fixedSize()

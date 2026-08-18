@@ -171,13 +171,14 @@ export function updateLogEntry(
   reason?: string,
   result?: { rows: unknown[]; fields?: string[] },
   responseText?: string,
+  sql?: string,
 ): void {
   if (id < 0) return;
   try {
     const { resultJson, rowCount } = packResult(result);
     db.query(
-      `UPDATE query_log SET verdict=?, reason=?, result_json=?, row_count=?, response_text=? WHERE id=?`
-    ).run(verdict, reason ?? null, resultJson, rowCount, packResponse(responseText), id);
+      `UPDATE query_log SET sql=COALESCE(?, sql), verdict=?, reason=?, result_json=?, row_count=?, response_text=? WHERE id=?`
+    ).run(sql ?? null, verdict, reason ?? null, resultJson, rowCount, packResponse(responseText), id);
     notifyActivity(id);
   } catch {
     // Non-fatal

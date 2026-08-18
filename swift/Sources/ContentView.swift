@@ -210,7 +210,9 @@ struct ContentView: View {
             searchRow
             sidebarList
         }
+        .frame(maxWidth: .infinity)
         .background(Surface.sidebar)
+        .background(SplitViewDividerHider())
         // Hidden ⌘F shortcut focuses the filter field (searchFocused binding on
         // .searchable is macOS 15+; this custom field keeps ⌘F working on 14).
         .background(
@@ -257,6 +259,7 @@ struct ContentView: View {
             TextField("Filter integrations", text: $search)
                 .textFieldStyle(.plain)
                 .scaledFont(.callout)
+                .foregroundStyle(.secondary)
                 .focused($searchFocused)
                 .onExitCommand { search = ""; searchFocused = false }
             if !search.isEmpty {
@@ -266,9 +269,9 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .scaledFont(.callout)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Surface.sidebarTertiaryLabel)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pointer)
                 .help("Clear")
             }
         }
@@ -289,7 +292,7 @@ struct ContentView: View {
                 .frame(width: 28, height: 28)
                 .background(Color.controlFill, in: RoundedRectangle(cornerRadius: Radius.small, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pointer)
         .help("Filter by type and environment")
         .popover(isPresented: $showFilters, arrowEdge: .bottom) {
             FilterPopover(
@@ -305,7 +308,7 @@ struct ContentView: View {
     private var sidebarList: some View {
         List(selection: $selectedID) {
             if !filteredGroups.isEmpty {
-                Section("Groups") {
+                Section {
                     ForEach(filteredGroups) { group in
                         GroupRow(group: group)
                             .tag(group.id)
@@ -316,11 +319,14 @@ struct ContentView: View {
                                 }
                             }
                     }
+                } header: {
+                    Text("Groups")
+                        .foregroundStyle(Surface.sidebarTertiaryLabel)
                 }
             }
 
             if !filteredConnections.isEmpty {
-                Section("Integrations") {
+                Section {
                     ForEach(filteredConnections) { conn in
                         ConnectionRow(conn: conn, health: store.health[conn.id])
                             .tag(conn.id)
@@ -332,6 +338,9 @@ struct ContentView: View {
                                 }
                             }
                     }
+                } header: {
+                    Text("Integrations")
+                        .foregroundStyle(Surface.sidebarTertiaryLabel)
                 }
             }
         }
@@ -370,6 +379,8 @@ struct ContentView: View {
         if let group = selectedGroup {
             GroupDetailView(group: group, store: store) {
                 sheet = .editGroup(group)
+            } onEditConnection: { conn in
+                sheet = .edit(conn)
             } onDelete: {
                 pendingDelete = .group(group)
             }
@@ -439,52 +450,60 @@ struct ContentView: View {
 
 struct GroupRow: View {
     let group: ConnectionGroup
+    @SwiftUI.Environment(\.backgroundProminence) private var prominence
+    @SwiftUI.Environment(\.uiScale) private var uiScale
 
     var body: some View {
-        HStack(spacing: Space.sm + 2) {
+        HStack(spacing: Space.sm) {
             Image(systemName: "square.stack.3d.up.fill")
-                .scaledFont(.callout)
+                .font(.system(size: 11 * uiScale))
                 .foregroundStyle(.secondary)
-                .frame(width: 24, height: 24)
-            VStack(alignment: .leading, spacing: Space.xxs) {
-                Text(group.name)
-                    .scaledFont(.callout)
-                    .lineLimit(1)
-                Text("\(group.memberIds.count) integration\(group.memberIds.count == 1 ? "" : "s")")
-                    .scaledFont(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer()
+                .frame(width: 12 * uiScale)
+            Text(group.name)
+                .scaledFont(.callout)
+                .foregroundStyle(prominence == .increased ? Color.primary : Surface.sidebarLabel)
+                .lineLimit(1)
+            Text("· \(group.memberIds.count) integration\(group.memberIds.count == 1 ? "" : "s")")
+                .scaledFont(.caption)
+                .foregroundStyle(Surface.sidebarTertiaryLabel)
+                .lineLimit(1)
+                .fixedSize()
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, Space.xs)
+        .padding(.vertical, 2)
+        .frame(minHeight: 28)
+        .pointerCursor()
     }
 }
 
-// Row anatomy: adapter mark, name, and one quiet meta line answering "which
-// service, which environment" — the two facts that decide whether an agent
-// should be pointed at this integration. Health and read-only ride on the
-// trailing edge as marks, not words, so scanning the list stays fast.
+// Row anatomy: adapter mark, name, and the environment as a quiet trailing
+// tag — the fact that decides whether an agent should be pointed at this
+// integration. The mark already says which service, so the type is not spelled
+// out. Health and read-only ride on the trailing edge as marks, not words, so
+// scanning the list stays fast.
 struct ConnectionRow: View {
     let conn: Connection
     var health: ConnHealth?
+    @SwiftUI.Environment(\.backgroundProminence) private var prominence
+    @SwiftUI.Environment(\.uiScale) private var uiScale
 
     var body: some View {
-        HStack(spacing: Space.sm + 2) {
-            TypeBadge(type: conn.type)
-            VStack(alignment: .leading, spacing: Space.xxs) {
-                Text(conn.name)
-                    .scaledFont(.callout)
-                    .lineLimit(1)
-                Text("\(conn.typeLabel) · \(conn.environment.label)")
-                    .scaledFont(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: Space.sm)
+        HStack(spacing: Space.sm) {
+            SidebarInlineGlyph(type: conn.type, size: 12 * uiScale)
+            Text(conn.name)
+                .scaledFont(.callout)
+                .foregroundStyle(prominence == .increased ? Color.primary : Surface.sidebarLabel)
+                .lineLimit(1)
+            Text("· \(conn.environment.label)")
+                .scaledFont(.caption)
+                .foregroundStyle(Surface.sidebarTertiaryLabel)
+                .lineLimit(1)
+                .fixedSize()
+            Spacer(minLength: Space.xs)
             if conn.readOnly {
                 Image(systemName: "lock.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Surface.sidebarTertiaryLabel)
                     .help("Read-only")
             }
             // Only when we actually know: an always-on dot would imply
@@ -496,7 +515,35 @@ struct ConnectionRow: View {
                     .help(health.isError ? (health.error ?? "Connection failing") : "Healthy")
             }
         }
-        .padding(.vertical, Space.xs)
+        .padding(.vertical, 2)
+        .frame(minHeight: 28)
+        .pointerCursor()
+    }
+}
+
+private struct SidebarInlineGlyph: View {
+    let type: String
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let logo = AdapterStyle.logo(for: type) {
+                Image(nsImage: logo)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(AdapterStyle.color(for: type))
+            } else if let symbol = AdapterStyle.symbol(for: type) {
+                Image(systemName: symbol)
+                    .font(.system(size: size * 0.9, weight: .semibold))
+                    .foregroundStyle(AdapterStyle.color(for: type))
+            } else {
+                Text(AdapterStyle.abbrev(for: type))
+                    .font(.mono(size * 0.8, weight: .semibold))
+                    .foregroundStyle(AdapterStyle.color(for: type))
+            }
+        }
+        .frame(width: size, height: size)
     }
 }
 
@@ -700,7 +747,7 @@ private struct FilterPopover: View {
             Spacer()
             if active {
                 Button("Clear") { typeFilter = []; envFilter = [] }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pointer)
                     .scaledFont(.caption)
                     .foregroundStyle(Color.accentColor)
             }
@@ -714,7 +761,7 @@ private struct FilterPopover: View {
         VStack(alignment: .leading, spacing: Space.sm - 2) {
             Text(title)
                 .scaledFont(.caption, weight: .semibold)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Surface.sidebarTertiaryLabel)
             VStack(alignment: .leading, spacing: Space.xxs) { content() }
         }
     }
@@ -740,7 +787,7 @@ private struct FilterRow<Label: View>: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pointer)
     }
 }
 
@@ -759,7 +806,7 @@ private struct ServerStatusBanner: View {
                     .foregroundColor(.secondary)
             } else {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
                     .foregroundColor(.orange)
                 Text("Server not running")
                     .scaledFont(.caption)
@@ -796,7 +843,7 @@ private struct UpdateBanner: View {
                     .foregroundColor(.secondary)
             } else {
                 Image(systemName: "arrow.down.circle.fill")
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
                     .foregroundColor(.accentColor)
                 Text("Update available — \(commit.map { String($0.prefix(7)) } ?? "new commit") on remote")
                     .scaledFont(.caption)

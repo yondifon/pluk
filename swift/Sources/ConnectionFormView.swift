@@ -149,13 +149,13 @@ struct ConnectionFormView: View {
                                 Spacer()
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 10, weight: .semibold))
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(Surface.tertiaryLabel)
                             }
                             .padding(.horizontal, Space.md)
                             .padding(.vertical, Space.sm)
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.pointer)
                     }
                 }
             }
@@ -244,7 +244,7 @@ struct ConnectionFormView: View {
             row(f.label) {
                 SecureField(f.placeholder ?? "••••••", text: textBinding(f.key))
                     .textFieldStyle(.plain)
-                    .font(.mono(12))
+                    .scaledFont(.callout, design: .monospaced)
             }
         case "select":
             row(f.label) {
@@ -264,7 +264,7 @@ struct ConnectionFormView: View {
                 HStack {
                     TextField(f.placeholder ?? "", text: textBinding(f.key))
                         .textFieldStyle(.plain)
-                        .font(.mono(12))
+                        .scaledFont(.callout, design: .monospaced)
                     browseButton(title: "Choose…", types: f.fileTypes ?? []) { draft.config[f.key] = $0 }
                 }
             }
@@ -272,7 +272,7 @@ struct ConnectionFormView: View {
             row(f.label) {
                 TextField(f.placeholder ?? "", text: textBinding(f.key))
                     .textFieldStyle(.plain)
-                    .font(.mono(12))
+                    .scaledFont(.callout, design: .monospaced)
                     .frame(width: 90)
                 Spacer(minLength: 0)
             }
@@ -280,7 +280,7 @@ struct ConnectionFormView: View {
             row(f.label) {
                 TextField(f.placeholder ?? "", text: textBinding(f.key))
                     .textFieldStyle(.plain)
-                    .font(.mono(12))
+                    .scaledFont(.callout, design: .monospaced)
             }
         }
     }
@@ -362,13 +362,13 @@ struct ConnectionFormView: View {
                 VStack(alignment: .leading, spacing: Space.xxs) {
                     HStack(spacing: Space.sm) {
                         Text(tool.name)
-                            .font(.mono(12, weight: .medium))
+                            .scaledFont(.callout, weight: .medium, design: .monospaced)
                             .foregroundColor(enabled ? .primary : .secondary)
                         ToolCategoryTag(category: tool.category)
                         if hasSettings, enabled {
                             Image(systemName: "slider.horizontal.3")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.tertiary)
+                                .font(.system(size: 10))
+                                .foregroundStyle(Surface.tertiaryLabel)
                         }
                     }
                     Text(tool.description)
@@ -420,14 +420,14 @@ struct ConnectionFormView: View {
                 HStack {
                     Text(setting.label).scaledFont(.callout).frame(width: 120, alignment: .leading)
                     TextField(def, text: settingTextBinding(tool, setting.key, default: def))
-                        .textFieldStyle(.plain).font(.mono(12)).frame(width: 90)
+                        .textFieldStyle(.plain).scaledFont(.callout, design: .monospaced).frame(width: 90)
                     Spacer(minLength: 0)
                 }
             default: // text / password
                 HStack {
                     Text(setting.label).scaledFont(.callout).frame(width: 120, alignment: .leading)
                     TextField(setting.placeholder ?? "", text: settingTextBinding(tool, setting.key, default: def))
-                        .textFieldStyle(.plain).font(.mono(12))
+                        .textFieldStyle(.plain).scaledFont(.callout, design: .monospaced)
                 }
             }
             if let help = setting.help {
