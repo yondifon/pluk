@@ -10,17 +10,18 @@
   "devDependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
     "@types/bun": "latest",
-    "@types/pg": "^8.20.0",
+    "@types/pg": "^8.21.0",
     "@types/ssh2": "^1.15.5"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",
-    "mysql2": "^3.22.4",
+    "mysql2": "^3.23.3",
     "node-sql-parser": "^5.4.0",
-    "pg": "^8.21.0",
-    "ssh2": "^1.17.0"
+    "pg": "^8.23.0",
+    "ssh2": "^1.17.0",
+    "zod": "^4.4.3"
   }
 }
