@@ -159,7 +159,13 @@ async function ensureMaster(
       "-o", "ServerAliveCountMax=3",
       ...target,
     ];
-    if (config.authType === "key" && config.keyPath) args.push("-i", expandHome(config.keyPath));
+    // A key tunnel authenticates with the file it was given and nothing else:
+    // the agent is never consulted, so a locked or refusing 1Password cannot
+    // fail a connection that needs no signature from it, and no default
+    // ~/.ssh key is offered beside the configured one.
+    if (config.authType === "key" && config.keyPath) {
+      args.push("-i", expandHome(config.keyPath), "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none");
+    }
 
     // Point ssh at a probed, live agent socket explicitly. A GUI-launched app
     // inherits whatever SSH_AUTH_SOCK launchd set — often an empty or stale

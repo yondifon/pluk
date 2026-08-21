@@ -196,6 +196,30 @@ test("repeated pending stops after the ration and reports the real failure", asy
   expect(connectCalls).toBe(calls + 1);
 });
 
+// Regression: a failure is only ever news about the attempt that produced it.
+// A recorded agent refusal outlived its attempt and was handed to callers
+// waiting on later, healthy ones — so an MCP query failed instantly with
+// SSH_AGENT_DENIED while Test on the same connection worked, because Test
+// clears the record and the query path did not.
+test("a new connect is never answered with the previous attempt's agent failure", async () => {
+  connectBehavior = "agent-error";
+  const failed = getDriver("s5", integration);
+  expect(((await failed.catch((e) => e)) as Error).message).toBe("communication with agent failed");
+  await settle();
+
+  connectBehavior = "hang";
+  const mark = nextTimerId - 1;
+  const retry = getDriver("s5", integration);
+  retry.catch(() => {});
+  await settle();
+
+  const waits = takeNewTimers(mark).filter((t) => t.ms === 25_000);
+  expect(waits).toHaveLength(1);
+  waits[0]!.fn();
+
+  expect(((await retry.catch((e) => e)) as { code?: string }).code).toBe("SSH_CONNECT_PENDING");
+});
+
 // Regression: retries must never stack SSH connections. Evicting an unsettled
 // entry cannot cancel its connect — the close only runs once the promise settles
 // — so respawning "to trigger a fresh prompt" left the original ssh running and

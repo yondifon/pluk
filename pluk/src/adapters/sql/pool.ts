@@ -8,6 +8,7 @@ import {
   connectWaitError,
   isSshStalled,
   recordConnectFailure,
+  startConnectAttempt,
 } from "../../ssh/pending.js";
 import { classifySqlError, humanizeSqlError } from "./errors.js";
 
@@ -142,6 +143,7 @@ function awaitConnect(key: string, entry: DriverEntry): Promise<Driver> {
 function createDriverEntry(key: string, ownerId: string, integration: Integration, database?: string): DriverEntry {
   const useSsh = integration.config.use_ssh === true || integration.config.use_ssh === "true";
   const connectTimeout = useSsh ? CONNECT_TIMEOUT_SSH_MS : CONNECT_TIMEOUT_DIRECT_MS;
+  startConnectAttempt(key);
   const created = createDriver(integration, ownerId, () => {
     if (driverPool.get(key) === entry) {
       evictDriverByKey(key);

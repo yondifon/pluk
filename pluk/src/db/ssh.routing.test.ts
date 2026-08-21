@@ -1,5 +1,6 @@
 import { test, expect, mock, afterEach } from "bun:test";
 import { createServer, type Server } from "net";
+import { homedir } from "os";
 import { EventEmitter } from "events";
 import { PassThrough } from "stream";
 import type { Tunnel } from "./ssh.js";
@@ -88,4 +89,24 @@ test("agent-auth DB tunnel forwards via the OpenSSH binary, not ssh2", async () 
   await Bun.sleep(10);
   const cancel = spawnCalls.at(-1)!;
   expect(cancel.args.slice(0, 2)).toEqual(["-O", "cancel"]);
+});
+
+// A key tunnel carries its own credential, so the agent has no part in it: a
+// locked or refusing 1Password must not be able to fail it, and no default
+// ~/.ssh key may be offered beside the configured one.
+test("key-auth DB tunnel pins the key file and shuts the agent out", async () => {
+  tunnel = await openSSHTunnel({
+    host: "legacy.example.internal",
+    port: 22,
+    user: "root",
+    authType: "key",
+    keyPath: "~/.ssh/id_legacy",
+    remoteHost: "127.0.0.1",
+    remotePort: 5432,
+  });
+
+  const master = spawnCalls[1]!;
+  expect(master.args[master.args.indexOf("-i") + 1]).toBe(`${homedir()}/.ssh/id_legacy`);
+  expect(master.args).toContain("IdentitiesOnly=yes");
+  expect(master.args).toContain("IdentityAgent=none");
 });

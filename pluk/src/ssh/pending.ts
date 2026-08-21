@@ -20,15 +20,21 @@ export const SSH_PENDING_MAX_REPORTS = 2;
 
 interface Episode {
   pendingReports: number;
+  attemptSeq: number;
   lastError?: Error;
+  lastErrorSeq: number;
 }
 
 const episodes = new Map<string, Episode>();
 
+// Program-order stamps, so "recorded before this attempt started" is exact —
+// a wall clock can put a failure and the next attempt in the same millisecond.
+let seq = 0;
+
 function episode(key: string): Episode {
   const existing = episodes.get(key);
   if (existing) return existing;
-  const fresh: Episode = { pendingReports: 0 };
+  const fresh: Episode = { pendingReports: 0, attemptSeq: 0, lastErrorSeq: 0 };
   episodes.set(key, fresh);
   return fresh;
 }
@@ -38,9 +44,19 @@ export function clearConnectEpisode(key: string): void {
   episodes.delete(key);
 }
 
+/** A fresh connect is starting for this key. Failures from the attempts it
+ *  replaces stay on record for the stall report, but can no longer answer a
+ *  caller waiting on this one — an agent that refused an hour ago says nothing
+ *  about the request this attempt is about to make. */
+export function startConnectAttempt(key: string): void {
+  episode(key).attemptSeq = ++seq;
+}
+
 /** Remember why an attempt failed, so a later stall can report a real cause. */
 export function recordConnectFailure(key: string, err: unknown): void {
-  episode(key).lastError = err instanceof Error ? err : new Error(String(err));
+  const ep = episode(key);
+  ep.lastError = err instanceof Error ? err : new Error(String(err));
+  ep.lastErrorSeq = ++seq;
 }
 
 // Auth and agent failures are deterministic: a locked or unreachable agent and
@@ -51,13 +67,13 @@ export function isSshAuthError(err: unknown): boolean {
   return /permission denied|communication with agent failed|signing failed|publickey|no supported authentication|authentication failed|too many authentication failures|SSH key agent/i.test(msg);
 }
 
-// Error for a caller whose bounded wait on an in-flight connect ran out. An
-// earlier attempt that died on auth is the real story — report it, not the
-// pending guess. Otherwise: the guess while it's still plausible, then the
-// last real failure.
+// Error for a caller whose bounded wait on an in-flight connect ran out. This
+// attempt dying on auth is the real story — report it, not the pending guess.
+// Otherwise: the guess while it's still plausible, then the last real failure.
 export function connectWaitError(key: string): Error {
   const ep = episode(key);
-  if (ep.lastError && isSshAuthError(ep.lastError)) {
+  const fromThisAttempt = ep.lastErrorSeq >= ep.attemptSeq;
+  if (ep.lastError && fromThisAttempt && isSshAuthError(ep.lastError)) {
     episodes.delete(key);
     return ep.lastError;
   }

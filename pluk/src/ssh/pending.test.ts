@@ -5,6 +5,7 @@ import {
   isSshPending,
   isSshStalled,
   recordConnectFailure,
+  startConnectAttempt,
 } from "./pending.js";
 
 test("auth failure from an earlier attempt beats the pending guess", () => {
@@ -15,6 +16,18 @@ test("auth failure from an earlier attempt beats the pending guess", () => {
   const reported = connectWaitError(key);
   expect(reported).toBe(authErr);
   expect(isSshPending(reported)).toBe(false);
+});
+
+// Regression: an agent refusal belongs to the attempt that made the request.
+// Replaying it at a caller waiting on a later attempt reported a denial no
+// agent had given — instantly, with no prompt, since no ssh had run yet.
+test("an earlier attempt's auth failure never answers a caller waiting on a new one", () => {
+  const key = "retried-episode";
+  recordConnectFailure(key, new Error('sign_and_send_pubkey: signing failed for ED25519 "" from agent: agent refused operation'));
+
+  startConnectAttempt(key);
+
+  expect(isSshPending(connectWaitError(key))).toBe(true);
 });
 
 test("no recorded failure -> pending twice, then stalled", () => {
