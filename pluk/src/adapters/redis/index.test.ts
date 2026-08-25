@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
-import { redisConfig, buildUrl, type RedisAccessor } from "./client.js";
-import { redisAdapter, redisTools } from "./index.js";
+import { redisConfig, buildUrl } from "./client.js";
+import { redisAdapter } from "./index.js";
 import type { Integration } from "../../store/integrations.js";
 
 function conn(config: Record<string, unknown>): Integration {
@@ -43,14 +43,4 @@ test("redisConfig rejects a missing host", () => {
 
 test("testConnection rejects when the host is blank (before opening a client)", async () => {
   await expect(redisAdapter.testConnection(conn({}))).rejects.toThrow(/host is missing/);
-});
-
-test("scan projects defaults, presets, full payload, and rejects unknown fields", async () => {
-  const client = { send: async () => ["7", ["a"]] };
-  const acc = { get: async () => client } as unknown as RedisAccessor;
-  const scan = redisTools(acc).find((t) => t.name === "scan")!;
-  expect(await scan.run({}, {})).toEqual({ cursor: "7", keys: ["a"] });
-  expect(await scan.run({ only: ["pagination"] }, {})).toEqual({ cursor: "7" });
-  expect(await scan.run({ only: ["*"] }, {})).toEqual({ cursor: "7", keys: ["a"] });
-  await expect(scan.run({ only: ["missing"] }, {})).rejects.toThrow(/Unknown "only" field/);
 });

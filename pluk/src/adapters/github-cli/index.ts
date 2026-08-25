@@ -1,31 +1,74 @@
 import { z } from "zod";
 import { actionAdapter, type ActionTool } from "../kit.js";
-import { applyOnly, type FieldMap } from "../onlyProjection.js";
+import { applyOnly, onlySchema, onlyValue, type FieldMap } from "../onlyProjection.js";
 import { githubCliFields } from "./fields.js";
 import { ghCommand, ghConfig, ghJson, ghText, humanizeGhError, positional, repoFlag, resolveRepo, testGh, type GhConfig } from "./client.js";
 
 const AGENT_HINT =
   "Use this for GitHub work through the installed gh CLI — issues, pull requests, releases, code search, file contents at a ref, and CI status. gh uses your own login and infers the repository and branch from the cwd you pass (e.g. a git worktree). Start with list_pull_requests or list_issues; set default_repo to skip the repo arg.";
 
-function onlySchema(presetNames: string[]) {
-  const presetLine = presetNames.length ? ` Presets: ${presetNames.join(", ")}.` : "";
-  return z.array(z.string()).optional().describe(`Trim the response to just these fields — omit for a lighter default, pass ["*"] for the full payload. Entries are dot paths or presets.${presetLine}`);
-}
-
-const ISSUE_LIST_MAP: FieldMap = { fields: ["number", "title", "state", "labels", "author", "createdAt", "updatedAt"], default: ["number", "title", "state", "labels"], presets: { authorship: ["author", "createdAt", "updatedAt"] } };
-const ISSUE_MAP: FieldMap = { fields: ["number", "title", "body", "state", "labels", "author", "comments", "createdAt", "updatedAt"], default: ["number", "title", "body", "state", "comments"], presets: { metadata: ["author", "createdAt", "updatedAt", "labels"] } };
-const PR_LIST_MAP: FieldMap = { fields: ["number", "title", "state", "headRefName", "baseRefName", "author", "createdAt", "updatedAt"], default: ["number", "title", "state", "headRefName", "baseRefName"], presets: { authorship: ["author", "createdAt", "updatedAt"] } };
-const PR_MAP: FieldMap = { fields: ["number", "title", "body", "state", "headRefName", "baseRefName", "mergeable", "author", "createdAt", "updatedAt"], default: ["number", "title", "body", "state", "mergeable"], presets: { branch: ["headRefName", "baseRefName"], metadata: ["author", "createdAt", "updatedAt"] } };
-const FILE_MAP: FieldMap = { fields: ["name", "path", "sha", "size", "url", "html_url", "git_url", "download_url", "type", "content", "encoding"], default: ["path", "content", "encoding"], presets: { metadata: ["name", "path", "sha", "size", "html_url", "type"] } };
-const FILES_MAP: FieldMap = { fields: ["sha", "filename", "status", "additions", "deletions", "changes", "blob_url", "raw_url", "contents_url", "patch"], default: ["filename", "status", "additions", "deletions", "patch"], presets: { links: ["blob_url", "raw_url", "contents_url"] } };
-const SEARCH_MAP: FieldMap = { fields: ["name", "path", "sha", "url", "html_url", "repository", "score", "text_matches"], default: ["name", "path", "repository", "html_url"], presets: { ranking: ["score", "sha"], matches: ["text_matches"] } };
-const STATUS_MAP: FieldMap = { fields: ["status", "check_runs"], default: ["status.state", "status.total_count", "check_runs.name", "check_runs.status", "check_runs.conclusion"], presets: { links: ["check_runs.html_url"] } };
-const REPO_MAP: FieldMap = { fields: ["name", "owner", "description", "url", "defaultBranchRef", "isPrivate", "pushedAt", "stargazerCount", "forkCount"], default: ["name", "owner.login", "description", "url", "defaultBranchRef.name", "isPrivate"], presets: { stats: ["pushedAt", "stargazerCount", "forkCount"] } };
-const RELEASE_LIST_MAP: FieldMap = { fields: ["tagName", "name", "isDraft", "isPrerelease", "author", "publishedAt"], default: ["tagName", "name", "isDraft", "isPrerelease"], presets: { authorship: ["author", "publishedAt"] } };
-const RELEASE_MAP: FieldMap = { fields: ["tagName", "name", "body", "isDraft", "isPrerelease", "author", "createdAt", "publishedAt", "assets", "url"], default: ["tagName", "name", "body", "isDraft", "isPrerelease", "assets"], presets: { metadata: ["author", "createdAt", "publishedAt", "url"] } };
+const ISSUE_LIST_MAP: FieldMap = {
+  fields: ["number", "title", "state", "labels", "author", "createdAt", "updatedAt"],
+  default: ["number", "title", "state", "labels"],
+  presets: { authorship: ["author", "createdAt", "updatedAt"] },
+};
+const ISSUE_MAP: FieldMap = {
+  fields: ["number", "title", "body", "state", "labels", "author", "comments", "createdAt", "updatedAt"],
+  default: ["number", "title", "body", "state", "comments"],
+  presets: { metadata: ["author", "createdAt", "updatedAt", "labels"] },
+};
+const PR_LIST_MAP: FieldMap = {
+  fields: ["number", "title", "state", "headRefName", "baseRefName", "author", "createdAt", "updatedAt"],
+  default: ["number", "title", "state", "headRefName", "baseRefName"],
+  presets: { authorship: ["author", "createdAt", "updatedAt"] },
+};
+const PR_MAP: FieldMap = {
+  fields: ["number", "title", "body", "state", "headRefName", "baseRefName", "mergeable", "author", "createdAt", "updatedAt"],
+  default: ["number", "title", "body", "state", "mergeable"],
+  presets: { branch: ["headRefName", "baseRefName"], metadata: ["author", "createdAt", "updatedAt"] },
+};
+const FILE_MAP: FieldMap = {
+  fields: ["name", "path", "sha", "size", "url", "html_url", "git_url", "download_url", "type", "content", "encoding"],
+  default: ["path", "content", "encoding"],
+  presets: { metadata: ["name", "path", "sha", "size", "html_url", "type"] },
+};
+const FILES_MAP: FieldMap = {
+  fields: ["sha", "filename", "status", "additions", "deletions", "changes", "blob_url", "raw_url", "contents_url", "patch"],
+  default: ["filename", "status", "additions", "deletions", "patch"],
+  presets: { links: ["blob_url", "raw_url", "contents_url"] },
+};
+const SEARCH_MAP: FieldMap = {
+  fields: ["name", "path", "sha", "url", "html_url", "repository", "score", "text_matches"],
+  default: ["name", "path", "repository", "html_url"],
+  presets: { ranking: ["score", "sha"], matches: ["text_matches"] },
+};
+const STATUS_MAP: FieldMap = {
+  fields: ["status", "check_runs"],
+  default: ["status.state", "status.total_count", "check_runs.name", "check_runs.status", "check_runs.conclusion"],
+  presets: { links: ["check_runs.html_url"] },
+};
+const REPO_MAP: FieldMap = {
+  fields: ["name", "owner", "description", "url", "defaultBranchRef", "isPrivate", "pushedAt", "stargazerCount", "forkCount"],
+  default: ["name", "owner.login", "description", "url", "defaultBranchRef.name", "isPrivate"],
+  presets: { stats: ["pushedAt", "stargazerCount", "forkCount"] },
+};
+const RELEASE_LIST_MAP: FieldMap = {
+  fields: ["tagName", "name", "isDraft", "isPrerelease", "author", "publishedAt"],
+  default: ["tagName", "name", "isDraft", "isPrerelease"],
+  presets: { authorship: ["author", "publishedAt"] },
+};
+const RELEASE_MAP: FieldMap = {
+  fields: ["tagName", "name", "body", "isDraft", "isPrerelease", "author", "createdAt", "publishedAt", "assets", "url"],
+  default: ["tagName", "name", "body", "isDraft", "isPrerelease", "assets"],
+  presets: { metadata: ["author", "createdAt", "publishedAt", "url"] },
+};
 
 function project(data: unknown, args: Record<string, unknown>, map: FieldMap): unknown {
-  return applyOnly(data, args.only as string[] | undefined, map);
+  return applyOnly(data, onlyValue(args), map);
+}
+
+function jsonFields(map: FieldMap): string {
+  return map.fields.join(",");
 }
 
 // GitHub CLI's tools. Each declares its policy category, log line, and gh
@@ -50,11 +93,11 @@ export function githubCliTools(cfg: GhConfig): ActionTool[] {
         only: onlySchema(["authorship"]),
       },
       detail: (a) => `list_issues ${(a.repo as string) ?? cfg.defaultRepo ?? "?"} state=${a.state}`,
-      command: (a) => ghCommand(cfg, ["issue", "list", ...repoFlag(cfg, a.repo as string | undefined), "--state", a.state as string, "--limit", String(a.limit), "--json", "number,title,state,labels,author,createdAt,updatedAt"]),
+      command: (a) => ghCommand(cfg, ["issue", "list", ...repoFlag(cfg, a.repo as string | undefined), "--state", a.state as string, "--limit", String(a.limit), "--json", jsonFields(ISSUE_LIST_MAP)]),
       run: async (a) =>
         project(await ghJson(cfg, ["issue", "list", ...repoFlag(cfg, a.repo as string | undefined),
            "--state", a.state as string, "--limit", String(a.limit),
-           "--json", "number,title,state,labels,author,createdAt,updatedAt"], a.cwd as string | undefined), a, ISSUE_LIST_MAP),
+           "--json", jsonFields(ISSUE_LIST_MAP)], a.cwd as string | undefined), a, ISSUE_LIST_MAP),
     },
     {
       name: "get_issue",
@@ -62,10 +105,10 @@ export function githubCliTools(cfg: GhConfig): ActionTool[] {
       category: "read",
       schema: { cwd: cwdArg, repo: repoArg, number: z.number().int().describe("Issue number"), only: onlySchema(["metadata"]) },
       detail: (a) => `get_issue ${(a.repo as string) ?? cfg.defaultRepo ?? "?"}#${a.number}`,
-      command: (a) => ghCommand(cfg, ["issue", "view", String(a.number), ...repoFlag(cfg, a.repo as string | undefined), "--json", "number,title,body,state,labels,author,comments,createdAt,updatedAt"]),
+      command: (a) => ghCommand(cfg, ["issue", "view", String(a.number), ...repoFlag(cfg, a.repo as string | undefined), "--json", jsonFields(ISSUE_MAP)]),
       run: async (a) =>
         project(await ghJson(cfg, ["issue", "view", String(a.number), ...repoFlag(cfg, a.repo as string | undefined),
-           "--json", "number,title,body,state,labels,author,comments,createdAt,updatedAt"], a.cwd as string | undefined),
+           "--json", jsonFields(ISSUE_MAP)], a.cwd as string | undefined),
            a, ISSUE_MAP),
     },
     {
@@ -80,11 +123,11 @@ export function githubCliTools(cfg: GhConfig): ActionTool[] {
         only: onlySchema(["authorship"]),
       },
       detail: (a) => `list_pull_requests ${(a.repo as string) ?? cfg.defaultRepo ?? "?"} state=${a.state}`,
-      command: (a) => ghCommand(cfg, ["pr", "list", ...repoFlag(cfg, a.repo as string | undefined), "--state", a.state as string, "--limit", String(a.limit), "--json", "number,title,state,headRefName,baseRefName,author,createdAt,updatedAt"]),
+      command: (a) => ghCommand(cfg, ["pr", "list", ...repoFlag(cfg, a.repo as string | undefined), "--state", a.state as string, "--limit", String(a.limit), "--json", jsonFields(PR_LIST_MAP)]),
       run: async (a) =>
         project(await ghJson(cfg, ["pr", "list", ...repoFlag(cfg, a.repo as string | undefined),
            "--state", a.state as string, "--limit", String(a.limit),
-           "--json", "number,title,state,headRefName,baseRefName,author,createdAt,updatedAt"], a.cwd as string | undefined), a, PR_LIST_MAP),
+           "--json", jsonFields(PR_LIST_MAP)], a.cwd as string | undefined), a, PR_LIST_MAP),
     },
     {
       name: "get_pull_request",
@@ -92,10 +135,10 @@ export function githubCliTools(cfg: GhConfig): ActionTool[] {
       category: "read",
       schema: { cwd: cwdArg, repo: repoArg, number: z.number().int().describe("PR number"), only: onlySchema(["branch", "metadata"]) },
       detail: (a) => `get_pull_request ${(a.repo as string) ?? cfg.defaultRepo ?? "?"}#${a.number}`,
-      command: (a) => ghCommand(cfg, ["pr", "view", String(a.number), ...repoFlag(cfg, a.repo as string | undefined), "--json", "number,title,body,state,headRefName,baseRefName,mergeable,author,createdAt,updatedAt"]),
+      command: (a) => ghCommand(cfg, ["pr", "view", String(a.number), ...repoFlag(cfg, a.repo as string | undefined), "--json", jsonFields(PR_MAP)]),
       run: async (a) =>
         project(await ghJson(cfg, ["pr", "view", String(a.number), ...repoFlag(cfg, a.repo as string | undefined),
-           "--json", "number,title,body,state,headRefName,baseRefName,mergeable,author,createdAt,updatedAt"], a.cwd as string | undefined),
+           "--json", jsonFields(PR_MAP)], a.cwd as string | undefined),
            a, PR_MAP),
     },
     {
@@ -168,34 +211,32 @@ export function githubCliTools(cfg: GhConfig): ActionTool[] {
       category: "read",
       schema: { cwd: cwdArg, repo: repoArg, only: onlySchema(["stats"]) },
       detail: (a) => `get_repo ${(a.repo as string) ?? cfg.defaultRepo ?? "?"}`,
-      command: (a) => ghCommand(cfg, ["repo", "view", ...repoFlag(cfg, a.repo as string | undefined), "--json", "name,owner,description,url,defaultBranchRef,isPrivate,pushedAt,stargazerCount,forkCount"]),
+      command: (a) => ghCommand(cfg, ["repo", "view", ...repoFlag(cfg, a.repo as string | undefined), "--json", jsonFields(REPO_MAP)]),
       run: async (a) =>
         project(await ghJson(cfg, ["repo", "view", ...repoFlag(cfg, a.repo as string | undefined),
-          "--json", "name,owner,description,url,defaultBranchRef,isPrivate,pushedAt,stargazerCount,forkCount"], a.cwd as string | undefined), a, REPO_MAP),
+           "--json", jsonFields(REPO_MAP)], a.cwd as string | undefined), a, REPO_MAP),
     },
     {
       name: "list_releases",
       description: "List releases in a repo, newest first.",
       category: "read",
-       schema: { cwd: cwdArg, repo: repoArg, limit: limitArg, only: onlySchema(["authorship"]) },
+      schema: { cwd: cwdArg, repo: repoArg, limit: limitArg, only: onlySchema(["authorship"]) },
       detail: (a) => `list_releases ${(a.repo as string) ?? cfg.defaultRepo ?? "?"}`,
-      command: (a) => ghCommand(cfg, ["release", "list", ...repoFlag(cfg, a.repo as string | undefined), "--limit", String(a.limit), "--json", "tagName,name,isDraft,isPrerelease,author,publishedAt"]),
-       run: async (a) =>
-         project(await ghJson(cfg, ["release", "list", ...repoFlag(cfg, a.repo as string | undefined),
-           "--limit", String(a.limit),
-           "--json", "tagName,name,isDraft,isPrerelease,author,publishedAt"], a.cwd as string | undefined), a, RELEASE_LIST_MAP),
+      command: (a) => ghCommand(cfg, ["release", "list", ...repoFlag(cfg, a.repo as string | undefined), "--limit", String(a.limit), "--json", jsonFields(RELEASE_LIST_MAP)]),
+      run: async (a) =>
+        project(await ghJson(cfg, ["release", "list", ...repoFlag(cfg, a.repo as string | undefined),
+          "--limit", String(a.limit), "--json", jsonFields(RELEASE_LIST_MAP)], a.cwd as string | undefined), a, RELEASE_LIST_MAP),
     },
     {
       name: "get_release",
       description: "Get a single release by tag (body, assets, draft/prerelease state).",
       category: "read",
-       schema: { cwd: cwdArg, repo: repoArg, tag: z.string().describe("Release tag, e.g. v1.2.3"), only: onlySchema(["metadata"]) },
+      schema: { cwd: cwdArg, repo: repoArg, tag: z.string().describe("Release tag, e.g. v1.2.3"), only: onlySchema(["metadata"]) },
       detail: (a) => `get_release ${(a.repo as string) ?? cfg.defaultRepo ?? "?"}@${a.tag}`,
-      command: (a) => ghCommand(cfg, ["release", "view", positional(a.tag, "tag"), ...repoFlag(cfg, a.repo as string | undefined), "--json", "tagName,name,body,isDraft,isPrerelease,author,createdAt,publishedAt,assets,url"]),
-       run: async (a) =>
-         project(await ghJson(cfg, ["release", "view", positional(a.tag, "tag"), ...repoFlag(cfg, a.repo as string | undefined),
-           "--json", "tagName,name,body,isDraft,isPrerelease,author,createdAt,publishedAt,assets,url"], a.cwd as string | undefined),
-           a, RELEASE_MAP),
+      command: (a) => ghCommand(cfg, ["release", "view", positional(a.tag, "tag"), ...repoFlag(cfg, a.repo as string | undefined), "--json", jsonFields(RELEASE_MAP)]),
+      run: async (a) =>
+        project(await ghJson(cfg, ["release", "view", positional(a.tag, "tag"), ...repoFlag(cfg, a.repo as string | undefined),
+          "--json", jsonFields(RELEASE_MAP)], a.cwd as string | undefined), a, RELEASE_MAP),
     },
 
     // ── Write tools ──────────────────────────────────────────────────────────

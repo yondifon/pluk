@@ -25,7 +25,7 @@ import { ok, err, runGated, type ToolResult, type LogSnapshot } from "../kit.js"
 import type { ToolHost } from "../../mcp/namespace.js";
 import { formatSqlError } from "./errors.js";
 import { isSshPending, withSshApprovalRetry } from "../../ssh/pending.js";
-import { applyOnly, type FieldMap } from "../onlyProjection.js";
+import { applyOnly, onlySchema, onlyValue, type FieldMap } from "../onlyProjection.js";
 
 // Human label for a SQL adapter id — single source for the manifest and the
 // agent-facing instructions so they never drift.
@@ -82,25 +82,16 @@ const QUERY_SETTINGS: ConfigField[] = [
     help: "Cap rows returned to the agent. 0 = no cap." },
 ];
 
-function onlySchema(presetNames: string[]) {
-  const presetLine = presetNames.length ? ` Presets: ${presetNames.join(", ")}.` : "";
-  return z.array(z.string()).optional().describe(
-    `Trim the response to just these fields — omit for a lighter default, pass ["*"] for the full payload. Entries are dot paths or presets.${presetLine}`,
-  );
-}
-
 const QUERY_MAP: FieldMap = {
   fields: ["env", "connection", "type", "database", "fields", "rows", "truncated", "row_cap", "row_count", "returned_rows"],
   default: ["rows", "fields", "row_count", "returned_rows", "truncated"],
   presets: { connection: ["env", "connection", "type", "database"], limits: ["truncated", "row_cap", "row_count", "returned_rows"] },
 };
-const DESCRIBE_MAP: FieldMap = { fields: ["column", "type", "nullable"], default: ["column", "type", "nullable"] };
 const RELATIONSHIPS_MAP: FieldMap = {
   fields: ["from_table", "from_column", "to_table", "to_column", "constraint_name"],
   default: ["from_table", "from_column", "to_table", "to_column"],
   presets: { constraints: ["constraint_name"] },
 };
-const SEARCH_SCHEMA_MAP: FieldMap = { fields: ["kind", "table", "column", "type"], default: ["kind", "table", "column", "type"] };
 const TABLE_STATS_MAP: FieldMap = {
   fields: ["table", "estimatedRows", "sizeBytes", "indexes"],
   default: ["table", "estimatedRows", "sizeBytes"],
@@ -476,7 +467,7 @@ ${sql}` } },
       if (!statement) return Promise.resolve(missingSqlArg());
       const r = resolveDatabase(database);
       if (!r.ok) return Promise.resolve(err(r.error));
-      return gatedQuery(statement, "query", toTimeoutMs(timeout), limit, r.db, params, (args as typeof args & { only?: string[] }).only);
+      return gatedQuery(statement, "query", toTimeoutMs(timeout), limit, r.db, params, onlyValue(args));
     },
   );
 
@@ -503,7 +494,7 @@ ${sql}` } },
         const result = await driver.sampleTable(table, effectiveLimit, s.schema);
         const { rows, truncated, limit: rowCap } = capRows(result.rows, policy.maxRows);
         const maskedRows = maskedColumns.length > 0 ? rows.map(r => maskRow(r as Record<string, unknown>, maskedColumns)) : rows;
-        let text = projectedJson(resultWithMeta(result, maskedRows, truncated, rowCap, r.db), (rest as { only?: string[] }).only, QUERY_MAP);
+        let text = projectedJson(resultWithMeta(result, maskedRows, truncated, rowCap, r.db), onlyValue(rest), QUERY_MAP);
         if (truncated) {
           text += `\n\n[Row limit: showing first ${policy.maxRows} of ${result.rows.length} rows.]`;
         }
@@ -536,7 +527,7 @@ ${sql}` } },
         logQuery(conn.id, conn.name, statement, "blocked", verdict.categories, verdict.reason ?? undefined, undefined, undefined, undefined, conn.viaGroup, r.db ?? pinnedDb);
         return Promise.resolve(err(`Blocked: ${verdict.reason}`));
       }
-      return introspect("explain_query", async (driver) => projectedJson(await driver.explain(statement, params), (rest as { only?: string[] }).only, {
+      return introspect("explain_query", async (driver) => projectedJson(await driver.explain(statement, params), onlyValue(rest), {
         fields: ["rows", "fields"],
         default: ["rows", "fields"],
       }), r.db);
@@ -546,9 +537,9 @@ ${sql}` } },
   if (on("describe_table")) server.tool(
     "describe_table",
     "Get column definitions for a table",
-    { table: z.string().describe("Table name"), ...dbOption, ...schemaOption, only: onlySchema([]) },
+    { table: z.string().describe("Table name"), ...dbOption, ...schemaOption },
     ({ table, ...rest }) =>
-      introspectScoped("describe_table", rest as { database?: string; schema?: string }, async (driver, schema) => projectedJson(await driver.describeTable(table, schema), (rest as { only?: string[] }).only, DESCRIBE_MAP))
+      introspectScoped("describe_table", rest as { database?: string; schema?: string }, async (driver, schema) => JSON.stringify(await driver.describeTable(table, schema), null, 2))
   );
 
   if (on("list_relationships")) server.tool(
@@ -556,15 +547,15 @@ ${sql}` } },
     "List foreign key relationships between tables",
     { table: z.string().optional().describe("Filter to a specific table (optional)"), ...dbOption, ...schemaOption, only: onlySchema(["constraints"]) },
     ({ table, ...rest }) =>
-      introspectScoped("list_relationships", rest as { database?: string; schema?: string }, async (driver, schema) => projectedJson(await driver.listRelationships(table, schema), (rest as { only?: string[] }).only, RELATIONSHIPS_MAP))
+      introspectScoped("list_relationships", rest as { database?: string; schema?: string }, async (driver, schema) => projectedJson(await driver.listRelationships(table, schema), onlyValue(rest), RELATIONSHIPS_MAP))
   );
 
   if (on("search_schema")) server.tool(
     "search_schema",
     "Find tables or columns matching a term",
-    { term: z.string().describe("Search term (substring match on table or column names)"), ...dbOption, ...schemaOption, only: onlySchema([]) },
+    { term: z.string().describe("Search term (substring match on table or column names)"), ...dbOption, ...schemaOption },
     ({ term, ...rest }) =>
-      introspectScoped("search_schema", rest as { database?: string; schema?: string }, async (driver, schema) => projectedJson(await driver.searchSchema(term, schema), (rest as { only?: string[] }).only, SEARCH_SCHEMA_MAP))
+      introspectScoped("search_schema", rest as { database?: string; schema?: string }, async (driver, schema) => JSON.stringify(await driver.searchSchema(term, schema), null, 2))
   );
 
   if (on("table_stats")) server.tool(
@@ -572,7 +563,7 @@ ${sql}` } },
     "Get cheap table statistics (estimated rows, size, indexes)",
     { table: z.string().describe("Table name"), ...dbOption, ...schemaOption, only: onlySchema(["indexes"]) },
     ({ table, ...rest }) =>
-      introspectScoped("table_stats", rest as { database?: string; schema?: string }, async (driver, schema) => projectedJson(await driver.tableStats(table, schema), (rest as { only?: string[] }).only, TABLE_STATS_MAP))
+      introspectScoped("table_stats", rest as { database?: string; schema?: string }, async (driver, schema) => projectedJson(await driver.tableStats(table, schema), onlyValue(rest), TABLE_STATS_MAP))
   );
 
   if (on("list_schemas")) server.tool("list_schemas", "List all schemas or databases", () =>
@@ -656,7 +647,7 @@ ${sql}` } },
       if (!r.ok) return Promise.resolve(err(r.error));
       const saved = getSavedQuery(conn.id, name);
       if (!saved) return Promise.resolve(err(`Saved query "${name}" not found.`));
-      return gatedQuery(saved.sql, "run_saved_query", toTimeoutMs(timeout), undefined, r.db, params, (args as typeof args & { only?: string[] }).only);
+      return gatedQuery(saved.sql, "run_saved_query", toTimeoutMs(timeout), undefined, r.db, params, onlyValue(args));
     }
   );
 
@@ -664,9 +655,9 @@ ${sql}` } },
     "list_saved_queries",
     "List saved queries for this connection",
     { only: onlySchema(["sql", "ids"]) },
-     async (args) => {
+    async (args) => {
       try {
-        return ok(projectedJson(listSavedQueries(conn.id), args.only as string[] | undefined, SAVED_QUERIES_MAP));
+        return ok(projectedJson(listSavedQueries(conn.id), onlyValue(args), SAVED_QUERIES_MAP));
       } catch (e) {
         return err(`Error: ${(e as Error).message}`);
       }
