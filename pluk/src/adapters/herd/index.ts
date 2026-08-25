@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Integration } from "../../store/integrations.js";
 import { actionAdapter, type ActionTool, type CommandOutput } from "../kit.js";
+import { applyOnly, type FieldMap } from "../onlyProjection.js";
 import { herdFields } from "./fields.js";
 import { assertFeature, createSite, destroySite, herdConfig, listSites, testHerd, worktreePath, type HerdConfig } from "./client.js";
 
@@ -11,7 +12,14 @@ const AGENT_HINT =
  *  Herd binary are local state that can change under a long-lived session. */
 type ConfigRef = () => HerdConfig;
 
-function herdTools(cfg: ConfigRef): ActionTool[] {
+function onlySchema(presetNames: string[]) {
+  const presetLine = presetNames.length ? ` Presets: ${presetNames.join(", ")}.` : "";
+  return z.array(z.string()).optional().describe(`Trim the response to just these fields — omit for a lighter default, pass ["*"] for the full payload. Entries are dot paths or presets.${presetLine}`);
+}
+
+export const LIST_SITES_MAP: FieldMap = { fields: ["value", "command"], default: ["value"], presets: { command: ["command"] } };
+
+export function herdTools(cfg: ConfigRef): ActionTool[] {
   const command = (args: string[]): string => {
     const quote = (value: string): string => /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
     return args.map(quote).join(" ");
@@ -22,12 +30,14 @@ function herdTools(cfg: ConfigRef): ActionTool[] {
       name: "list_sites",
       description: "List the feature sites for this app — feature, branch, URL and worktree path.",
       category: "read",
-      run: async () => {
+      schema: { only: onlySchema(["command"]) },
+      run: async (a) => {
         const c = cfg();
-        return {
+        const result = {
           value: await listSites(c),
           command: command(["git", "-C", c.appPath, "worktree", "list", "--porcelain"]),
         } satisfies CommandOutput;
+        return applyOnly(result, a.only as string[] | undefined, LIST_SITES_MAP) as CommandOutput;
       },
     },
     {
