@@ -1,16 +1,11 @@
 import { z } from "zod";
 import type { Integration } from "../../store/integrations.js";
 import { actionAdapter, type ActionTool } from "../kit.js";
-import { applyOnly, type FieldMap } from "../onlyProjection.js";
+import { applyOnly, onlySchema, onlyValue, type FieldMap } from "../onlyProjection.js";
 import { slackFields } from "./fields.js";
 import { slackConfig, slackRequest, resolveChannel, type SlackCfg } from "./client.js";
 
 const AGENT_HINT = "Use this for Slack workspace access — list channels, read recent channel messages for context, and post messages back. list_channels to find a channel id, channel_history to read it; set default_channel to skip the arg.";
-
-function onlySchema(presetNames: string[]) {
-  const presetLine = presetNames.length ? ` Presets: ${presetNames.join(", ")}.` : "";
-  return z.array(z.string()).optional().describe(`Trim the response to just these fields — omit for a lighter default, pass ["*"] for the full payload. Entries are dot paths or presets.${presetLine}`);
-}
 
 const CHANNEL_MAP: FieldMap = { fields: ["id", "name", "is_private", "topic", "purpose", "num_members"], default: ["id", "name", "topic"], presets: { details: ["purpose", "num_members", "is_private"] } };
 const MESSAGE_MAP: FieldMap = { fields: ["type", "user", "text", "ts", "thread_ts", "reply_count", "reactions", "files"], default: ["user", "text", "ts"], presets: { thread: ["thread_ts", "reply_count"], attachments: ["files", "reactions"] } };
@@ -25,14 +20,14 @@ export function slackTools(cfg: SlackCfg): ActionTool[] {
       name: "list_channels",
       description: "List public channels in the workspace (id, name, topic).",
       category: "read",
-       schema: { limit: z.number().int().min(1).max(1000).default(100).describe("Max channels to return"), only: onlySchema(["details"]) },
+      schema: { limit: z.number().int().min(1).max(1000).default(100).describe("Max channels to return"), only: onlySchema(["details"]) },
       detail: () => `list_channels`,
       run: async (a) => {
         const data = await slackRequest<{ channels: unknown[] }>(cfg, "conversations.list", {
           types: "public_channel",
           limit: a.limit as number,
         });
-        return applyOnly(data.channels, a.only as string[] | undefined, CHANNEL_MAP);
+        return applyOnly(data.channels, onlyValue(a), CHANNEL_MAP);
       },
     },
     {
@@ -51,7 +46,7 @@ export function slackTools(cfg: SlackCfg): ActionTool[] {
           channel,
           limit: a.limit as number,
         });
-        return applyOnly(data.messages, a.only as string[] | undefined, MESSAGE_MAP);
+        return applyOnly(data.messages, onlyValue(a), MESSAGE_MAP);
       },
     },
 
@@ -66,10 +61,10 @@ export function slackTools(cfg: SlackCfg): ActionTool[] {
         only: onlySchema(["message"]),
       },
       detail: (a) => `post_message ${(a.channel as string) ?? cfg.defaultChannel ?? "?"}`,
-       run: async (a) => {
+      run: async (a) => {
         const channel = resolveChannel(cfg, a.channel as string | undefined);
         const data = await slackRequest(cfg, "chat.postMessage", { channel, text: a.text as string });
-        return applyOnly(data, a.only as string[] | undefined, POST_MAP);
+        return applyOnly(data, onlyValue(a), POST_MAP);
       },
     },
   ];

@@ -1,20 +1,8 @@
 import { z } from "zod";
 import type { Integration } from "../../store/integrations.js";
 import { actionAdapter, type ActionTool } from "../kit.js";
-import { applyOnly, type FieldMap } from "../onlyProjection.js";
 import { redisFields } from "./fields.js";
 import { redisAccessor, raw, testRedis, type RedisAccessor } from "./client.js";
-
-function onlySchema(presetNames: string[]) {
-  const presetLine = presetNames.length ? ` Presets: ${presetNames.join(", ")}.` : "";
-  return z.array(z.string()).optional().describe(`Trim the response to just these fields — omit for a lighter default, pass ["*"] for the full payload. Entries are dot paths or presets.${presetLine}`);
-}
-
-const SCAN_MAP: FieldMap = {
-  fields: ["cursor", "keys"],
-  default: ["cursor", "keys"],
-  presets: { pagination: ["cursor"] },
-};
 
 const AGENT_HINT = "Use this to inspect and edit a Redis datastore — list keys, read values, types and TTLs, check server INFO, and set, expire or delete keys. Use scan (not keys) to list keys safely; get/type/ttl inspect a single key.";
 
@@ -22,7 +10,7 @@ const AGENT_HINT = "Use this to inspect and edit a Redis datastore — list keys
 // logging, and response shaping are handled by actionAdapter. The accessor opens
 // the connection (and SSH tunnel, if configured) lazily on first use and reuses it
 // across the owner's calls.
-export function redisTools(acc: RedisAccessor): ActionTool[] {
+function redisTools(acc: RedisAccessor): ActionTool[] {
   return [
     {
       name: "scan",
@@ -32,7 +20,6 @@ export function redisTools(acc: RedisAccessor): ActionTool[] {
         cursor: z.string().default("0").describe("Cursor from a previous scan; start at 0"),
         match: z.string().optional().describe("Glob pattern, e.g. user:*"),
         count: z.number().int().min(1).max(10000).default(100).describe("Approximate keys to scan per call"),
-        only: onlySchema(["pagination"]),
       },
       detail: (a) => `scan match=${(a.match as string) ?? "*"} count=${a.count}`,
       run: async (a) => {
@@ -40,7 +27,7 @@ export function redisTools(acc: RedisAccessor): ActionTool[] {
         if (a.match) args.push("MATCH", a.match as string);
         args.push("COUNT", a.count as number);
         const [cursor, keys] = (await raw(await acc.get(), "SCAN", args)) as [string, string[]];
-        return applyOnly({ cursor, keys }, a.only as string[] | undefined, SCAN_MAP);
+        return { cursor, keys };
       },
     },
     {

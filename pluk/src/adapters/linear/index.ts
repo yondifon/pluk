@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Integration } from "../../store/integrations.js";
 import { actionAdapter, type ActionTool } from "../kit.js";
-import { applyOnly, type FieldMap } from "../onlyProjection.js";
+import { applyOnly, onlySchema, onlyValue, type FieldMap } from "../onlyProjection.js";
 import { linearGraphQL } from "./client.js";
 import { linearFields } from "./fields.js";
 import { resolveLabels, resolveState, resolveTeam, resolveUser } from "./resolve.js";
@@ -68,14 +68,6 @@ const CREATE_ISSUE_MAP: FieldMap = { fields: ["success", "issue"], default: ["is
 const UPDATE_ISSUE_MAP: FieldMap = { fields: ["success", "issue"], default: ["issue.identifier", "issue.state.name"] };
 const COMMENT_MAP: FieldMap = { fields: ["success", "comment"], default: ["comment.url"] };
 
-function onlySchema(presetNames: string[]) {
-  const presetLine = presetNames.length ? ` Presets: ${presetNames.join(", ")}.` : "";
-  return z
-    .array(z.string())
-    .optional()
-    .describe(`Trim the response to just these fields — omit for a lighter default, pass ["*"] for the full payload. Entries are dot paths (e.g. "state.name") or presets.${presetLine}`);
-}
-
 // Linear reports a project's issue counts as a running history; the last sample
 // is the current total/completed. Flatten that (and drop the noisy arrays) into
 // a count summary the agent can read directly.
@@ -135,7 +127,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `query($first:Int!,$filter:IssueFilter){ issues(first:$first, filter:$filter){ nodes { ${ISSUE_FIELDS} } } }`,
           { first: a.limit, filter },
         );
-        return applyOnly(data.issues.nodes, a.only as string[] | undefined, ISSUE_LIST_MAP);
+        return applyOnly(data.issues.nodes, onlyValue(a), ISSUE_LIST_MAP);
       },
     },
     {
@@ -156,7 +148,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `query($first:Int!,$filter:IssueFilter){ issues(first:$first, filter:$filter){ nodes { ${ISSUE_FIELDS} } } }`,
           { first: a.limit, filter },
         );
-        return applyOnly(data.issues.nodes, a.only as string[] | undefined, MY_ISSUES_MAP);
+        return applyOnly(data.issues.nodes, onlyValue(a), MY_ISSUES_MAP);
       },
     },
     {
@@ -174,7 +166,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `query($id:String!){ issue(id:$id){ id identifier title description state { name type } assignee { name } priority estimate dueDate branchName url createdAt updatedAt team { key } project { name } parent { identifier title } labels { nodes { name } } } }`,
           { id: a.id },
         );
-        return applyOnly(data.issue, a.only as string[] | undefined, GET_ISSUE_MAP);
+        return applyOnly(data.issue, onlyValue(a), GET_ISSUE_MAP);
       },
     },
     {
@@ -194,7 +186,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `query($first:Int!,$filter:IssueFilter){ issues(first:$first, filter:$filter){ nodes { ${ISSUE_FIELDS} } } }`,
           { first: a.limit, filter },
         );
-        return applyOnly(data.issues.nodes, a.only as string[] | undefined, ISSUE_LIST_MAP);
+        return applyOnly(data.issues.nodes, onlyValue(a), ISSUE_LIST_MAP);
       },
     },
     {
@@ -215,7 +207,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
         );
         if (!data.issue) throw new Error(`Issue "${a.issue_id}" not found.`);
         const result = { issue: data.issue.identifier, comments: threadComments(data.issue.comments.nodes) };
-        return applyOnly(result, a.only as string[] | undefined, LIST_COMMENTS_MAP);
+        return applyOnly(result, onlyValue(a), LIST_COMMENTS_MAP);
       },
     },
     {
@@ -240,7 +232,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           { first },
         );
         const nodes = a.unread_only ? data.notifications.nodes.filter((n) => n.readAt == null) : data.notifications.nodes;
-        return applyOnly(nodes.slice(0, limit), a.only as string[] | undefined, INBOX_MAP);
+        return applyOnly(nodes.slice(0, limit), onlyValue(a), INBOX_MAP);
       },
     },
     {
@@ -251,7 +243,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
       schema: { only: onlySchema([]) },
       run: async (a) => {
         const data = await linearGraphQL<{ teams: { nodes: unknown[] } }>(apiKey, `{ teams { nodes { id name key } } }`);
-        return applyOnly(data.teams.nodes, a.only as string[] | undefined, LIST_TEAMS_MAP);
+        return applyOnly(data.teams.nodes, onlyValue(a), LIST_TEAMS_MAP);
       },
     },
     {
@@ -293,7 +285,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `query($first:Int!,$filter:ProjectFilter){ projects(first:$first, filter:$filter){ nodes { ${PROJECT_FIELDS} } } }`,
           { first: a.limit, filter },
         );
-        return applyOnly(data.projects.nodes.map(summarizeProject), a.only as string[] | undefined, LIST_PROJECTS_MAP);
+        return applyOnly(data.projects.nodes.map(summarizeProject), onlyValue(a), LIST_PROJECTS_MAP);
       },
     },
     {
@@ -315,7 +307,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
         );
         if (!data.project) throw new Error(`Project "${a.project_id}" not found.`);
         const result = { project: data.project.name, updates: data.project.projectUpdates.nodes };
-        return applyOnly(result, a.only as string[] | undefined, PROJECT_UPDATES_MAP);
+        return applyOnly(result, onlyValue(a), PROJECT_UPDATES_MAP);
       },
     },
     {
@@ -346,7 +338,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `mutation($input:IssueCreateInput!){ issueCreate(input: $input){ success issue { id identifier title url } } }`,
           { input },
         );
-        return applyOnly(data.issueCreate, a.only as string[] | undefined, CREATE_ISSUE_MAP);
+        return applyOnly(data.issueCreate, onlyValue(a), CREATE_ISSUE_MAP);
       },
     },
     {
@@ -366,7 +358,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `mutation($input:CommentCreateInput!){ commentCreate(input:$input){ success comment { id url parentId } } }`,
           { input: { issueId: a.issue_id, body: a.body, parentId: a.parent_id } },
         );
-        return applyOnly(data.commentCreate, a.only as string[] | undefined, COMMENT_MAP);
+        return applyOnly(data.commentCreate, onlyValue(a), COMMENT_MAP);
       },
     },
     {
@@ -411,7 +403,7 @@ export function linearTools(apiKey: string, defaultTeam: string | undefined): Ac
           `mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id, input:$input){ success issue { identifier title state { name } assignee { name } priority url } } }`,
           { id: a.id, input },
         );
-        return applyOnly(data.issueUpdate, a.only as string[] | undefined, UPDATE_ISSUE_MAP);
+        return applyOnly(data.issueUpdate, onlyValue(a), UPDATE_ISSUE_MAP);
       },
     },
     {

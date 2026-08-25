@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /**
  * Shared `only` field-selection for read tools. A tool declares a FieldMap
  * (its default dot paths, its named presets, and the full set of top-level
@@ -19,6 +21,18 @@ export interface FieldMap {
   /** Named shortcuts. A preset name must not be mistaken for a literal path,
    *  so pick names that don't collide with entries in `fields`. */
   presets?: Record<string, Preset>;
+}
+
+export function onlySchema(presetNames: string[]) {
+  const presetLine = presetNames.length ? ` Presets: ${presetNames.join(", ")}.` : "";
+  return z
+    .array(z.string())
+    .optional()
+    .describe(`Trim the response to just these fields — omit for a lighter default, pass ["*"] for the full payload. Entries are dot paths (e.g. "project.slug") or presets.${presetLine}`);
+}
+
+export function onlyValue(args: { only?: unknown }): string[] | undefined {
+  return args.only as string[] | undefined;
 }
 
 type PathTree = Map<string, PathTree>;

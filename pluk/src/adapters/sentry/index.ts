@@ -4,7 +4,7 @@ import { homedir } from "os";
 import { join, resolve } from "path";
 import type { Integration } from "../../store/integrations.js";
 import { actionAdapter, type ActionTool } from "../kit.js";
-import { applyOnly, type FieldMap } from "../onlyProjection.js";
+import { applyOnly, onlySchema, onlyValue, type FieldMap } from "../onlyProjection.js";
 import { sentryFields } from "./fields.js";
 import { sentryConfig, sentryRequest, sentryRequestBytes, type SentryConfig } from "./client.js";
 
@@ -106,14 +106,6 @@ const AGENT_HINT = "Use this for Sentry error monitoring and logs — list/read 
 // ── `only` field selection ───────────────────────────────────────────────────
 // Each tool's default output and its named shortcuts. `only` entries are
 // validated against `fields` and expanded through `presets`; see onlyProjection.ts.
-
-function onlySchema(presetNames: string[]) {
-  const presetLine = presetNames.length ? ` Presets: ${presetNames.join(", ")}.` : "";
-  return z
-    .array(z.string())
-    .optional()
-    .describe(`Trim the response to just these fields — omit for a lighter default, pass ["*"] for the full payload. Entries are dot paths (e.g. "project.slug") or presets.${presetLine}`);
-}
 
 const LIST_PROJECTS_MAP: FieldMap = {
   fields: ["slug", "name", "platform", "team", "environments", "access", "features", "teams", "id", "isBookmarked", "isMember", "hasAccess", "dateCreated", "firstEvent", "firstTransactionEvent", "platforms", "latestRelease", "latestDeploys"],
@@ -230,7 +222,7 @@ export function sentryTools(cfg: SentryConfig): ActionTool[] {
       schema: { only: onlySchema(["deploys", "access", "capabilities"]) },
       run: async (a) => {
         const projects = await sentryRequest(cfg, "GET", `/organizations/${cfg.org}/projects/`);
-        return applyOnly(projects, a.only as string[] | undefined, LIST_PROJECTS_MAP);
+        return applyOnly(projects, onlyValue(a), LIST_PROJECTS_MAP);
       },
     },
     {
@@ -254,7 +246,7 @@ export function sentryTools(cfg: SentryConfig): ActionTool[] {
           ? await sentryRequest<unknown[]>(cfg, "GET", `/projects/${cfg.org}/${proj}/issues/`, { query, statsPeriod: period })
           : await sentryRequest<unknown[]>(cfg, "GET", `/organizations/${cfg.org}/issues/`, { query, statsPeriod: period, project: "-1" });
         const capped = Array.isArray(issues) ? issues.slice(0, limit) : issues;
-        return applyOnly(capped, a.only as string[] | undefined, LIST_ISSUES_MAP);
+        return applyOnly(capped, onlyValue(a), LIST_ISSUES_MAP);
       },
     },
     {
@@ -268,7 +260,7 @@ export function sentryTools(cfg: SentryConfig): ActionTool[] {
       detail: (a) => `get_issue ${a.id}`,
       run: async (a) => {
         const issue = await sentryRequest(cfg, "GET", `/organizations/${cfg.org}/issues/${encodeURIComponent(String(a.id))}/`);
-        return applyOnly(issue, a.only as string[] | undefined, GET_ISSUE_MAP);
+        return applyOnly(issue, onlyValue(a), GET_ISSUE_MAP);
       },
     },
     {
@@ -282,7 +274,7 @@ export function sentryTools(cfg: SentryConfig): ActionTool[] {
       detail: (a) => `latest_event ${a.id}`,
       run: async (a) => {
         const raw = await sentryRequest<Record<string, unknown>>(cfg, "GET", `/issues/${encodeURIComponent(String(a.id))}/events/latest/`);
-        const only = a.only as string[] | undefined;
+        const only = onlyValue(a);
         if (only?.includes("*")) return raw;
         const frameOpts = frameOptionsFrom(only);
         const derived: Record<string, unknown> = {
@@ -342,7 +334,7 @@ export function sentryTools(cfg: SentryConfig): ActionTool[] {
             results.push({ ...metadata, size: ref.size, path: null, error: error instanceof Error ? error.message : String(error) });
           }
         }
-        return applyOnly(results, a.only as string[] | undefined, LIST_EVENT_ATTACHMENTS_MAP);
+        return applyOnly(results, onlyValue(a), LIST_EVENT_ATTACHMENTS_MAP);
       },
     },
     {
