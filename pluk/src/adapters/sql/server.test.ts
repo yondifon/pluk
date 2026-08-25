@@ -70,19 +70,34 @@ async function serialize(toolName: string, args: unknown): Promise<Record<string
   return JSON.parse(text) as Record<string, unknown>;
 }
 
-test("query result omits host but keeps env/connection/type/database", async () => {
+test("query result keeps rows and trims connection metadata by default", async () => {
   const parsed = await serialize("query", { sql: "SELECT 1" });
   expect(parsed).not.toHaveProperty("host");
   expect(parsed.host).toBeUndefined();
-  expect(parsed.env).not.toBeUndefined();
-  expect(parsed.connection).toBe("test-pg");
-  expect(parsed.type).toBe("postgres");
-  expect(parsed.database).toBe("app");
+  expect(parsed.rows).toEqual([{ id: 1 }]);
+  expect(parsed).not.toHaveProperty("connection");
 });
 
 test("sample_table result omits host", async () => {
   const parsed = await serialize("sample_table", { table: "users" });
   expect(parsed).not.toHaveProperty("host");
-  expect(parsed.connection).toBe("test-pg");
-  expect(parsed.database).toBe("app");
+  expect(parsed.rows).toEqual([{ id: 1 }]);
+});
+
+test("query connection preset exposes connection metadata", async () => {
+  const parsed = await serialize("query", { sql: "SELECT 1", only: ["connection"] });
+  expect(parsed).toEqual({ env: "development", connection: "test-pg", type: "postgres", database: "app" });
+});
+
+test("query supports the full payload escape hatch", async () => {
+  const parsed = await serialize("query", { sql: "SELECT 1", only: ["*"] });
+  expect(parsed).toHaveProperty("connection", "test-pg");
+});
+
+test("query rejects unknown only fields", async () => {
+  const { tools, host } = captureHost();
+  registerSqlServer(host, conn, "owner1");
+  const result = await tools.get("query")!({ sql: "SELECT 1", only: ["bogus"] });
+  expect(result.isError).toBe(true);
+  expect(result.content[0]!.text).toContain('Unknown \\"only\\" field \\"bogus\\"');
 });

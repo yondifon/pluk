@@ -9,6 +9,7 @@ import { ok, err, runGated, type ToolResult } from "../kit.js";
 import { toolGate } from "../../mcp/toolConfig.js";
 import type { ToolSpec } from "../types.js";
 import type { ToolHost } from "../../mcp/namespace.js";
+import { applyOnly, type FieldMap } from "../onlyProjection.js";
 
 export const SSH_AGENT_HINT = "Use this for SSH access to the remote host — run shell commands to inspect logs, processes, disk and memory, and Docker/systemd services for debugging and ops, and open local port forwards (ssh -L) so a remote service like a database or web UI is reachable at localhost on this machine. Every command runs as the SSH user and must be confirmed before it runs.";
 
@@ -45,6 +46,23 @@ const FORWARD_ANNOTATIONS = {
 } as const;
 
 const MAX_PORT = 65535;
+
+function onlySchema(presetNames: string[]) {
+  const presetLine = presetNames.length ? ` Presets: ${presetNames.join(", ")}.` : "";
+  return z.array(z.string()).optional().describe(
+    `Trim the response to just these fields — omit for a lighter default, pass ["*"] for the full payload. Entries are dot paths or presets.${presetLine}`,
+  );
+}
+
+const SAVED_COMMANDS_MAP: FieldMap = {
+  fields: ["name", "command", "working_dir"],
+  default: ["name", "command"],
+  presets: { location: ["working_dir"] },
+};
+const FORWARDS_MAP: FieldMap = {
+  fields: ["id", "local", "remote"],
+  default: ["id", "local", "remote"],
+};
 
 export function sshInstructions(conn: Integration): string {
   return buildInstructions(conn, {
@@ -205,11 +223,12 @@ export function registerSshServer(server: ToolHost, conn: Integration, ownerId: 
   if (on("list_saved_commands")) server.tool(
     "list_saved_commands",
     "List the pre-selected (saved) commands available for this SSH integration.",
-    { readOnlyHint: true, openWorldHint: false } as const,
-    async () => {
-      const saved = listSavedCommands(conn.id).map((c) => ({ name: c.name, command: c.command, working_dir: c.working_dir }));
-      if (saved.length === 0) return ok("No saved commands for this integration.");
-      return ok(JSON.stringify(saved, null, 2));
+     { only: onlySchema(["location"]) },
+     { readOnlyHint: true, openWorldHint: false } as const,
+     async (args) => {
+       const saved = listSavedCommands(conn.id).map((c) => ({ name: c.name, command: c.command, working_dir: c.working_dir }));
+       if (saved.length === 0) return ok("No saved commands for this integration.");
+       return ok(JSON.stringify(applyOnly(saved, args.only as string[] | undefined, SAVED_COMMANDS_MAP), null, 2));
     },
   );
 
@@ -246,11 +265,12 @@ export function registerSshServer(server: ToolHost, conn: Integration, ownerId: 
   if (on("list_forwards")) server.tool(
     "list_forwards",
     "List the open local port forwards for this connection (local port → remote target).",
-    { readOnlyHint: true, openWorldHint: false } as const,
-    async () => {
-      const forwards = listForwards(ownerId, conn).map(forwardRow);
-      if (forwards.length === 0) return ok("No open forwards for this connection.");
-      return ok(JSON.stringify(forwards, null, 2));
+     { only: onlySchema([]) },
+     { readOnlyHint: true, openWorldHint: false } as const,
+     async (args) => {
+       const forwards = listForwards(ownerId, conn).map(forwardRow);
+       if (forwards.length === 0) return ok("No open forwards for this connection.");
+       return ok(JSON.stringify(applyOnly(forwards, args.only as string[] | undefined, FORWARDS_MAP), null, 2));
     },
   );
 
