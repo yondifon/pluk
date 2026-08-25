@@ -187,3 +187,16 @@ test("the adapter exposes the gh surface once, reads on, writes off", () => {
     expect(byName[w]!.defaultEnabled).toBe(false);
   }
 });
+
+test("get_repo supports default, preset, full, and invalid projections", async () => {
+  setGhRunner(async () => ({ code: 0, stdout: JSON.stringify({ name: "app", owner: { login: "acme" }, description: "d", url: "u", defaultBranchRef: { name: "main" }, isPrivate: false, stargazerCount: 2 }), stderr: "" }));
+  try {
+    const repo = tool("get_repo");
+    expect(await repo.run({ repo: "acme/app" }, {})).toEqual({ name: "app", owner: { login: "acme" }, description: "d", url: "u", defaultBranchRef: { name: "main" }, isPrivate: false });
+    expect(await repo.run({ repo: "acme/app", only: ["stats"] }, {})).toEqual({ stargazerCount: 2, forkCount: undefined, pushedAt: undefined });
+    expect(await repo.run({ repo: "acme/app", only: ["*"] }, {})).toEqual({ name: "app", owner: { login: "acme" }, description: "d", url: "u", defaultBranchRef: { name: "main" }, isPrivate: false, stargazerCount: 2 });
+    await expect(repo.run({ repo: "acme/app", only: ["missing"] }, {})).rejects.toThrow(/Unknown "only" field/);
+  } finally {
+    setGhRunner(fake);
+  }
+});

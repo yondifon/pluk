@@ -4,6 +4,8 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { assertFeature, discoverSites, herdConfig, parseLinkPaths, parseWorktrees, setAppUrl, siteUrl } from "./client.js";
 import { herdAdapter } from "./index.js";
+import { LIST_SITES_MAP } from "./index.js";
+import { applyOnly } from "../onlyProjection.js";
 import type { Integration } from "../../store/integrations.js";
 
 function conn(config: Record<string, unknown>): Integration {
@@ -121,4 +123,12 @@ test("the adapter exposes list/create/destroy with create and destroy off by def
 
 test("testConnection reports an unresolvable app before shelling out", async () => {
   await expect(herdAdapter.testConnection(conn({ site: "definitely-not-a-herd-site-xyz" }))).rejects.toThrow(/Herd serves no/);
+});
+
+test("list site output supports default, preset, full, and invalid projections", () => {
+  const result = { value: [{ site: "app" }], command: "git worktree list" };
+  expect(applyOnly(result, undefined, LIST_SITES_MAP)).toEqual({ value: [{ site: "app" }] });
+  expect(applyOnly(result, ["command"], LIST_SITES_MAP)).toEqual({ command: "git worktree list" });
+  expect(applyOnly(result, ["*"], LIST_SITES_MAP)).toEqual(result);
+  expect(() => applyOnly(result, ["missing"], LIST_SITES_MAP)).toThrow(/Unknown "only" field/);
 });

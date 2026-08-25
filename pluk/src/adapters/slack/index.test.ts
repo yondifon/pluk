@@ -1,6 +1,6 @@
 import { test, expect, afterEach } from "bun:test";
 import { slackConfig, slackRequest, resolveChannel } from "./client.js";
-import { slackAdapter } from "./index.js";
+import { slackAdapter, slackTools } from "./index.js";
 import type { Integration } from "../../store/integrations.js";
 
 function conn(config: Record<string, unknown>): Integration {
@@ -32,4 +32,13 @@ test("slackRequest throws on ok:false so the gated runner logs it as an error", 
 
 test("testConnection rejects when the bot token is blank", async () => {
   await expect(slackAdapter.testConnection(conn({}))).rejects.toThrow(/bot token is missing/);
+});
+
+test("channel history supports default, preset, full, and invalid projections", async () => {
+  globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true, messages: [{ user: "U1", text: "hi", ts: "1", thread_ts: "1" }] }))) as unknown as typeof fetch;
+  const history = slackTools(slackConfig(conn({ bot_token: "x", default_channel: "C1" }))).find((t) => t.name === "channel_history")!;
+  expect(await history.run({}, {})).toEqual([{ user: "U1", text: "hi", ts: "1" }]);
+  expect(await history.run({ only: ["thread"] }, {})).toEqual([{ thread_ts: "1", reply_count: undefined }]);
+  expect(await history.run({ only: ["*"] }, {})).toEqual([{ user: "U1", text: "hi", ts: "1", thread_ts: "1" }]);
+  await expect(history.run({ only: ["missing"] }, {})).rejects.toThrow(/Unknown "only" field/);
 });
