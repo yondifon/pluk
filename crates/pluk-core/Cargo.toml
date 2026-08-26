@@ -1,0 +1,6 @@
+[package]
+name = "pluk-core"
+description = "Shared types and the platform abstraction layer"
+edition.workspace = true
+version.workspace = true
+license.workspace = true

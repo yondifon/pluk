@@ -2,6 +2,13 @@
 *.swp
 *.swo
 
+# Rust
+/target/
+
+# Node/Bun
+node_modules/
+ui/dist/
+
 .agents/
 skills-lock.json
 .claude/

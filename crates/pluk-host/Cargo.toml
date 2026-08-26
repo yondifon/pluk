@@ -1,0 +1,12 @@
+[package]
+name = "pluk-host"
+description = "Tauri application host for Pluk"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
+
+[dependencies]
+tauri = { version = "2.11", features = ["tray-icon", "image-png"] }

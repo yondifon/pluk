@@ -1,0 +1,8 @@
+[package]
+name = "pluk-store"
+description = "SQLite persistence for Pluk"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]

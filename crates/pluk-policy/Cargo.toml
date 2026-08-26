@@ -1,0 +1,8 @@
+[package]
+name = "pluk-policy"
+description = "SQL policy engine for Pluk"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]

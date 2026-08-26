@@ -1,0 +1,15 @@
+[package]
+name = "pluk-server"
+description = "MCP serving, HTTP routes, and SSE for Pluk"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "pluk-serverd"
+path = "src/bin/pluk-serverd.rs"
+
+[dependencies]
