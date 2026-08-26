@@ -1,0 +1,140 @@
+pub mod api;
+pub mod error;
+pub mod fields;
+pub mod server;
+
+pub use error::{classify_sql_error, format_sql_error, humanize_sql_error, SqlErrorCategory, SqlErrorInfo};
+pub use fields::{network_sql_fields, sqlite_fields};
+pub use server::{sql_agent_hint, sql_instructions, sql_label, sql_tool_specs, register_sql_server, SqlCancelRegistry};
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use pluk_store::Integration;
+
+use crate::adapter::{Adapter, ApiRequest, ApiResponse, PolicyKind};
+use crate::config_field::ConfigField;
+use crate::error::AdapterError;
+use crate::tool_host::ToolHost;
+use crate::tool_spec::ToolSpec;
+
+use pluk_store::Store;
+use pluk_db::factory::{CreateDriverOpts, create_driver};
+use pluk_db::config::SqlConfig as DbSqlConfig;
+
+fn db_config_from(conn: &Integration) -> DbSqlConfig {
+    let mut cfg = DbSqlConfig::default();
+    cfg.r#type = conn.r#type.clone();
+    cfg.host = conn.config.get("host").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.port = conn.config.get("port").and_then(|v| v.as_u64()).map(|n| n as u16);
+    cfg.user = conn.config.get("user").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.password = conn.config.get("password").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.database = conn.config.get("database").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.filename = conn.config.get("filename").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg
+}
+
+async fn test_sql(conn: &Integration, _store: Option<Arc<Store>>) -> Result<(), AdapterError> {
+    // Force-evict would go here: we have no global pool, so no-op
+    let cfg = db_config_from(conn);
+    // Use factory to test connection (it will create fake driver for postgres/mysql)
+    let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(|e| crate::sql::error::driver_error_to_adapter(e))?;
+    let res = dw.driver.test_connection().await;
+    let _ = dw.driver.close().await;
+    res.map_err(|e| crate::sql::error::driver_error_to_adapter(e))
+}
+
+pub struct SqlAdapter {
+    id: &'static str,
+    label: &'static str,
+    port: Option<u16>,
+    store: Arc<Store>,
+    cancels: Arc<SqlCancelRegistry>,
+}
+
+impl SqlAdapter {
+    pub fn postgres(store: Arc<Store>, cancels: Arc<SqlCancelRegistry>) -> Arc<Self> {
+        Arc::new(Self { id: "postgres", label: "PostgreSQL", port: Some(5432), store, cancels })
+    }
+    pub fn mysql(store: Arc<Store>, cancels: Arc<SqlCancelRegistry>) -> Arc<Self> {
+        Arc::new(Self { id: "mysql", label: "MySQL", port: Some(3306), store, cancels })
+    }
+    pub fn sqlite(store: Arc<Store>, cancels: Arc<SqlCancelRegistry>) -> Arc<Self> {
+        Arc::new(Self { id: "sqlite", label: "SQLite", port: None, store, cancels })
+    }
+}
+
+#[async_trait]
+impl Adapter for SqlAdapter {
+    fn id(&self) -> &str { self.id }
+    fn label(&self) -> &str { self.label }
+    fn category(&self) -> &str { "database" }
+    fn policy_kind(&self) -> PolicyKind { PolicyKind::Sql }
+    fn agent_hint(&self) -> &str {
+        // leak to satisfy static? Use owned string via Box::leak for now
+        // Instead return static str via sql_agent_hint but need owned
+        // We can return leaked string: not ideal but works for trait requiring &str
+        // Use match to return static literals
+        match self.id {
+            "postgres" => "Use this to query and inspect a PostgreSQL database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT for production data.",
+            "mysql" => "Use this to query and inspect a MySQL database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT for production data.",
+            _ => "Use this to query and inspect a SQLite database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT before wider queries.",
+        }
+    }
+    fn tool_specs(&self) -> &[ToolSpec] {
+        // Return leaked vec? Need static slice. Use OnceLock.
+        static POSTGRES_SPECS: std::sync::OnceLock<Vec<ToolSpec>> = std::sync::OnceLock::new();
+        static MYSQL_SPECS: std::sync::OnceLock<Vec<ToolSpec>> = std::sync::OnceLock::new();
+        static SQLITE_SPECS: std::sync::OnceLock<Vec<ToolSpec>> = std::sync::OnceLock::new();
+        match self.id {
+            "postgres" => POSTGRES_SPECS.get_or_init(sql_tool_specs),
+            "mysql" => MYSQL_SPECS.get_or_init(sql_tool_specs),
+            _ => SQLITE_SPECS.get_or_init(sql_tool_specs),
+        }
+    }
+    fn config_fields(&self) -> &[ConfigField] {
+        static PG_FIELDS: std::sync::OnceLock<Vec<ConfigField>> = std::sync::OnceLock::new();
+        static MY_FIELDS: std::sync::OnceLock<Vec<ConfigField>> = std::sync::OnceLock::new();
+        static SQ_FIELDS: std::sync::OnceLock<Vec<ConfigField>> = std::sync::OnceLock::new();
+        match self.id {
+            "postgres" => PG_FIELDS.get_or_init(|| network_sql_fields(5432)),
+            "mysql" => MY_FIELDS.get_or_init(|| network_sql_fields(3306)),
+            _ => SQ_FIELDS.get_or_init(sqlite_fields),
+        }
+    }
+    async fn test_connection(&self, conn: &Integration) -> Result<(), AdapterError> {
+        test_sql(conn, Some(self.store.clone())).await
+    }
+    fn humanize_error(&self, error: &AdapterError) -> Option<String> {
+        Some(humanize_sql_error(error))
+    }
+    async fn handle_api(&self, conn: &Integration, request: ApiRequest, subpath: &str) -> Option<ApiResponse> {
+        api::handle_sql_api(self.store.clone(), conn, request, subpath).await
+    }
+    async fn handle_global_api(&self, request: ApiRequest, path: &str) -> Option<ApiResponse> {
+        // global cancel
+        if path.starts_with("/api/log/") && path.ends_with("/cancel") {
+            let re = regex::Regex::new(r"^/api/log/(\d+)/cancel$").unwrap();
+            if let Some(caps) = re.captures(path) {
+                if request.method == "POST" {
+                    let id: i64 = caps.get(1).unwrap().as_str().parse().unwrap_or(0);
+                    let ok = self.cancels.cancel(id);
+                    return Some(ApiResponse::json(200, &serde_json::json!({ "ok": ok })));
+                }
+            }
+        }
+        None
+    }
+    fn instructions(&self, conn: &Integration) -> String { sql_instructions(conn) }
+    fn register(&self, host: &mut dyn ToolHost, conn: &Integration, owner_id: &str) -> Result<(), AdapterError> {
+        register_sql_server(host, conn, owner_id, self.store.clone(), self.cancels.clone())
+    }
+}
+
+pub fn sql_adapters(store: Arc<Store>, cancels: Arc<SqlCancelRegistry>) -> Vec<Arc<dyn Adapter>> {
+    vec![
+        SqlAdapter::postgres(store.clone(), cancels.clone()),
+        SqlAdapter::mysql(store.clone(), cancels.clone()),
+        SqlAdapter::sqlite(store.clone(), cancels.clone()),
+    ]
+}

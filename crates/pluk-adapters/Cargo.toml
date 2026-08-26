@@ -8,9 +8,20 @@ license.workspace = true
 [dependencies]
 pluk-store = { path = "../pluk-store" }
 pluk-policy = { path = "../pluk-policy" }
+pluk-db = { path = "../pluk-db" }
+pluk-ssh = { path = "../pluk-ssh" }
+pluk-core = { path = "../pluk-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 async-trait = "0.1"
+tokio = { version = "1", features = ["rt", "macros", "time", "sync", "fs"] }
+tokio-util = { version = "0.7", features = ["full"] }
+regex = "1"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+hex = "0.4"
+chrono = "0.4"
+urlencoding = "2"
 
 [dev-dependencies]
 tempfile = "3"
