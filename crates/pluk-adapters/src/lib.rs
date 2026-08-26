@@ -18,6 +18,7 @@ mod ssh_fields;
 mod tool_host;
 mod tool_spec;
 pub mod sql;
+pub mod ssh;
 
 pub use action::{
     action_adapter, ActionAdapter, ActionAdapterSpec, ActionOutput, ActionTool, ClientFn,
