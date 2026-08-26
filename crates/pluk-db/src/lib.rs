@@ -5,10 +5,12 @@ pub mod error;
 pub mod factory;
 pub mod fake;
 pub mod mysql;
+pub mod pool;
 pub mod postgres;
 pub mod sqlite;
 pub mod sqlite_remote;
 pub mod sql_log;
+pub mod ssh_provider;
 pub mod ssl;
 pub mod types;
 
