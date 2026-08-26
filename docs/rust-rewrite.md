@@ -23,6 +23,16 @@ This file is the skeleton contract for the rewrite chain (tasks R01–R23). Late
 - **Targets are macOS and Linux.** Windows is deferred — do not write Windows code, but do not make it impossible.
 - **`only`-projection** response shaping is settled in `pluk/src/adapters/onlyProjection.ts` (post `ba26ec4`); adapters must mirror it. It does not apply to `spark`, which returns CLI text verbatim.
 
+### SQLite journal mode (decided by R02)
+
+`pluk.db` is opened by two processes during the port — the Rust store and the SwiftUI app (`pluk/src/store/*` never set a journal mode, so until now every open ran the default rollback journal and any concurrent read/write collided with `SQLITE_BUSY`). `pluk-store` now sets, on every open:
+
+- **`journal_mode=WAL`** — readers never block the writer across processes, which is exactly this file's access pattern (the Swift app reads while the server writes log rows). The mode is persistent in the database header: once the Rust store has opened the file once, the Swift app's plain `sqlite3_open` picks WAL up unchanged — no Swift-side changes needed. Both consumers bundle/ship modern SQLite, so WAL support is a given. The `-wal`/`-shm` sidecar files live next to `pluk.db`; they are recovered automatically after a crash.
+- **`synchronous=NORMAL`** — the standard WAL pairing. Safe against application crashes; on OS/power loss the final seconds of commits may be lost. Accepted for an audit log that regenerates from live traffic.
+- **`busy_timeout=5000ms`** — backstop for the rare moments WAL still contends (checkpoint starvation, another process mid-migration): wait briefly instead of erroring.
+
+Schema moves only through `pluk-store`'s `user_version` migration ladder; the TypeScript try/catch ALTER loop stays authoritative for its own process but new databases get version 1 from the Rust side.
+
 ## Platform abstraction contract
 
 Everything platform-varying resolves through `pluk_core::platform` — no scattered `cfg` attributes elsewhere. Functions return paths/capabilities, not constants. macOS impl: `platform/macos.rs`; Linux impl: `platform/linux.rs`.
