@@ -10,6 +10,7 @@ pub struct SqlConfig {
     pub password: Option<String>,
     pub database: Option<String>,
     pub socket_path: Option<String>,
+    pub filename: Option<String>,
     pub use_ssl: bool,
     pub ssl_mode: Option<String>,
     pub ssl_ca_path: Option<String>,
@@ -25,7 +26,11 @@ pub struct SqlConfig {
 impl SqlConfig {
     pub fn effective_host(&self) -> String { self.host.clone().unwrap_or_else(|| "localhost".into()) }
     pub fn effective_port(&self) -> u16 {
+        if self.r#type == "sqlite" { return self.port.unwrap_or(0); }
         self.port.unwrap_or_else(|| if self.r#type == "mysql" { 3306 } else { 5432 })
+    }
+    pub fn sqlite_filename(&self) -> Option<String> {
+        self.filename.clone().or_else(|| self.database.clone())
     }
 }
 
@@ -68,5 +73,26 @@ pub struct NoopTunnelProvider;
 impl SshTunnelProvider for NoopTunnelProvider {
     async fn open_tunnel(&self, _cfg: &SqlConfig, _remote_host: &str, _remote_port: u16) -> Result<TunnelEndpoint, DriverError> {
         Err(DriverError::Other("SSH tunnelling not yet implemented (R08)".into()))
+    }
+}
+
+/// Seam for R07/R08: SSH command execution for remote SQLite.
+///
+/// R08 owns the SSH transport. This trait is the minimal surface R07 needs to
+/// shell out `sqlite3 -json [-readonly] <file> <sql>` over an SSH exec channel.
+/// The `command` is the exact shell string to run on the remote host. The
+/// implementation is responsible for SSH connection pooling, timeout, output
+/// capping (1_000_000 bytes), and converting non-zero exit into an error.
+#[async_trait::async_trait]
+pub trait SshExecProvider: Send + Sync {
+    async fn exec(&self, command: String, timeout_ms: Option<u64>) -> Result<String, DriverError>;
+}
+
+/// No-op exec provider used until R08 plugs in.
+pub struct NoopSshExecProvider;
+#[async_trait::async_trait]
+impl SshExecProvider for NoopSshExecProvider {
+    async fn exec(&self, _command: String, _timeout_ms: Option<u64>) -> Result<String, DriverError> {
+        Err(DriverError::Other("SSH exec not yet implemented (R08)".into()))
     }
 }

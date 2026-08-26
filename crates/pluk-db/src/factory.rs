@@ -1,4 +1,4 @@
-use crate::config::{SqlConfig, SshTunnelProvider, NoopTunnelProvider, TunnelEndpoint, resolve_ssl};
+use crate::config::{NoopSshExecProvider, NoopTunnelProvider, SshExecProvider, SshTunnelProvider, SqlConfig, TunnelEndpoint, resolve_ssl};
 use crate::driver::Driver;
 use crate::error::DriverError;
 use crate::fake::FakeDriver;
@@ -10,11 +10,14 @@ pub struct CreateDriverOpts {
     pub database_override: Option<String>,
     /// Optional SSH tunnel provider. R08 will supply a real one.
     pub ssh_provider: Option<Box<dyn SshTunnelProvider>>,
+    /// SSH exec provider for remote SQLite. R08 will supply a real one.
+    pub ssh_exec_provider: Option<Box<dyn SshExecProvider>>,
 }
 
 impl CreateDriverOpts {
-    pub fn new(cfg: SqlConfig) -> Self { Self { cfg, database_override: None, ssh_provider: None } }
+    pub fn new(cfg: SqlConfig) -> Self { Self { cfg, database_override: None, ssh_provider: None, ssh_exec_provider: None } }
     pub fn with_database(mut self, db: impl Into<String>) -> Self { self.database_override = Some(db.into()); self }
+    pub fn with_ssh_exec(mut self, p: Box<dyn SshExecProvider>) -> Self { self.ssh_exec_provider = Some(p); self }
 }
 
 /// Result of `create_driver`: a boxed driver and an optional tunnel handle that
@@ -73,6 +76,16 @@ pub async fn create_driver(mut opts: CreateDriverOpts) -> Result<DriverWithTunne
     }
 
     let driver: Box<dyn Driver> = match opts.cfg.r#type.as_str() {
+        "sqlite" => {
+            let filename = opts.cfg.sqlite_filename().ok_or_else(|| DriverError::Connection("SQLite path is missing. Set the database file path.".into()))?;
+            let use_ssh = opts.cfg.use_ssh.as_deref() == Some("true") && opts.cfg.ssh_host.is_some();
+            if use_ssh {
+                let exec: Box<dyn SshExecProvider> = opts.ssh_exec_provider.unwrap_or_else(|| Box::new(NoopSshExecProvider));
+                Box::new(crate::sqlite_remote::RemoteSqliteDriver::new(filename, exec))
+            } else {
+                Box::new(crate::sqlite::SqliteDriver::open(&filename)?)
+            }
+        }
         "postgres" => {
             // Real Postgres pool would be built here with `effective_host`, `effective_port`, `_ssl`.
             // For now return a fake that records the resolved endpoint so R08 can be tested.
