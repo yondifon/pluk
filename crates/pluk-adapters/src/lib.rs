@@ -17,6 +17,7 @@ mod registry;
 mod ssh_fields;
 mod tool_host;
 mod tool_spec;
+pub mod github_cli;
 pub mod sql;
 pub mod ssh;
 
