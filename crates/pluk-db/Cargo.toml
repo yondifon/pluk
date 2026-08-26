@@ -1,0 +1,32 @@
+[package]
+name = "pluk-db"
+description = "Database driver abstraction for Pluk — Postgres and MySQL engines"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+pluk-policy = { path = "../pluk-policy" }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "fs"] }
+tokio-util = "0.7"
+
+# Postgres
+deadpool-postgres = { version = "0.14", optional = true }
+tokio-postgres = { version = "0.7", features = ["with-uuid-1"], optional = true }
+postgres-native-tls = { version = "0.5", optional = true }
+native-tls = { version = "0.2", optional = true }
+
+# MySQL
+sqlx = { version = "0.8", default-features = false, features = ["mysql", "runtime-tokio-rustls", "tls-rustls"], optional = true }
+
+[features]
+default = ["postgres", "mysql"]
+postgres = ["dep:deadpool-postgres", "dep:tokio-postgres", "dep:postgres-native-tls", "dep:native-tls"]
+mysql = ["dep:sqlx"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
