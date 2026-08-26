@@ -7,6 +7,7 @@
 //! `GET /api/logs`.
 
 use std::fmt;
+use std::sync::Arc;
 
 use rusqlite::types::{ToSql, ToSqlOutput};
 use serde::{Deserialize, Serialize};
@@ -194,6 +195,86 @@ impl ToSql for Param {
 const ENTRY_COLUMNS: &str = "id, connection_id, connection_name, sql, verdict, reason, categories, source, \
      result_json, row_count, response_text, group_id, group_name, database, created_at";
 
+// ── Activity feed ────────────────────────────────────────────────────────────
+//
+// Subscribers learn about every new or updated log row the moment it is
+// written, so the app can update its log views without polling. The feed is
+// cursor-based: the row id is monotonic, and a subscriber that comes in late
+// can be caught up with `log_rows_after`. Heavy fields (`result_json`,
+// `response_text`) stay in the shared DB — the app re-reads rows from there;
+// the feed carries only what a collapsed log row needs.
+
+/// A collapsed log row, as pushed to activity subscribers.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogActivity {
+    pub id: i64,
+    pub connection_id: String,
+    pub connection_name: String,
+    pub sql: String,
+    pub verdict: String,
+    pub reason: Option<String>,
+    pub categories: Option<String>,
+    pub source: Option<String>,
+    pub group_id: Option<String>,
+    pub group_name: Option<String>,
+    pub database: Option<String>,
+    pub row_count: Option<i64>,
+    pub created_at: String,
+}
+
+/// Called with each written row. Must not block for long: it runs inline on
+/// the writer's thread.
+pub type ActivityHandler = Arc<dyn Fn(&LogActivity) + Send + Sync>;
+
+#[derive(Default)]
+pub(crate) struct ActivityFeed {
+    next_subscription: u64,
+    handlers: Vec<(u64, ActivityHandler)>,
+}
+
+impl ActivityFeed {
+    fn subscribe(&mut self, handler: ActivityHandler) -> u64 {
+        let id = self.next_subscription;
+        self.next_subscription += 1;
+        self.handlers.push((id, handler));
+        id
+    }
+
+    fn unsubscribe(&mut self, subscription: u64) {
+        self.handlers.retain(|(id, _)| *id != subscription);
+    }
+
+    fn dispatch(&self, row: &LogActivity) {
+        for (_, handler) in &self.handlers {
+            handler(row);
+        }
+    }
+}
+
+const ACTIVITY_COLUMNS: &str =
+    "id, connection_id, connection_name, sql, verdict, reason, categories, source, \
+     group_id, group_name, database, row_count, created_at";
+
+fn map_activity(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogActivity> {
+    Ok(LogActivity {
+        id: row.get(0)?,
+        connection_id: row.get(1)?,
+        connection_name: row.get(2)?,
+        sql: row.get(3)?,
+        verdict: row.get(4)?,
+        reason: row.get(5)?,
+        categories: row.get(6)?,
+        source: row.get(7)?,
+        group_id: row.get(8)?,
+        group_name: row.get(9)?,
+        database: row.get(10)?,
+        row_count: row.get(11)?,
+        created_at: row.get(12)?,
+    })
+}
+
+
 impl Store {
     /// Insert a new log entry and return its row id for later finalization.
     ///
@@ -220,6 +301,7 @@ impl Store {
         let id = conn.last_insert_rowid();
         drop(conn);
         self.purge_if_due()?;
+        self.notify_activity(id);
         Ok(id)
     }
 
@@ -234,7 +316,7 @@ impl Store {
             "UPDATE query_log
              SET sql = COALESCE(?, sql), verdict = ?, reason = ?, result_json = ?, row_count = ?, response_text = ?
              WHERE id = ?",
-            rusqlite::params![
+            rusqlite::            params![
                 update.sql,
                 update.verdict.as_str(),
                 update.reason,
@@ -244,7 +326,47 @@ impl Store {
                 id,
             ],
         )?;
+        drop(conn);
+        self.notify_activity(id);
         Ok(())
+    }
+
+    /// Subscribe to the activity feed; every later write (insert or update)
+    /// calls `handler` with the row. Returns a subscription id to pass to
+    /// [`Store::unsubscribe_log_activity`].
+    pub fn subscribe_log_activity(&self, handler: ActivityHandler) -> u64 {
+        let mut feed = self.activity.lock().expect("activity feed");
+        feed.subscribe(handler)
+    }
+
+    pub fn unsubscribe_log_activity(&self, subscription: u64) {
+        let mut feed = self.activity.lock().expect("activity feed");
+        feed.unsubscribe(subscription);
+    }
+
+    /// Read one row back in its light activity shape and hand it to every
+    /// subscriber. Best-effort: a read or dispatch failure never fails the
+    /// write that triggered it.
+    fn notify_activity(&self, id: i64) {
+        if id <= 0 {
+            return;
+        }
+        let feed = self.activity.lock().expect("activity feed");
+        if feed.handlers.is_empty() {
+            return;
+        }
+        let row = {
+            let conn = self.conn.lock().expect("store lock");
+            conn.query_row(
+                &format!("SELECT {ACTIVITY_COLUMNS} FROM query_log WHERE id = ?"),
+                [id],
+                map_activity,
+            )
+            .ok()
+        };
+        if let Some(row) = row {
+            feed.dispatch(&row);
+        }
     }
 
     /// Delete every log entry older than the retention window. Zero or
@@ -284,8 +406,6 @@ impl Store {
         Ok(rows.collect::<std::result::Result<Vec<LogEntry>, rusqlite::Error>>()?)
     }
 
-    /// One keyset-ordered page of the log, scoped to exactly one connection or
-    /// group, optionally limited to a time range and continued past a cursor.
     pub fn read_log_page(
         &self,
         scope: &LogScope,

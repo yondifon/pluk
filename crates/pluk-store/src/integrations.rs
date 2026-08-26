@@ -66,6 +66,7 @@ fn hydrate(row: &Row<'_>) -> rusqlite::Result<Integration> {
         query_policy: row.get(6)?,
         token: row.get(7)?,
         created_at: row.get(8)?,
+        via_group: None,
     })
 }
 

@@ -336,6 +336,7 @@ fn dummy_integration(adapter_id: &str) -> Integration {
         query_policy: None,
         token: String::new(),
         created_at: String::new(),
+         via_group: None,
     }
 }
 
@@ -442,6 +443,7 @@ impl<C> Adapter for ActionAdapter<C> {
                     .clone()
                     .map(|properties| object_schema(properties, &[]))
                     .unwrap_or_default(),
+                annotations: Map::new(),
             };
             let handler = make_handler(
                 self.store.clone(),
@@ -567,6 +569,7 @@ mod tests {
             query_policy: query_policy.map(Into::into),
             token: "tok".into(),
             created_at: String::new(),
+            via_group: None,
         }
     }
 

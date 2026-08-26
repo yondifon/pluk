@@ -10,6 +10,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
 
+use crate::query_log::LogGroup;
+
 /// A config blob: string-keyed, per-adapter values. Holds secrets; never log it.
 pub type Config = Map<String, serde_json::Value>;
 
@@ -69,6 +71,11 @@ pub struct Integration {
     pub query_policy: Option<String>,
     pub token: String,
     pub created_at: String,
+    /// Transient, not persisted: set only when this integration is registered
+    /// as a member of a group, so the gated runner attributes its log rows to
+    /// the group endpoint that fronted the call.
+    #[serde(skip)]
+    pub via_group: Option<LogGroup>,
 }
 
 /// One group member: an integration id plus optional per-group config overrides.

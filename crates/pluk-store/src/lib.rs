@@ -44,8 +44,8 @@ pub use models::{
     SavedCommand, SavedQuery, Verdict,
 };
 pub use query_log::{
-    LOG_PAGE_SIZE, LOG_RESPONSE_LIMIT, LOG_RESULT_ROWS, LogCursor, LogDraft, LogGroup, LogPage,
-    LogRange, LogScope, LogUpdate, QueryResult,
+    LOG_PAGE_SIZE, LOG_RESPONSE_LIMIT, LOG_RESULT_ROWS, ActivityHandler, LogActivity, LogCursor,
+    LogDraft, LogGroup, LogPage, LogRange, LogScope, LogUpdate, QueryResult,
 };
 pub use saved_commands::SavedCommandInput;
 pub use saved_queries::SavedQueryInput;
@@ -66,6 +66,7 @@ const PURGE_MIN_INTERVAL: Duration = Duration::from_secs(15 * 60);
 pub struct Store {
     conn: Mutex<rusqlite::Connection>,
     last_purge: Mutex<Option<Instant>>,
+    activity: Mutex<query_log::ActivityFeed>,
 }
 
 impl Store {
@@ -80,6 +81,7 @@ impl Store {
         let store = Store {
             conn: Mutex::new(conn),
             last_purge: Mutex::new(None),
+            activity: Mutex::new(query_log::ActivityFeed::default()),
         };
         store.purge_old_logs()?;
         *store.last_purge.lock().expect("purge clock") = Some(Instant::now());

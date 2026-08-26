@@ -65,11 +65,21 @@ pub struct ToolRegistration {
     /// (`{"type":"object","properties":{…}}`). Empty when the tool takes no
     /// arguments; use [`object_schema`] to build one from properties.
     pub input_schema: Map<String, Value>,
+    /// MCP tool-annotation hints (`readOnlyHint`, `destructiveHint`, …),
+    /// camelCase like the TypeScript server sent them. Hints only — never
+    /// enforced here.
+    pub annotations: Map<String, Value>,
 }
 
 impl ToolRegistration {
     pub fn no_args(name: impl Into<String>, description: impl Into<String>) -> Self {
-        ToolRegistration { name: name.into(), description: description.into(), input_schema: Map::new() }
+        ToolRegistration { name: name.into(), description: description.into(), input_schema: Map::new(), annotations: Map::new() }
+    }
+
+    /// Attach annotation hints (camelCase keys).
+    pub fn with_annotations(mut self, annotations: Map<String, Value>) -> Self {
+        self.annotations = annotations;
+        self
     }
 }
 
