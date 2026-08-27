@@ -31,8 +31,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/integrations/{id}/test", post(test_integration))
         .route("/api/reload", post(reload))
         .route("/api/events", get(events))
-        .route("/api/logs", get(logs))
+        .route("/api/logs", get(logs).delete(clear_logs))
         .route("/api/log/{id}/cancel", post(cancel_log))
+        .route("/api/retention", get(get_retention).put(set_retention))
         .route("/mcp/{token}", any(mcp))
         .route("/health", get(|| async { "ok" }))
         .route("/api/health", get(health_report))
@@ -150,6 +151,49 @@ async fn cancel_log(State(state): State<AppState>, Path(id): Path<String>) -> Re
     };
     let ok = state.cancels.cancel(log_id);
     json_response(StatusCode::OK, serde_json::json!({ "ok": ok }))
+}
+
+/// GET /api/retention — current log retention window in days (0 = forever).
+async fn get_retention(State(state): State<AppState>) -> Response {
+    let days = state.store.retention_days().unwrap_or(30);
+    json_response(StatusCode::OK, serde_json::json!({ "days": days }))
+}
+
+/// PUT /api/retention — set log retention window. Body: { days: number }.
+async fn set_retention(State(state): State<AppState>, bytes: Bytes) -> Response {
+    let days: Option<i64> = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|v| v.get("days").and_then(|d| d.as_i64()));
+    let Some(days) = days else {
+        return json_response(StatusCode::BAD_REQUEST, serde_json::json!({ "ok": false, "error": "days is required" }));
+    };
+    let allowed = [0i64, 7, 14, 30, 60, 90];
+    if !allowed.contains(&days) {
+        return json_response(StatusCode::BAD_REQUEST, serde_json::json!({ "ok": false, "error": "Invalid retention days" }));
+    }
+    match state.store.set_retention_days(days) {
+        Ok(()) => {
+            // Purge immediately after changing window so the UI reflects the new limit.
+            let _ = state.store.purge_old_logs();
+            json_response(StatusCode::OK, serde_json::json!({ "ok": true, "days": days }))
+        }
+        Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, serde_json::json!({ "ok": false, "error": e.to_string() })),
+    }
+}
+
+/// DELETE /api/logs?connectionId=… or ?groupId=… — clear all logs for one entity.
+async fn clear_logs(State(state): State<AppState>, RawQuery(query): RawQuery) -> Response {
+    let params = crate::logs_api::parse_query(query.as_deref().unwrap_or_default());
+    let get = |key: &str| params.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_str());
+    let scope = match (get("connectionId"), get("groupId")) {
+        (Some(c), None) if !c.is_empty() => pluk_store::LogScope::Connection(c.to_string()),
+        (None, Some(g)) if !g.is_empty() => pluk_store::LogScope::Group(g.to_string()),
+        _ => return json_response(StatusCode::BAD_REQUEST, serde_json::json!({ "ok": false, "error": "Exactly one scope required" })),
+    };
+    match state.store.clear_logs(&scope) {
+        Ok(deleted) => json_response(StatusCode::OK, serde_json::json!({ "ok": true, "deleted": deleted })),
+        Err(e) => json_response(StatusCode::INTERNAL_SERVER_ERROR, serde_json::json!({ "ok": false, "error": e.to_string() })),
+    }
 }
 
 /// GET /api/health — per-connection health for the UI.
