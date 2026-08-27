@@ -1,0 +1,58 @@
+/* Design tokens — ported from swift/Sources/DesignSystem.swift
+   Deliberately small: two radii, a spacing scale, one control height,
+   and surface tiers that follow the system appearance. No theme switcher. */
+
+:root {
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+
+  /* Spacing scale */
+  --space-xxs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-xxl: 32px;
+
+  /* Control */
+  --control-height: 22px;
+
+  /* Surfaces — light defaults (overridden by prefers-color-scheme) */
+  --surface-sidebar: #f4f4f4;           /* neutral 0.957 */
+  --surface-content: #fafafa;           /* neutral 0.98 */
+  --surface-panel: #ffffff;             /* neutral 1.0 */
+  --surface-sunken: rgba(0, 0, 0, 0.05);
+  --surface-selection: rgba(0, 0, 0, 0.06);
+  --surface-card: rgba(0, 0, 0, 0.035);
+  --surface-control: rgba(0, 0, 0, 0.05);
+  --surface-sidebar-label: #383838;     /* neutral 0.22 */
+  --surface-tertiary-label: rgba(0, 0, 0, 0.45);
+  --surface-sidebar-tertiary: rgba(0, 0, 0, 0.38);
+
+  /* Typography — intended faces with system fallback.
+     IBM Plex Sans / Mono are not bundled today; fallback ships. */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Zoom scale — applied to type only, never as a page transform */
+  --zoom-scale: 1;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-sidebar: #1e1e1e;         /* neutral 0.118 */
+    --surface-content: #262626;         /* neutral 0.15 */
+    --surface-panel: #2e2e2e;           /* neutral 0.18 */
+    --surface-sunken: rgba(255, 255, 255, 0.06);
+    --surface-selection: rgba(255, 255, 255, 0.10);
+    --surface-card: rgba(255, 255, 255, 0.04);
+    --surface-control: rgba(255, 255, 255, 0.06);
+    --surface-sidebar-label: rgba(255, 255, 255, 0.86);
+    --surface-tertiary-label: rgba(255, 255, 255, 0.45);
+    --surface-sidebar-tertiary: rgba(255, 255, 255, 0.5);
+  }
+}
