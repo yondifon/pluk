@@ -457,5 +457,5 @@ pub fn reload(state: State<'_, HostState>, owner_id: Option<String>) -> usize {
 /// Verify STEPS serializes stably as JSON numbers.
 #[cfg(test)]
 pub fn steps_json() -> serde_json::Value {
-    serde_json::json!(STEPS)
+    serde_json::json!(crate::zoom::STEPS)
 }
