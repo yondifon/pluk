@@ -60,31 +60,44 @@ export function createShell(
 
 export function renderBanners(mount: HTMLElement, state: BannerState, onRestart: () => void, onUpdate: () => void): void {
   mount.innerHTML = "";
+  const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
   if (state.update) {
     const banner = document.createElement("div");
     banner.className = "banner";
+    banner.setAttribute("role", "status");
+    banner.setAttribute("aria-live", "polite");
     if (state.update.updating) {
       banner.textContent = "Updating — rebuilding from source, app will relaunch";
+      banner.setAttribute("aria-label", "Updating");
     } else {
       const short = state.update.commit ? state.update.commit.slice(0, 7) : "new commit";
       banner.textContent = `Update available — ${short} on remote`;
+      banner.setAttribute("aria-label", `Update available ${short}`);
       const btn = document.createElement("button");
       btn.textContent = "Update & Relaunch";
+      btn.className = "btn btn-sm";
+      btn.setAttribute("aria-label", "Update and relaunch app");
       btn.onclick = onUpdate;
       banner.appendChild(btn);
     }
+    if (!reduce) banner.style.transition = "transform 200ms ease, opacity 200ms ease";
     mount.appendChild(banner);
   }
   if (state.serverStatus !== "running") {
     const banner = document.createElement("div");
     banner.className = "banner";
+    banner.setAttribute("role", state.serverStatus === "stopped" ? "alert" : "status");
+    banner.setAttribute("aria-live", state.serverStatus === "stopped" ? "assertive" : "polite");
     banner.textContent = state.serverStatus === "starting" ? "Server starting…" : "Server not running";
     if (state.serverStatus === "stopped") {
       const btn = document.createElement("button");
       btn.textContent = "Restart";
+      btn.className = "btn btn-sm";
+      btn.setAttribute("aria-label", "Restart server");
       btn.onclick = onRestart;
       banner.appendChild(btn);
     }
+    if (!reduce) banner.style.transition = "transform 200ms ease, opacity 200ms ease";
     mount.appendChild(banner);
   }
 }
