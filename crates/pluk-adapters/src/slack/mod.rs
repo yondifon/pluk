@@ -148,9 +148,10 @@ impl Adapter for SlackAdapter {
             m.insert("only".into(), json!({"type":"array","items":{"type":"string"},"description": crate::projection::only_param_description(&["details"])}));
             m
         }, |_args: &Value| "list_channels".to_string(), |args: Value, cfg: &SlackConfig| {
+            let cfg = cfg.clone();
             Box::pin(async move {
                 let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(100);
-                let data = slack_request(cfg, "conversations.list", json!({"types":"public_channel","limit": limit})).await?;
+                let data = slack_request(&cfg, "conversations.list", json!({"types":"public_channel","limit": limit})).await?;
                 let channels = data.get("channels").cloned().unwrap_or(json!([]));
                 let only = only_from_args(&args);
                 project_value(channels, only, &channel_map())
@@ -162,19 +163,17 @@ impl Adapter for SlackAdapter {
             m.insert("limit".into(), json!({"type":"integer","minimum":1,"maximum":100,"default":20,"description":"Max messages to return"}));
             m.insert("only".into(), json!({"type":"array","items":{"type":"string"},"description": crate::projection::only_param_description(&["thread","attachments"])}));
             m
-        }, {
-            let dc = cfg.default_channel.clone().unwrap_or("?".to_string());
-            move |args: &Value| {
-                let ch = args.get("channel").and_then(|v| v.as_str()).unwrap_or(&dc);
-                let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20);
-                format!("channel_history {ch} limit={limit}")
-            }
+        }, |args: &Value| {
+            let ch = args.get("channel").and_then(|v| v.as_str()).unwrap_or("?");
+            let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20);
+            format!("channel_history {ch} limit={limit}")
         }, |args: Value, cfg: &SlackConfig| {
+            let cfg = cfg.clone();
             Box::pin(async move {
                 let ch_arg = args.get("channel").and_then(|v| v.as_str());
-                let channel = resolve_channel(cfg, ch_arg)?;
+                let channel = resolve_channel(&cfg, ch_arg)?;
                 let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20);
-                let data = slack_request(cfg, "conversations.history", json!({"channel": channel, "limit": limit})).await?;
+                let data = slack_request(&cfg, "conversations.history", json!({"channel": channel, "limit": limit})).await?;
                 let messages = data.get("messages").cloned().unwrap_or(json!([]));
                 let only = only_from_args(&args);
                 project_value(messages, only, &message_map())
@@ -186,18 +185,13 @@ impl Adapter for SlackAdapter {
             m.insert("text".into(), json!({"type":"string","description":"Message text (markdown)"}));
             m.insert("only".into(), json!({"type":"array","items":{"type":"string"},"description": crate::projection::only_param_description(&["message"])}));
             m
-        }, {
-            let dc = cfg.default_channel.clone().unwrap_or("?".to_string());
-            move |args: &Value| {
-                let ch = args.get("channel").and_then(|v| v.as_str()).unwrap_or(&dc);
-                format!("post_message {ch}")
-            }
-        }, |args: Value, cfg: &SlackConfig| {
+        }, |args: &Value| format!("post_message {}", args.get("channel").and_then(|v| v.as_str()).unwrap_or("?")), |args: Value, cfg: &SlackConfig| {
+            let cfg = cfg.clone();
             Box::pin(async move {
                 let ch_arg = args.get("channel").and_then(|v| v.as_str());
-                let channel = resolve_channel(cfg, ch_arg)?;
+                let channel = resolve_channel(&cfg, ch_arg)?;
                 let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let data = slack_request(cfg, "chat.postMessage", json!({"channel": channel, "text": text})).await?;
+                let data = slack_request(&cfg, "chat.postMessage", json!({"channel": channel, "text": text})).await?;
                 let only = only_from_args(&args);
                 project_value(data, only, &post_map())
             })
@@ -212,6 +206,11 @@ pub fn slack_adapters(store: Arc<pluk_store::Store>) -> Vec<Arc<dyn Adapter>> { 
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::{Mutex, OnceLock};
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     fn conn(config: Map<String, Value>) -> Integration {
         Integration { id: "s".into(), name: "Slack".into(), r#type: "slack".into(), config, environment: None, read_only: 0, query_policy: None, token: "t".into(), created_at: String::new(), via_group: None }
@@ -244,6 +243,7 @@ mod tests {
     }
     #[tokio::test]
     async fn slack_request_throws_on_ok_false() {
+        let _g = lock();
         let cfg = cfg_with_default(None);
         let runner = Arc::new(|method: String, _params: Value| {
             Box::pin(async move { Err(AdapterError::new(format!("Slack API {method}: invalid_auth"))) }) as _
@@ -274,6 +274,7 @@ mod tests {
     }
     #[tokio::test]
     async fn channel_history_uses_default_channel_and_projection() {
+        let _g = lock();
         let cfg = cfg_with_default(Some("C1"));
         let runner = Arc::new(|method: String, params: Value| {
             Box::pin(async move {

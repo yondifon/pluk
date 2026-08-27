@@ -420,7 +420,12 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Mutex, OnceLock};
+
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     fn conn(config: Map<String, Value>) -> Integration {
         Integration {
@@ -532,6 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn lazy_accessor_opens_once_and_reused() {
+        let _g = lock();
         let mut m = Map::new();
         m.insert("host".into(), json!("127.0.0.1"));
         let cfg = redis_config_from(&conn(m)).unwrap();
@@ -569,6 +575,7 @@ mod tests {
 
     #[tokio::test]
     async fn redis_command_construction_per_tool() {
+        let _g = lock();
         let mut m = Map::new();
         m.insert("host".into(), json!("127.0.0.1"));
         let cfg = redis_config_from(&conn(m)).unwrap();
@@ -640,6 +647,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_error_surfaces_clearly() {
+        let _g = lock();
         let mut m = Map::new();
         m.insert("host".into(), json!("127.0.0.1"));
         let cfg = redis_config_from(&conn(m)).unwrap();
