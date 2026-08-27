@@ -3,6 +3,7 @@ pub mod config;
 pub mod driver;
 pub mod error;
 pub mod factory;
+#[cfg(test)]
 pub mod fake;
 pub mod mysql;
 pub mod pool;
