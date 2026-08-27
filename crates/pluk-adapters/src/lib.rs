@@ -20,6 +20,7 @@ mod tool_spec;
 pub mod github_cli;
 pub mod linear;
 pub mod sentry;
+pub mod spark;
 pub mod sql;
 pub mod ssh;
 
