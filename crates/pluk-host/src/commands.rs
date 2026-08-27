@@ -10,7 +10,7 @@ use tauri::State;
 
 use crate::frame::{self, Frame};
 use crate::server::ServerHandle;
-use crate::zoom::{ZoomState, STEPS};
+use crate::zoom::ZoomState;
 
 type CmdResult<T> = Result<T, String>;
 

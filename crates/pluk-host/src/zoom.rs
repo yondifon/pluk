@@ -109,24 +109,21 @@ impl PersistedZoom {
     /// Load from `file_path` when given, otherwise return default.
     /// Callers that prefer Store should use `load_from_store`.
     pub fn load(file_path: Option<PathBuf>) -> Self {
-        if let Some(ref path) = file_path {
-            if let Ok(data) = std::fs::read_to_string(path) {
-                if let Ok(v) = data.trim().parse::<usize>() {
-                    if v < STEPS.len() {
+        if let Some(ref path) = file_path
+            && let Ok(data) = std::fs::read_to_string(path) {
+                if let Ok(v) = data.trim().parse::<usize>()
+                    && v < STEPS.len() {
                         return Self { state: ZoomState::new(v), file_path };
                     }
-                }
                 // Also try JSON { "index": n }
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
-                    if let Some(n) = json.get("index").and_then(|v| v.as_u64()) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
+                    && let Some(n) = json.get("index").and_then(|v| v.as_u64()) {
                         let idx = n as usize;
                         if idx < STEPS.len() {
                             return Self { state: ZoomState::new(idx), file_path };
                         }
                     }
-                }
             }
-        }
         Self { state: ZoomState::default(), file_path }
     }
 

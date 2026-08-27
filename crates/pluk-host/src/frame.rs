@@ -64,11 +64,10 @@ pub fn default_file_path() -> PathBuf {
 
 /// Load the persisted frame, or the default when absent / corrupt.
 pub fn load(path: &PathBuf) -> Frame {
-    if let Ok(data) = std::fs::read_to_string(path) {
-        if let Ok(frame) = serde_json::from_str::<Frame>(&data) {
+    if let Ok(data) = std::fs::read_to_string(path)
+        && let Ok(frame) = serde_json::from_str::<Frame>(&data) {
             return frame.clamped();
         }
-    }
     Frame::default()
 }
 

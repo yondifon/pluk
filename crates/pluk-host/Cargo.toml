@@ -22,7 +22,7 @@ tokio-util = "0.7"
 axum = { version = "0.8", features = ["http1", "json", "tokio"] }
 
 [features]
-default = []
+default = ["updater"]
 updater = ["dep:tauri-plugin-updater"]
 
 [dev-dependencies]
