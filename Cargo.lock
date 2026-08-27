@@ -3566,6 +3566,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "futures",
  "hex",
  "pluk-core",
  "pluk-db",

@@ -214,11 +214,11 @@ impl GateOpts {
     }
 }
 
-/// The standard SQL-style classifier: any thrown message mentioning
-/// `needle` ("cancelled") records a cancellation; everything else is an error.
 pub fn cancelled_when_message_contains(needle: &'static str) -> impl Fn(&AdapterError) -> Verdict + Send {
+    let needle = needle.to_ascii_lowercase();
     move |error: &AdapterError| {
-        if error.message.contains(needle) {
+        let lower = error.message.to_ascii_lowercase();
+        if lower.contains(&needle) || lower.contains("cancel") || lower.contains("interrupted") || lower.contains("killed") {
             Verdict::Cancelled
         } else {
             Verdict::Error
@@ -263,7 +263,50 @@ where
 
     let log_id = store.create_log_entry(draft_for(target, &recorded_sql, &meta, Verdict::Pending, None)).ok();
 
-    match run(log_id).await {
+    let finalized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    struct PendingGuard {
+        store: *const Store,
+        id: Option<i64>,
+        finalized: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+    unsafe impl Send for PendingGuard {}
+    unsafe impl Sync for PendingGuard {}
+    impl Drop for PendingGuard {
+        fn drop(&mut self) {
+            if !self.finalized.load(std::sync::atomic::Ordering::SeqCst) {
+                if let Some(id) = self.id {
+                    if let Some(s) = unsafe { self.store.as_ref() } {
+                        let _ = s.update_log_entry(
+                            id,
+                            LogUpdate {
+                                verdict: Verdict::Error,
+                                reason: Some("Query was interrupted (dropped or panicked)".into()),
+                                response_text: Some("Error: Query was interrupted (dropped or panicked)".into()),
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let _guard = PendingGuard {
+        store: store as *const Store,
+        id: log_id,
+        finalized: finalized.clone(),
+    };
+
+    use futures::FutureExt as _;
+    let run_result: Result<Outcome, AdapterError> = match std::panic::AssertUnwindSafe(run(log_id))
+        .catch_unwind()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => Err(crate::error::AdapterError::new("Query panicked")),
+    };
+    finalized.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    match run_result {
         Ok(Outcome::Blocked(block)) => {
             if let Some(id) = log_id {
                 let update = LogUpdate { verdict: Verdict::Blocked, reason: Some(block.clone()), ..Default::default() };
