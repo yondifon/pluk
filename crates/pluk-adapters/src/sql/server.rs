@@ -227,6 +227,9 @@ fn sql_config_from(conn: &Integration, database_override: Option<&str>) -> SqlCo
     cfg.ssh_port = conn.config.get("ssh_port").and_then(|v| v.as_u64()).map(|n| n as u16);
     if cfg.ssh_port.is_none() { if let Some(s)=conn.config.get("ssh_port").and_then(|v| v.as_str()) { cfg.ssh_port = s.parse().ok(); } }
     cfg.ssh_user = conn.config.get("ssh_user").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.ssh_auth_type = conn.config.get("ssh_auth_type").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.ssh_key_path = conn.config.get("ssh_key_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.ssh_password = conn.config.get("ssh_password").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg
 }
 

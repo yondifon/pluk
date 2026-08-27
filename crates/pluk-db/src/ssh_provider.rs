@@ -26,24 +26,17 @@ impl SshTunnelProvider for PlukSshTunnelProvider {
         let ssh_port = cfg.ssh_port.unwrap_or(22);
         let ssh_user = cfg.ssh_user.clone().unwrap_or_default();
 
-        // Map SqlConfig's SSH fields to pluk-ssh's SshTunnelConfig.
-        // SqlConfig currently stores ssh_host/port/user but not auth details;
-        // for now we treat use_ssh=true as agent auth. R09 will extend SqlConfig
-        // with ssh auth fields (key_path, passphrase, auth_type).
-        let auth_type = if cfg.ssh_user.is_some() {
-            // Heuristic: if needed, extend to read from cfg
-            "agent"
-        } else {
-            "agent"
-        };
+        let auth_type = cfg.ssh_auth_type.clone().unwrap_or_else(|| "agent".to_string());
+        let key_path = cfg.ssh_key_path.clone();
+        let passphrase = cfg.ssh_password.clone();
 
         let tunnel_cfg = pluk_ssh::SshTunnelConfig {
             host: ssh_host,
             port: ssh_port,
             user: ssh_user,
-            auth_type: auth_type.to_string(),
-            key_path: None,
-            passphrase: cfg.password.clone(),
+            auth_type,
+            key_path,
+            passphrase,
             remote_host: remote_host.to_string(),
             remote_port,
         };
