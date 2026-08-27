@@ -45,18 +45,24 @@ export function renderClientConfig(
   const title = document.createElement("h2");
   title.className = "card-title";
   title.textContent = "Agent setup";
+  title.id = "agent-setup-title";
   container.appendChild(title);
 
   let selectedClient: McpClientId | "all" = "all";
   let selectedScope: ConfigScope = "project";
-  const installed = opts?.installed ?? (CLIENTS.map((c) => c.id) as McpClientId[]);
+  let installed: McpClientId[] = opts?.installed ?? (CLIENTS.map((c) => c.id) as McpClientId[]);
 
   const controls = document.createElement("div");
   controls.className = "client-controls";
+  controls.setAttribute("role", "group");
+  controls.setAttribute("aria-labelledby", "agent-setup-title");
 
-  const clientLabel = document.createElement("span");
+  const clientLabel = document.createElement("label");
   clientLabel.textContent = "Client";
+  clientLabel.htmlFor = "pluk-client-select";
   const clientSelect = document.createElement("select");
+  clientSelect.id = "pluk-client-select";
+  clientSelect.setAttribute("aria-label", "AI client");
   const allOpt = document.createElement("option");
   allOpt.value = "all";
   allOpt.textContent = "All detected";
@@ -69,7 +75,13 @@ export function renderClientConfig(
   }
   clientSelect.value = selectedClient;
 
+  const scopeLabel = document.createElement("label");
+  scopeLabel.textContent = "Scope";
+  scopeLabel.htmlFor = "pluk-scope-select";
+  scopeLabel.id = "pluk-scope-label";
   const scopeSelect = document.createElement("select");
+  scopeSelect.id = "pluk-scope-select";
+  scopeSelect.setAttribute("aria-labelledby", "pluk-scope-label");
   for (const s of ["project", "global"] as const) {
     const o = document.createElement("option");
     o.value = s;
@@ -87,18 +99,28 @@ export function renderClientConfig(
   }
 
   const addBtn = document.createElement("button");
+  addBtn.type = "button";
   addBtn.className = "btn btn-secondary btn-sm";
-  addBtn.textContent = "Add";
+  addBtn.textContent = "Install";
+  addBtn.setAttribute("aria-label", "Install into selected clients");
   const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
   copyBtn.className = "btn btn-secondary btn-sm";
   copyBtn.textContent = "Copy";
+  copyBtn.setAttribute("aria-label", "Copy snippet to clipboard");
   const snippetPre = document.createElement("pre");
   snippetPre.className = "snippet";
+  snippetPre.tabIndex = 0;
+  snippetPre.setAttribute("aria-label", "Configuration snippet");
   const hint = document.createElement("div");
   hint.className = "hint";
+  hint.id = "pluk-config-hint";
+  snippetPre.setAttribute("aria-describedby", "pluk-config-hint");
   const toast = document.createElement("div");
   toast.className = "toast";
   toast.setAttribute("role", "status");
+  toast.setAttribute("aria-live", "polite");
+  toast.setAttribute("aria-atomic", "true");
 
   function syncScopeOptions() {
     const single = selectedClient !== "all" ? CLIENTS.find((x) => x.id === selectedClient) : null;
@@ -106,9 +128,21 @@ export function renderClientConfig(
       selectedScope = "global";
       scopeSelect.value = "global";
     }
-    scopeSelect.style.display = single && !single.supportsProject ? "none" : "";
-    // When all, both scopes available
-    if (selectedClient === "all") scopeSelect.style.display = "";
+    const hideScope = Boolean(single && !single.supportsProject);
+    scopeSelect.style.display = hideScope ? "none" : "";
+    scopeLabel.style.display = hideScope ? "none" : "";
+    scopeSelect.disabled = hideScope;
+    scopeSelect.setAttribute("aria-hidden", hideScope ? "true" : "false");
+    if (hideScope) scopeSelect.setAttribute("tabindex", "-1");
+    else scopeSelect.removeAttribute("tabindex");
+    if (selectedClient === "all") {
+      scopeSelect.style.display = "";
+      scopeLabel.style.display = "";
+      scopeSelect.disabled = false;
+      scopeSelect.setAttribute("aria-hidden", "false");
+      scopeSelect.removeAttribute("tabindex");
+    }
+    addBtn.setAttribute("aria-disabled", targets().length === 0 ? "true" : "false");
   }
 
   function renderPreview() {
@@ -137,7 +171,7 @@ export function renderClientConfig(
       const url = mcpUrl(integration.token);
       const key = integration.id;
       snippetPre.textContent = snippetFor(id, key, url);
-      hint.textContent = `Add to ${configPathFor(id, selectedScope)}`;
+      hint.textContent = `Install to ${configPathFor(id, selectedScope)}`;
     }
   }
 
@@ -151,8 +185,24 @@ export function renderClientConfig(
     renderPreview();
   });
 
-  controls.append(clientLabel, clientSelect, scopeSelect, addBtn, copyBtn);
+  controls.append(clientLabel, clientSelect, scopeLabel, scopeSelect, addBtn, copyBtn);
   container.append(controls, hint, snippetPre, toast);
+
+  if (!opts?.installed) {
+    const anyTauri = window as unknown as { __TAURI__?: { core?: { invoke?: (cmd: string) => Promise<unknown> } } };
+    const invoke = anyTauri.__TAURI__?.core?.invoke;
+    if (invoke) {
+      invoke("list_installed_mcp_clients")
+        .then((res) => {
+          if (Array.isArray(res) && res.length) {
+            installed = res as McpClientId[];
+            renderPreview();
+            syncScopeOptions();
+          }
+        })
+        .catch(() => {});
+    }
+  }
 
   copyBtn.addEventListener("click", async () => {
     if (selectedClient === "all") return;
@@ -193,6 +243,9 @@ export function renderClientConfig(
       projectDir = await pickProjectDir();
       if (!projectDir) return;
     }
+    addBtn.disabled = true;
+    addBtn.setAttribute("aria-busy", "true");
+    addBtn.textContent = "Installing…";
     const key = integration.id;
     const url = mcpUrl(integration.token);
     const added: string[] = [];
@@ -212,6 +265,10 @@ export function renderClientConfig(
     const { kind, message } = formatFanOutMessage(key, { added, skipped, failed });
     toast.textContent = message;
     toast.className = `toast toast-${kind}`;
+    addBtn.disabled = targets().length === 0;
+    addBtn.removeAttribute("aria-busy");
+    addBtn.textContent = "Install";
+    addBtn.focus();
   });
 
   syncScopeOptions();

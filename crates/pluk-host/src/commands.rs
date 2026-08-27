@@ -508,6 +508,82 @@ pub fn cancel_query(state: State<'_, HostState>, log_id: i64) -> bool {
     state.server.blocking_lock().state().cancels.cancel(log_id)
 }
 
+// ── MCP client config ──────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InjectResultJson {
+    pub status: String,
+    pub path: String,
+}
+
+fn parse_mcp_client(raw: &str) -> Option<pluk_core::platform::McpClient> {
+    match raw {
+        "opencode" => Some(pluk_core::platform::McpClient::Opencode),
+        "codex" => Some(pluk_core::platform::McpClient::Codex),
+        "claudeCode" | "claude-code" | "claude_code" => Some(pluk_core::platform::McpClient::ClaudeCode),
+        "cursor" => Some(pluk_core::platform::McpClient::Cursor),
+        "windsurf" => Some(pluk_core::platform::McpClient::Windsurf),
+        "antigravity" => Some(pluk_core::platform::McpClient::Antigravity),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+pub fn inject_mcp_config(
+    client: String,
+    scope: String,
+    project_dir: Option<String>,
+    key: String,
+    url: String,
+) -> CmdResult<InjectResultJson> {
+    let mcp_client = parse_mcp_client(&client).ok_or_else(|| format!("Unknown client “{client}”. Choose a supported client and try again."))?;
+    let config_scope = match scope.as_str() {
+        "project" => {
+            let dir = project_dir
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| "Choose a project folder and try again.".to_string())?;
+            pluk_core::platform::ConfigScope::Project {
+                root: std::path::PathBuf::from(dir),
+            }
+        }
+        "global" => pluk_core::platform::ConfigScope::Global,
+        _ => return Err("Unknown scope. Use Project or Global and try again.".to_string()),
+    };
+    if key.trim().is_empty() {
+        return Err("Missing integration key. Try again.".to_string());
+    }
+    if url.trim().is_empty() {
+        return Err("Missing endpoint URL. Try again.".to_string());
+    }
+    match pluk_core::mcp_config::inject(mcp_client, &config_scope, &key, &url) {
+        Ok(pluk_core::mcp_config::InjectResult::Added { path }) => Ok(InjectResultJson {
+            status: "added".to_string(),
+            path: path.display().to_string(),
+        }),
+        Ok(pluk_core::mcp_config::InjectResult::Skipped { path }) => Ok(InjectResultJson {
+            status: "skipped".to_string(),
+            path: path.display().to_string(),
+        }),
+        Err(e) => Err(format!("{e} Check the file and try again, or copy the snippet manually.")),
+    }
+}
+
+#[tauri::command]
+pub fn list_installed_mcp_clients() -> Vec<String> {
+    pluk_core::platform::McpClient::ALL
+        .iter()
+        .filter(|c| c.is_installed())
+        .map(|c| match c {
+            pluk_core::platform::McpClient::Opencode => "opencode".to_string(),
+            pluk_core::platform::McpClient::Codex => "codex".to_string(),
+            pluk_core::platform::McpClient::ClaudeCode => "claudeCode".to_string(),
+            pluk_core::platform::McpClient::Cursor => "cursor".to_string(),
+            pluk_core::platform::McpClient::Windsurf => "windsurf".to_string(),
+            pluk_core::platform::McpClient::Antigravity => "antigravity".to_string(),
+        })
+        .collect()
+}
+
 // ── Reload ─────────────────────────────────────────────────────────────
 
 #[tauri::command]

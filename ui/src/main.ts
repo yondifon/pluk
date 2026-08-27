@@ -406,9 +406,20 @@ function refreshSidebar(): void {
   }
 }
 
-/** No host command writes AI-client config files yet. */
-async function injectClientConfig(): Promise<{ status: "added" | "skipped"; path: string }> {
-  throw new Error("Pluk can't write config files yet — copy the snippet instead");
+async function injectClientConfig(args: {
+  client: string;
+  scope: string;
+  projectDir: string | null;
+  key: string;
+  url: string;
+}): Promise<{ status: "added" | "skipped"; path: string }> {
+  return invoke<{ status: "added" | "skipped"; path: string }>("inject_mcp_config", {
+    client: args.client,
+    scope: args.scope,
+    project_dir: args.projectDir,
+    key: args.key,
+    url: args.url,
+  });
 }
 
 // ── Data ─────────────────────────────────────────────────────────────────────
