@@ -519,7 +519,7 @@ pub fn register_sql_server(
                             }
                             // snapshot for log: masked rows + fields
                             let snapshot = pluk_store::QueryResult { fields: fields.clone(), rows: rows.clone() };
-                            Ok(Outcome::Ran(RunOutcome { text: text.clone(), is_error: false, reason: None, result: Some(snapshot), response_text: Some(text), command: None }))
+                            Ok(Outcome::Ran(RunOutcome { text, is_error: false, reason: None, result: Some(snapshot), response_text: None, command: None }))
                         }
                     }, GateOpts::default()
                         .precheck({
@@ -1026,7 +1026,7 @@ pub fn register_sql_server(
                             };
                             let _ = tokio::fs::write(&path, payload).await.map_err(|e| crate::error::AdapterError::new(e.to_string()));
                             let snapshot = pluk_store::QueryResult { fields: fields.clone(), rows: rows.clone() };
-                            Ok(Outcome::Ran(RunOutcome { text: format!("Exported {} rows to {}", rows.len(), path.display()), result: Some(snapshot), response_text: Some(format!("Exported {} rows to {}", rows.len(), path.display())), ..Default::default() }))
+                            Ok(Outcome::Ran(RunOutcome { text: format!("Exported {} rows to {}", rows.len(), path.display()), result: Some(snapshot), ..Default::default() }))
                         }
                     }, GateOpts::default()
                         .precheck({
@@ -1151,7 +1151,7 @@ pub fn register_sql_server(
                             let mut text = projected_json(meta_val, only, &query_map()).map_err(|e| crate::error::AdapterError::new(e))?;
                             if truncated { text.push_str(&format!("\n\n[Row limit: showing first {} of {} rows. Add a LIMIT clause to see all results.]", cap_limit.unwrap_or(0), total)); }
                             let snapshot = pluk_store::QueryResult { fields, rows: rows.clone() };
-                            Ok(Outcome::Ran(RunOutcome { text: text.clone(), result: Some(snapshot), response_text: Some(text), ..Default::default() }))
+                            Ok(Outcome::Ran(RunOutcome { text, result: Some(snapshot), ..Default::default() }))
                         }
                     }, GateOpts::default()
                         .precheck({

@@ -127,6 +127,34 @@ async fn each_tool_happy_path() {
 }
 
 #[tokio::test]
+async fn successful_query_logs_result_json_without_response_text() {
+    let (_dir, store) = temp_store();
+    let db_dir = tempfile::tempdir().unwrap();
+    let db_path = db_dir.path().join("regress.sqlite");
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute("CREATE TABLE t (id INTEGER, name TEXT)", []).unwrap();
+        conn.execute("INSERT INTO t VALUES (1, 'a'), (2, 'b')", []).unwrap();
+    }
+    let conn = make_integration("sq1", "sqlite", json!({"filename": db_path.to_str().unwrap()}), None);
+    let host = capture_for(&conn, store.clone());
+    let h = host.tools.get("query").unwrap();
+    let r = h(json!({"sql": "SELECT * FROM t"})).await;
+    assert!(!r.is_error, "query should succeed: {}", r.text());
+
+    let page = store.read_log_page(&LogScope::Connection("sq1".into()), LogRange::All, None).unwrap();
+    let entry = page.entries.iter().find(|e| e.source.as_deref() == Some("query")).expect("query log entry");
+    assert_eq!(entry.verdict, "allowed");
+    assert!(entry.result_json.is_some(), "result_json must be set so the activity log can render a table");
+    assert!(
+        entry.response_text.is_none(),
+        "response_text must stay unset on a successful query — setting it makes the UI fall back to the raw-JSON preview instead of the table"
+    );
+    let result: Value = serde_json::from_str(entry.result_json.as_deref().unwrap()).unwrap();
+    assert_eq!(result["rows"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn pinned_database_hides_arg_from_schema() {
     let (_dir, store) = temp_store();
     let conn_pinned = make_integration("pg1", "postgres", json!({"host":"localhost","database":"app"}), None);
