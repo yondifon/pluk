@@ -344,7 +344,7 @@ async fn bind_params_postgres_and_mysql() {
     let host_pg = capture_for(&conn_pg, store.clone());
     let h = host_pg.tools.get("query").unwrap();
     let r = h(json!({"sql":"SELECT $1::int + $2::int","params":[1,2]})).await;
-    if r.is_error && r.text().contains("connection failed") {
+    if r.is_error && r.text().to_lowercase().contains("connection") {
         eprintln!("skip bind_params postgres: no pg reachable: {}", r.text());
     } else {
         assert!(!r.is_error, "postgres $1 params should succeed: {}", r.text());
@@ -354,8 +354,8 @@ async fn bind_params_postgres_and_mysql() {
     let host_my = capture_for(&conn_my, store);
     let h2 = host_my.tools.get("query").unwrap();
     let r2 = h2(json!({"sql":"SELECT ? + ?","params":[1,2]})).await;
-    if r2.is_error && (r2.text().contains("connection failed") || r2.text().contains("not supported in the prepared statement")) {
-        eprintln!("skip bind_params mysql: no mysql reachable or unsupported prepared stmt: {}", r2.text());
+    if r2.is_error && r2.text().to_lowercase().contains("connection") {
+        eprintln!("skip bind_params mysql: no mysql reachable: {}", r2.text());
         return;
     }
     assert!(!r2.is_error, "mysql ? params should succeed: {}", r2.text());

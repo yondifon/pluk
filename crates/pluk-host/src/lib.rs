@@ -25,7 +25,8 @@ pub fn run() {
     );
     let zoom = Mutex::new(crate::zoom::PersistedZoom::load_from_store(&store));
     let server = tauri::async_runtime::block_on(async { ServerHandle::start_default(store.clone(), registry.clone()).await.expect("bind 4242") });
-    let host_state = HostState { store: store.clone(), server: tokio::sync::Mutex::new(server), zoom };
+    let shared = server.state().clone();
+    let host_state = HostState { store: store.clone(), server: tokio::sync::Mutex::new(server), shared, zoom };
     let initial_zoom_title = { let z = host_state.zoom.lock().expect("zoom lock"); z.state().reset_title() };
     let updater = Updater::new(UpdaterConfig::placeholder());
     let activity_store = store.clone();

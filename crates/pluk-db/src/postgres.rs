@@ -68,6 +68,93 @@ pub mod live {
             .collect()
     }
 
+    /// Postgres sends `numeric` in a binary form no built-in Rust type maps to,
+    /// so decode it here and keep it exact as a string.
+    struct PgNumeric(String);
+
+    impl<'a> tokio_postgres::types::FromSql<'a> for PgNumeric {
+        fn from_sql(
+            _ty: &Type,
+            raw: &'a [u8],
+        ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+            if raw.len() < 8 {
+                return Err("numeric too short".into());
+            }
+            let be16 = |o: usize| i16::from_be_bytes([raw[o], raw[o + 1]]);
+            let digit_count = be16(0) as usize;
+            let weight = be16(2) as i32;
+            let sign = u16::from_be_bytes([raw[4], raw[5]]);
+            let scale = be16(6) as usize;
+            if raw.len() < 8 + digit_count * 2 {
+                return Err("numeric truncated".into());
+            }
+            if sign == 0xC000 {
+                return Ok(PgNumeric("NaN".into()));
+            }
+
+            let digits: Vec<i16> = (0..digit_count).map(|i| be16(8 + i * 2)).collect();
+            let mut whole = String::new();
+            for position in 0..=weight.max(0) {
+                let group = digits.get(position as usize).copied().unwrap_or(0);
+                if position == 0 {
+                    whole.push_str(&group.to_string());
+                } else {
+                    whole.push_str(&format!("{group:04}"));
+                }
+            }
+            if whole.is_empty() {
+                whole.push('0');
+            }
+
+            let mut fraction = String::new();
+            let mut position = weight + 1;
+            while fraction.len() < scale {
+                let group = if position < 0 { 0 } else { digits.get(position as usize).copied().unwrap_or(0) };
+                fraction.push_str(&format!("{group:04}"));
+                position += 1;
+            }
+            fraction.truncate(scale);
+
+            let mut out = String::new();
+            if sign == 0x4000 {
+                out.push('-');
+            }
+            out.push_str(&whole);
+            if !fraction.is_empty() {
+                out.push('.');
+                out.push_str(&fraction);
+            }
+            Ok(PgNumeric(out))
+        }
+
+        fn accepts(ty: &Type) -> bool {
+            *ty == Type::NUMERIC
+        }
+    }
+
+    /// Render an array column as a JSON array.
+    fn list<T: serde::Serialize>(
+        got: Result<Option<Vec<T>>, tokio_postgres::Error>,
+    ) -> serde_json::Value {
+        match got {
+            Ok(Some(v)) => serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            Ok(None) => serde_json::Value::Null,
+            Err(e) => serde_json::Value::String(e.to_string()),
+        }
+    }
+
+    /// Render a decoded value as JSON, or null when the column is null.
+    fn iso<T>(
+        got: Result<Option<T>, tokio_postgres::Error>,
+        render: impl Fn(T) -> String,
+    ) -> serde_json::Value {
+        match got {
+            Ok(Some(v)) => serde_json::Value::String(render(v)),
+            Ok(None) => serde_json::Value::Null,
+            Err(e) => serde_json::Value::String(e.to_string()),
+        }
+    }
+
     fn pg_row_to_json(row: &tokio_postgres::Row) -> serde_json::Value {
         let mut map = serde_json::Map::new();
         for (idx, col) in row.columns().iter().enumerate() {
@@ -100,7 +187,7 @@ pub mod live {
                         .unwrap_or(serde_json::Value::Null)
                 }
                 Type::NUMERIC => {
-                    let v: Option<String> = row.get(idx);
+                    let v: Option<String> = row.try_get::<_, Option<PgNumeric>>(idx).ok().flatten().map(|n| n.0);
                     match v {
                         None => serde_json::Value::Null,
                         Some(s) => {
@@ -127,17 +214,30 @@ pub mod live {
                         }
                     }
                 }
-                Type::JSON | Type::JSONB => {
-                    let s: Option<String> = row.get(idx);
-                    match s {
-                        None => serde_json::Value::Null,
-                        Some(txt) => serde_json::from_str(&txt).unwrap_or(serde_json::Value::String(txt)),
-                    }
+                Type::JSON | Type::JSONB => row
+                    .try_get::<_, Option<serde_json::Value>>(idx)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(serde_json::Value::Null),
+                Type::TIMESTAMP => iso(row.try_get::<_, Option<chrono::NaiveDateTime>>(idx), |v| v.and_utc().to_rfc3339()),
+                Type::TIMESTAMPTZ => iso(row.try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(idx), |v| v.to_rfc3339()),
+                Type::DATE => iso(row.try_get::<_, Option<chrono::NaiveDate>>(idx), |v| v.to_string()),
+                Type::TIME => iso(row.try_get::<_, Option<chrono::NaiveTime>>(idx), |v| v.to_string()),
+                Type::UUID => iso(row.try_get::<_, Option<uuid::Uuid>>(idx), |v| v.to_string()),
+                Type::BOOL_ARRAY => list(row.try_get::<_, Option<Vec<bool>>>(idx)),
+                Type::INT2_ARRAY => list(row.try_get::<_, Option<Vec<i16>>>(idx)),
+                Type::INT4_ARRAY => list(row.try_get::<_, Option<Vec<i32>>>(idx)),
+                Type::INT8_ARRAY => list(row.try_get::<_, Option<Vec<i64>>>(idx)),
+                Type::FLOAT8_ARRAY => list(row.try_get::<_, Option<Vec<f64>>>(idx)),
+                Type::TEXT_ARRAY | Type::VARCHAR_ARRAY | Type::NAME_ARRAY => {
+                    list(row.try_get::<_, Option<Vec<String>>>(idx))
                 }
-                _ => {
-                    let v: Option<String> = row.get(idx);
-                    v.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null)
-                }
+                _ => match row.try_get::<_, Option<String>>(idx) {
+                    Ok(v) => v.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
+                    // A type with no text form still has to say which column and
+                    // type could not be read, rather than nulling the value.
+                    Err(_) => serde_json::Value::String(format!("<unreadable {} value>", ty.name())),
+                },
             };
             map.insert(col.name().to_string(), val);
         }

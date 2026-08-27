@@ -19,6 +19,9 @@ type CmdResult<T> = Result<T, String>;
 pub struct HostState {
     pub store: std::sync::Arc<pluk_store::Store>,
     pub server: tokio::sync::Mutex<ServerHandle>,
+    /// The server's shared state, held directly so commands read it without
+    /// taking the async lock — locking it from a command panics the runtime.
+    pub shared: crate::server::SharedState,
     pub zoom: std::sync::Mutex<crate::zoom::PersistedZoom>,
 }
 
@@ -219,7 +222,7 @@ pub fn delete_integration(state: State<'_, HostState>, id: String) -> CmdResult<
     let did = state.store.delete_integration(&id).map_err(|e| e.to_string())?;
     if did {
         // Drop owner's pooled resources so stale creds/tunnels are gone.
-        let owners = state.server.blocking_lock().state().owners.clone();
+        let owners = state.shared.owners.clone();
         owners.reset_owners(Some(&id));
     }
     Ok(did)
@@ -293,7 +296,7 @@ pub fn update_group(state: State<'_, HostState>, id: String, payload: UpdateGrou
     let update = pluk_store::GroupUpdate { name: payload.name, environment: env, members: payload.members };
     let result = state.store.update_group(&id, &update).map(|o| o.map(GroupJson::from)).map_err(|e| e.to_string())?;
     if result.is_some() {
-        let owners = state.server.blocking_lock().state().owners.clone();
+        let owners = state.shared.owners.clone();
         owners.reset_owners(Some(&id));
     }
     Ok(result)
@@ -303,7 +306,7 @@ pub fn update_group(state: State<'_, HostState>, id: String, payload: UpdateGrou
 pub fn delete_group(state: State<'_, HostState>, id: String) -> CmdResult<bool> {
     let did = state.store.delete_group(&id).map_err(|e| e.to_string())?;
     if did {
-        let owners = state.server.blocking_lock().state().owners.clone();
+        let owners = state.shared.owners.clone();
         owners.reset_owners(Some(&id));
     }
     Ok(did)
@@ -326,7 +329,7 @@ pub struct AdapterInfo {
 // Note: we expose via HTTP fallback too, but commands are the default for the host UI.
 #[tauri::command]
 pub fn list_adapters(state: State<'_, HostState>) -> Vec<AdapterInfo> {
-    let registry = state.server.blocking_lock().state().registry.clone();
+    let registry = state.shared.registry.clone();
     registry
         .list()
         .iter()
@@ -353,7 +356,7 @@ pub struct HealthEntry {
 
 #[tauri::command]
 pub fn get_health(state: State<'_, HostState>) -> std::collections::BTreeMap<String, HealthEntry> {
-    let map = state.server.blocking_lock().state().health.all();
+    let map = state.shared.health.all();
     map.into_iter()
         .map(|(k, v)| {
             let status = match v.status {
@@ -369,8 +372,8 @@ pub fn get_health(state: State<'_, HostState>) -> std::collections::BTreeMap<Str
 #[tauri::command]
 pub async fn test_connection(state: State<'_, HostState>, id: String) -> CmdResult<serde_json::Value> {
     let store = state.store.clone();
-    let registry = state.server.blocking_lock().state().registry.clone();
-    let health = state.server.blocking_lock().state().health.clone();
+    let registry = state.shared.registry.clone();
+    let health = state.shared.health.clone();
 
     let integration = store.integration_by_id(&id).map_err(|e| e.to_string())?.ok_or_else(|| "Not found".to_string())?;
     let adapter = registry.get(&integration.r#type).ok_or_else(|| format!("No adapter for type: {}", integration.r#type))?;
@@ -505,7 +508,7 @@ pub fn get_logs(
 
 #[tauri::command]
 pub fn cancel_query(state: State<'_, HostState>, log_id: i64) -> bool {
-    state.server.blocking_lock().state().cancels.cancel(log_id)
+    state.shared.cancels.cancel(log_id)
 }
 
 // ── MCP client config ──────────────────────────────────────────────────
@@ -588,7 +591,7 @@ pub fn list_installed_mcp_clients() -> Vec<String> {
 
 #[tauri::command]
 pub fn reload(state: State<'_, HostState>, owner_id: Option<String>) -> usize {
-    let owners = state.server.blocking_lock().state().owners.clone();
+    let owners = state.shared.owners.clone();
     owners.reset_owners(owner_id.as_deref())
 }
 

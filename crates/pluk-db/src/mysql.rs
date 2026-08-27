@@ -22,11 +22,17 @@ pub mod live {
             DriverError::Connection(format!("Database authentication failed for {host}:{port}. Check username and password. ({msg})"))
         } else if lower.contains("unknown database") {
             DriverError::Connection(format!("Database not found on {host}:{port}. Check the database name. ({msg})"))
+        } else if lower.contains("no database selected") || lower.contains("1046") {
+            DriverError::Connection(format!("No database selected on {host}:{port}. Set a database in the connection settings or pass `database` (see list_databases). ({msg})"))
         } else if lower.contains("self signed") || lower.contains("certificate") || lower.contains("ssl") || lower.contains("tls") {
             DriverError::Connection(format!("SSL error connecting to {host}:{port}. Check SSL mode and certificates. ({msg})"))
         } else {
             DriverError::Connection(format!("connection failed to {host}:{port}: {msg}"))
         }
+    }
+
+    fn no_db_error() -> DriverError {
+        DriverError::Connection("No database selected. Set a database in the connection settings or pass `database` (see list_databases).".into())
     }
 
     fn map_sqlx_error(e: sqlx::Error) -> DriverError {
@@ -43,6 +49,13 @@ pub mod live {
         serde_json::Value::Object(map)
     }
 
+    /// The text protocol hands every column back as bytes, so read them
+    /// directly rather than asking sqlx to decode into a Rust type it will
+    /// refuse for dates, decimals and JSON.
+    fn raw_text(row: &sqlx::mysql::MySqlRow, idx: usize) -> Option<String> {
+        row.try_get_unchecked::<Option<String>, _>(idx).ok().flatten()
+    }
+
     fn decode_mysql_value(row: &sqlx::mysql::MySqlRow, idx: usize) -> serde_json::Value {
         let tn = type_name(row, idx);
         match tn.as_str() {
@@ -50,10 +63,9 @@ pub mod live {
                 if let Ok(v) = row.try_get::<Option<i64>, _>(idx) {
                     return v.map(|x| serde_json::json!(x)).unwrap_or(serde_json::Value::Null);
                 }
-                if let Ok(v) = row.try_get::<Option<String>, _>(idx) {
-                    return v.and_then(|s| s.parse::<i64>().ok().map(|i| serde_json::json!(i))).unwrap_or(serde_json::Value::Null);
-                }
-                serde_json::Value::Null
+                raw_text(row, idx)
+                    .and_then(|s| s.parse::<i64>().ok().map(|i| serde_json::json!(i)))
+                    .unwrap_or(serde_json::Value::Null)
             }
             "FLOAT" | "DOUBLE" | "DECIMAL" | "NEWDECIMAL" | "NUMERIC" => {
                 if let Ok(v) = row.try_get::<Option<f64>, _>(idx)
@@ -61,49 +73,40 @@ pub mod live {
                         if let Some(n) = serde_json::Number::from_f64(f) { return serde_json::Value::Number(n); }
                         return serde_json::Value::String(f.to_string());
                     }
-                if let Ok(v) = row.try_get::<Option<String>, _>(idx)
-                    && let Some(s) = v {
-                        if let Ok(f) = s.parse::<f64>()
-                            && let Some(n) = serde_json::Number::from_f64(f) { return serde_json::Value::Number(n); }
-                        return serde_json::Value::String(s);
-                    }
-                serde_json::Value::Null
+                match raw_text(row, idx) {
+                    None => serde_json::Value::Null,
+                    Some(s) => match s.parse::<f64>().ok().and_then(serde_json::Number::from_f64) {
+                        Some(n) => serde_json::Value::Number(n),
+                        None => serde_json::Value::String(s),
+                    },
+                }
             }
             "DATE" | "DATETIME" | "TIMESTAMP" | "TIME" | "NEWDATE" | "DATETIME2" => {
-                if let Ok(v) = row.try_get::<Option<String>, _>(idx) {
-                    return v.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null);
-                }
-                serde_json::Value::Null
+                raw_text(row, idx).map(serde_json::Value::String).unwrap_or(serde_json::Value::Null)
             }
-            "JSON" => {
-                if let Ok(v) = row.try_get::<Option<String>, _>(idx)
-                    && let Some(s) = v {
-                        if let Ok(j) = serde_json::from_str(&s) { return j; }
-                        return serde_json::Value::String(s);
-                    }
-                serde_json::Value::Null
-            }
+            "JSON" => match raw_text(row, idx) {
+                None => serde_json::Value::Null,
+                Some(s) => serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s)),
+            },
             "BLOB" | "MEDIUMBLOB" | "LONGBLOB" | "TINYBLOB" | "VARBINARY" | "BINARY" | "BIT" | "GEOMETRY" => {
-                if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(idx)
-                    && let Some(b) = v {
-                        if let Ok(s) = String::from_utf8(b.clone()) { return serde_json::Value::String(s); }
-                        return serde_json::Value::Array(b.iter().map(|x| serde_json::json!(*x)).collect());
-                    }
-                serde_json::Value::Null
+                bytes_value(row, idx)
             }
-            _ => {
-                if let Ok(v) = row.try_get::<Option<String>, _>(idx)
-                    && let Some(s) = v { return serde_json::Value::String(s); }
-                if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(idx)
-                    && let Some(b) = v {
-                        if let Ok(s) = String::from_utf8(b.clone()) { return serde_json::Value::String(s); }
-                        return serde_json::Value::Array(b.iter().map(|x| serde_json::json!(*x)).collect());
-                    }
-                if let Ok(v) = row.try_get::<Option<i64>, _>(idx) {
-                    return v.map(|x| serde_json::json!(x)).unwrap_or(serde_json::Value::Null);
-                }
-                serde_json::Value::Null
-            }
+            _ => match raw_text(row, idx) {
+                Some(s) => serde_json::Value::String(s),
+                None => bytes_value(row, idx),
+            },
+        }
+    }
+
+    /// Binary columns come back as text or, when they are not valid UTF-8, as
+    /// the byte array itself.
+    fn bytes_value(row: &sqlx::mysql::MySqlRow, idx: usize) -> serde_json::Value {
+        match row.try_get_unchecked::<Option<Vec<u8>>, _>(idx) {
+            Ok(Some(b)) => match String::from_utf8(b) {
+                Ok(s) => serde_json::Value::String(s),
+                Err(e) => serde_json::Value::Array(e.into_bytes().iter().map(|x| serde_json::json!(*x)).collect()),
+            },
+            _ => serde_json::Value::Null,
         }
     }
 
@@ -114,6 +117,7 @@ pub mod live {
         pool: MySqlPool,
         host: String,
         port: u16,
+        database: Option<String>,
     }
 
     impl MySqlDriver {
@@ -134,7 +138,7 @@ pub mod live {
             }
             if let Some(u) = user { opts = opts.username(&u); }
             if let Some(p) = password { opts = opts.password(&p); }
-            if let Some(db) = database { opts = opts.database(&db); }
+            if let Some(db) = &database { opts = opts.database(db); }
 
             let mode = match ssl.as_ref().and_then(|s| s.mode.clone()) {
                 Some(crate::ssl::SslMode::Disable) | None if ssl.is_none() => MySqlSslMode::Disabled,
@@ -162,7 +166,7 @@ pub mod live {
             }
 
             let pool = MySqlPool::connect_with(opts).await.map_err(|e| conn_error(&host, port, e))?;
-            Ok(Self { pool, host, port })
+            Ok(Self { pool, host, port, database })
         }
     }
 
@@ -178,210 +182,140 @@ pub mod live {
         Ok(path)
     }
 
-    fn bind_params<'a>(sql: &'a str, params: &'a [serde_json::Value]) -> sqlx::query::Query<'a, sqlx::MySql, sqlx::mysql::MySqlArguments> {
-        let mut q = sqlx::query(sql);
-        for p in params {
-            match p {
-                serde_json::Value::Null => { q = q.bind(Option::<String>::None); }
-                serde_json::Value::Bool(b) => { q = q.bind(*b); }
-                serde_json::Value::Number(n) => {
-                    if let Some(i) = n.as_i64() { q = q.bind(i); }
-                    else if let Some(u) = n.as_u64() { q = q.bind(u as i64); }
-                    else if let Some(f) = n.as_f64() { q = q.bind(f); }
-                    else { q = q.bind(n.to_string()); }
-                }
-                serde_json::Value::String(s) => { q = q.bind(s.clone()); }
-                serde_json::Value::Array(_) | serde_json::Value::Object(_) => { q = q.bind(p.to_string()); }
+    fn escape_mysql_string(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() + 2);
+        out.push('\'');
+        for ch in s.chars() {
+            match ch {
+                '\'' => out.push_str("\\'"),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\0' => out.push_str("\\0"),
+                _ => out.push(ch),
             }
         }
-        q
+        out.push('\'');
+        out
+    }
+
+    fn interpolate_mysql(sql: &str, params: &[serde_json::Value]) -> String {
+        let mut out = String::with_capacity(sql.len() + params.len() * 8);
+        let mut idx = 0;
+        for ch in sql.chars() {
+            if ch == '?' && idx < params.len() {
+                let v = &params[idx];
+                idx += 1;
+                let s = match v {
+                    serde_json::Value::Null => "NULL".to_string(),
+                    serde_json::Value::Bool(b) => if *b { "1".to_string() } else { "0".to_string() },
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::String(s) => escape_mysql_string(s),
+                    serde_json::Value::Array(_) | serde_json::Value::Object(_) => escape_mysql_string(&v.to_string()),
+                };
+                out.push_str(&s);
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
+    impl MySqlDriver {
+        /// MySQL refuses transaction control over the prepared-statement
+        /// protocol, so every statement goes out on the text protocol with
+        /// parameters already interpolated.
+        async fn run(
+            &self,
+            sql: &str,
+            params: &[serde_json::Value],
+            opts: Option<QueryOpts>,
+            read_only: bool,
+        ) -> Result<QueryResult, DriverError> {
+            let statement = if params.is_empty() { sql.to_string() } else { interpolate_mysql(sql, params) };
+            let pool = self.pool.clone();
+            let cancel = opts.as_ref().and_then(|o| o.cancel.clone());
+            let timeout_ms = opts.as_ref().and_then(|o| o.timeout_ms);
+
+            // Running the statement on a spawned task keeps the future
+            // `'static`, which sqlx's executor lifetimes require here.
+            let fut = async move {
+                tokio::spawn(async move {
+                    let mut tx = if read_only {
+                        pool.begin_with("START TRANSACTION READ ONLY").await
+                    } else {
+                        pool.begin().await
+                    }
+                    .map_err(|e| DriverError::Pool(e.to_string()))?;
+
+                    let killer = spawn_killer(&pool, &mut tx, cancel, timeout_ms).await;
+                    crate::sql_log::record_executed_sql(&statement, None, None);
+                    let result = sqlx::Executor::fetch_all(&mut *tx, sqlx::raw_sql(statement.as_str())).await.map_err(map_sqlx_error);
+                    let _ = tx.rollback().await;
+                    if let Some(handle) = killer { handle.abort(); }
+
+                    match result {
+                        Ok(rows) => {
+                            let fields = rows.first().map(|r| r.columns().iter().map(|c| c.name().to_string()).collect());
+                            let json_rows: Vec<serde_json::Value> = rows.iter().map(mysql_row_to_json).collect();
+                            crate::sql_log::record_executed_sql(&statement, Some(json_rows.len() as i64), None);
+                            Ok(QueryResult { rows: json_rows, fields })
+                        }
+                        Err(e) => {
+                            crate::sql_log::record_executed_sql(&statement, None, Some(&e.to_string()));
+                            Err(e)
+                        }
+                    }
+                })
+                .await
+                .map_err(|e| DriverError::Other(e.to_string()))?
+            };
+            crate::driver::with_opts(opts, fut).await
+        }
+    }
+
+    /// Ask the server to abort the running statement when the caller cancels or
+    /// the deadline passes; the connection itself stays blocked until it does.
+    async fn spawn_killer(
+        pool: &sqlx::MySqlPool,
+        tx: &mut sqlx::Transaction<'static, sqlx::MySql>,
+        cancel: Option<tokio_util::sync::CancellationToken>,
+        timeout_ms: Option<u64>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        if cancel.is_none() && timeout_ms.is_none() {
+            return None;
+        }
+        let id: u64 = sqlx::Executor::fetch_one(&mut **tx, sqlx::raw_sql("SELECT CONNECTION_ID() AS id"))
+            .await
+            .ok()
+            .and_then(|row| row.try_get::<u64, _>("id").ok())?;
+        let pool = pool.clone();
+        Some(tokio::spawn(async move {
+            match (cancel, timeout_ms) {
+                (Some(token), Some(ms)) => {
+                    tokio::select! {
+                        _ = token.cancelled() => {},
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(ms)) => {},
+                    }
+                }
+                (Some(token), None) => token.cancelled().await,
+                (None, Some(ms)) => tokio::time::sleep(std::time::Duration::from_millis(ms)).await,
+                (None, None) => return,
+            }
+            let _ = sqlx::raw_sql(&format!("KILL QUERY {id}")).execute(&pool).await;
+        }))
     }
 
     #[async_trait]
     impl Driver for MySqlDriver {
         async fn query(&self, sql: &str, params: &[serde_json::Value], opts: Option<QueryOpts>) -> Result<QueryResult, DriverError> {
-            let sql_owned = sql.to_string();
-            let params_owned = params.to_vec();
-            let pool = self.pool.clone();
-            let host = self.host.clone();
-            let port = self.port;
-
-            let fut = async move {
-                crate::sql_log::record_executed_sql(&sql_owned, None, None);
-                if params_owned.is_empty() {
-                    let rows = sqlx::query(&sql_owned).fetch_all(&pool).await.map_err(map_sqlx_error)?;
-                    let fields = rows.first().map(|r| r.columns().iter().map(|c| c.name().to_string()).collect());
-                    let json_rows = rows.iter().map(mysql_row_to_json).collect::<Vec<_>>();
-                    let res = QueryResult { rows: json_rows, fields };
-                    crate::sql_log::record_executed_sql(&sql_owned, Some(res.rows.len() as i64), None);
-                    Ok::<QueryResult, DriverError>(res)
-                } else {
-                    let q = bind_params(&sql_owned, &params_owned);
-                    // sqlx query with binds needs to be executed via fetch_all
-                    let rows = q.fetch_all(&pool).await.map_err(map_sqlx_error)?;
-                    let fields = rows.first().map(|r| r.columns().iter().map(|c| c.name().to_string()).collect());
-                    let json_rows = rows.iter().map(mysql_row_to_json).collect::<Vec<_>>();
-                    let res = QueryResult { rows: json_rows, fields };
-                    crate::sql_log::record_executed_sql(&sql_owned, Some(res.rows.len() as i64), None);
-                    Ok(res)
-                }
-            };
-
-            // cancellable path with KILL QUERY
-            if let Some(o) = opts.clone()
-                && (o.cancel.is_some() || o.timeout_ms.is_some()) {
-                    let pool2 = self.pool.clone();
-                    let cancel = o.cancel.clone();
-                    let timeout_ms = o.timeout_ms;
-                    let sql2 = sql.to_string();
-                    let params2 = params.to_vec();
-                    let fut2 = async move {
-                        let mut conn = pool2.acquire().await.map_err(|e| DriverError::Pool(e.to_string()))?;
-                        let tid: u32 = {
-                            let row = sqlx::query("SELECT CONNECTION_ID() as id").fetch_one(&mut *conn).await.map_err(map_sqlx_error)?;
-                            row.try_get::<u32, _>("id").unwrap_or(row.try_get::<i32, _>("id").unwrap_or(0) as u32)
-                        };
-                        let cancel_task = cancel.clone().map(|tok| {
-                            let p = pool2.clone();
-                            tokio::spawn(async move {
-                                tok.cancelled().await;
-                                let _ = sqlx::query(&format!("KILL QUERY {tid}")).execute(&p).await;
-                            })
-                        });
-                        let timeout_task = timeout_ms.map(|ms| {
-                            let p = pool2.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-                                let _ = sqlx::query(&format!("KILL QUERY {tid}")).execute(&p).await;
-                            })
-                        });
-                        crate::sql_log::record_executed_sql(&sql2, None, None);
-                        let res: Result<QueryResult, DriverError> = tokio::select! {
-                            r = async {
-                                if params2.is_empty() {
-                                    let rows = sqlx::query(&sql2).fetch_all(&mut *conn).await.map_err(map_sqlx_error)?;
-                                    let fields = rows.first().map(|r| r.columns().iter().map(|c| c.name().to_string()).collect());
-                                    let json_rows = rows.iter().map(mysql_row_to_json).collect();
-                                    Ok(QueryResult { rows: json_rows, fields })
-                                } else {
-                                    let q = bind_params(&sql2, &params2);
-                                    // need to use &mut *conn as executor
-                                    let rows = q.fetch_all(&mut *conn).await.map_err(map_sqlx_error)?;
-                                    let fields = rows.first().map(|r| r.columns().iter().map(|c| c.name().to_string()).collect());
-                                    let json_rows = rows.iter().map(mysql_row_to_json).collect();
-                                    Ok(QueryResult { rows: json_rows, fields })
-                                }
-                            } => r,
-                            _ = async { if let Some(t) = cancel.as_ref() { t.cancelled().await } else { std::future::pending::<()>().await } } => Err(DriverError::Cancelled),
-                        };
-                        if let Some(h) = cancel_task { h.abort(); }
-                        if let Some(h) = timeout_task { h.abort(); }
-                        match &res {
-                            Ok(qr) => crate::sql_log::record_executed_sql(&sql2, Some(qr.rows.len() as i64), None),
-                            Err(e) if !matches!(e, DriverError::Cancelled) => crate::sql_log::record_executed_sql(&sql2, None, Some(&e.to_string())),
-                            _ => {}
-                        }
-                        if let Err(e) = sqlx::query("ROLLBACK").execute(&mut *conn).await { let _ = e; }
-                        res
-                    };
-                    return crate::driver::with_opts(opts, fut2).await;
-                }
-            // also need host/port for conn_error? already inside fut
-            let _ = (host, port);
-            crate::driver::with_opts(opts, fut).await
+            self.run(sql, params, opts, false).await
         }
 
         async fn query_read_only(&self, sql: &str, params: &[serde_json::Value], opts: Option<QueryOpts>) -> Result<QueryResult, DriverError> {
-            if let Some(o) = opts.clone()
-                && (o.cancel.is_some() || o.timeout_ms.is_some()) {
-                    let pool2 = self.pool.clone();
-                    let cancel = o.cancel.clone();
-                    let timeout_ms = o.timeout_ms;
-                    let sql2 = sql.to_string();
-                    let params2 = params.to_vec();
-                    let fut2 = async move {
-                        let mut conn = pool2.acquire().await.map_err(|e| DriverError::Pool(e.to_string()))?;
-                        let tid: u32 = {
-                            let row = sqlx::query("SELECT CONNECTION_ID() as id").fetch_one(&mut *conn).await.map_err(map_sqlx_error)?;
-                            row.try_get::<u32, _>("id").unwrap_or(row.try_get::<i32, _>("id").unwrap_or(0) as u32)
-                        };
-                        let cancel_task = cancel.clone().map(|tok| {
-                            let p = pool2.clone();
-                            tokio::spawn(async move {
-                                tok.cancelled().await;
-                                let _ = sqlx::query(&format!("KILL QUERY {tid}")).execute(&p).await;
-                            })
-                        });
-                        let timeout_task = timeout_ms.map(|ms| {
-                            let p = pool2.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-                                let _ = sqlx::query(&format!("KILL QUERY {tid}")).execute(&p).await;
-                            })
-                        });
-                        crate::sql_log::record_executed_sql(&sql2, None, None);
-                        let res: Result<QueryResult, DriverError> = tokio::select! {
-                            r = async {
-                                sqlx::query("START TRANSACTION READ ONLY").execute(&mut *conn).await.map_err(map_sqlx_error)?;
-                                let qr: QueryResult = if params2.is_empty() {
-                                    let rows = sqlx::query(&sql2).fetch_all(&mut *conn).await.map_err(map_sqlx_error)?;
-                                    let fields = rows.first().map(|r| r.columns().iter().map(|c| c.name().to_string()).collect());
-                                    let json_rows = rows.iter().map(mysql_row_to_json).collect();
-                                    QueryResult { rows: json_rows, fields }
-                                } else {
-                                    let q = bind_params(&sql2, &params2);
-                                    let rows = q.fetch_all(&mut *conn).await.map_err(map_sqlx_error)?;
-                                    let fields = rows.first().map(|r| r.columns().iter().map(|c| c.name().to_string()).collect());
-                                    let json_rows = rows.iter().map(mysql_row_to_json).collect();
-                                    QueryResult { rows: json_rows, fields }
-                                };
-                                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-                                Ok(qr)
-                            } => r,
-                            _ = async { if let Some(t) = cancel.as_ref() { t.cancelled().await } else { std::future::pending::<()>().await } } => {
-                                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-                                Err(DriverError::Cancelled)
-                            },
-                        };
-                        if let Some(h) = cancel_task { h.abort(); }
-                        if let Some(h) = timeout_task { h.abort(); }
-                        match &res {
-                            Ok(qr) => crate::sql_log::record_executed_sql(&sql2, Some(qr.rows.len() as i64), None),
-                            Err(e) if !matches!(e, DriverError::Cancelled) => crate::sql_log::record_executed_sql(&sql2, None, Some(&e.to_string())),
-                            _ => {}
-                        }
-                        res
-                    };
-                    return crate::driver::with_opts(opts, fut2).await;
-                }
-            let sql_owned = sql.to_string();
-            let params_owned = params.to_vec();
-            let pool = self.pool.clone();
-            let fut = async move {
-                let mut conn = pool.acquire().await.map_err(|e| DriverError::Pool(e.to_string()))?;
-                crate::sql_log::record_executed_sql(&sql_owned, None, None);
-                sqlx::query("START TRANSACTION READ ONLY").execute(&mut *conn).await.map_err(map_sqlx_error)?;
-                let res: Result<QueryResult, DriverError> = if params_owned.is_empty() {
-                    let rows = sqlx::query(&sql_owned).fetch_all(&mut *conn).await.map_err(map_sqlx_error)?;
-                    let fields = rows.first().map(|r| r.columns().iter().map(|c| c.name().to_string()).collect());
-                    let json_rows = rows.iter().map(mysql_row_to_json).collect();
-                    Ok(QueryResult { rows: json_rows, fields })
-                } else {
-                    let q = bind_params(&sql_owned, &params_owned);
-                    let rows = q.fetch_all(&mut *conn).await.map_err(map_sqlx_error)?;
-                    let fields = rows.first().map(|r| r.columns().iter().map(|c| c.name().to_string()).collect());
-                    let json_rows = rows.iter().map(mysql_row_to_json).collect();
-                    Ok(QueryResult { rows: json_rows, fields })
-                };
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-                match &res {
-                    Ok(qr) => crate::sql_log::record_executed_sql(&sql_owned, Some(qr.rows.len() as i64), None),
-                    Err(e) => crate::sql_log::record_executed_sql(&sql_owned, None, Some(&e.to_string())),
-                }
-                res
-            };
-            crate::driver::with_opts(opts, fut).await
+            self.run(sql, params, opts, true).await
         }
+
 
         async fn explain(&self, sql: &str, params: &[serde_json::Value]) -> Result<QueryResult, DriverError> {
             let full = format!("EXPLAIN {sql}");
@@ -389,8 +323,8 @@ pub mod live {
             let rows = if params.is_empty() {
                 sqlx::query(&full).fetch_all(&self.pool).await.map_err(map_sqlx_error)?
             } else {
-                let q = bind_params(&full, params);
-                q.fetch_all(&self.pool).await.map_err(map_sqlx_error)?
+                let sql2 = interpolate_mysql(&full, params);
+                sqlx::query(&sql2).fetch_all(&self.pool).await.map_err(map_sqlx_error)?
             };
             let fields = rows.first().map(|r| r.columns().iter().map(|c| c.name().to_string()).collect());
             let json_rows = rows.iter().map(mysql_row_to_json).collect::<Vec<_>>();
@@ -400,7 +334,8 @@ pub mod live {
         }
 
         async fn list_tables(&self, _schema: Option<&str>) -> Result<Vec<String>, DriverError> {
-            let rows = sqlx::query("SHOW TABLES").fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
+            if self.database.is_none() { return Err(no_db_error()); }
+            let rows = sqlx::query("SHOW TABLES").persistent(false).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
             Ok(rows.iter().map(|r| {
                 let v: String = r.try_get(0).unwrap_or_default();
                 v
@@ -408,8 +343,9 @@ pub mod live {
         }
 
         async fn describe_table(&self, table: &str, _schema: Option<&str>) -> Result<Vec<ColumnInfo>, DriverError> {
+            if self.database.is_none() { return Err(no_db_error()); }
             let sql = format!("DESCRIBE `{}`", table.replace('`', "``"));
-            let rows = sqlx::query(&sql).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
+            let rows = sqlx::query(&sql).persistent(false).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
             Ok(rows.iter().map(|r| {
                 let field: String = r.try_get::<Option<String>, _>("Field").unwrap_or(None).unwrap_or_default();
                 let typ: String = r.try_get::<Option<String>, _>("Type").unwrap_or(None).unwrap_or_default();
@@ -419,10 +355,11 @@ pub mod live {
         }
 
         async fn sample_table(&self, table: &str, limit: i64, _schema: Option<&str>) -> Result<QueryResult, DriverError> {
+            if self.database.is_none() { return Err(no_db_error()); }
             let quoted = table.replace('`', "``");
             let sql = format!("SELECT * FROM `{quoted}` LIMIT ?");
             crate::sql_log::record_executed_sql(&sql, None, None);
-            let rows = sqlx::query(&sql).bind(limit).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
+            let rows = sqlx::query(&sql).persistent(false).bind(limit).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
             let fields = rows.first().map(|r| r.columns().iter().map(|c| c.name().to_string()).collect());
             let json_rows = rows.iter().map(mysql_row_to_json).collect();
             let res = QueryResult { rows: json_rows, fields };
@@ -431,9 +368,9 @@ pub mod live {
         }
 
         async fn search_schema(&self, term: &str, _schema: Option<&str>) -> Result<Vec<SchemaSearchResult>, DriverError> {
+            if self.database.is_none() { return Err(no_db_error()); }
             let pattern = format!("%{}%", term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
-            let rows = sqlx::query(
-                r#"
+            let sql_tmp = interpolate_mysql(r#"
                 SELECT 'table' AS kind, table_name AS `table`, NULL AS `column`, NULL AS type
                 FROM information_schema.tables
                 WHERE table_schema = DATABASE() AND table_name LIKE ?
@@ -445,8 +382,8 @@ pub mod live {
                 WHERE c.table_schema = DATABASE()
                   AND (c.column_name LIKE ? OR c.table_name LIKE ?)
                 ORDER BY `table`, kind, `column`
-                "#
-            ).bind(pattern.clone()).bind(pattern.clone()).bind(pattern).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
+                "#, &[serde_json::json!(pattern.clone()), serde_json::json!(pattern.clone()), serde_json::json!(pattern)]);
+            let rows = sqlx::query(&sql_tmp).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
             Ok(rows.iter().map(|r| {
                 let kind: String = r.try_get::<Option<String>, _>("kind").unwrap_or(None).unwrap_or_default();
                 let table: String = r.try_get::<Option<String>, _>("table").unwrap_or(None).unwrap_or_default();
@@ -457,6 +394,7 @@ pub mod live {
         }
 
         async fn list_relationships(&self, table: Option<&str>, _schema: Option<&str>) -> Result<Vec<RelationshipInfo>, DriverError> {
+            if self.database.is_none() { return Err(no_db_error()); }
             let (sql, bind_table) = if table.is_some() {
                 (
                     r#"
@@ -486,7 +424,7 @@ pub mod live {
                 )
             };
             let rows = if bind_table {
-                sqlx::query(sql).bind(table.unwrap()).fetch_all(&self.pool).await.map_err(map_sqlx_error)?
+                sqlx::query(sql).persistent(false).bind(table.unwrap()).fetch_all(&self.pool).await.map_err(map_sqlx_error)?
             } else {
                 sqlx::query(sql).fetch_all(&self.pool).await.map_err(map_sqlx_error)?
             };
@@ -501,17 +439,16 @@ pub mod live {
         }
 
         async fn table_stats(&self, table: &str, _schema: Option<&str>) -> Result<TableStats, DriverError> {
-            let table_rows = sqlx::query(
-                "SELECT table_rows, data_length + index_length AS size_bytes FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?"
-            ).bind(table).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
+            if self.database.is_none() { return Err(no_db_error()); }
+            let sql_tmp = interpolate_mysql("SELECT table_rows, data_length + index_length AS size_bytes FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?", &[serde_json::json!(table)]);
+            let table_rows = sqlx::query(&sql_tmp).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
             let (estimated_rows, size_bytes) = if let Some(r) = table_rows.first() {
                 let tr: Option<i64> = r.try_get::<Option<i64>, _>("table_rows").unwrap_or(None).or_else(|| r.try_get::<Option<String>, _>("table_rows").unwrap_or(None).and_then(|s| s.parse().ok()));
                 let sb: Option<i64> = r.try_get::<Option<i64>, _>("size_bytes").unwrap_or(None).or_else(|| r.try_get::<Option<String>, _>("size_bytes").unwrap_or(None).and_then(|s| s.parse().ok()));
                 (tr, sb)
             } else { (None, None) };
-            let idx_rows = sqlx::query(
-                "SELECT index_name, column_name, non_unique FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? ORDER BY index_name, seq_in_index"
-            ).bind(table).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
+            let sql_tmp2 = interpolate_mysql("SELECT index_name, column_name, non_unique FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? ORDER BY index_name, seq_in_index", &[serde_json::json!(table)]);
+            let idx_rows = sqlx::query(&sql_tmp2).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
             let mut idx_map: std::collections::BTreeMap<String, (Vec<String>, bool)> = std::collections::BTreeMap::new();
             for r in idx_rows {
                 let name: String = r.try_get::<Option<String>, _>("index_name").unwrap_or(None).unwrap_or_default();
@@ -535,6 +472,7 @@ pub mod live {
         }
 
         async fn get_full_schema(&self, _schema: Option<&str>) -> Result<String, DriverError> {
+            if self.database.is_none() { return Err(no_db_error()); }
             let col_rows = sqlx::query(
                 "SELECT table_name, column_name, data_type, is_nullable, ordinal_position FROM information_schema.columns WHERE table_schema = DATABASE() ORDER BY table_name, ordinal_position"
             ).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
