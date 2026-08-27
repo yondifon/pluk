@@ -10,6 +10,19 @@ export type HeaderActions = {
 
 export type TestState = "idle" | "testing" | "ok" | { kind: "fail"; error: string };
 
+function humanize(raw: string): string {
+  if (!raw) return "Connection failed. Check the setup and try again.";
+  const low = raw.toLowerCase();
+  let msg: string;
+  if (low.includes("refused") || low.includes("connection")) msg = "Couldn’t connect. Check that the service is reachable and try again.";
+  else if (low.includes("auth") || low.includes("unauthorized") || low.includes("forbidden")) msg = "Authentication failed. Check the credentials and try again.";
+  else if (low.includes("timeout")) msg = "Connection timed out. Check the network and try again.";
+  else if (low.includes("tunnel") || low.includes("ssh")) msg = "Secure tunnel failed. Check SSH settings and try again.";
+  else msg = raw.trim();
+  if (!msg.toLowerCase().includes("try again")) msg = msg.replace(/\.?$/, ".") + " Check the setup and try again.";
+  return msg;
+}
+
 export function renderHeader(
   container: HTMLElement,
   integration: Integration,
@@ -42,8 +55,10 @@ export function renderHeader(
   const status = deriveStatus(health ?? null);
   const chip = document.createElement("span");
   chip.className = `status-chip status-${status}`;
+  chip.setAttribute("aria-label", `Status: ${statusLabel(status)}`);
   const dot = document.createElement("span");
   dot.className = "status-dot";
+  dot.setAttribute("aria-hidden", "true");
   chip.appendChild(dot);
   const label = document.createElement("span");
   label.textContent = statusLabel(status);
@@ -57,24 +72,33 @@ export function renderHeader(
   }
   if (health?.error) chip.title = health.error;
 
-  // Test button
   const testWrap = document.createElement("span");
   testWrap.className = "test-wrap";
-  const testGlyph = document.createElement("span");
-  testGlyph.className = "test-glyph";
-  if (testState === "testing") testGlyph.textContent = "…";
-  else if (testState === "ok") testGlyph.textContent = "✓";
-  else if (typeof testState === "object" && testState.kind === "fail") testGlyph.textContent = "✕";
-  if (testGlyph.textContent) testWrap.appendChild(testGlyph);
+
+  const glyph = document.createElement("span");
+  glyph.className = "test-glyph";
+  glyph.setAttribute("aria-hidden", "true");
+  if (testState === "testing") glyph.textContent = "…";
+  else if (testState === "ok") glyph.textContent = "✓";
+  else if (typeof testState === "object" && testState.kind === "fail") glyph.textContent = "✕";
+  if (glyph.textContent) testWrap.appendChild(glyph);
 
   const testBtn = document.createElement("button");
+  testBtn.type = "button";
   testBtn.className = "btn btn-secondary btn-sm";
-  testBtn.textContent = "Test";
-  testBtn.disabled = testState === "testing";
+  testBtn.setAttribute("aria-label", "Test connection");
+  if (testState === "testing") {
+    testBtn.textContent = "Testing…";
+    testBtn.disabled = true;
+    testBtn.setAttribute("aria-busy", "true");
+  } else {
+    testBtn.textContent = "Test";
+    testBtn.disabled = false;
+    testBtn.removeAttribute("aria-busy");
+  }
   testBtn.addEventListener("click", actions.onTest);
   testWrap.appendChild(testBtn);
 
-  // Overflow menu
   const menu = document.createElement("details");
   menu.className = "overflow-menu";
   const summary = document.createElement("summary");
@@ -118,6 +142,19 @@ export function renderHeader(
   }
 
   stack.append(titleRow, metaRow);
+
+  if (testState !== "idle") {
+    const live = document.createElement("div");
+    live.className = `test-result test-result-${testState === "testing" ? "testing" : testState === "ok" ? "ok" : "fail"}`;
+    live.setAttribute("role", "status");
+    live.setAttribute("aria-live", "polite");
+    live.setAttribute("aria-atomic", "true");
+    if (testState === "testing") live.textContent = "Testing connection…";
+    else if (testState === "ok") live.textContent = "Connected — your integration is working.";
+    else live.textContent = humanize(testState.error);
+    stack.appendChild(live);
+  }
+
   top.append(badge, stack);
   container.appendChild(top);
 }

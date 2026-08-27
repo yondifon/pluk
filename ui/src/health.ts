@@ -44,13 +44,21 @@ export function transitionToast(transition: Transition, integrationName: string)
   };
 }
 
-// Human-facing error copy: say what failed and what to try, never internal vocab
 export function humanizeHealthError(raw: string | null | undefined): string {
   if (!raw) return "Connection is failing. Check the setup and try again.";
   const low = raw.toLowerCase();
-  if (low.includes("refused") || low.includes("connection")) return "Couldn’t connect. Check that the service is reachable and try again.";
-  if (low.includes("auth") || low.includes("unauthorized") || low.includes("forbidden")) return "Authentication failed. Check the credentials and try again.";
-  if (low.includes("timeout")) return "Connection timed out. Check the network and try again.";
-  if (low.includes("tunnel") || low.includes("ssh")) return "Secure tunnel failed. Check SSH settings and try again.";
-  return raw;
+  let msg: string;
+  if (low.includes("refused") || low.includes("connection")) msg = "Couldn’t connect. Check that the service is reachable and try again.";
+  else if (low.includes("auth") || low.includes("unauthorized") || low.includes("forbidden")) msg = "Authentication failed. Check the credentials and try again.";
+  else if (low.includes("timeout")) msg = "Connection timed out. Check the network and try again.";
+  else if (low.includes("tunnel") || low.includes("ssh")) msg = "Secure tunnel failed. Check SSH settings and try again.";
+  else msg = raw.trim();
+  if (!msg.toLowerCase().includes("try again")) {
+    msg = msg.replace(/\.?$/, ".") + " Check the setup and try again.";
+  }
+  return msg;
+}
+
+export function humanizeTestError(raw: string | null | undefined): string {
+  return humanizeHealthError(raw);
 }

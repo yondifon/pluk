@@ -4,9 +4,9 @@ import { createShell, renderBanners } from "./shell.ts";
 import { createSidebar, type SidebarState } from "./sidebar.ts";
 import { emptyState, renderEmptyState } from "./emptyStates.ts";
 import { mountIntegrationDetail } from "./integration-detail/index.ts";
-import type { Integration as DetailIntegration } from "./integration-detail/types.ts";
+import type { Integration as DetailIntegration, ConnHealth as DetailHealth } from "./integration-detail/types.ts";
 import { renderGroupDetail } from "./groupDetail.ts";
-import { renderIntegrationForm, renderGroupForm } from "./forms/render.ts";
+import { renderIntegrationForm, renderGroupForm, renderTypeChooser } from "./forms/render.ts";
 import {
   adopt,
   applyEnvironmentDefaults,
@@ -17,6 +17,7 @@ import {
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
 import type { AdapterManifest as CatalogManifest, ToolState } from "./forms/catalog.ts";
 import { ToastCenter, renderToasts } from "./toast.ts";
+import { humanizeHealthError } from "./health.ts";
 import { invoke, hasHost } from "./host.ts";
 import type { Integration, Group, Environment, Health } from "./types.ts";
 
@@ -51,6 +52,7 @@ type Selection =
   | { kind: "none" }
   | { kind: "integration"; id: string }
   | { kind: "group"; id: string }
+  | { kind: "choose-integration-type" }
   | { kind: "new-integration" }
   | { kind: "new-group" }
   | { kind: "edit-integration"; id: string }
@@ -68,8 +70,10 @@ let manifests: CatalogManifest[] = [];
 let hostIntegrations: HostIntegration[] = [];
 let hostGroups: HostGroup[] = [];
 let selection: Selection = { kind: "none" };
+let previousSelection: Selection = { kind: "none" };
 let draft: ConnectionDraft | null = null;
 let groupDraft: GroupDraft | null = null;
+let detailHandle: { destroy: () => void; updateHealth: (next: DetailHealth | null) => void } | null = null;
 let detachDetail: (() => void) | null = null;
 
 const toasts = new ToastCenter();
@@ -108,6 +112,8 @@ function report(error: unknown, integrationId: string, title: string): void {
 // ── Detail rendering ─────────────────────────────────────────────────────────
 
 function renderDetail(mount: HTMLElement): void {
+  detailHandle?.destroy();
+  detailHandle = null;
   detachDetail?.();
   detachDetail = null;
   mount.innerHTML = "";
@@ -148,6 +154,7 @@ function renderDetail(mount: HTMLElement): void {
           inject: injectClientConfig,
         },
       );
+      detailHandle = mounted;
       detachDetail = mounted.destroy;
       return;
     }
@@ -173,10 +180,27 @@ function renderDetail(mount: HTMLElement): void {
       });
       return;
     }
+    case "choose-integration-type": {
+      const chooser = renderTypeChooser(
+        manifests,
+        (m) => chooseIntegrationType(m),
+        {
+          onCancel: () => {
+            draft = null;
+            select(previousSelection);
+          },
+          adaptersLoadFailed: state.adaptersLoadFailed,
+          onRetry: () => void loadAdapters().then(refresh),
+        },
+      );
+      wrap.appendChild(chooser);
+      return;
+    }
     case "new-integration":
     case "edit-integration": {
       if (!draft) return;
       const current = draft;
+      const isNew = selection.kind === "new-integration";
       wrap.appendChild(
         renderIntegrationForm(
           current,
@@ -186,7 +210,16 @@ function renderDetail(mount: HTMLElement): void {
             renderDetail(mount);
           },
           (saved) => void saveIntegration(saved),
-          () => select({ kind: "none" }),
+          () => {
+            draft = null;
+            select({ kind: "none" });
+          },
+          isNew
+            ? () => {
+                previousSelection = selection;
+                select({ kind: "choose-integration-type" });
+              }
+            : undefined,
         ),
       );
       return;
@@ -224,8 +257,14 @@ function renderDetail(mount: HTMLElement): void {
 // ── Actions ──────────────────────────────────────────────────────────────────
 
 function startNewIntegration(): void {
-  const first = manifests[0];
-  draft = first ? adopt(applyEnvironmentDefaults(emptyDraft()), first, true) : emptyDraft();
+  previousSelection = selection;
+  draft = null;
+  select({ kind: "choose-integration-type" });
+}
+
+function chooseIntegrationType(manifest: CatalogManifest): void {
+  const base = draft ?? applyEnvironmentDefaults(emptyDraft());
+  draft = adopt(base, manifest, true);
   select({ kind: "new-integration" });
 }
 
@@ -344,12 +383,43 @@ async function deleteGroup(id: string): Promise<void> {
 async function testIntegration(id: string): Promise<{ ok: boolean; error?: string }> {
   const result = await invoke<{ ok: boolean; error?: string }>("test_connection", { id });
   await loadHealth();
+  const row = hostIntegrations.find((c) => c.id === id);
+  const name = row?.name ?? "Integration";
+  if (result.ok) {
+    toasts.present({ integrationId: id, title: name, message: "Connected — your integration is working.", kind: "success" });
+  } else {
+    const msg = humanizeHealthError(result.error ?? null);
+    toasts.present({ integrationId: id, title: name, message: msg, kind: "error" });
+  }
+  const h = state.health[id];
+  detailHandle?.updateHealth(h ? { status: h.status, error: h.error ?? null, at: h.at } : null);
+  refreshSidebar();
   return result;
 }
 
-/** No host command writes AI-client config files yet. */
-async function injectClientConfig(): Promise<{ status: "added" | "skipped"; path: string }> {
-  throw new Error("Pluk can't write config files yet — copy the snippet instead");
+function refreshSidebar(): void {
+  if (!shellMounts) return;
+  const sidebarWrap = shellMounts.root.querySelector(".shell-sidebar");
+  if (sidebarWrap) {
+    sidebarWrap.innerHTML = "";
+    sidebarWrap.appendChild(buildSidebar());
+  }
+}
+
+async function injectClientConfig(args: {
+  client: string;
+  scope: string;
+  projectDir: string | null;
+  key: string;
+  url: string;
+}): Promise<{ status: "added" | "skipped"; path: string }> {
+  return invoke<{ status: "added" | "skipped"; path: string }>("inject_mcp_config", {
+    client: args.client,
+    scope: args.scope,
+    project_dir: args.projectDir,
+    key: args.key,
+    url: args.url,
+  });
 }
 
 // ── Data ─────────────────────────────────────────────────────────────────────
@@ -461,7 +531,17 @@ async function bootstrap(): Promise<void> {
   await loadHealth();
   await loadData();
 
-  setInterval(() => void loadHealth().then(refresh), 15000);
+  setInterval(
+    () =>
+      void loadHealth().then(() => {
+        refreshSidebar();
+        if (selection.kind === "integration") {
+          const h = state.health[selection.id];
+          detailHandle?.updateHealth(h ? { status: h.status, error: h.error ?? null, at: h.at } : null);
+        }
+      }),
+    15000,
+  );
 }
 
 void bootstrap();
