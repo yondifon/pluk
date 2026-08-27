@@ -59,9 +59,40 @@ impl pluk_ssh::pool::DriverFactory for DbDriverFactory {
         if let Some(db) = database {
             cfg.database = Some(db.to_string());
         }
-        // For pool tests, we use FakeDriver; real path would call create_driver
-        // with tunnel provider. Here we return a fake that satisfies PoolDriver.
-        let fake = crate::fake::FakeDriver::new_generic();
-        Ok(Arc::new(DbDriverAdapter(Arc::new(fake))))
+        let opts = crate::factory::CreateDriverOpts::new(cfg);
+        let dw = crate::factory::create_driver(opts)
+            .await
+            .map_err(|e| pluk_ssh::pool::PoolError::Connection(e.to_string()))?;
+        let driver: Arc<dyn DbDriver> = Arc::from(dw.driver);
+        let tunnel = dw.tunnel;
+        struct TunnelDriver {
+            inner: Arc<dyn DbDriver>,
+            tunnel: Option<crate::config::TunnelEndpoint>,
+        }
+        #[async_trait::async_trait]
+        impl pluk_ssh::pool::PoolDriver for TunnelDriver {
+            async fn test_connection(&self) -> Result<(), pluk_ssh::pool::PoolError> {
+                self.inner
+                    .test_connection()
+                    .await
+                    .map_err(|e| pluk_ssh::pool::PoolError::Connection(e.to_string()))
+            }
+            async fn close(&self) -> Result<(), pluk_ssh::pool::PoolError> {
+                let r = self
+                    .inner
+                    .close()
+                    .await
+                    .map_err(|e| pluk_ssh::pool::PoolError::Other(e.to_string()));
+                if let Some(t) = &self.tunnel {
+                    t.close();
+                }
+                r
+            }
+        }
+        if tunnel.is_some() {
+            Ok(Arc::new(TunnelDriver { inner: driver, tunnel }))
+        } else {
+            Ok(Arc::new(DbDriverAdapter(driver)))
+        }
     }
 }

@@ -1,7 +1,6 @@
 use crate::config::{SshExecProvider, SshTunnelProvider, SqlConfig, TunnelEndpoint, resolve_ssl};
 use crate::driver::Driver;
 use crate::error::DriverError;
-use crate::fake::FakeDriver;
 use crate::ssh_provider::{PlukSshExecProvider, PlukSshTunnelProvider};
 
 pub struct CreateDriverOpts {
@@ -40,33 +39,25 @@ impl DriverWithTunnel {
     }
 }
 
-/// Port of `createDriver` — resolves pin rule, builds SSL config, rewrites
-/// host/port through SSH tunnel when configured, dispatches to engine, and
-/// wraps close to tear down the tunnel.
-///
-/// Today engines are faked (no live DB). Real pool construction will replace
-/// the fake branches when `pool` features are wired; the pin/SSL/tunnel
-/// logic is already live and tested.
 pub async fn create_driver(mut opts: CreateDriverOpts) -> Result<DriverWithTunnel, DriverError> {
-    // Pin rule (fail closed before any pool is built)
     let configured = opts.cfg.database.clone();
     let effective_db = pluk_policy::resolve_override_database(
         configured.as_deref(),
         opts.database_override.as_deref(),
-    ).map_err(DriverError::from)?;
+    )
+    .map_err(DriverError::from)?;
     opts.cfg.database = effective_db;
 
-    // SSL config — loads CA/cert/key from disk with verification enforced on verify modes
-    let _ssl = resolve_ssl(&opts.cfg)?;
+    let ssl = resolve_ssl(&opts.cfg)?;
 
-    // SSH tunnel seam — leave host/port rewrite to provider
     let mut effective_host = opts.cfg.effective_host();
     let mut effective_port = opts.cfg.effective_port();
     let mut tunnel: Option<TunnelEndpoint> = None;
 
     let use_ssh = opts.cfg.is_use_ssh();
     if opts.cfg.r#type != "sqlite" && use_ssh && opts.cfg.ssh_host.is_some() {
-        let provider: Box<dyn SshTunnelProvider> = opts.ssh_provider.unwrap_or_else(|| Box::new(PlukSshTunnelProvider));
+        let provider: Box<dyn SshTunnelProvider> =
+            opts.ssh_provider.unwrap_or_else(|| Box::new(PlukSshTunnelProvider));
         let t = provider.open_tunnel(&opts.cfg, &effective_host, effective_port).await?;
         effective_host = t.local_host.clone();
         effective_port = t.local_port;
@@ -78,40 +69,61 @@ pub async fn create_driver(mut opts: CreateDriverOpts) -> Result<DriverWithTunne
             let is_ssh = opts.cfg.is_use_ssh();
             if is_ssh {
                 if opts.cfg.ssh_host.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
-                    return Err(DriverError::Connection("SQLite SSH host is missing. Set it in the connection settings.".into()));
+                    return Err(DriverError::Connection(
+                        "SQLite SSH host is missing. Set it in the connection settings.".into(),
+                    ));
                 }
-                let filename = opts.cfg.sqlite_filename().ok_or_else(|| DriverError::Connection("SQLite path is missing. Set the remote database file path.".into()))?;
+                let filename = opts.cfg.sqlite_filename().ok_or_else(|| {
+                    DriverError::Connection("SQLite path is missing. Set the remote database file path.".into())
+                })?;
                 let exec: Box<dyn SshExecProvider> = opts.ssh_exec_provider.unwrap_or_else(|| {
                     let cfg = opts.cfg.clone();
                     Box::new(PlukSshExecProvider::new(cfg))
                 });
                 Box::new(crate::sqlite_remote::RemoteSqliteDriver::new(filename, exec))
             } else {
-                let filename = opts.cfg.sqlite_filename().ok_or_else(|| DriverError::Connection("SQLite path is missing. Set the database file path.".into()))?;
+                let filename = opts.cfg.sqlite_filename().ok_or_else(|| {
+                    DriverError::Connection("SQLite path is missing. Set the database file path.".into())
+                })?;
                 Box::new(crate::sqlite::SqliteDriver::open(&filename)?)
             }
         }
         "postgres" => {
-            // Real Postgres pool would be built here with `effective_host`, `effective_port`, `_ssl`.
-            // For now return a fake that records the resolved endpoint so R08 can be tested.
-            let mut d = FakeDriver::new_postgres();
-            d.host = effective_host;
-            d.port = effective_port;
-            d.database = opts.cfg.database.clone();
-            d.ssl_mode = opts.cfg.ssl_mode.clone();
-            Box::new(d)
+            #[cfg(feature = "postgres")]
+            {
+                let d = crate::postgres::live::PostgresDriver::new(
+                    effective_host,
+                    effective_port,
+                    opts.cfg.user.clone(),
+                    opts.cfg.password.clone(),
+                    opts.cfg.database.clone(),
+                    ssl,
+                )?;
+                Box::new(d)
+            }
+            #[cfg(not(feature = "postgres"))]
+            return Err(DriverError::UnsupportedType("postgres".into()));
         }
         "mysql" => {
-            let mut d = FakeDriver::new_mysql();
-            d.host = effective_host;
-            d.port = effective_port;
-            d.database = opts.cfg.database.clone();
-            d.ssl_mode = opts.cfg.ssl_mode.clone();
-            Box::new(d)
+            #[cfg(feature = "mysql")]
+            {
+                let d = crate::mysql::live::MySqlDriver::new(
+                    effective_host,
+                    effective_port,
+                    opts.cfg.user.clone(),
+                    opts.cfg.password.clone(),
+                    opts.cfg.database.clone(),
+                    ssl,
+                    opts.cfg.socket_path.clone(),
+                )
+                .await?;
+                Box::new(d)
+            }
+            #[cfg(not(feature = "mysql"))]
+            return Err(DriverError::UnsupportedType("mysql".into()));
         }
         other => return Err(DriverError::UnsupportedType(other.to_string())),
     };
 
-    // Close wrapping is handled by DriverWithTunnel::close; no need to monkey-patch trait object.
     Ok(DriverWithTunnel { driver, tunnel })
 }

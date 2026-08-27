@@ -24,6 +24,7 @@ native-tls = { version = "0.2", optional = true }
 
 # SQLite
 rusqlite = { version = "0.40", features = ["bundled"] }
+tempfile = "3"
 
 # MySQL
 sqlx = { version = "0.8", default-features = false, features = ["mysql", "runtime-tokio-rustls", "tls-rustls"], optional = true }
