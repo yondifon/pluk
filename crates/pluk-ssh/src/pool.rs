@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::pending::{
     clear_connect_episode, connect_wait_error, is_ssh_auth_error, is_ssh_stalled,
-    record_connect_failure_msg, start_connect_attempt, SSH_CONNECT_WAIT_MS, SSH_PENDING_CODE,
+    record_connect_failure_msg, start_connect_attempt, SSH_CONNECT_WAIT_MS,
 };
 
 // ── Budgets ──────────────────────────────────────────────────────────────────
@@ -107,6 +107,7 @@ struct Entry {
     notify: Arc<Notify>,
     idle_handle: Option<tokio::task::JoinHandle<()>>,
     last_used: Instant,
+    #[allow(dead_code)]
     started_at: Instant,
     use_ssh: bool,
     validating: bool,
@@ -118,6 +119,7 @@ enum DriverState {
     Failed(String),
 }
 
+#[allow(dead_code)]
 impl Entry {
     fn is_settled(&self, state: &DriverState) -> bool {
         !matches!(state, DriverState::Pending)
@@ -496,8 +498,6 @@ impl DriverPool {
                 }
                 if coded.code == "SSH_AUTH_ERROR" {
                     Err(PoolError::Auth(coded.message))
-                } else if coded.code == SSH_PENDING_CODE {
-                    Err(PoolError::Other(format!("{}: {}", coded.code, coded.message)))
                 } else {
                     Err(PoolError::Other(format!("{}: {}", coded.code, coded.message)))
                 }
@@ -530,10 +530,7 @@ impl DriverPool {
             )
             .await;
 
-            let healthy = match healthcheck {
-                Ok(Ok(())) => true,
-                _ => false,
-            };
+            let healthy = matches!(healthcheck, Ok(Ok(())));
 
             if healthy {
                 let mut e = entry.lock().await;

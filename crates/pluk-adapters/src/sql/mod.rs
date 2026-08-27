@@ -31,6 +31,17 @@ fn db_config_from(conn: &Integration) -> DbSqlConfig {
     cfg.password = conn.config.get("password").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.database = conn.config.get("database").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.filename = conn.config.get("filename").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.use_ssh = conn.config.get("use_ssh").map(|v| match v {
+        serde_json::Value::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        serde_json::Value::String(s) => s.clone(),
+        _ => "".to_string(),
+    });
+    cfg.ssh_host = conn.config.get("ssh_host").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.ssh_port = conn.config.get("ssh_port").and_then(|v| v.as_u64()).map(|n| n as u16);
+    cfg.ssh_user = conn.config.get("ssh_user").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.ssh_auth_type = conn.config.get("ssh_auth_type").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.ssh_key_path = conn.config.get("ssh_key_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.ssh_password = conn.config.get("ssh_password").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg
 }
 
