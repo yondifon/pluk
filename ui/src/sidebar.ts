@@ -38,12 +38,9 @@ export function createSidebar(
   root.style.height = "100%";
   root.style.minHeight = "0";
 
-  // Toolbar
+  // Top bar
   const toolbar = document.createElement("div");
-  toolbar.style.display = "flex";
-  toolbar.style.gap = "8px";
-  toolbar.style.padding = "8px 12px";
-  toolbar.style.justifyContent = "flex-end";
+  toolbar.className = "sidebar-topbar";
   const btnNewInt = document.createElement("button");
   btnNewInt.textContent = "+";
   btnNewInt.title = "New Integration (⌘N)";

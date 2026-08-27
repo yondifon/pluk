@@ -19,9 +19,12 @@ import type { AdapterManifest as CatalogManifest, ToolState } from "./forms/cata
 import { ToastCenter, renderToasts } from "./toast.ts";
 import { humanizeHealthError } from "./health.ts";
 import { invoke, hasHost } from "./host.ts";
+import { isMac } from "./platform.ts";
 import type { Integration, Group, Environment, Health } from "./types.ts";
 
 const app = document.getElementById("app")!;
+
+if (isMac()) document.documentElement.classList.add("platform-macos");
 
 zoom.apply();
 zoom.syncFromHost();
