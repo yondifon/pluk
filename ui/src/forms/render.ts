@@ -5,25 +5,107 @@ import { canSave, splitTools } from "./connectionDraft.ts";
 import type { GroupDraft } from "./groupForm.ts";
 import { overridableFields, inheritPlaceholder, canSaveGroup } from "./groupForm.ts";
 
-export function renderTypeChooser(adapters: AdapterManifest[], onChoose: (m: AdapterManifest) => void): HTMLElement {
+export function renderTypeChooser(
+  adapters: AdapterManifest[],
+  onChoose: (m: AdapterManifest) => void,
+  opts?: { onCancel?: () => void; adaptersLoadFailed?: boolean; onRetry?: () => void },
+): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "form-chooser";
-  for (const { category, items } of groupedByCategory(adapters)) {
-    const section = document.createElement("section");
-    section.className = "card";
-    const h = document.createElement("h3");
-    h.className = "card-title";
-    h.textContent = prettyCategory(category);
-    section.appendChild(h);
-    for (const a of items) {
-      const btn = document.createElement("button");
-      btn.className = "chooser-row";
-      btn.innerHTML = `<span class="type-badge">${a.id[0].toUpperCase()}</span><span>${a.label}</span><span class="chooser-chevron">›</span>`;
-      btn.addEventListener("click", () => onChoose(a));
-      section.appendChild(btn);
+  wrap.setAttribute("role", "region");
+  wrap.setAttribute("aria-label", "Choose a service");
+
+  const heading = document.createElement("h2");
+  heading.className = "card-title";
+  heading.id = "chooser-heading";
+  heading.textContent = "Choose a service";
+  heading.setAttribute("tabindex", "-1");
+  wrap.appendChild(heading);
+
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.id = "chooser-hint";
+  hint.textContent = "Select a service to set up a new integration.";
+  wrap.appendChild(hint);
+
+  if (!adapters.length) {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.setAttribute("role", "status");
+    if (opts?.adaptersLoadFailed) {
+      const title = document.createElement("h3");
+      title.className = "card-title";
+      title.textContent = "Couldn’t load services";
+      const body = document.createElement("p");
+      body.className = "hint";
+      body.textContent = "The service catalog is unavailable. Check that the server is running and try again.";
+      card.append(title, body);
+      if (opts?.onRetry) {
+        const retry = document.createElement("button");
+        retry.className = "btn btn-sm";
+        retry.textContent = "Try again";
+        retry.setAttribute("aria-label", "Try again");
+        retry.addEventListener("click", opts.onRetry);
+        card.appendChild(retry);
+      }
+    } else {
+      const body = document.createElement("p");
+      body.className = "hint";
+      body.textContent = "Loading services…";
+      card.appendChild(body);
     }
-    wrap.appendChild(section);
+    wrap.appendChild(card);
+  } else {
+    for (const { category, items } of groupedByCategory(adapters)) {
+      const section = document.createElement("section");
+      section.className = "card";
+      section.setAttribute("role", "group");
+      const h = document.createElement("h3");
+      h.className = "card-title";
+      const cid = `chooser-cat-${category}`;
+      h.id = cid;
+      h.textContent = prettyCategory(category);
+      section.setAttribute("aria-labelledby", cid);
+      section.appendChild(h);
+      for (const a of items) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chooser-row";
+        btn.setAttribute("aria-label", `${a.label}`);
+        btn.innerHTML = `<span class="type-badge" aria-hidden="true">${a.id[0].toUpperCase()}</span><span>${a.label}</span><span class="chooser-chevron" aria-hidden="true">›</span>`;
+        btn.addEventListener("click", () => onChoose(a));
+        section.appendChild(btn);
+      }
+      wrap.appendChild(section);
+    }
   }
+
+  const footer = document.createElement("div");
+  footer.style.display = "flex";
+  footer.style.justifyContent = "flex-end";
+  footer.style.marginTop = "8px";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "btn";
+  cancel.textContent = "Cancel";
+  cancel.setAttribute("aria-label", "Cancel");
+  cancel.addEventListener("click", () => opts?.onCancel?.());
+  footer.appendChild(cancel);
+  wrap.appendChild(footer);
+
+  wrap.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      opts?.onCancel?.();
+    }
+  });
+
+  queueMicrotask(() => {
+    const first = wrap.querySelector<HTMLButtonElement>(".chooser-row");
+    if (first) first.focus();
+    else heading.focus();
+  });
+
   return wrap;
 }
 

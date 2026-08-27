@@ -6,7 +6,7 @@ import { emptyState, renderEmptyState } from "./emptyStates.ts";
 import { mountIntegrationDetail } from "./integration-detail/index.ts";
 import type { Integration as DetailIntegration } from "./integration-detail/types.ts";
 import { renderGroupDetail } from "./groupDetail.ts";
-import { renderIntegrationForm, renderGroupForm } from "./forms/render.ts";
+import { renderIntegrationForm, renderGroupForm, renderTypeChooser } from "./forms/render.ts";
 import {
   adopt,
   applyEnvironmentDefaults,
@@ -51,6 +51,7 @@ type Selection =
   | { kind: "none" }
   | { kind: "integration"; id: string }
   | { kind: "group"; id: string }
+  | { kind: "choose-integration-type" }
   | { kind: "new-integration" }
   | { kind: "new-group" }
   | { kind: "edit-integration"; id: string }
@@ -68,6 +69,7 @@ let manifests: CatalogManifest[] = [];
 let hostIntegrations: HostIntegration[] = [];
 let hostGroups: HostGroup[] = [];
 let selection: Selection = { kind: "none" };
+let previousSelection: Selection = { kind: "none" };
 let draft: ConnectionDraft | null = null;
 let groupDraft: GroupDraft | null = null;
 let detachDetail: (() => void) | null = null;
@@ -173,10 +175,27 @@ function renderDetail(mount: HTMLElement): void {
       });
       return;
     }
+    case "choose-integration-type": {
+      const chooser = renderTypeChooser(
+        manifests,
+        (m) => chooseIntegrationType(m),
+        {
+          onCancel: () => {
+            draft = null;
+            select(previousSelection);
+          },
+          adaptersLoadFailed: state.adaptersLoadFailed,
+          onRetry: () => void loadAdapters().then(refresh),
+        },
+      );
+      wrap.appendChild(chooser);
+      return;
+    }
     case "new-integration":
     case "edit-integration": {
       if (!draft) return;
       const current = draft;
+      const isNew = selection.kind === "new-integration";
       wrap.appendChild(
         renderIntegrationForm(
           current,
@@ -186,7 +205,16 @@ function renderDetail(mount: HTMLElement): void {
             renderDetail(mount);
           },
           (saved) => void saveIntegration(saved),
-          () => select({ kind: "none" }),
+          () => {
+            draft = null;
+            select({ kind: "none" });
+          },
+          isNew
+            ? () => {
+                previousSelection = selection;
+                select({ kind: "choose-integration-type" });
+              }
+            : undefined,
         ),
       );
       return;
@@ -224,8 +252,14 @@ function renderDetail(mount: HTMLElement): void {
 // ── Actions ──────────────────────────────────────────────────────────────────
 
 function startNewIntegration(): void {
-  const first = manifests[0];
-  draft = first ? adopt(applyEnvironmentDefaults(emptyDraft()), first, true) : emptyDraft();
+  previousSelection = selection;
+  draft = null;
+  select({ kind: "choose-integration-type" });
+}
+
+function chooseIntegrationType(manifest: CatalogManifest): void {
+  const base = draft ?? applyEnvironmentDefaults(emptyDraft());
+  draft = adopt(base, manifest, true);
   select({ kind: "new-integration" });
 }
 
