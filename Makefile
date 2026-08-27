@@ -22,11 +22,9 @@ help:
 
 # ── Dev (Rust) ────────────────────────────────────────────────────────────────
 dev:
-	@printf "→ dev: ensure frontend deps, then run Tauri host (loads http://localhost:1420)\n"
-	@printf "  frontend: bun run --cwd ui dev  (run in another terminal if you use cargo run -p pluk-host)\n"
+	@printf "→ dev: vite on http://localhost:1420, then the Tauri host\n"
 	bun install --cwd ui --silent
-	bun run --cwd ui build --silent
-	cargo run -p pluk-host
+	@bash -c 'bun run --silent --cwd ui dev & UI=$$!; trap "kill $$UI 2>/dev/null" EXIT; until curl -sf http://localhost:1420 >/dev/null; do sleep 0.3; done; cargo run -p pluk-host'
 
 deps:
 	@printf "→ installing ui deps and Rust deps\n"
@@ -90,7 +88,7 @@ test:
 
 lint:
 	cargo clippy --workspace -- -D warnings
-	bun run --cwd ui build --silent 2>&1 | head -20
+	bun run --silent --cwd ui build 2>&1 | head -20
 
 # ── Legacy Swift (fallback) ────────────────────────────────────────────────
 # The Swift app stays buildable as the fallback until the Rust app reaches

@@ -19,17 +19,31 @@ fn get_version() -> serde_json::Value { serde_json::json!({"version": version::v
 
 pub fn run() {
     let store = Arc::new(pluk_store::Store::open_default().expect("open pluk.db"));
-    let registry = Arc::new(pluk_adapters::AdapterRegistry::new());
+    let sql_cancels = Arc::new(pluk_adapters::sql::SqlCancelRegistry::default());
+    let registry = Arc::new(
+        pluk_adapters::default_registry(store.clone(), sql_cancels).expect("register adapters"),
+    );
     let zoom = Mutex::new(crate::zoom::PersistedZoom::load_from_store(&store));
     let server = tauri::async_runtime::block_on(async { ServerHandle::start_default(store.clone(), registry.clone()).await.expect("bind 4242") });
     let host_state = HostState { store: store.clone(), server: tokio::sync::Mutex::new(server), zoom };
     let initial_zoom_title = { let z = host_state.zoom.lock().expect("zoom lock"); z.state().reset_title() };
     let updater = Updater::new(UpdaterConfig::placeholder());
+    let activity_store = store.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(host_state)
         .manage(updater.clone())
         .setup(move |app| {
+            // Every written log row reaches the window as it happens, so the
+            // activity log needs no polling.
+            let activity_app = app.handle().clone();
+            activity_store.subscribe_log_activity(Arc::new(move |row| {
+                if let Some(window) = activity_app.get_webview_window("main")
+                    && let Ok(payload) = serde_json::to_value(row)
+                {
+                    let _ = window.emit("pluk://log-activity", payload);
+                }
+            }));
             let show = MenuItem::with_id(app, "tray_show", "Open pluk", true, None::<&str>)?;
             let check_updates = MenuItem::with_id(app, "tray_updates", "Check for Updates…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "tray_quit", "Quit pluk", true, None::<&str>)?;
@@ -102,7 +116,7 @@ pub fn run() {
                 }
             });
             Ok(())
-        }).invoke_handler(tauri::generate_handler![get_version, commands::get_zoom, commands::zoom_in, commands::zoom_out, commands::zoom_reset, commands::get_frame, commands::set_frame, commands::list_integrations, commands::get_integration, commands::create_integration, commands::update_integration, commands::delete_integration, commands::list_groups, commands::get_group, commands::create_group, commands::update_group, commands::delete_group, commands::list_adapters, commands::get_health, commands::test_connection, commands::get_logs, commands::cancel_query, commands::reload, updater::get_update_state, updater::check_for_updates, updater::install_update,]).on_window_event(|window, event| { if let WindowEvent::CloseRequested { api, .. } = event { api.prevent_close(); hide_window(window.app_handle()); } }).build(tauri::generate_context!()).expect("build tauri app").run(|app, event| { if let tauri::RunEvent::ExitRequested { .. } = event { let state: tauri::State<HostState> = app.state(); tauri::async_runtime::block_on(async { state.server.lock().await.stop().await; }); if let Some(window) = app.get_webview_window("main") && let Ok(pos) = window.outer_position() && let Ok(size) = window.outer_size() { let f = frame::Frame { x: Some(pos.x as f64), y: Some(pos.y as f64), width: size.width as f64, height: size.height as f64 }.clamped(); let _ = frame::save(&frame::default_file_path(), &f); } } });
+        }).invoke_handler(tauri::generate_handler![get_version, commands::get_zoom, commands::zoom_in, commands::zoom_out, commands::zoom_reset, commands::get_frame, commands::set_frame, commands::list_integrations, commands::get_integration, commands::create_integration, commands::update_integration, commands::delete_integration, commands::list_groups, commands::get_group, commands::create_group, commands::update_group, commands::delete_group, commands::list_adapters, commands::get_health, commands::test_connection, commands::get_logs, commands::get_retention, commands::set_retention, commands::clear_logs, commands::cancel_query, commands::reload, updater::get_update_state, updater::check_for_updates, updater::install_update,]).on_window_event(|window, event| { if let WindowEvent::CloseRequested { api, .. } = event { api.prevent_close(); hide_window(window.app_handle()); } }).build(tauri::generate_context!()).expect("build tauri app").run(|app, event| { if let tauri::RunEvent::ExitRequested { .. } = event { let state: tauri::State<HostState> = app.state(); tauri::async_runtime::block_on(async { state.server.lock().await.stop().await; }); if let Some(window) = app.get_webview_window("main") && let Ok(pos) = window.outer_position() && let Ok(size) = window.outer_size() { let f = frame::Frame { x: Some(pos.x as f64), y: Some(pos.y as f64), width: size.width as f64, height: size.height as f64 }.clamped(); let _ = frame::save(&frame::default_file_path(), &f); } } });
 }
 fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>, zoom_reset_title: &str) -> tauri::Result<Menu<R>> {
     let quit = PredefinedMenuItem::quit(app, Some("Quit pluk"))?;

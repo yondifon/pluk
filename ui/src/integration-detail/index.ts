@@ -3,6 +3,7 @@ import { renderOverview } from "./overview";
 import { renderTools } from "./tools";
 import { renderClientConfig, type InjectFn } from "./client-config";
 import { renderTabs, type TabId } from "./tabs";
+import { mountActivityLog } from "../activityLog/activityLog";
 import type { AdapterManifest, ConnHealth, Integration } from "./types";
 
 export type DetailActions = {
@@ -32,9 +33,9 @@ export function mountIntegrationDetail(
 
   let selectedTab: TabId = "logs";
   let testState: TestState = "idle";
-  let logsMount = document.createElement("div");
+  const logsMount = document.createElement("div");
   logsMount.className = "logs-mount";
-  logsMount.textContent = "Logs — mount point for R21";
+  let logs: { destroy: () => void } | null = null;
 
   function render() {
     renderHeader(headerEl, integration, manifest ?? null, health ?? null, testState, {
@@ -67,6 +68,10 @@ export function mountIntegrationDetail(
     contentEl.innerHTML = "";
     if (selectedTab === "logs") {
       contentEl.appendChild(logsMount);
+      logs ??= mountActivityLog(logsMount, {
+        scope: { connectionId: integration.id },
+        connectionTypes: new Map([[integration.id, integration.type]]),
+      });
     } else if (selectedTab === "overview") {
       const overviewWrap = document.createElement("div");
       const clientWrap = document.createElement("div");
@@ -82,6 +87,8 @@ export function mountIntegrationDetail(
 
   return {
     destroy() {
+      logs?.destroy();
+      logs = null;
       root.innerHTML = "";
     },
   };

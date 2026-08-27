@@ -42,7 +42,7 @@ pub use projection::{
     apply_only, only_param_description, only_param_schema, only_value, pick_paths, FieldMap,
     OnlyError, Preset, ReduceFn,
 };
-pub use registry::AdapterRegistry;
+pub use registry::{default_registry, AdapterRegistry};
 pub use ssh_fields::ssh_auth_fields;
 pub use tool_host::{
     object_schema, BoxFuture, PromptHandler, PromptMessage, PromptResult, PromptRole,

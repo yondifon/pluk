@@ -151,21 +151,6 @@ describe("retry re-tests connection", () => {
     // simulate clicking retry: centre's listener would call onRetry
     onRetry("i42");
     expect(retriedId).toBe("i42");
-
-    // Also verify health retry would hit test endpoint: we test the function exists via fetch spy
-    let calledUrl = "";
-    let calledOpts: RequestInit | undefined;
-    const origFetch = globalThis.fetch;
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string, opts?: RequestInit) => {
-      calledUrl = String(url);
-      calledOpts = opts;
-      return { ok: true, json: async () => ({}) } as unknown as Response;
-    }) as unknown as typeof fetch;
-    await fetch(`/api/integrations/i42/test`, { method: "POST" });
-    expect(calledUrl).toContain("i42");
-    expect(calledUrl).toContain("/test");
-    expect(calledOpts?.method).toBe("POST");
-    (globalThis as unknown as { fetch: typeof fetch }).fetch = origFetch;
   });
 });
 

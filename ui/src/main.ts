@@ -3,12 +3,22 @@ import { zoom } from "./zoom.ts";
 import { createShell, renderBanners } from "./shell.ts";
 import { createSidebar, type SidebarState } from "./sidebar.ts";
 import { emptyState, renderEmptyState } from "./emptyStates.ts";
-import type { Integration, Group, Environment, AdapterManifest } from "./types.ts";
-
-// --- Mount points for R19–R22 ---
-// Detail area: keyed by selection so per-entity view state resets on switch.
-// Toast mount: #toast-mount top-right (R22 populates).
-// Forms/log view: rendered inside detail when entity selected; empty placeholder today.
+import { mountIntegrationDetail } from "./integration-detail/index.ts";
+import type { Integration as DetailIntegration } from "./integration-detail/types.ts";
+import { renderGroupDetail } from "./groupDetail.ts";
+import { renderIntegrationForm, renderGroupForm } from "./forms/render.ts";
+import {
+  adopt,
+  applyEnvironmentDefaults,
+  draftFromConnection,
+  emptyDraft,
+  type ConnectionDraft,
+} from "./forms/connectionDraft.ts";
+import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
+import type { AdapterManifest as CatalogManifest, ToolState } from "./forms/catalog.ts";
+import { ToastCenter, renderToasts } from "./toast.ts";
+import { invoke, hasHost } from "./host.ts";
+import type { Integration, Group, Environment, Health } from "./types.ts";
 
 const app = document.getElementById("app")!;
 
@@ -16,294 +26,442 @@ zoom.apply();
 zoom.syncFromHost();
 zoom.bindKeyboard();
 
-// Sample adapters fallback — matches real catalog shape
-function fallbackAdapters(): AdapterManifest[] {
-  return [
-    { id: "postgres", label: "PostgreSQL" },
-    { id: "mysql", label: "MySQL" },
-    { id: "sqlite", label: "SQLite" },
-    { id: "linear", label: "Linear" },
-    { id: "sentry", label: "Sentry" },
-    { id: "ssh", label: "SSH" },
-    { id: "github-cli", label: "GitHub CLI" },
-    { id: "redis", label: "Redis" },
-    { id: "slack", label: "Slack" },
-    { id: "spark", label: "Spark" },
-  ];
-}
+type HostIntegration = {
+  id: string;
+  name: string;
+  type: string;
+  config: Record<string, unknown>;
+  environment: string | null;
+  toolConfig: Record<string, ToolState>;
+  token: string;
+  createdAt: string;
+};
+
+type HostGroup = {
+  id: string;
+  name: string;
+  environment: string | null;
+  members: Array<{ id: string; overrides?: Record<string, string> }>;
+  token: string;
+  createdAt: string;
+};
+
+/** What the sidebar and detail screens are showing. */
+type Selection =
+  | { kind: "none" }
+  | { kind: "integration"; id: string }
+  | { kind: "group"; id: string }
+  | { kind: "new-integration" }
+  | { kind: "new-group" }
+  | { kind: "edit-integration"; id: string }
+  | { kind: "edit-group"; id: string };
 
 let state: SidebarState = {
   integrations: [],
   groups: [],
-  adapters: fallbackAdapters(),
+  adapters: [],
   health: {},
   adaptersLoadFailed: false,
   loading: true,
 };
-let selectedId: string | null = null;
+let manifests: CatalogManifest[] = [];
+let hostIntegrations: HostIntegration[] = [];
+let hostGroups: HostGroup[] = [];
+let selection: Selection = { kind: "none" };
+let draft: ConnectionDraft | null = null;
+let groupDraft: GroupDraft | null = null;
+let detachDetail: (() => void) | null = null;
 
-// Detail routing helper — keyed by selection, resets per-entity state.
-function renderDetail(mount: HTMLElement, id: string | null) {
+const toasts = new ToastCenter();
+
+function manifestFor(type: string): CatalogManifest | undefined {
+  return manifests.find((m) => m.id === type);
+}
+
+function toDetailIntegration(row: HostIntegration): DetailIntegration {
+  const config: Record<string, string> = {};
+  for (const [key, value] of Object.entries(row.config)) {
+    config[key] = value == null ? "" : String(value);
+  }
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    environment: (row.environment ?? undefined) as DetailIntegration["environment"],
+    config,
+    toolConfig: row.toolConfig,
+    token: row.token,
+    createdAt: row.createdAt,
+  };
+}
+
+function report(error: unknown, integrationId: string, title: string): void {
+  const reason = error instanceof Error ? error.message : String(error);
+  toasts.present({
+    integrationId,
+    title,
+    message: `${reason.replace(/\.?$/, ".")} Try again.`,
+    kind: "error",
+  });
+}
+
+// ── Detail rendering ─────────────────────────────────────────────────────────
+
+function renderDetail(mount: HTMLElement): void {
+  detachDetail?.();
+  detachDetail = null;
   mount.innerHTML = "";
-  // key attribute ensures later frameworks remount rather than reuse
+
   const wrap = document.createElement("div");
   wrap.style.height = "100%";
-  if (id) wrap.setAttribute("data-key", id);
-
-  if (id == null) {
-    // Empty state when sidebar has no selection
-    if (!state.integrations.length && !state.groups.length && !state.loading && !state.adaptersLoadFailed) {
-      renderEmptyState(wrap, emptyState("no-integrations"), (action) => {
-        if (action === "new-integration") handleCreateIntegration();
-      });
-    } else if (state.loading) {
-      wrap.textContent = "Loading…";
-      wrap.style.padding = "24px";
-      wrap.style.color = "var(--surface-tertiary-label)";
-    } else {
-      renderEmptyState(wrap, emptyState("nothing-selected"));
-    }
-  } else {
-    // R19–R22 attach here — keyed container guarantees their view state resets on switch.
-    // Today show placeholder that confirms routing is keyed.
-    const group = state.groups.find((g) => g.id === id);
-    const integration = state.integrations.find((c) => c.id === id);
-    const placeholder = document.createElement("div");
-    placeholder.style.padding = "24px";
-    placeholder.setAttribute("data-key", id);
-    placeholder.setAttribute("data-mount", "detail");
-    if (group) {
-      placeholder.innerHTML = `<h2 class="t-title">${group.name}</h2><p class="t-body" style="color:var(--surface-tertiary-label)">Group detail — R20 mounts here. This view resets when you switch groups.</p>`;
-      // R20: GroupDetailView mounts at placeholder[data-mount=detail][data-key]
-    } else if (integration) {
-      placeholder.innerHTML = `<h2 class="t-title">${integration.name}</h2><p class="t-body" style="color:var(--surface-tertiary-label)">Integration detail — R19 mounts here. This view resets when you switch integrations.</p>`;
-      // R19: ConnectionDetailView mounts at placeholder[data-mount=detail][data-key]
-      // R21: log view mounts inside detail alongside header
-    } else {
-      placeholder.textContent = "Not found";
-    }
-    wrap.appendChild(placeholder);
-  }
   mount.appendChild(wrap);
-}
 
-function handleCreateIntegration() {
-  // R19 builds the form; today open placeholder via detail key
-  selectedId = "__new-integration__";
-  // trigger sidebar reselect + detail rerender
-  refresh();
-}
-
-function handleCreateGroup() {
-  selectedId = "__new-group__";
-  refresh();
-}
-
-async function handleDuplicate(id: string) {
-  // naive client-side duplicate for shell demo
-  const src = state.integrations.find((c) => c.id === id);
-  if (!src) return;
-  const dup: Integration = { ...src, id: `${src.id}-copy-${Date.now()}`, name: `${src.name} copy` };
-  state.integrations = [dup, ...state.integrations];
-  selectedId = dup.id;
-  refresh();
-}
-
-async function handleDelete(kind: "integration" | "group", id: string, _name: string) {
-  if (kind === "integration") {
-    try {
-      const res = await fetch(`/api/integrations/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(String(res.status));
-    } catch {
-      // offline fallback: mutate local
+  switch (selection.kind) {
+    case "none": {
+      if (state.loading) {
+        wrap.className = "detail-loading";
+        wrap.textContent = "Loading…";
+      } else if (!state.integrations.length && !state.groups.length) {
+        renderEmptyState(wrap, emptyState("no-integrations"), (action) => {
+          if (action === "new-integration") startNewIntegration();
+        });
+      } else {
+        renderEmptyState(wrap, emptyState("nothing-selected"));
+      }
+      return;
     }
-    state.integrations = state.integrations.filter((c) => c.id !== id);
-    if (selectedId === id) selectedId = null;
-  } else {
-    try {
-      await fetch(`/api/groups/${id}`, { method: "DELETE" });
-    } catch {
-      // fallback
+    case "integration": {
+      const { id } = selection;
+      const row = hostIntegrations.find((c) => c.id === id);
+      if (!row) return renderEmptyState(wrap, emptyState("nothing-selected"));
+      wrap.setAttribute("data-key", row.id);
+      const mounted = mountIntegrationDetail(
+        wrap,
+        toDetailIntegration(row),
+        manifestFor(row.type),
+        state.health[row.id],
+        {
+          onEdit: () => startEditIntegration(row.id),
+          onDuplicate: () => void duplicateIntegration(row.id),
+          onDelete: () => void deleteIntegration(row.id),
+          onTest: () => testIntegration(row.id),
+          inject: injectClientConfig,
+        },
+      );
+      detachDetail = mounted.destroy;
+      return;
     }
-    state.groups = state.groups.filter((g) => g.id !== id);
-    if (selectedId === id) selectedId = null;
+    case "group": {
+      const { id } = selection;
+      const row = hostGroups.find((g) => g.id === id);
+      if (!row) return renderEmptyState(wrap, emptyState("nothing-selected"));
+      wrap.setAttribute("data-key", row.id);
+      renderGroupDetail(wrap, {
+        group: {
+          id: row.id,
+          name: row.name,
+          environment: row.environment,
+          token: row.token,
+          members: row.members.map((m) => ({ id: m.id, overrides: m.overrides ?? {} })),
+        },
+        integrations: hostIntegrations.map(toDetailIntegration),
+        adapters: manifests,
+        onEdit: () => startEditGroup(row.id),
+        onDelete: () => void deleteGroup(row.id),
+        onEditIntegration: (id) => select({ kind: "integration", id }),
+        toastCenter: toasts,
+      });
+      return;
+    }
+    case "new-integration":
+    case "edit-integration": {
+      if (!draft) return;
+      const current = draft;
+      wrap.appendChild(
+        renderIntegrationForm(
+          current,
+          manifestFor(current.type),
+          (next) => {
+            draft = next;
+            renderDetail(mount);
+          },
+          (saved) => void saveIntegration(saved),
+          () => select({ kind: "none" }),
+        ),
+      );
+      return;
+    }
+    case "new-group":
+    case "edit-group": {
+      if (!groupDraft) return;
+      const current = groupDraft;
+      wrap.appendChild(
+        renderGroupForm(
+          current,
+          hostIntegrations.map((c) => ({
+            id: c.id,
+            name: c.name,
+            type: c.type,
+            environment: c.environment ?? undefined,
+            config: Object.fromEntries(
+              Object.entries(c.config).map(([k, v]) => [k, v == null ? "" : String(v)]),
+            ),
+          })),
+          manifests,
+          (next) => {
+            groupDraft = next;
+            renderDetail(mount);
+          },
+          (saved) => void saveGroup(saved),
+          () => select({ kind: "none" }),
+        ),
+      );
+      return;
+    }
   }
+}
+
+// ── Actions ──────────────────────────────────────────────────────────────────
+
+function startNewIntegration(): void {
+  const first = manifests[0];
+  draft = first ? adopt(applyEnvironmentDefaults(emptyDraft()), first, true) : emptyDraft();
+  select({ kind: "new-integration" });
+}
+
+function startEditIntegration(id: string): void {
+  const row = hostIntegrations.find((c) => c.id === id);
+  if (!row) return;
+  const base = draftFromConnection({
+    name: row.name,
+    type: row.type,
+    config: row.config,
+    environment: (row.environment ?? "development") as Environment,
+  });
+  const manifest = manifestFor(row.type);
+  draft = manifest ? { ...adopt(base, manifest, false), toolConfig: row.toolConfig } : base;
+  select({ kind: "edit-integration", id });
+}
+
+function startNewGroup(): void {
+  groupDraft = groupDraftFrom({ name: "", environment: null, members: [] });
+  select({ kind: "new-group" });
+}
+
+function startEditGroup(id: string): void {
+  const row = hostGroups.find((g) => g.id === id);
+  if (!row) return;
+  groupDraft = groupDraftFrom({
+    name: row.name,
+    environment: row.environment,
+    members: row.members.map((m) => ({ id: m.id, overrides: m.overrides ?? {} })),
+  });
+  select({ kind: "edit-group", id });
+}
+
+async function saveIntegration(saved: ConnectionDraft): Promise<void> {
+  const payload = {
+    name: saved.name,
+    type: saved.type,
+    config: saved.config,
+    environment: saved.environment,
+    toolConfig: saved.toolConfig,
+  };
+  try {
+    if (selection.kind === "edit-integration") {
+      await invoke("update_integration", { id: selection.id, payload });
+    } else {
+      await invoke("create_integration", { payload });
+    }
+    await loadData();
+    select({ kind: "none" });
+  } catch (error) {
+    report(error, selection.kind === "edit-integration" ? selection.id : "", "Integration not saved");
+  }
+}
+
+async function saveGroup(saved: GroupDraft): Promise<void> {
+  const payload = {
+    name: saved.name,
+    environment: saved.environment ?? null,
+    members: serializeGroup(saved, hostIntegrations),
+  };
+  try {
+    if (selection.kind === "edit-group") {
+      await invoke("update_group", { id: selection.id, payload });
+    } else {
+      await invoke("create_group", { payload });
+    }
+    await loadData();
+    select({ kind: "none" });
+  } catch (error) {
+    report(error, "", "Group not saved");
+  }
+}
+
+async function duplicateIntegration(id: string): Promise<void> {
+  const row = hostIntegrations.find((c) => c.id === id);
+  if (!row) return;
+  try {
+    await invoke("create_integration", {
+      payload: {
+        name: `${row.name} copy`,
+        type: row.type,
+        config: row.config,
+        environment: row.environment,
+      },
+    });
+    await loadData();
+  } catch (error) {
+    report(error, id, "Integration not duplicated");
+  }
+}
+
+async function deleteIntegration(id: string): Promise<void> {
+  try {
+    await invoke("delete_integration", { id });
+    if (selection.kind !== "none" && "id" in selection && selection.id === id) {
+      selection = { kind: "none" };
+    }
+    await loadData();
+  } catch (error) {
+    report(error, id, "Integration not deleted");
+  }
+}
+
+async function deleteGroup(id: string): Promise<void> {
+  try {
+    await invoke("delete_group", { id });
+    if (selection.kind !== "none" && "id" in selection && selection.id === id) {
+      selection = { kind: "none" };
+    }
+    await loadData();
+  } catch (error) {
+    report(error, "", "Group not deleted");
+  }
+}
+
+async function testIntegration(id: string): Promise<{ ok: boolean; error?: string }> {
+  const result = await invoke<{ ok: boolean; error?: string }>("test_connection", { id });
+  await loadHealth();
+  return result;
+}
+
+/** No host command writes AI-client config files yet. */
+async function injectClientConfig(): Promise<{ status: "added" | "skipped"; path: string }> {
+  throw new Error("Pluk can't write config files yet — copy the snippet instead");
+}
+
+// ── Data ─────────────────────────────────────────────────────────────────────
+
+async function loadAdapters(): Promise<void> {
+  try {
+    manifests = await invoke<CatalogManifest[]>("list_adapters");
+    state.adapters = manifests.map((m) => ({ id: m.id, label: m.label }));
+    state.adaptersLoadFailed = manifests.length === 0;
+  } catch {
+    manifests = [];
+    state.adapters = [];
+    state.adaptersLoadFailed = true;
+  }
+}
+
+async function loadHealth(): Promise<void> {
+  try {
+    state.health = await invoke<Record<string, Health>>("get_health");
+  } catch {
+    state.health = {};
+  }
+}
+
+async function loadData(): Promise<void> {
+  const [integrations, groups] = await Promise.all([
+    invoke<HostIntegration[]>("list_integrations"),
+    invoke<HostGroup[]>("list_groups"),
+  ]);
+  hostIntegrations = integrations;
+  hostGroups = groups;
+  state.integrations = integrations.map(
+    (row): Integration => ({
+      id: row.id,
+      name: row.name,
+      type: row.type,
+      environment: (row.environment ?? "development") as Environment,
+      readOnly: false,
+    }),
+  );
+  state.groups = groups.map(
+    (row): Group => ({
+      id: row.id,
+      name: row.name,
+      environment: (row.environment ?? null) as Environment | null,
+      memberIds: row.members.map((m) => m.id),
+    }),
+  );
+  state.loading = false;
   refresh();
 }
 
-async function handleRetryAdapters() {
-  await loadAdapters();
-  refresh();
-}
+// ── Shell ────────────────────────────────────────────────────────────────────
 
-let sidebarEl: HTMLElement | null = null;
 let detailEl = document.createElement("div");
-detailEl.style.height = "100%";
 let shellMounts: ReturnType<typeof createShell> | null = null;
 
-function refresh() {
-  // Recreate sidebar with current selectedId — ensures selection highlight updates
-  const nextSidebar = createSidebar(state, selectedId, {
+function select(next: Selection): void {
+  selection = next;
+  refresh();
+}
+
+function sidebarSelection(): string | null {
+  return selection.kind !== "none" && "id" in selection ? selection.id : null;
+}
+
+function buildSidebar(): HTMLElement {
+  return createSidebar(state, sidebarSelection(), {
     onSelect: (id) => {
-      selectedId = id;
-      refresh();
+      const isGroup = hostGroups.some((g) => g.id === id);
+      select(isGroup ? { kind: "group", id } : { kind: "integration", id });
     },
-    onCreateIntegration: handleCreateIntegration,
-    onCreateGroup: handleCreateGroup,
-    onDuplicate: handleDuplicate,
-    onDelete: handleDelete,
-    onRetryAdapters: handleRetryAdapters,
+    onCreateIntegration: startNewIntegration,
+    onCreateGroup: startNewGroup,
+    onDuplicate: (id) => void duplicateIntegration(id),
+    onDelete: (kind, id) =>
+      void (kind === "integration" ? deleteIntegration(id) : deleteGroup(id)),
+    onRetryAdapters: () => void loadAdapters().then(refresh),
   });
-  // Replace sidebar in shell
-  if (shellMounts) {
-    const oldSidebar = shellMounts.root.querySelector(".shell-sidebar");
-    if (oldSidebar) {
-      oldSidebar.innerHTML = "";
-      oldSidebar.appendChild(nextSidebar);
-    }
-    // Rerender detail keyed
-    renderDetail(detailEl, selectedId);
-    // Handle special new-entity placeholders
-    if (selectedId === "__new-integration__") {
-      detailEl.innerHTML = "";
-      const wrap = document.createElement("div");
-      wrap.setAttribute("data-key", selectedId);
-      wrap.setAttribute("data-mount", "integration-form");
-      wrap.style.padding = "24px";
-      wrap.innerHTML = `<p class="t-callout" style="color:var(--surface-tertiary-label)">New integration form — R19 mounts here. <em>data-mount="integration-form"</em></p>`;
-      detailEl.appendChild(wrap);
-    }
-    if (selectedId === "__new-group__") {
-      detailEl.innerHTML = "";
-      const wrap = document.createElement("div");
-      wrap.setAttribute("data-key", selectedId);
-      wrap.setAttribute("data-mount", "group-form");
-      wrap.style.padding = "24px";
-      wrap.innerHTML = `<p class="t-callout" style="color:var(--surface-tertiary-label)">New group form — R19 mounts here. <em>data-mount="group-form"</em></p>`;
-      detailEl.appendChild(wrap);
-    }
-  }
-  sidebarEl = nextSidebar;
 }
 
-async function loadAdapters() {
-  try {
-    const res = await fetch("/api/adapters");
-    if (res.ok) {
-      const data = (await res.json()) as { adapters: AdapterManifest[] };
-      state.adapters = data.adapters;
-      state.adaptersLoadFailed = false;
-    } else {
-      throw new Error(String(res.status));
-    }
-  } catch {
-    // Keep fallback adapters; only flag failure if we had no fallback? Task says show retry rather than empty form.
-    // For demo we keep fallback but if fetch fails we still show retry affordance per spec when catalog unavailable.
-    // To satisfy spec we treat load failure as flag; UI shows retry.
-    // Uncomment to enable failure state:
-    // state.adaptersLoadFailed = true;
-    // For now keep fallback so app remains usable offline.
-    if (!state.adapters.length) state.adaptersLoadFailed = true;
+function refresh(): void {
+  if (!shellMounts) return;
+  const sidebarWrap = shellMounts.root.querySelector(".shell-sidebar");
+  if (sidebarWrap) {
+    sidebarWrap.innerHTML = "";
+    sidebarWrap.appendChild(buildSidebar());
   }
+  renderDetail(detailEl);
 }
 
-async function loadData() {
-  try {
-    const [iRes, gRes] = await Promise.all([fetch("/api/integrations"), fetch("/api/groups")]);
-    if (iRes.ok) {
-      const data = (await iRes.json()) as { integrations: unknown[] };
-      state.integrations = (data.integrations as Integration[]).map((r: unknown) => {
-        // map store shape to UI type
-        const row = r as Record<string, unknown>;
-        return {
-          id: String(row["id"]),
-          name: String(row["name"]),
-          type: String(row["type"]),
-          environment: (String(row["environment"] || "development").toLowerCase() as Environment),
-          readOnly: Boolean(row["readOnly"] ?? row["read_only"]),
-        };
-      });
-    }
-    if (gRes.ok) {
-      const data = (await gRes.json()) as { groups: unknown[] };
-      state.groups = (data.groups as Group[]).map((r: unknown) => {
-        const row = r as Record<string, unknown>;
-        return {
-          id: String(row["id"]),
-          name: String(row["name"]),
-          environment: row["environment"] ? (String(row["environment"]).toLowerCase() as Environment) : null,
-          memberIds: Array.isArray(row["memberIds"] ?? row["member_ids"])
-            ? ((row["memberIds"] ?? row["member_ids"]) as string[]).map(String)
-            : [],
-        };
-      });
-    }
-  } catch {
-    // demo fallback data so sidebar is not empty during development
-    if (!state.integrations.length) {
-      state.integrations = [
-        { id: "demo-pg", name: "Production DB", type: "postgres", environment: "production", readOnly: true },
-        { id: "demo-linear", name: "Linear Workspace", type: "linear", environment: "production", readOnly: false },
-        { id: "demo-ssh", name: "Bastion", type: "ssh", environment: "staging", readOnly: false },
-      ];
-      state.groups = [{ id: "demo-group", name: "API Services", environment: "production", memberIds: ["demo-pg"] }];
-    }
-  }
-  // Health polling — three-state dot, absent renders nothing
-  try {
-    const hRes = await fetch("/api/health");
-    if (hRes.ok) {
-      const data = (await hRes.json()) as { health: Record<string, { status: "ok" | "error"; error?: string; at: number }> };
-      state.health = data.health;
-    }
-  } catch {
-    // keep empty — dot absent
-  }
-  state.loading = false;
-}
-
-async function bootstrap() {
-  // Shell skeleton with empty detail initially
+async function bootstrap(): Promise<void> {
   detailEl = document.createElement("div");
   detailEl.style.height = "100%";
-  renderDetail(detailEl, selectedId);
-  const initialSidebar = createSidebar(state, selectedId, {
-    onSelect: (id) => {
-      selectedId = id;
-      refresh();
-    },
-    onCreateIntegration: handleCreateIntegration,
-    onCreateGroup: handleCreateGroup,
-    onDuplicate: handleDuplicate,
-    onDelete: handleDelete,
-    onRetryAdapters: handleRetryAdapters,
-  });
-  sidebarEl = initialSidebar;
-  shellMounts = createShell(initialSidebar, detailEl);
+  shellMounts = createShell(buildSidebar(), detailEl);
   app.innerHTML = "";
   app.appendChild(shellMounts.root);
-
-  // Bottom inset banners — stacked when both apply
+  renderToasts(shellMounts.toastMount, toasts, (id) => void testIntegration(id));
   renderBanners(shellMounts.bottomMount, { serverStatus: "running" }, () => {}, () => {});
-  // Toast mount is already in shell at #toast-mount — R22's ToastCenter subscribes there.
+
+  if (!hasHost()) {
+    state.loading = false;
+    state.adaptersLoadFailed = true;
+    refresh();
+    return;
+  }
 
   await loadAdapters();
+  await loadHealth();
   await loadData();
-  refresh();
 
-  // Health poll every 15s like Swift
-  setInterval(async () => {
-    try {
-      const hRes = await fetch("/api/health");
-      if (hRes.ok) {
-        const data = (await hRes.json()) as { health: Record<string, { status: "ok" | "error"; error?: string; at: number }> };
-        state.health = data.health;
-        refresh();
-      }
-    } catch {
-      // ignore
-    }
-  }, 15000);
+  setInterval(() => void loadHealth().then(refresh), 15000);
 }
 
-bootstrap();
+void bootstrap();

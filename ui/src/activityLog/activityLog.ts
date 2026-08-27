@@ -46,8 +46,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
 
   // Pending poll timer
   let pollTimer: number | null = null;
-  let sseClose: (() => void) | null = null;
-  let driftTimer: number | null = null;
+  let liveClose: (() => void) | null = null;
 
   const typeMap = opts.connectionTypes ?? new Map();
 
@@ -421,91 +420,52 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     }
   }
 
-  // SSE live updates
+  // Live rows pushed by the host
   function startLive() {
-    // start after current high-water
-    const after = liveCursor;
-    const conn = connectEvents(after, {
-      onEvent: (ev: LiveEvent) => {
-        // monotonic cursor already handled in connectEvents, but double-check
-        if (ev.id <= liveCursor && seenIds.has(ev.id)) {
-          // update existing row in place
-        }
-        if (ev.id > liveCursor) liveCursor = ev.id;
-        // map LiveEvent to LogEntry (light; heavy fields missing — refetch if needed?)
-        // For pending->done, server will push updated row with same id; we need to fetch full entry
-        const existing = entries.find(e => e.id === ev.id);
-        if (existing) {
-          // For updates, fetch full entry to get responseText/resultJson
-          // But we can optimistically update light fields and then fetch
-          const updated: LogEntry = {
-            ...existing,
-            sql: ev.sql,
-            verdict: ev.verdict,
-            reason: ev.reason,
-            categories: ev.categories,
-            source: ev.source,
-            groupId: ev.groupId,
-            groupName: ev.groupName,
-            database: ev.database,
-            rowCount: ev.rowCount,
-            createdAt: ev.createdAt,
-          };
-          // If verdict changed from pending, try to fetch full payload
-          if (existing.verdict === "pending" && ev.verdict !== "pending") {
-            // fetch the single entry via page filter: simplest re-fetch page containing it
-            // We'll just fetch newest page and merge; pending poll will also refresh
-            reload();
-            return;
-          }
-          entries = mergeEntries(entries, [updated]);
-          patchRow(updated);
-          updateStats();
-          updatePolling();
-        } else {
-          // New row: check scope filter — if it belongs to this scope, insert
-          const belongsToScope = ("connectionId" in opts.scope && ev.connectionId === opts.scope.connectionId) || ("groupId" in opts.scope && ev.groupId === opts.scope.groupId) || ("groupId" in opts.scope && ev.groupId === null && false);
-          // For connection scope, only connectionId matters; group scope includes any member? Simplified: accept if scope matches connectionId or groupId
-          const inScope = (() => {
-            if ("connectionId" in opts.scope) return ev.connectionId === opts.scope.connectionId;
-            if ("groupId" in opts.scope) return ev.groupId === opts.scope.groupId;
-            return false;
-          })();
-          if (!inScope) return;
-          // Insert light entry; full payload will be available on expand via fetch if needed
-          const light: LogEntry = {
-            id: ev.id, connectionId: ev.connectionId, connectionName: ev.connectionName, sql: ev.sql, verdict: ev.verdict, reason: ev.reason, categories: ev.categories, source: ev.source, resultJson: null, rowCount: ev.rowCount, responseText: null, groupId: ev.groupId, groupName: ev.groupName, database: ev.database, createdAt: ev.createdAt,
-          };
-          entries = mergeEntries(entries, [light]);
-          seenIds.add(light.id);
-          patchRow(light);
-          updateStats();
-          updatePolling();
-        }
-      },
-      onReady: (cursor) => {
-        if (cursor > liveCursor) liveCursor = cursor;
-        // drift check: if server cursor far ahead of local, reconcile
-        if (cursor > liveCursor + 50 || (entries.length > 0 && cursor > Math.max(...entries.map(e => e.id)) + 10)) {
+    const conn = connectEvents((ev: LiveEvent) => {
+      if (ev.id > liveCursor) liveCursor = ev.id;
+      const existing = entries.find(e => e.id === ev.id);
+      if (existing) {
+        // A settled row carries the response payload the live event omits.
+        if (existing.verdict === "pending" && ev.verdict !== "pending") {
           reload();
+          return;
         }
-      },
-      onKeepalive: (cursor) => {
-        if (cursor > liveCursor) {
-          // drift detected
-          if (cursor - liveCursor > 20) reload();
-          liveCursor = cursor;
-        }
-      },
-    });
-    sseClose = conn.close;
-    // periodic drift check every 30s
-    driftTimer = window.setInterval(() => {
-      // fetch high water via ready comparison already; also poll if behind
-      if (liveCursor > 0) {
-        // no-op, keepalive already does it; but force reload if we suspect gap
+        const updated: LogEntry = {
+          ...existing,
+          sql: ev.sql,
+          verdict: ev.verdict,
+          reason: ev.reason,
+          categories: ev.categories,
+          source: ev.source,
+          groupId: ev.groupId,
+          groupName: ev.groupName,
+          database: ev.database,
+          rowCount: ev.rowCount,
+          createdAt: ev.createdAt,
+        };
+        entries = mergeEntries(entries, [updated]);
+        patchRow(updated);
+        updateStats();
+        updatePolling();
+      } else {
+        const inScope = (() => {
+          if ("connectionId" in opts.scope) return ev.connectionId === opts.scope.connectionId;
+          if ("groupId" in opts.scope) return ev.groupId === opts.scope.groupId;
+          return false;
+        })();
+        if (!inScope) return;
+        const light: LogEntry = {
+          id: ev.id, connectionId: ev.connectionId, connectionName: ev.connectionName, sql: ev.sql, verdict: ev.verdict, reason: ev.reason, categories: ev.categories, source: ev.source, resultJson: null, rowCount: ev.rowCount, responseText: null, groupId: ev.groupId, groupName: ev.groupName, database: ev.database, createdAt: ev.createdAt,
+        };
+        entries = mergeEntries(entries, [light]);
+        seenIds.add(light.id);
+        patchRow(light);
+        updateStats();
+        updatePolling();
       }
-    }, 30000);
+    });
+    liveClose = conn.close;
   }
 
   // ----- event wiring -----
@@ -593,8 +553,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   return {
     destroy() {
       if (pollTimer) clearInterval(pollTimer);
-      if (driftTimer) clearInterval(driftTimer);
-      sseClose?.();
+      liveClose?.();
       sentinelObs?.disconnect();
     },
   };

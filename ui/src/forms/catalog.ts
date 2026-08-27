@@ -39,7 +39,7 @@ export interface AdapterManifest {
   label: string;
   category: string;
   policyKind: string;
-  agentHint?: string;
+  agentHint: string;
   tools: ToolDef[];
   configFields: ConfigFieldDef[];
 }

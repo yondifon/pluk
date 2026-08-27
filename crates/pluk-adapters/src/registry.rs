@@ -54,6 +54,28 @@ impl AdapterRegistry {
     }
 }
 
+/// The registry the app runs on: every adapter Pluk ships, in catalog order.
+pub fn default_registry(
+    store: Arc<pluk_store::Store>,
+    cancels: Arc<crate::sql::SqlCancelRegistry>,
+) -> Result<AdapterRegistry, AdapterError> {
+    let mut registry = AdapterRegistry::new();
+    for adapter in crate::sql::sql_adapters(store.clone(), cancels) {
+        registry.register(adapter)?;
+    }
+    registry.register(crate::ssh::SshAdapter::new(store.clone()))?;
+    registry.register(crate::redis::RedisAdapter::new(store.clone()))?;
+    registry.register(crate::slack::SlackAdapter::new(store.clone()))?;
+    registry.register(crate::linear::LinearAdapter::new(store.clone()))?;
+    registry.register(crate::sentry::SentryAdapter::new(store.clone()))?;
+    registry.register(Arc::new(crate::github_cli::build_github_cli_adapter(store.clone())))?;
+    registry.register(Arc::new(crate::action::action_adapter(
+        crate::spark::spark_adapter_spec(),
+        store,
+    )))?;
+    Ok(registry)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

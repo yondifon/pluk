@@ -96,6 +96,7 @@ pub fn set_frame(frame: Frame) -> CmdResult<Frame> {
 // ── Integrations ───────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IntegrationJson {
     pub id: String,
     pub name: String,
@@ -103,6 +104,8 @@ pub struct IntegrationJson {
     pub r#type: String,
     pub config: serde_json::Map<String, serde_json::Value>,
     pub environment: Option<String>,
+    /// Per-tool enablement and settings, lifted out of the `query_policy` blob.
+    pub tool_config: std::collections::BTreeMap<String, pluk_store::ToolPolicy>,
     pub token: String,
     pub created_at: String,
 }
@@ -115,6 +118,9 @@ impl From<pluk_store::Integration> for IntegrationJson {
             r#type: i.r#type,
             config: i.config,
             environment: i.environment.map(|e| e.as_str().to_string()),
+            tool_config: pluk_store::parse_query_policy(i.query_policy.as_deref())
+                .map(|p| p.tools)
+                .unwrap_or_default(),
             token: i.token,
             created_at: i.created_at,
         }
@@ -140,6 +146,7 @@ pub fn get_integration(state: State<'_, HostState>, id: String) -> CmdResult<Opt
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateIntegrationPayload {
     pub name: String,
     #[serde(rename = "type")]
@@ -162,14 +169,15 @@ pub fn create_integration(state: State<'_, HostState>, payload: CreateIntegratio
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateIntegrationPayload {
     pub name: Option<String>,
     #[serde(rename = "type")]
     pub r#type: Option<String>,
     pub config: Option<serde_json::Map<String, serde_json::Value>>,
     pub environment: Option<String>,
-    /// Explicit null clears query_policy; absent leaves it.
-    pub query_policy: Option<Option<String>>,
+    /// Per-tool enablement; absent leaves the stored policy untouched.
+    pub tool_config: Option<std::collections::BTreeMap<String, pluk_store::ToolPolicy>>,
 }
 
 #[tauri::command]
@@ -178,13 +186,26 @@ pub fn update_integration(
     id: String,
     payload: UpdateIntegrationPayload,
 ) -> CmdResult<Option<IntegrationJson>> {
+    // Fold tool settings back into the policy blob, keeping the sibling keys
+    // the other writers store there.
+    let query_policy = match payload.tool_config {
+        Some(tools) => {
+            let stored = state.store.integration_by_id(&id).map_err(|e| e.to_string())?;
+            let mut policy = stored
+                .and_then(|i| pluk_store::parse_query_policy(i.query_policy.as_deref()))
+                .unwrap_or_default();
+            policy.tools = tools;
+            Some(Some(pluk_store::serialize_query_policy(&policy)))
+        }
+        None => None,
+    };
     let update = pluk_store::IntegrationUpdate {
         name: payload.name,
         r#type: payload.r#type,
         config: payload.config,
         environment: payload.environment.as_deref().and_then(pluk_store::Environment::parse),
         read_only: None,
-        query_policy: payload.query_policy,
+        query_policy,
     };
     state
         .store
@@ -207,6 +228,7 @@ pub fn delete_integration(state: State<'_, HostState>, id: String) -> CmdResult<
 // ── Groups ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GroupJson {
     pub id: String,
     pub name: String,
@@ -289,13 +311,16 @@ pub fn delete_group(state: State<'_, HostState>, id: String) -> CmdResult<bool> 
 
 // ── Adapter catalog ────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AdapterInfo {
     pub id: String,
     pub label: String,
     pub category: String,
     pub policy_kind: String,
     pub agent_hint: String,
+    pub tools: Vec<pluk_adapters::ToolSpec>,
+    pub config_fields: Vec<pluk_adapters::ConfigField>,
 }
 
 // Note: we expose via HTTP fallback too, but commands are the default for the host UI.
@@ -311,6 +336,8 @@ pub fn list_adapters(state: State<'_, HostState>) -> Vec<AdapterInfo> {
             category: format!("{:?}", a.category()),
             policy_kind: format!("{:?}", a.policy_kind()),
             agent_hint: a.agent_hint().to_string(),
+            tools: a.tool_specs().to_vec(),
+            config_fields: a.config_fields().to_vec(),
         })
         .collect()
 }
@@ -364,6 +391,7 @@ pub async fn test_connection(state: State<'_, HostState>, id: String) -> CmdResu
 // ── Logs ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LogPageJson {
     pub entries: Vec<LogEntryJson>,
     pub next_cursor: Option<CursorJson>,
@@ -371,6 +399,7 @@ pub struct LogPageJson {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LogEntryJson {
     pub id: i64,
     pub connection_id: String,
@@ -378,15 +407,64 @@ pub struct LogEntryJson {
     pub sql: String,
     pub verdict: String,
     pub reason: Option<String>,
+    pub categories: Option<String>,
+    pub source: Option<String>,
+    pub result_json: Option<String>,
+    pub row_count: Option<i64>,
+    pub response_text: Option<String>,
     pub group_id: Option<String>,
     pub group_name: Option<String>,
+    pub database: Option<String>,
     pub created_at: String,
 }
 
+impl From<pluk_store::LogEntry> for LogEntryJson {
+    fn from(e: pluk_store::LogEntry) -> Self {
+        Self {
+            id: e.id,
+            connection_id: e.connection_id,
+            connection_name: e.connection_name,
+            sql: e.sql,
+            verdict: e.verdict,
+            reason: e.reason,
+            categories: e.categories,
+            source: e.source,
+            result_json: e.result_json,
+            row_count: e.row_count,
+            response_text: e.response_text,
+            group_id: e.group_id,
+            group_name: e.group_name,
+            database: e.database,
+            created_at: e.created_at,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CursorJson {
     pub created_at: String,
     pub id: i64,
+}
+
+#[tauri::command]
+pub fn get_retention(state: State<'_, HostState>) -> CmdResult<i64> {
+    state.store.retention_days().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_retention(state: State<'_, HostState>, days: i64) -> CmdResult<()> {
+    state.store.set_retention_days(days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn clear_logs(state: State<'_, HostState>, scope: String, scope_id: String) -> CmdResult<usize> {
+    let log_scope = if scope == "group" {
+        pluk_store::LogScope::Group(scope_id)
+    } else {
+        pluk_store::LogScope::Connection(scope_id)
+    };
+    state.store.clear_logs(&log_scope).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -419,21 +497,7 @@ pub fn get_logs(
         .read_log_page(&log_scope, log_range, cursor.as_ref())
         .map_err(|e| e.to_string())?;
     Ok(LogPageJson {
-        entries: page
-            .entries
-            .into_iter()
-            .map(|e| LogEntryJson {
-                id: e.id,
-                connection_id: e.connection_id,
-                connection_name: e.connection_name,
-                sql: e.sql,
-                verdict: e.verdict,
-                reason: e.reason,
-                group_id: e.group_id,
-                group_name: e.group_name,
-                created_at: e.created_at,
-            })
-            .collect(),
+        entries: page.entries.into_iter().map(LogEntryJson::from).collect(),
         next_cursor: page.next_cursor.map(|c| CursorJson { created_at: c.created_at, id: c.id }),
         has_more: page.has_more,
     })

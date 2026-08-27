@@ -36,7 +36,7 @@ pub fn serialize_config(config: &Config) -> String {
 ///
 /// Unknown fields are captured so a parse → serialize round trip is lossless;
 /// the Swift app re-serializes this blob on every connection edit.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct QueryPolicy {
     #[serde(default)]
     pub tools: BTreeMap<String, ToolPolicy>,

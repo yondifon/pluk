@@ -4,7 +4,7 @@
  * typography only (never as a CSS transform on the page).
  *
  * Host contract (Tauri):
- *  - `invoke("get_zoom_scale")` returns { scale, steps, defaultIndex } when available
+ *  - `invoke("get_zoom")` returns { scale, index, … } when a host is attached
  *  - event "zoom-changed" with payload scale when host changes zoom via menu
  * Fallback: localStorage + keyboard shortcuts, same steps as AppZoom.swift
  */
@@ -109,7 +109,7 @@ export class Zoom {
       return;
     }
     try {
-      const res = (await tauri.core.invoke("get_zoom_scale")) as { scale?: number; index?: number };
+      const res = (await tauri.core.invoke("get_zoom")) as { scale?: number; index?: number };
       if (typeof res?.index === "number" && res.index >= 0 && res.index < ZoomSteps.length) {
         this.index = res.index;
         this.apply();
@@ -125,13 +125,12 @@ export class Zoom {
     try {
       const listen = tauri.event?.listen;
       if (listen) {
-        await listen("zoom-changed", (e) => {
-          const p = e.payload as { scale?: number; index?: number };
-          if (typeof p?.index === "number") this.setIndex(p.index);
-          else if (typeof p?.scale === "number") {
-            const idx = ZoomSteps.indexOf(p.scale as (typeof ZoomSteps)[number]);
-            if (idx !== -1) this.setIndex(idx);
-          }
+        await listen("pluk://zoom", (e) => {
+          // The host emits the scale itself when zoom changes from the menu.
+          const scale = typeof e.payload === "number" ? e.payload : undefined;
+          if (scale == null) return;
+          const idx = ZoomSteps.indexOf(scale as (typeof ZoomSteps)[number]);
+          if (idx !== -1) this.setIndex(idx);
         });
       }
     } catch {

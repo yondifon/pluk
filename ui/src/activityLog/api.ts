@@ -1,76 +1,41 @@
 import type { LogCursor, LogEntry, LogPage, TimeRange } from "./types";
+import { invoke, listen } from "../host";
 
 export type LogScope = { connectionId: string } | { groupId: string };
 
-function scopeParams(scope: LogScope): string {
-  if ("connectionId" in scope) return `connectionId=${encodeURIComponent(scope.connectionId)}`;
-  return `groupId=${encodeURIComponent(scope.groupId)}`;
+function scopeArgs(scope: LogScope): { scope: string; scopeId: string } {
+  return "connectionId" in scope
+    ? { scope: "connection", scopeId: scope.connectionId }
+    : { scope: "group", scopeId: scope.groupId };
 }
 
 export async function fetchLogPage(
   scope: LogScope,
   range: TimeRange,
   cursor: LogCursor | null,
-  signal?: AbortSignal,
 ): Promise<LogPage> {
-  const qs = new URLSearchParams();
-  // scope
-  if ("connectionId" in scope) qs.set("connectionId", scope.connectionId);
-  else qs.set("groupId", scope.groupId);
-  qs.set("range", range);
-  if (cursor) {
-    qs.set("cursorTime", cursor.createdAt);
-    qs.set("cursorId", String(cursor.id));
-  }
-  const res = await fetch(`/api/logs?${qs.toString()}`, { signal });
-  if (!res.ok) throw new Error(`logs fetch ${res.status}`);
-  const json = await res.json() as { entries: any[]; nextCursor: LogCursor | null; hasMore: boolean };
-  // Normalize camelCase from server
-  const entries: LogEntry[] = (json.entries ?? []).map((e: any) => ({
-    id: e.id,
-    connectionId: e.connectionId,
-    connectionName: e.connectionName,
-    sql: e.sql,
-    verdict: e.verdict,
-    reason: e.reason ?? null,
-    categories: e.categories ?? null,
-    source: e.source ?? null,
-    resultJson: e.resultJson ?? null,
-    rowCount: e.rowCount ?? null,
-    responseText: e.responseText ?? null,
-    groupId: e.groupId ?? null,
-    groupName: e.groupName ?? null,
-    database: e.database ?? null,
-    createdAt: e.createdAt,
-  }));
-  return { entries, nextCursor: json.nextCursor ?? null, hasMore: !!json.hasMore };
+  return invoke<LogPage>("get_logs", {
+    ...scopeArgs(scope),
+    range,
+    cursorTime: cursor?.createdAt ?? null,
+    cursorId: cursor?.id ?? null,
+  });
 }
 
 export async function cancelLog(id: number): Promise<boolean> {
-  const res = await fetch(`/api/log/${id}/cancel`, { method: "POST" });
-  if (!res.ok) return false;
-  const json = await res.json() as { ok: boolean };
-  return !!json.ok;
+  return invoke<boolean>("cancel_query", { id });
 }
 
 export async function getRetention(): Promise<number> {
-  const res = await fetch("/api/retention");
-  if (!res.ok) return 30;
-  const json = await res.json() as { days: number };
-  return json.days;
+  return invoke<number>("get_retention");
 }
 
 export async function setRetention(days: number): Promise<void> {
-  const res = await fetch("/api/retention", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ days }) });
-  if (!res.ok) throw new Error(`retention ${res.status}`);
+  await invoke<void>("set_retention", { days });
 }
 
 export async function clearLogs(scope: LogScope): Promise<number> {
-  const qs = scopeParams(scope);
-  const res = await fetch(`/api/logs?${qs}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`clear ${res.status}`);
-  const json = await res.json() as { deleted: number };
-  return json.deleted ?? 0;
+  return invoke<number>("clear_logs", scopeArgs(scope));
 }
 
 // Merge by id newest-first
@@ -100,78 +65,21 @@ export interface LiveEvent {
   createdAt: string;
 }
 
-export type SseHandler = {
-  onEvent: (ev: LiveEvent) => void;
-  onReady: (cursor: number) => void;
-  onKeepalive: (cursor: number) => void;
-};
-
-export function connectEvents(after: number, handler: SseHandler, opts?: { backoffMs?: number }): { close: () => void } {
+/**
+ * Live rows from the host. Every written log row is emitted, so the caller
+ * filters to its own scope.
+ */
+export function connectEvents(onEvent: (ev: LiveEvent) => void): { close: () => void } {
+  let unlisten: (() => void) | null = null;
   let closed = false;
-  let attempt = 0;
-  let es: EventSource | null = null;
-  let reconnectTimer: number | null = null;
-  let cursor = after;
-
-  const open = () => {
-    if (closed) return;
-    es = new EventSource(`/api/events?after=${cursor}`);
-    es.addEventListener("event", (e: MessageEvent) => {
-      try {
-        const data = JSON.parse((e as MessageEvent).data) as LiveEvent;
-        // monotonic cursor: never move backwards
-        if (data.id > cursor) cursor = data.id;
-        handler.onEvent(data);
-        attempt = 0;
-      } catch { /* ignore */ }
-    });
-    es.addEventListener("ready", (e: MessageEvent) => {
-      try {
-        const data = JSON.parse((e as MessageEvent).data) as { cursor: number };
-        if (data.cursor > cursor) cursor = data.cursor;
-        handler.onReady(data.cursor);
-        attempt = 0;
-      } catch {}
-    });
-    es.addEventListener("keepalive", (e: MessageEvent) => {
-      try {
-        const data = JSON.parse((e as MessageEvent).data) as { cursor: number };
-        if (data.cursor > cursor) cursor = data.cursor;
-        handler.onKeepalive(data.cursor);
-      } catch {}
-    });
-    es.onerror = () => {
-      es?.close();
-      es = null;
-      if (closed) return;
-      const backoff = Math.min(30000, (opts?.backoffMs ?? 500) * Math.pow(2, attempt++));
-      reconnectTimer = window.setTimeout(open, backoff);
-    };
-  };
-  open();
+  void listen<LiveEvent>("pluk://log-activity", onEvent).then((off) => {
+    if (closed) off();
+    else unlisten = off;
+  });
   return {
     close() {
       closed = true;
-      es?.close();
-      if (reconnectTimer) clearTimeout(reconnectTimer);
+      unlisten?.();
     },
   };
-}
-
-// Drift check: periodically compare local high-water with server
-export function startDriftCheck(getLocalHighWater: () => number, onDrift: (serverHighWater: number) => void, intervalMs = 30000): () => void {
-  const id = window.setInterval(async () => {
-    try {
-      // Use retention endpoint not suitable; instead fetch high-water via events ready?
-      // Fallback: fetch a single newest entry and compare ids
-      // We use /api/events?after=0 ready frame to get cursor, but simpler: fetch logs page 1 and look at first id
-      // Here we poll /api/logs?range=all limit 1 equivalent by fetching page
-      const res = await fetch(`/api/events?after=${getLocalHighWater()}`);
-      // Not ideal — we just keep connection alive; drift is detected via keepalive cursor > local
-      void res;
-    } catch {}
-    // Real drift reconciliation is driven by keepalive cursor comparison in caller
-    void onDrift;
-  }, intervalMs);
-  return () => clearInterval(id);
 }
