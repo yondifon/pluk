@@ -142,6 +142,10 @@ impl SqlCancelRegistry {
         token
     }
     pub fn clear(&self, log_id: i64) { self.handles.lock().unwrap().remove(&log_id); }
+    pub fn complete(&self, log_id: i64) { self.clear(log_id); }
+    pub fn token_for(&self, log_id: i64) -> Option<CancellationToken> {
+        self.handles.lock().unwrap().get(&log_id).cloned()
+    }
     pub fn cancel(&self, log_id: i64) -> bool {
         if let Some(t) = self.handles.lock().unwrap().remove(&log_id) { t.cancel(); true } else { false }
     }
@@ -423,9 +427,11 @@ pub fn register_sql_server(
                     let params = obj.get("params").and_then(|v| v.as_array()).cloned().unwrap_or_default();
                     let limit = obj.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
                     let only = obj.get("only").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect::<Vec<_>>());
-                    let timeout_ms = obj.get("timeout").and_then(|v| v.as_u64()).map(|t| t*1000);
+                    let mut timeout_ms = obj.get("timeout").and_then(|v| v.as_u64()).map(|t| t*1000);
                     if conn.r#type=="sqlite" && !uses_ssh(&conn) {
-                        // timeout ignored
+                        timeout_ms = None;
+                    } else if timeout_ms.is_none() {
+                        timeout_ms = Some(30_000);
                     }
                     // switch block
                     if let Some(block) = switch_block(&sql, pinned.as_ref()) { return err(format!("Blocked: {}", block)); }
@@ -462,7 +468,15 @@ pub fn register_sql_server(
                         let timeout = timeout_ms;
                         async move {
                             let token = log_id.map(|id| cancels.register(id));
-                            let query_opts = token.clone().map(|t| QueryOpts { timeout_ms: timeout, cancel: Some(t) });
+                            let query_opts = {
+                                let has_timeout = timeout.is_some();
+                                let has_cancel = token.is_some();
+                                if has_timeout || has_cancel {
+                                    Some(QueryOpts { timeout_ms: timeout, cancel: token.clone() })
+                                } else {
+                                    None
+                                }
+                            };
                             // create driver
                             let cfg = sql_config_from(&conn, db_opt.as_deref());
                             let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
@@ -961,7 +975,12 @@ pub fn register_sql_server(
                     let database = obj.get("database").and_then(|v| v.as_str()).map(|s| s.to_string());
                     let db_opt = match resolve_database(pinned.as_ref(), database.as_deref()) { Ok(v)=>v, Err(e)=> return err(e) };
                     let params = obj.get("params").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-                    let timeout_ms = obj.get("timeout").and_then(|v| v.as_u64()).map(|t| t*1000);
+                    let mut timeout_ms = obj.get("timeout").and_then(|v| v.as_u64()).map(|t| t*1000);
+                    if conn.r#type == "sqlite" && !uses_ssh(&conn) {
+                        timeout_ms = None;
+                    } else if timeout_ms.is_none() {
+                        timeout_ms = Some(30_000);
+                    }
                     if let Some(b)=switch_block(&sql, pinned.as_ref()) { return err(format!("Blocked: {}", b)); }
                     let verdict = evaluate(&sql, &policy, dialect);
                     let target = CallTarget { connection_id: conn_id.clone(), connection_name: conn_name.clone(), group: via_group.clone() };
@@ -986,7 +1005,15 @@ pub fn register_sql_server(
                         let pinned_for_payload = pinned_for_inner.clone();
                         async move {
                             let token = log_id.map(|id| cancels.register(id));
-                            let opts = token.clone().map(|t| QueryOpts { timeout_ms: timeout, cancel: Some(t) });
+                            let opts = {
+                                let has_timeout = timeout.is_some();
+                                let has_cancel = token.is_some();
+                                if has_timeout || has_cancel {
+                                    Some(QueryOpts { timeout_ms: timeout, cancel: token.clone() })
+                                } else {
+                                    None
+                                }
+                            };
                             let cfg = sql_config_from(&conn, db_opt.as_deref());
                             let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
                             let res = {
@@ -1090,7 +1117,12 @@ pub fn register_sql_server(
                     let db_opt = match resolve_database(pinned.as_ref(), database.as_deref()) { Ok(v)=>v, Err(e)=> return err(e) };
                     let params = obj.get("params").and_then(|v| v.as_array()).cloned().unwrap_or_default();
                     let only = obj.get("only").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect::<Vec<_>>());
-                    let timeout_ms = obj.get("timeout").and_then(|v| v.as_u64()).map(|t| t*1000);
+                    let mut timeout_ms = obj.get("timeout").and_then(|v| v.as_u64()).map(|t| t*1000);
+                    if conn.r#type == "sqlite" && !uses_ssh(&conn) {
+                        timeout_ms = None;
+                    } else if timeout_ms.is_none() {
+                        timeout_ms = Some(30_000);
+                    }
                     let saved = match store.get_saved_query(&conn.id, &name).unwrap_or(None) { Some(q)=>q, None=> return err(format!("Saved query \"{}\" not found.", name)) };
                     let sql = saved.sql.clone();
                     if let Some(b)=switch_block(&sql, pinned.as_ref()) { return err(format!("Blocked: {}", b)); }
@@ -1123,7 +1155,15 @@ pub fn register_sql_server(
                         let timeout = timeout_ms;
                         async move {
                             let token = log_id.map(|id| cancels.register(id));
-                            let opts = token.clone().map(|t| QueryOpts { timeout_ms: timeout, cancel: Some(t) });
+                            let opts = {
+                                let has_timeout = timeout.is_some();
+                                let has_cancel = token.is_some();
+                                if has_timeout || has_cancel {
+                                    Some(QueryOpts { timeout_ms: timeout, cancel: token.clone() })
+                                } else {
+                                    None
+                                }
+                            };
                             let cfg = sql_config_from(&conn, db_opt.as_deref());
                             let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
                             let use_ro = policy.allowed.len()==2;

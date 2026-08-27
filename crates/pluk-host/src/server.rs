@@ -27,14 +27,19 @@ impl ServerHandle {
     /// Start the loopback server. `port` overrides `PORT`/`4242` when `Some`.
     /// Returns once the listener is bound (so agents can connect immediately).
     pub async fn start(store: Arc<Store>, registry: Arc<AdapterRegistry>, port: Option<u16>) -> std::io::Result<Self> {
+        Self::start_with_cancels(store, registry, Arc::new(pluk_server::CancelRegistry::default()), port).await
+    }
+
+    pub async fn start_with_cancels(
+        store: Arc<Store>,
+        registry: Arc<AdapterRegistry>,
+        cancels: Arc<pluk_server::CancelRegistry>,
+        port: Option<u16>,
+    ) -> std::io::Result<Self> {
         let shutdown = CancellationToken::new();
         let owners = Arc::new(pluk_server::OwnerPool::default());
         let health = Arc::new(pluk_server::HealthMap::default());
-        let cancels = Arc::new(pluk_server::CancelRegistry::default());
         let rate_state = pluk_server::AppState::new(store.clone(), registry.clone(), owners, health);
-        // Replace cancels so the handle owns the same registry (AppState::new makes one).
-        // We constructed owners/health/cancels above; AppState::new used our owners/health
-        // and made a fresh cancels — overwrite it.
         let mut state_inner = rate_state;
         state_inner.cancels = cancels;
         let state = Arc::new(state_inner);

@@ -21,10 +21,10 @@ pub fn run() {
     let store = Arc::new(pluk_store::Store::open_default().expect("open pluk.db"));
     let sql_cancels = Arc::new(pluk_adapters::sql::SqlCancelRegistry::default());
     let registry = Arc::new(
-        pluk_adapters::default_registry(store.clone(), sql_cancels).expect("register adapters"),
+        pluk_adapters::default_registry(store.clone(), sql_cancels.clone()).expect("register adapters"),
     );
     let zoom = Mutex::new(crate::zoom::PersistedZoom::load_from_store(&store));
-    let server = tauri::async_runtime::block_on(async { ServerHandle::start_default(store.clone(), registry.clone()).await.expect("bind 4242") });
+    let server = tauri::async_runtime::block_on(async { ServerHandle::start_with_cancels(store.clone(), registry.clone(), sql_cancels.clone(), None).await.expect("bind 4242") });
     let shared = server.state().clone();
     let host_state = HostState { store: store.clone(), server: tokio::sync::Mutex::new(server), shared, zoom };
     let initial_zoom_title = { let z = host_state.zoom.lock().expect("zoom lock"); z.state().reset_title() };
