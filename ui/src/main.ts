@@ -4,7 +4,7 @@ import { createShell, renderBanners } from "./shell.ts";
 import { createSidebar, type SidebarState } from "./sidebar.ts";
 import { emptyState, renderEmptyState } from "./emptyStates.ts";
 import { mountIntegrationDetail } from "./integration-detail/index.ts";
-import type { Integration as DetailIntegration } from "./integration-detail/types.ts";
+import type { Integration as DetailIntegration, ConnHealth as DetailHealth } from "./integration-detail/types.ts";
 import { renderGroupDetail } from "./groupDetail.ts";
 import { renderIntegrationForm, renderGroupForm, renderTypeChooser } from "./forms/render.ts";
 import {
@@ -17,6 +17,7 @@ import {
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
 import type { AdapterManifest as CatalogManifest, ToolState } from "./forms/catalog.ts";
 import { ToastCenter, renderToasts } from "./toast.ts";
+import { humanizeHealthError } from "./health.ts";
 import { invoke, hasHost } from "./host.ts";
 import type { Integration, Group, Environment, Health } from "./types.ts";
 
@@ -72,6 +73,7 @@ let selection: Selection = { kind: "none" };
 let previousSelection: Selection = { kind: "none" };
 let draft: ConnectionDraft | null = null;
 let groupDraft: GroupDraft | null = null;
+let detailHandle: { destroy: () => void; updateHealth: (next: DetailHealth | null) => void } | null = null;
 let detachDetail: (() => void) | null = null;
 
 const toasts = new ToastCenter();
@@ -110,6 +112,8 @@ function report(error: unknown, integrationId: string, title: string): void {
 // ── Detail rendering ─────────────────────────────────────────────────────────
 
 function renderDetail(mount: HTMLElement): void {
+  detailHandle?.destroy();
+  detailHandle = null;
   detachDetail?.();
   detachDetail = null;
   mount.innerHTML = "";
@@ -150,6 +154,7 @@ function renderDetail(mount: HTMLElement): void {
           inject: injectClientConfig,
         },
       );
+      detailHandle = mounted;
       detachDetail = mounted.destroy;
       return;
     }
@@ -378,7 +383,27 @@ async function deleteGroup(id: string): Promise<void> {
 async function testIntegration(id: string): Promise<{ ok: boolean; error?: string }> {
   const result = await invoke<{ ok: boolean; error?: string }>("test_connection", { id });
   await loadHealth();
+  const row = hostIntegrations.find((c) => c.id === id);
+  const name = row?.name ?? "Integration";
+  if (result.ok) {
+    toasts.present({ integrationId: id, title: name, message: "Connected — your integration is working.", kind: "success" });
+  } else {
+    const msg = humanizeHealthError(result.error ?? null);
+    toasts.present({ integrationId: id, title: name, message: msg, kind: "error" });
+  }
+  const h = state.health[id];
+  detailHandle?.updateHealth(h ? { status: h.status, error: h.error ?? null, at: h.at } : null);
+  refreshSidebar();
   return result;
+}
+
+function refreshSidebar(): void {
+  if (!shellMounts) return;
+  const sidebarWrap = shellMounts.root.querySelector(".shell-sidebar");
+  if (sidebarWrap) {
+    sidebarWrap.innerHTML = "";
+    sidebarWrap.appendChild(buildSidebar());
+  }
 }
 
 /** No host command writes AI-client config files yet. */
@@ -495,7 +520,17 @@ async function bootstrap(): Promise<void> {
   await loadHealth();
   await loadData();
 
-  setInterval(() => void loadHealth().then(refresh), 15000);
+  setInterval(
+    () =>
+      void loadHealth().then(() => {
+        refreshSidebar();
+        if (selection.kind === "integration") {
+          const h = state.health[selection.id];
+          detailHandle?.updateHealth(h ? { status: h.status, error: h.error ?? null, at: h.at } : null);
+        }
+      }),
+    15000,
+  );
 }
 
 void bootstrap();

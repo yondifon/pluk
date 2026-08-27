@@ -85,6 +85,27 @@ body {
   color: #9ca3af;
   font-size: calc(var(--type-caption) * var(--zoom-scale));
 }
+.test-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.test-glyph {
+  font-size: calc(var(--type-caption) * var(--zoom-scale));
+  width: 14px;
+  text-align: center;
+}
+.test-glyph:empty { display: none; }
+.test-result {
+  margin-top: 8px;
+  font-size: calc(var(--type-caption) * var(--zoom-scale));
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  line-height: 1.4;
+}
+.test-result-testing { background: #f3f4f6; color: #6b7280; }
+.test-result-ok { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+.test-result-fail { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
 .detail-meta {
   font-size: calc(var(--type-caption) * var(--zoom-scale));
   color: #6b7280;

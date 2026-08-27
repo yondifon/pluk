@@ -21,7 +21,7 @@ export function mountIntegrationDetail(
   manifest: AdapterManifest | null | undefined,
   health: ConnHealth | null | undefined,
   actions: DetailActions,
-): { destroy: () => void } {
+): { destroy: () => void; updateHealth: (next: ConnHealth | null | undefined) => void } {
   root.innerHTML = "";
   root.className = "integration-detail";
 
@@ -31,26 +31,34 @@ export function mountIntegrationDetail(
   contentEl.className = "detail-content";
   root.append(headerEl, tabsEl, contentEl);
 
+  let currentHealth: ConnHealth | null | undefined = health ?? null;
   let selectedTab: TabId = "logs";
   let testState: TestState = "idle";
+  let resetTimer: ReturnType<typeof setTimeout> | null = null;
   const logsMount = document.createElement("div");
   logsMount.className = "logs-mount";
   let logs: { destroy: () => void } | null = null;
 
   function render() {
-    renderHeader(headerEl, integration, manifest ?? null, health ?? null, testState, {
+    renderHeader(headerEl, integration, manifest ?? null, currentHealth ?? null, testState, {
       onTest: async () => {
+        if (resetTimer) clearTimeout(resetTimer);
         testState = "testing";
         render();
         try {
           const res = await actions.onTest();
           testState = res.ok ? "ok" : { kind: "fail", error: res.error ?? "Unknown error" };
+          currentHealth = res.ok
+            ? { status: "ok", at: Date.now() }
+            : { status: "error", error: res.error ?? "Unknown error", at: Date.now() };
         } catch (e) {
-          testState = { kind: "fail", error: e instanceof Error ? e.message : String(e) };
+          const msg = e instanceof Error ? e.message : String(e);
+          testState = { kind: "fail", error: msg };
+          currentHealth = { status: "error", error: msg, at: Date.now() };
         }
         render();
         const delay = testState === "ok" ? 3000 : 5000;
-        setTimeout(() => {
+        resetTimer = setTimeout(() => {
           testState = "idle";
           render();
         }, delay);
@@ -86,7 +94,12 @@ export function mountIntegrationDetail(
   render();
 
   return {
+    updateHealth(next: ConnHealth | null | undefined) {
+      currentHealth = next ?? null;
+      render();
+    },
     destroy() {
+      if (resetTimer) clearTimeout(resetTimer);
       logs?.destroy();
       logs = null;
       root.innerHTML = "";
