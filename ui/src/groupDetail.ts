@@ -41,38 +41,25 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
   // Header
   const header = document.createElement("div");
   header.className = "detail-header";
-  header.style.display = "flex";
-  header.style.gap = "12px";
-  header.style.alignItems = "flex-start";
-  header.style.padding = "24px 24px 12px";
+  header.style.padding = "16px 24px 24px";
+
+  const top = document.createElement("div");
+  top.className = "detail-header-top";
 
   const icon = document.createElement("div");
   icon.textContent = "▦";
   icon.setAttribute("aria-hidden", "true");
-  icon.style.width = "34px";
-  icon.style.height = "34px";
-  icon.style.display = "grid";
-  icon.style.placeItems = "center";
-  icon.style.background = "rgba(0,0,0,0.05)";
-  icon.style.borderRadius = "6px";
-  icon.style.flexShrink = "0";
+  icon.className = "type-badge";
 
   const headerMain = document.createElement("div");
-  headerMain.style.flex = "1";
-  headerMain.style.minWidth = "0";
+  headerMain.className = "detail-header-stack";
 
   const titleRow = document.createElement("div");
-  titleRow.style.display = "flex";
-  titleRow.style.alignItems = "center";
-  titleRow.style.gap = "12px";
+  titleRow.className = "detail-title-row";
 
   const title = document.createElement("h1");
   title.textContent = group.name;
   title.className = "detail-title";
-  title.style.fontSize = "16px";
-  title.style.fontWeight = "600";
-  title.style.margin = "0";
-  title.style.flex = "1";
   title.id = "group-title";
   title.tabIndex = 0;
 
@@ -118,23 +105,21 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
   titleRow.append(title, editBtn, menuBtn);
 
   const subtitle = document.createElement("div");
-  subtitle.className = "detail-subtitle";
-  subtitle.style.fontSize = "11.5px";
-  subtitle.style.color = "var(--surface-tertiary-label)";
+  subtitle.className = "detail-meta";
   const membersForSubtitle = memberIntegrations(group, integrations);
   const countLabel = `${membersForSubtitle.length} integration${membersForSubtitle.length === 1 ? "" : "s"}`;
   subtitle.textContent = group.environment ? `Group · ${countLabel} · ${envLabel(group.environment)}` : `Group · ${countLabel}`;
 
   headerMain.append(titleRow, subtitle);
-  header.append(icon, headerMain);
+  top.append(icon, headerMain);
+  header.appendChild(top);
 
   // Tabs
   const tabBar = document.createElement("div");
   tabBar.className = "tab-bar";
   tabBar.style.display = "flex";
   tabBar.style.gap = "16px";
-  tabBar.style.padding = "8px 24px";
-  tabBar.style.borderBottom = "1px solid rgba(0,0,0,0.06)";
+  tabBar.style.padding = "8px 24px 16px";
   tabBar.setAttribute("role", "tablist");
   tabBar.setAttribute("aria-label", "Group sections");
 

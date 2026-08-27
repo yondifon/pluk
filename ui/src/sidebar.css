@@ -1,5 +1,23 @@
 /* Sidebar — search, filter popover, list, empty states */
 
+.sidebar-topbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 12px;
+  min-height: 28px;
+  -webkit-app-region: drag;
+}
+
+.sidebar-topbar button {
+  -webkit-app-region: no-drag;
+}
+
+.platform-macos .sidebar-topbar {
+  padding-left: 78px;
+}
+
 .sidebar-search-row {
   display: flex;
   gap: var(--space-sm);
