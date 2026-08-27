@@ -10,3 +10,20 @@ tauri-build = { version = "2.6", features = [] }
 
 [dependencies]
 tauri = { version = "2.11", features = ["tray-icon", "image-png"] }
+tauri-plugin-updater = { version = "2.10", optional = true }
+pluk-core = { path = "../pluk-core" }
+pluk-store = { path = "../pluk-store" }
+pluk-adapters = { path = "../pluk-adapters" }
+pluk-server = { path = "../pluk-server" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-util = "0.7"
+axum = { version = "0.8", features = ["http1", "json", "tokio"] }
+
+[features]
+default = []
+updater = ["dep:tauri-plugin-updater"]
+
+[dev-dependencies]
+tempfile = "3"

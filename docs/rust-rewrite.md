@@ -84,3 +84,40 @@ Tauri 2.11 / tauri-build 2.6. Frontend: Vite 7, vanilla TypeScript, Bun as packa
 ## Chain position
 
 You are reading task R01's deliverable: workspace skeleton, empty crates that compile, Tauri shell that launches on macOS with tray presence, frontend stub, and this document. Everything behavioural arrives in R02+.
+
+## Frontend bridge (R15 decision)
+
+**Surface.** `pluk-host` exposes a typed Tauri command boundary (`crates/pluk-host/src/commands.rs`) that the webview calls via `invoke`. It covers:
+
+- `list_integrations` / `get_integration` / `create_integration` / `update_integration` / `delete_integration`
+- `list_groups` / `get_group` / `create_group` / `update_group` / `delete_group`
+- `list_adapters` (catalog for dynamic form rendering)
+- `test_connection` (runs the adapter's `test_connection` and records `HealthMap`)
+- `get_health` (reads `HealthMap`)
+- `get_logs` (keyset-paged `read_log_page`)
+- `cancel_query` (aborts a single in-flight tool call by log id via `CancelRegistry`)
+- `reload` (`OwnerPool::reset_owners` — scoped or global, drops pooled drivers/tunnels/forwards)
+- `get_zoom` / `zoom_in` / `zoom_out` / `zoom_reset` (nine steps, persisted)
+- `get_frame` / `set_frame` (window rect, clamped)
+- `get_version` (from `VERSION` + `git rev-parse HEAD` stamped at build)
+
+The live event stream (`GET /api/events?after=<cursor>`) stays HTTP SSE (`pluk_server::EventHub`) — held-open streams are not modelled as Tauri commands/events because they require backpressure, replay, and `keepalive` GC that HTTP already handles. The frontend subscribes via `fetch` + `EventSource` to `http://localhost:4242/api/events`.
+
+**Default choice: HTTP for data, Tauri commands for host chrome.**
+
+- **Data reads/writes (integrations, groups, catalog, test, health, logs, cancel)** go over **HTTP `http://localhost:4242/api/*`** by default. Rationale: the loopback surface R05 already serves is the single source of truth for both agents (MCP over `/mcp/<token>`) and the UI. Reusing it keeps one routing/auth/serialization path, works in a plain browser during `bun run --cwd ui dev` without Tauri, and lets R18–R22 reuse the same `fetch` helpers that already exist. Tauri commands for these routes remain available as a typed alternative for callers that prefer `invoke` (they share the same `Store`/`OwnerPool`/`HealthMap` objects), but HTTP is canonical so the UI and agents never diverge.
+
+- **Host chrome (zoom, frame, reload side-effects, tray/window)** goes over **Tauri commands/events** by default. Rationale: these are host-process concerns that have no HTTP equivalent (zoom is a webview typography scale, frame is a window rect, reload must synchronously abort in-process `OwnerPool` and notify the webview via `pluk://zoom` events). They are most naturally modelled as `invoke` + `emit`.
+
+R18–R22 should therefore:
+1. Call `fetch("http://localhost:4242/api/...")` for data (or the Tauri `invoke` wrappers when they want generated types).
+2. Call `invoke("get_zoom")` / `invoke("zoom_in")` etc. for host chrome and listen for `pluk://zoom` events to apply `scale` as a CSS `font-size` / `--pluk-zoom` variable (never a window transform).
+3. Subscribe to `GET /api/events?after=<cursor>` for the live activity log via SSE.
+
+The server still binds `127.0.0.1:4242` before any window exists, so `http://localhost:4242/mcp/<token>` is live with or without a window, and graceful shutdown (`HostState::server.stop()`) cancels the token, calls `OwnerPool::reset_owners(None)`, and ends held-open SSE streams without stalling `ExitRequested`.
+
+## Host behaviour (R15)
+
+- **Tray + window.** Accessory (no dock) at launch; tray left-click toggles, right-click shows Open/Hide, Check for Updates…, Quit. `isVisible` forced true on every launch. Open promotes to `Regular` (dock + menu), close/hide demotes to `Accessory`. Close button hides, never quits. Window 1040×660, `contentMinSize` 720×520, resizable, frame persisted to `app_config_dir/window-frame.json` and clamped up on restore. Edit menu (Undo/Redo/Cut/Copy/Paste/SelectAll) is present so `⌘A/⌘C/⌘V` reach the webview.
+- **Zoom.** `STEPS = [0.85,0.90,1.00,1.10,1.25,1.40,1.60,1.80,2.00]`, default index 2 (1.0), persisted via `Store::set_setting("ui_zoom_step")`, exposed as `ZoomInfo { scale, label, reset_title, can_zoom_in/out }`. Frontend applies `scale` to typography only. Menu items disable at ends and `Actual Size` retitles to `Actual Size (140%)` when not default.
+- **Platform.** All paths through `pluk_core::platform`. macOS: `app_config_dir = ~/Library/Application Support/com.pluk.app`, `data_dir = ~/.pluk` (or `PLUK_DATA_DIR`), `mcp_detection_paths` includes `/Applications/*.app` for Cursor/Windsurf/Antigravity. Linux: `app_config_dir = $XDG_CONFIG_HOME/pluk` or `~/.config/pluk`, same `data_dir`, `mcp_detection_paths` is config/state dirs only. Activation policy (accessory↔regular) is macOS-only; Linux no-ops (window show/hide only). Tray `isVisible` forced true is macOS-only (Linux tray implementations ignore it).

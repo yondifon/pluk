@@ -14,19 +14,36 @@
       {
         "label": "main",
         "title": "Pluk",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600
+        "width": 1040,
+        "height": 660,
+        "minWidth": 720,
+        "minHeight": 520,
+        "resizable": true
       }
     ],
     "security": {
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": ["https://example.com/updates/latest.json"]
+    }
+  },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
-    "icon": ["icons/icon.icns"]
+    "targets": ["app", "dmg", "deb", "appimage"],
+    "icon": ["icons/icon.png", "icons/icon.icns"],
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": null,
+      "minimumSystemVersion": "13.0"
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
   }
 }
