@@ -41,6 +41,13 @@ pub enum McpClient {
     Antigravity,
 }
 
+/// File format of a client's config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigFormat {
+    Json,
+    Toml,
+}
+
 impl McpClient {
     pub const ALL: [McpClient; 6] = [
         McpClient::Opencode,
@@ -59,6 +66,45 @@ impl McpClient {
             self,
             McpClient::Opencode | McpClient::ClaudeCode | McpClient::Cursor
         )
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            McpClient::Opencode => "opencode",
+            McpClient::Codex => "Codex",
+            McpClient::ClaudeCode => "Claude Code",
+            McpClient::Cursor => "Cursor",
+            McpClient::Windsurf => "Windsurf",
+            McpClient::Antigravity => "Antigravity",
+        }
+    }
+
+    pub fn container_key(self) -> &'static str {
+        match self {
+            McpClient::Opencode => "mcp",
+            _ => "mcpServers",
+        }
+    }
+
+    pub fn config_format(self) -> ConfigFormat {
+        match self {
+            McpClient::Codex => ConfigFormat::Toml,
+            _ => ConfigFormat::Json,
+        }
+    }
+
+    pub fn config_language(self) -> &'static str {
+        match self {
+            McpClient::Codex => "toml",
+            _ => "json",
+        }
+    }
+
+    /// Whether this client is detected on the current machine.
+    pub fn is_installed(self) -> bool {
+        crate::platform::mcp_detection_paths(self)
+            .iter()
+            .any(|p| p.exists())
     }
 }
 
