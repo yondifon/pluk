@@ -41,7 +41,7 @@ Everything platform-varying resolves through `pluk_core::platform` — no scatte
 | --- | --- | --- |
 | `home_dir()` | `$HOME` via `std::env::home_dir` | same |
 | `data_dir()` | `PLUK_DATA_DIR` if set, else `~/.pluk` | same |
-| `app_config_dir()` | `~/Library/Application Support/com.pluk.app` | `$XDG_CONFIG_HOME/pluk` or `~/.config/pluk` |
+| `app_config_dir()` | `~/Library/Application Support/com.desgnspace.pluk` | `$XDG_CONFIG_HOME/pluk` or `~/.config/pluk` |
 | `log_file()` | `<data_dir>/pluk.log` | same |
 | `export_dir()` | `<data_dir>/exports` | same |
 | `ssh_control_dir()` | `<data_dir>/ssh-control` | same |
@@ -120,4 +120,4 @@ The server still binds `127.0.0.1:4242` before any window exists, so `http://loc
 
 - **Tray + window.** Accessory (no dock) at launch; tray left-click toggles, right-click shows Open/Hide, Check for Updates…, Quit. `isVisible` forced true on every launch. Open promotes to `Regular` (dock + menu), close/hide demotes to `Accessory`. Close button hides, never quits. Window 1040×660, `contentMinSize` 720×520, resizable, frame persisted to `app_config_dir/window-frame.json` and clamped up on restore. Edit menu (Undo/Redo/Cut/Copy/Paste/SelectAll) is present so `⌘A/⌘C/⌘V` reach the webview.
 - **Zoom.** `STEPS = [0.85,0.90,1.00,1.10,1.25,1.40,1.60,1.80,2.00]`, default index 2 (1.0), persisted via `Store::set_setting("ui_zoom_step")`, exposed as `ZoomInfo { scale, label, reset_title, can_zoom_in/out }`. Frontend applies `scale` to typography only. Menu items disable at ends and `Actual Size` retitles to `Actual Size (140%)` when not default.
-- **Platform.** All paths through `pluk_core::platform`. macOS: `app_config_dir = ~/Library/Application Support/com.pluk.app`, `data_dir = ~/.pluk` (or `PLUK_DATA_DIR`), `mcp_detection_paths` includes `/Applications/*.app` for Cursor/Windsurf/Antigravity. Linux: `app_config_dir = $XDG_CONFIG_HOME/pluk` or `~/.config/pluk`, same `data_dir`, `mcp_detection_paths` is config/state dirs only. Activation policy (accessory↔regular) is macOS-only; Linux no-ops (window show/hide only). Tray `isVisible` forced true is macOS-only (Linux tray implementations ignore it).
+- **Platform.** All paths through `pluk_core::platform`. macOS: `app_config_dir = ~/Library/Application Support/com.desgnspace.pluk`, `data_dir = ~/.pluk` (or `PLUK_DATA_DIR`), `mcp_detection_paths` includes `/Applications/*.app` for Cursor/Windsurf/Antigravity. Linux: `app_config_dir = $XDG_CONFIG_HOME/pluk` or `~/.config/pluk`, same `data_dir`, `mcp_detection_paths` is config/state dirs only. Activation policy (accessory↔regular) is macOS-only; Linux no-ops (window show/hide only). Tray `isVisible` forced true is macOS-only (Linux tray implementations ignore it).

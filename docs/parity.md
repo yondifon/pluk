@@ -39,7 +39,7 @@ that shape actually delivered in the agent environment.
 | `spark` | `pluk-adapters::spark` | `accounts`, `folders`, `list_emails`, `search_emails`, `read_thread`, `read_attachment`, `list_events`, `availability`, `find_contacts`, `team_info`, etc. | CLI text (`run_spark` stdout verbatim) — intentionally no field projection (see Decisions) |
 
 **Platform abstraction** (`pluk-core::platform`)
-- `data_dir()` (`PLUK_DATA_DIR` or `~/.pluk`), `app_config_dir()` (`~/Library/Application Support/com.pluk.app` on macOS, `$XDG_CONFIG_HOME/pluk` or `~/.config/pluk` on Linux), `log_file`, `export_dir`, `ssh_control_dir`, `mcp_config_path(client, scope)` + `mcp_detection_paths(client)` (extra `/Applications/*.app` scan on macOS only). All platform-varying code goes through this module — no scattered `cfg`.
+- `data_dir()` (`PLUK_DATA_DIR` or `~/.pluk`), `app_config_dir()` (`~/Library/Application Support/com.desgnspace.pluk` on macOS, `$XDG_CONFIG_HOME/pluk` or `~/.config/pluk` on Linux), `log_file`, `export_dir`, `ssh_control_dir`, `mcp_config_path(client, scope)` + `mcp_detection_paths(client)` (extra `/Applications/*.app` scan on macOS only). All platform-varying code goes through this module — no scattered `cfg`.
 
 **Packaging (R23)**
 - `crates/pluk-host/tauri.conf.json` targets `["app","dmg","deb","appimage"]`, placeholder updater config, `createUpdaterArtifacts:true`. `build.rs` stamps `PLUK_VERSION` (from `VERSION`) + `PLUK_COMMIT` (git HEAD) at compile time, exposed via `get_version` command for bug reports/updater. Signing is configured to accept a real identity at build time via `APPLE_SIGNING_IDENTITY` / `TAURI_SIGNING_PRIVATE_KEY` — no key committed.

@@ -5,7 +5,7 @@
     <key>CFBundleExecutable</key>
     <string>Pluk</string>
     <key>CFBundleIdentifier</key>
-    <string>com.pluk.app</string>
+    <string>com.desgnspace.pluk</string>
     <key>CFBundleName</key>
     <string>Pluk</string>
     <key>CFBundleIconFile</key>

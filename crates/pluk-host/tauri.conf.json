@@ -2,11 +2,11 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Pluk",
   "version": "0.1.0",
-  "identifier": "com.pluk.app",
+  "identifier": "com.desgnspace.pluk",
   "build": {
-    "beforeDevCommand": "bun run --cwd ../../ui dev",
+    "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run --cwd ../../ui build",
+    "beforeBuildCommand": "bun run build",
     "frontendDist": "../../ui/dist"
   },
   "app": {
@@ -31,17 +31,29 @@
   "plugins": {
     "updater": {
       "pubkey": "",
-      "endpoints": ["https://example.com/updates/latest.json"]
+      "endpoints": [
+        "https://example.com/updates/latest.json"
+      ]
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "deb", "appimage"],
-    "icon": ["icons/icon.png", "icons/icon.icns"],
-    "createUpdaterArtifacts": true,
+    "targets": [
+      "app",
+      "dmg",
+      "deb",
+      "appimage"
+    ],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns"
+    ],
+    "createUpdaterArtifacts": false,
     "macOS": {
-      "signingIdentity": null,
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "13.0",
+      "hardenedRuntime": true,
+      "entitlements": "./entitlements.plist",
+      "signingIdentity": null
     },
     "linux": {
       "deb": {

@@ -20,7 +20,7 @@ pub fn app_config_dir() -> PathBuf {
     home()
         .join("Library")
         .join("Application Support")
-        .join("com.pluk.app")
+        .join("com.desgnspace.pluk")
 }
 
 pub fn log_file() -> PathBuf {
