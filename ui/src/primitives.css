@@ -11,7 +11,6 @@
   color: var(--surface-label);
   font: inherit;
   font-size: calc(var(--type-callout) * var(--zoom-scale));
-  cursor: pointer;
 }
 .ui-button:hover:not(:disabled) { background: var(--surface-hover); }
 .ui-button.icon-button { min-width: var(--control-target); min-height: var(--control-target); padding: var(--space-xs); border: 0; background: transparent; color: var(--surface-secondary-label); }
@@ -21,9 +20,9 @@
 .ui-button-primary:hover:not(:disabled) { background: var(--action-fill-hover); }
 .ui-button-secondary { background: var(--surface-control); }
 .ui-button-danger { color: var(--danger-label); }
-.ui-button:disabled { opacity: var(--disabled-opacity); cursor: not-allowed; filter: grayscale(1); }
+.ui-button:disabled { opacity: var(--disabled-opacity); filter: grayscale(1); }
 
-.ui-select, .al-select { box-sizing: border-box; appearance: none; min-height: var(--control-target); padding: var(--space-xs) calc(var(--space-lg) + var(--space-xs)) var(--space-xs) var(--space-sm); border: var(--border-width) solid var(--border-control); border-radius: var(--radius-sm); background: var(--surface-panel) var(--select-chevron) no-repeat right var(--space-xs) center; background-size: var(--space-lg) var(--space-lg); color: var(--surface-label); font: inherit; font-size: calc(var(--type-callout) * var(--zoom-scale)); cursor: pointer; }
+.ui-select, .al-select { box-sizing: border-box; appearance: none; min-height: var(--control-target); padding: var(--space-xs) calc(var(--space-lg) + var(--space-xs)) var(--space-xs) var(--space-sm); border: var(--border-width) solid var(--border-control); border-radius: var(--radius-sm); background: var(--surface-panel) var(--select-chevron) no-repeat right var(--space-xs) center; background-size: var(--space-lg) var(--space-lg); color: var(--surface-label); font: inherit; font-size: calc(var(--type-callout) * var(--zoom-scale)); }
 
 .ui-card { padding: var(--space-lg); background: var(--surface-panel); border: var(--border-width) solid var(--border-subtle); border-radius: var(--radius-md); }
 .ui-card-title { margin: 0 0 var(--space-md); color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); font-weight: 600; letter-spacing: var(--tracking-label); text-transform: uppercase; }
@@ -45,4 +44,3 @@
 .icon-more { stroke-width: 3; }
 
 button, input, select, textarea { box-sizing: border-box; font-family: inherit; }
-button:disabled, select:disabled, input:disabled, textarea:disabled { cursor: not-allowed; }

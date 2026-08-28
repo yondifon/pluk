@@ -14,7 +14,7 @@ use crate::updater::{Updater, UpdaterConfig};
 use tauri::ActivationPolicy;
 use tauri::{
     Emitter, Manager, WindowEvent,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
 };
 
@@ -282,27 +282,13 @@ pub fn run() {
             }
         });
 }
+/// The menu bar the platform expects: submenus off the root, standard items in
+/// the standard places, so Undo/Cut/Copy/Paste and their accelerators reach the
+/// webview and zoom sits under View.
 fn build_app_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     zoom_reset_title: &str,
 ) -> tauri::Result<Menu<R>> {
-    let quit = PredefinedMenuItem::quit(app, Some("Quit pluk"))?;
-    let app_quit = MenuItem::with_id(app, "app_quit", "Quit pluk", true, None::<&str>)?;
-    let undo = PredefinedMenuItem::undo(app, None)?;
-    let redo = PredefinedMenuItem::redo(app, None)?;
-    let cut = PredefinedMenuItem::cut(app, None)?;
-    let copy = PredefinedMenuItem::copy(app, None)?;
-    let paste = PredefinedMenuItem::paste(app, None)?;
-    let select_all = PredefinedMenuItem::select_all(app, None)?;
-    let zoom_in = MenuItem::with_id(app, "zoom_in", "Zoom In", true, Some("CmdOrCtrl+Plus"))?;
-    let zoom_out = MenuItem::with_id(app, "zoom_out", "Zoom Out", true, Some("CmdOrCtrl+-"))?;
-    let zoom_reset = MenuItem::with_id(
-        app,
-        "zoom_reset",
-        zoom_reset_title,
-        true,
-        Some("CmdOrCtrl+0"),
-    )?;
     let check_updates = MenuItem::with_id(
         app,
         "check_for_updates",
@@ -310,25 +296,77 @@ fn build_app_menu<R: tauri::Runtime>(
         true,
         None::<&str>,
     )?;
-    let minimize = PredefinedMenuItem::minimize(app, None)?;
-    Menu::with_items(
+    let quit = PredefinedMenuItem::quit(app, Some("Quit pluk"))?;
+    let edit = Submenu::with_items(
         app,
+        "Edit",
+        true,
         &[
-            &quit,
-            &app_quit,
-            &undo,
-            &redo,
-            &cut,
-            &copy,
-            &paste,
-            &select_all,
-            &zoom_in,
-            &zoom_out,
-            &zoom_reset,
-            &check_updates,
-            &minimize,
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::select_all(app, None)?,
         ],
-    )
+    )?;
+    let view = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[
+            &MenuItem::with_id(app, "zoom_in", "Zoom In", true, Some("CmdOrCtrl+Plus"))?,
+            &MenuItem::with_id(app, "zoom_out", "Zoom Out", true, Some("CmdOrCtrl+-"))?,
+            &MenuItem::with_id(app, "zoom_reset", zoom_reset_title, true, Some("CmdOrCtrl+0"))?,
+        ],
+    )?;
+
+    #[cfg(target_os = "macos")]
+    let menu = {
+        let app_menu = Submenu::with_items(
+            app,
+            "pluk",
+            true,
+            &[
+                &PredefinedMenuItem::about(app, None, None)?,
+                &check_updates,
+                &PredefinedMenuItem::separator(app)?,
+                &PredefinedMenuItem::hide(app, None)?,
+                &PredefinedMenuItem::hide_others(app, None)?,
+                &PredefinedMenuItem::show_all(app, None)?,
+                &PredefinedMenuItem::separator(app)?,
+                &quit,
+            ],
+        )?;
+        let window = Submenu::with_items(
+            app,
+            "Window",
+            true,
+            &[
+                &PredefinedMenuItem::minimize(app, None)?,
+                &PredefinedMenuItem::close_window(app, None)?,
+            ],
+        )?;
+        Menu::with_items(app, &[&app_menu, &edit, &view, &window])?
+    };
+    #[cfg(not(target_os = "macos"))]
+    let menu = {
+        let file = Submenu::with_items(
+            app,
+            "File",
+            true,
+            &[
+                &check_updates,
+                &PredefinedMenuItem::separator(app)?,
+                &PredefinedMenuItem::minimize(app, None)?,
+                &quit,
+            ],
+        )?;
+        Menu::with_items(app, &[&file, &edit, &view])?
+    };
+    Ok(menu)
 }
 fn show_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     #[cfg(target_os = "macos")]

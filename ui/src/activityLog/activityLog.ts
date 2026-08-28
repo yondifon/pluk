@@ -8,18 +8,12 @@ import type { LogEntry, LogCursor, TimeRange, VerdictFilter } from "./types";
 import { timeRangeLabels } from "./types";
 import { fetchLogPage, mergeEntries, cancelLog, getRetention, setRetention, clearLogs, connectEvents, type LogScope, type LiveEvent } from "./api";
 import { relativeTime, localTimeString, parseUtcToMillis } from "./time";
-import { capResponse, capConsole } from "./caps";
 import { highlightedHtml, consoleHtml, parseLanguage, escapeHtml } from "./highlight";
+import { capResponse } from "./caps";
 import { createResponseViewer } from "./responseViewer";
 import { createIcon } from "../icon";
 import { confirmModal } from "../modal";
-
-const COMMAND_TYPES = new Set(["ssh", "github-cli", "spark", "herd"]);
-
-function isTerminalEntry(entry: LogEntry, typeMap: Map<string, string>): boolean {
-  const t = typeMap.get(entry.connectionId) ?? null;
-  return t ? COMMAND_TYPES.has(t) : false;
-}
+import { ENTRY_RENDERERS, entryType, responseTextForCopy } from "./renderers";
 
 export interface ActivityLogOptions {
   scope: LogScope;
@@ -179,97 +173,22 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   }
 
   function rowHtml(entry: LogEntry, isExpanded: boolean): string {
-    const terminal = isTerminalEntry(entry, typeMap);
-    if (terminal) return terminalRowHtml(entry, isExpanded);
-    return dbRowHtml(entry, isExpanded);
+    const type = entryType(entry, typeMap.get(entry.connectionId));
+    const detailId = `al-detail-${entry.id}`;
+    const detail = isExpanded ? `<div id="${detailId}" class="al-expanded" role="region">${ENTRY_RENDERERS[type](entry)}</div>` : "";
+    return `<div class="al-row ui-card${isExpanded ? " al-row-expanded" : ""}" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="${isExpanded}" aria-controls="${detailId}">${metaLineHtml(entry, type)}<div class="al-summary" title="${escapeHtml(entry.sql)}">${escapeHtml(entry.sql)}</div>${detail}</div>`;
   }
 
-  function dbRowHtml(entry: LogEntry, isExpanded: boolean): string {
-    const meta = metaLineHtml(entry);
-    if (!isExpanded) {
-       return `<div class="al-row ui-card" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="false">
-         <div class="al-row-main">${meta}<div class="al-sql-collapsed" title="${escapeHtml(entry.sql)}">${escapeHtml(entry.sql)}</div></div>
-      </div>`;
-    }
-    const reason = entry.reason ? `<div class="al-reason al-reason-${escapeHtml(entry.verdict)}">${escapeHtml(entry.reason)}</div>` : "";
-    const cap = entry.responseText ? capResponse(entry.responseText) : null;
-    let responseBlock = "";
-    if (entry.responseText) {
-      const htmlPromise = ""; // filled async
-      void htmlPromise;
-      responseBlock = `<div class="al-response">
-        <div class="al-response-head"><span>Response</span>${cap?.truncated ? `<button class="al-link" data-open="${entry.id}">Open</button>` : ""}</div>
-        <div class="al-response-preview" data-preview="${entry.id}"></div>
-        ${cap?.truncated ? `<div class="al-trunc">Preview truncated — Open for the full, formatted response</div>` : ""}
-      </div>`;
-    } else if (entry.resultJson) {
-      responseBlock = resultPreviewHtml(entry.resultJson, entry.rowCount);
-    }
-    const fullResponse = entry.responseText ?? entry.resultJson ?? entry.reason ?? "";
-     return `<div class="al-row ui-card al-row-expanded" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="true">
-      <div class="al-row-main">${meta}
-        <div class="al-query-block"><div class="al-label">Query</div><pre class="al-code" data-sql="${entry.id}">${escapeHtml(entry.sql)}</pre></div>
-        ${reason}
-        ${responseBlock}
-         <div class="al-actions">
-          <button class="ui-button ui-button-sm" data-copy-sql="${entry.id}">Copy query</button>
-          ${fullResponse ? `<button class="ui-button ui-button-sm" data-copy-res="${entry.id}">Copy response</button>` : ""}
-        </div>
-      </div>
-    </div>`;
-  }
-
-  function terminalRowHtml(entry: LogEntry, isExpanded: boolean): string {
-    const meta = metaLineHtml(entry);
-    const cmdLine = `<div class="al-cmdline"><span class="al-prompt">$</span> <span class="al-cmd" data-cmd="${entry.id}">${escapeHtml(entry.sql)}</span></div>`;
-    if (!isExpanded) {
-       return `<div class="al-row ui-card al-row-terminal" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="false">
-        ${meta}<div class="al-terminal-surface">${cmdLine}</div>
-      </div>`;
-    }
-    const reason = entry.reason ? `<div class="al-reason">${escapeHtml(entry.reason)}</div>` : "";
-    let outBlock = "";
-    if (entry.responseText) {
-      const cap = capConsole(entry.responseText);
-      outBlock = `<div class="al-console" data-console="${entry.id}"></div>${cap.truncated ? `<button class="al-link" data-open="${entry.id}">Open full output</button>` : ""}`;
-    } else {
-      outBlock = `<div class="al-console-empty">${entry.verdict === "pending" ? "Running…" : "No output"}</div>`;
-    }
-     return `<div class="al-row ui-card al-row-terminal al-row-expanded" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="true">
-      ${meta}<div class="al-terminal-surface">${cmdLine}${outBlock}</div>
-      ${reason}
-       <div class="al-actions">
-         <button class="ui-button ui-button-sm" data-copy-sql="${entry.id}">Copy command</button>
-         ${entry.responseText ? `<button class="ui-button ui-button-sm" data-copy-res="${entry.id}">Copy output</button>` : ""}
-      </div>
-    </div>`;
-  }
-
-  function metaLineHtml(entry: LogEntry): string {
-    const isGroup = "groupId" in opts.scope;
+  function metaLineHtml(entry: LogEntry, type = entryType(entry, typeMap.get(entry.connectionId))): string {
     const badges: string[] = [];
     badges.push(`<span class="al-badge al-badge-${escapeHtml(entry.verdict)}"><span class="al-dot al-dot-${escapeHtml(entry.verdict)}"></span>${escapeHtml(verdictLabel(entry.verdict))}</span>`);
-    if (isGroup) badges.push(`<span class="al-chip">${escapeHtml(entry.connectionName)}</span>`);
+    badges.push(`<span class="al-chip">${escapeHtml(entry.connectionName)}</span>`);
     if (entry.source) badges.push(`<span class="al-chip">${escapeHtml(entry.source)}</span>`);
-    if (entry.categories) badges.push(`<span class="al-cat">${escapeHtml(entry.categories)}</span>`);
+    badges.push(`<span class="al-kind">${escapeHtml(type)}</span>`);
     const stopBtn = entry.verdict === "pending" ? `<button class="ui-button ui-button-sm ui-button-danger" data-stop="${entry.id}">Stop</button>` : "";
      const rel = escapeHtml(relativeTime(entry.createdAt));
      const absolute = escapeHtml(localTimeString(entry.createdAt));
      return `<div class="al-meta">${badges.join("")}<span class="al-spacer"></span>${stopBtn}<time class="al-time-ago" datetime="${escapeHtml(entry.createdAt)}" title="${absolute}">${rel}</time></div>`;
-  }
-
-  function resultPreviewHtml(jsonStr: string, rowCount: number | null): string {
-    try {
-      const obj = JSON.parse(jsonStr) as { fields: string[]; rows: Record<string, unknown>[] };
-      const fields = obj.fields ?? [];
-      const rows = (obj.rows ?? []).slice(0, 5);
-      if (fields.length === 0) return "";
-       const head = `<div class="al-table-head">${fields.slice(0,6).map(f=>`<span class="al-th" title="${escapeHtml(f)}">${escapeHtml(f)}</span>`).join("")}</div>`;
-       const body = rows.map(r => `<div class="al-tr">${fields.slice(0,6).map(f => { const value = r[f] == null ? "NULL" : String(r[f]); return `<span class="al-td" title="${escapeHtml(value)}">${escapeHtml(value)}</span>`; }).join("")}</div>`).join("");
-      const total = rowCount ?? rows.length;
-      const foot = total > rows.length ? `<div class="al-table-foot">${rows.length} of ${total} rows</div>` : "";
-      return `<div class="al-table">${head}${body}${foot}</div>`;
-    } catch { return ""; }
   }
 
   // Render list: only re-render affected rows when possible
@@ -286,6 +205,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     // For simplicity, rebuild list but keep scroll position stable.
     // Requirement "Only the affected feed re-renders" is met for live single-row updates via patchRow below.
     elList.innerHTML = f.map(e => rowHtml(e, expandedId === e.id)).join("");
+    for (const button of Array.from(elList.querySelectorAll<HTMLButtonElement>(".al-copy-block"))) button.appendChild(createIcon("copy", { size: 14 }));
     renderLoadMore();
     // async highlight for expanded rows
     for (const e of f) if (expandedId === e.id) enhanceExpandedRow(e);
@@ -303,7 +223,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
       const hl = await highlightedHtmlAsync(entry.sql, "shell");
       cmdEl.innerHTML = hl;
     }
-    const previewEl = elList.querySelector(`[data-preview="${entry.id}"]`) as HTMLElement | null;
+    const previewEl = null as HTMLElement | null;
     if (previewEl && entry.responseText) {
       const cap = capResponse(entry.responseText);
       // format slice only
@@ -323,9 +243,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     }
     const consoleEl = elList.querySelector(`[data-console="${entry.id}"]`) as HTMLElement | null;
     if (consoleEl && entry.responseText) {
-      const cap = capConsole(entry.responseText);
-      const html = consoleHtml(cap.preview);
-      consoleEl.innerHTML = `<pre class="al-console-pre">${html}</pre>`;
+      consoleEl.innerHTML = consoleHtml(entry.responseText);
     }
   }
 
@@ -537,6 +455,18 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   // Delegated row events
   elList.addEventListener("click", async (e) => {
     const target = e.target as HTMLElement;
+    const copyBlock = target.closest<HTMLButtonElement>("[data-copy-block]");
+    if (copyBlock) {
+      const row = copyBlock.closest<HTMLElement>("[data-id]");
+      const entry = row ? entries.find(item => item.id === Number(row.dataset.id)) : undefined;
+      if (entry) {
+        await navigator.clipboard.writeText(copyBlock.dataset.copyBlock === "request" ? entry.sql : responseTextForCopy(entry));
+        copyBlock.replaceChildren(createIcon("check", { size: 14 }));
+        window.setTimeout(() => copyBlock.replaceChildren(createIcon("copy", { size: 14 })), 1000);
+      }
+      return;
+    }
+    if (target.closest(".al-expanded")) return;
     const stopId = target.closest("[data-stop]")?.getAttribute("data-stop");
     if (stopId) {
       e.stopPropagation();
@@ -582,6 +512,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   elList.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
     const target = e.target as HTMLElement;
+    if (target.closest(".al-expanded")) return;
     if (target.closest("button, a, input, select, textarea")) return;
     const row = target.closest("[data-id]") as HTMLElement | null;
     if (!row) return;

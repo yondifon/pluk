@@ -1,5 +1,6 @@
 import "./style.css";
 import { suppressWebViewContextMenu } from "./contextMenu.ts";
+import { suppressWebViewKeyBeep } from "./keyBeep.ts";
 import { zoom } from "./zoom.ts";
 import { createShell } from "./shell.ts";
 import { createSidebar, type SidebarState } from "./sidebar.ts";
@@ -27,7 +28,10 @@ import type { Integration, Group, Environment, Health } from "./types.ts";
 
 const app = document.getElementById("app")!;
 
-if (isMac()) document.documentElement.classList.add("platform-macos");
+if (isMac()) {
+  document.documentElement.classList.add("platform-macos");
+  suppressWebViewKeyBeep();
+}
 suppressWebViewContextMenu(import.meta.env.DEV);
 
 zoom.apply();
