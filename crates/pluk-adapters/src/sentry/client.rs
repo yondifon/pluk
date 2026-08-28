@@ -50,12 +50,12 @@ async fn request(cfg: &SentryConfig, method: &str, path: &str, query: Option<Val
                 if v.is_null() { continue; }
                 if *v == Value::String(String::new()) { continue; }
                 if let Some(arr) = v.as_array() {
-                    for item in arr { params.push(format!("{}={}", urlencoding::encode(k), urlencoding::encode(&item.to_string().trim_matches('"')))); }
+                    for item in arr { params.push(format!("{}={}", urlencoding::encode(k), urlencoding::encode(item.to_string().trim_matches('"')))); }
                 } else if let Some(s) = v.as_str() {
                     if s.is_empty() { continue; }
                     params.push(format!("{}={}", urlencoding::encode(k), urlencoding::encode(s)));
                 } else {
-                    params.push(format!("{}={}", urlencoding::encode(k), urlencoding::encode(&v.to_string().trim_matches('"'))));
+                    params.push(format!("{}={}", urlencoding::encode(k), urlencoding::encode(v.to_string().trim_matches('"'))));
                 }
             }
         }

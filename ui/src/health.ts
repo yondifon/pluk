@@ -48,12 +48,12 @@ export function humanizeHealthError(raw: string | null | undefined): string {
   if (!raw) return "Connection is failing. Check the setup and try again.";
   const low = raw.toLowerCase();
   let msg: string;
-  if (low.includes("refused") || low.includes("connection")) msg = "Couldn’t connect. Check that the service is reachable and try again.";
+  if (low.includes("refused") || low.includes("connection")) msg = "Couldn’t connect. Check that the connection is reachable and try again.";
   else if (low.includes("auth") || low.includes("unauthorized") || low.includes("forbidden")) msg = "Authentication failed. Check the credentials and try again.";
   else if (low.includes("timeout")) msg = "Connection timed out. Check the network and try again.";
   else if (low.includes("tunnel") || low.includes("ssh")) msg = "Secure tunnel failed. Check SSH settings and try again.";
   else msg = raw.trim();
-  if (!msg.toLowerCase().includes("try again")) {
+  if (!/(?:try again|retry)\.?$/i.test(msg.trim())) {
     msg = msg.replace(/\.?$/, ".") + " Check the setup and try again.";
   }
   return msg;

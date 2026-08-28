@@ -11,6 +11,8 @@ import { relativeTime, localTimeString, parseUtcToMillis } from "./time";
 import { capResponse, capConsole } from "./caps";
 import { highlightedHtml, consoleHtml, parseLanguage, escapeHtml } from "./highlight";
 import { createResponseViewer } from "./responseViewer";
+import { createIcon } from "../icon";
+import { confirmModal } from "../modal";
 
 const COMMAND_TYPES = new Set(["ssh", "github-cli", "spark", "herd"]);
 
@@ -39,6 +41,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   let requestGeneration = 0;
   let loadedOlderPage = false;
   let refreshAfterLoad = false;
+  let loadError: string | null = null;
 
   // Live cursor (monotonic)
   let liveCursor = 0;
@@ -57,9 +60,9 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   container.innerHTML = `
     <div class="al-toolbar">
       <div class="al-search">
-        <span class="al-search-icon">⌕</span>
+        <span class="al-search-icon"></span>
         <input class="al-search-input" placeholder="Filter SQL, tool, integration…" aria-label="Filter activity" />
-        <button class="al-search-clear" aria-label="Clear search" hidden>×</button>
+        <button class="al-search-clear icon-button" aria-label="Clear search" hidden></button>
       </div>
       <div class="al-spacer"></div>
       <div class="al-menus">
@@ -90,11 +93,12 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
             <option value="0">Forever</option>
           </select>
         </label>
-        <button class="al-btn" data-role="refresh" aria-label="Refresh">↻ Refresh</button>
-        <button class="al-btn al-btn-danger" data-role="clear" aria-label="Clear all">Clear</button>
+         <button class="ui-button ui-button-sm" data-role="refresh" aria-label="Refresh">Refresh</button>
+         <button class="ui-button ui-button-sm ui-button-danger" data-role="clear" aria-label="Clear all">Clear</button>
       </div>
     </div>
-    <div class="al-stats" data-role="stats" aria-live="polite"></div>
+    <div class="al-stats" data-role="stats"></div>
+    <div class="al-retention-status sr-only" data-role="retention-status" role="status" aria-live="polite" aria-atomic="true"></div>
     <div class="al-list" data-role="list"></div>
     <div class="al-load-more" data-role="loadMore"></div>
     <div class="al-empty" data-role="empty" hidden></div>
@@ -106,12 +110,21 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   const elVerdict = container.querySelector("[data-role='verdict']") as HTMLSelectElement;
   const elRetention = container.querySelector("[data-role='retention']") as HTMLSelectElement;
   const elStats = container.querySelector("[data-role='stats']") as HTMLElement;
+  const elRetentionStatus = container.querySelector("[data-role='retention-status']") as HTMLElement;
   const elList = container.querySelector("[data-role='list']") as HTMLElement;
   const elLoadMore = container.querySelector("[data-role='loadMore']") as HTMLElement;
   const elEmpty = container.querySelector("[data-role='empty']") as HTMLElement;
+  container.querySelector(".al-search-icon")?.appendChild(createIcon("search"));
+  container.querySelector(".al-search-clear")?.appendChild(createIcon("close"));
+  container.querySelector("[data-role='refresh']")?.prepend(createIcon("refresh"));
 
   // retention init
-  getRetention().then(d => { if ([0,7,14,30,60,90].includes(d)) elRetention.value = String(d); });
+  getRetention().then(d => {
+    if ([0,7,14,30,60,90].includes(d)) {
+      elRetention.value = String(d);
+      elRetention.dataset.value = String(d);
+    }
+  });
 
   // ----- helpers -----
   function matchesSearch(e: LogEntry): boolean {
@@ -161,7 +174,8 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     else if (f !== "all") { title = `No ${f} activity`; subtitle = "Try a different filter."; }
     else if (timeRange !== "all") { title = "No activity in this range"; subtitle = "Try a wider time range."; }
     else { title = "No activity yet"; subtitle = "Activity from agents using this endpoint will appear here."; }
-    elEmpty.innerHTML = `<div class="al-empty-icon">◫</div><div class="al-empty-title">${escapeHtml(title)}</div><div class="al-empty-sub">${escapeHtml(subtitle)}</div>`;
+    elEmpty.innerHTML = `<div class="al-empty-icon"></div><div class="al-empty-title">${escapeHtml(title)}</div><div class="al-empty-sub">${escapeHtml(subtitle)}</div>`;
+    elEmpty.querySelector(".al-empty-icon")?.appendChild(createIcon("tray", { size: 24 }));
   }
 
   function rowHtml(entry: LogEntry, isExpanded: boolean): string {
@@ -173,8 +187,8 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   function dbRowHtml(entry: LogEntry, isExpanded: boolean): string {
     const meta = metaLineHtml(entry);
     if (!isExpanded) {
-      return `<div class="al-row" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="false">
-        <div class="al-row-main">${meta}<div class="al-sql-collapsed">${escapeHtml(entry.sql)}</div></div>
+       return `<div class="al-row ui-card" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="false">
+         <div class="al-row-main">${meta}<div class="al-sql-collapsed" title="${escapeHtml(entry.sql)}">${escapeHtml(entry.sql)}</div></div>
       </div>`;
     }
     const reason = entry.reason ? `<div class="al-reason al-reason-${escapeHtml(entry.verdict)}">${escapeHtml(entry.reason)}</div>` : "";
@@ -192,15 +206,14 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
       responseBlock = resultPreviewHtml(entry.resultJson, entry.rowCount);
     }
     const fullResponse = entry.responseText ?? entry.resultJson ?? entry.reason ?? "";
-    return `<div class="al-row al-row-expanded" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="true">
+     return `<div class="al-row ui-card al-row-expanded" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="true">
       <div class="al-row-main">${meta}
         <div class="al-query-block"><div class="al-label">Query</div><pre class="al-code" data-sql="${entry.id}">${escapeHtml(entry.sql)}</pre></div>
         ${reason}
         ${responseBlock}
-        <div class="al-time">${escapeHtml(localTimeString(entry.createdAt))}</div>
-        <div class="al-actions">
-          <button class="al-btn al-btn-sm" data-copy-sql="${entry.id}">Copy query</button>
-          ${fullResponse ? `<button class="al-btn al-btn-sm" data-copy-res="${entry.id}">Copy response</button>` : ""}
+         <div class="al-actions">
+          <button class="ui-button ui-button-sm" data-copy-sql="${entry.id}">Copy query</button>
+          ${fullResponse ? `<button class="ui-button ui-button-sm" data-copy-res="${entry.id}">Copy response</button>` : ""}
         </div>
       </div>
     </div>`;
@@ -210,7 +223,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     const meta = metaLineHtml(entry);
     const cmdLine = `<div class="al-cmdline"><span class="al-prompt">$</span> <span class="al-cmd" data-cmd="${entry.id}">${escapeHtml(entry.sql)}</span></div>`;
     if (!isExpanded) {
-      return `<div class="al-row al-row-terminal" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="false">
+       return `<div class="al-row ui-card al-row-terminal" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="false">
         ${meta}<div class="al-terminal-surface">${cmdLine}</div>
       </div>`;
     }
@@ -222,13 +235,12 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     } else {
       outBlock = `<div class="al-console-empty">${entry.verdict === "pending" ? "Running…" : "No output"}</div>`;
     }
-    return `<div class="al-row al-row-terminal al-row-expanded" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="true">
+     return `<div class="al-row ui-card al-row-terminal al-row-expanded" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="true">
       ${meta}<div class="al-terminal-surface">${cmdLine}${outBlock}</div>
       ${reason}
-      <div class="al-time">${escapeHtml(localTimeString(entry.createdAt))}</div>
-      <div class="al-actions">
-        <button class="al-btn al-btn-sm" data-copy-sql="${entry.id}">Copy command</button>
-        ${entry.responseText ? `<button class="al-btn al-btn-sm" data-copy-res="${entry.id}">Copy output</button>` : ""}
+       <div class="al-actions">
+         <button class="ui-button ui-button-sm" data-copy-sql="${entry.id}">Copy command</button>
+         ${entry.responseText ? `<button class="ui-button ui-button-sm" data-copy-res="${entry.id}">Copy output</button>` : ""}
       </div>
     </div>`;
   }
@@ -240,9 +252,10 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     if (isGroup) badges.push(`<span class="al-chip">${escapeHtml(entry.connectionName)}</span>`);
     if (entry.source) badges.push(`<span class="al-chip">${escapeHtml(entry.source)}</span>`);
     if (entry.categories) badges.push(`<span class="al-cat">${escapeHtml(entry.categories)}</span>`);
-    const stopBtn = entry.verdict === "pending" ? `<button class="al-btn al-btn-stop" data-stop="${entry.id}">Stop</button>` : "";
-    const rel = escapeHtml(relativeTime(entry.createdAt));
-    return `<div class="al-meta">${badges.join("")}<span class="al-spacer"></span>${stopBtn}<span class="al-time-ago">${rel}</span></div>`;
+    const stopBtn = entry.verdict === "pending" ? `<button class="ui-button ui-button-sm ui-button-danger" data-stop="${entry.id}">Stop</button>` : "";
+     const rel = escapeHtml(relativeTime(entry.createdAt));
+     const absolute = escapeHtml(localTimeString(entry.createdAt));
+     return `<div class="al-meta">${badges.join("")}<span class="al-spacer"></span>${stopBtn}<time class="al-time-ago" datetime="${escapeHtml(entry.createdAt)}" title="${absolute}">${rel}</time></div>`;
   }
 
   function resultPreviewHtml(jsonStr: string, rowCount: number | null): string {
@@ -251,8 +264,8 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
       const fields = obj.fields ?? [];
       const rows = (obj.rows ?? []).slice(0, 5);
       if (fields.length === 0) return "";
-      const head = `<div class="al-table-head">${fields.slice(0,6).map(f=>`<span class="al-th">${escapeHtml(f)}</span>`).join("")}</div>`;
-      const body = rows.map(r => `<div class="al-tr">${fields.slice(0,6).map(f => `<span class="al-td">${escapeHtml(r[f] == null ? "NULL" : String(r[f]))}</span>`).join("")}</div>`).join("");
+       const head = `<div class="al-table-head">${fields.slice(0,6).map(f=>`<span class="al-th" title="${escapeHtml(f)}">${escapeHtml(f)}</span>`).join("")}</div>`;
+       const body = rows.map(r => `<div class="al-tr">${fields.slice(0,6).map(f => { const value = r[f] == null ? "NULL" : String(r[f]); return `<span class="al-td" title="${escapeHtml(value)}">${escapeHtml(value)}</span>`; }).join("")}</div>`).join("");
       const total = rowCount ?? rows.length;
       const foot = total > rows.length ? `<div class="al-table-foot">${rows.length} of ${total} rows</div>` : "";
       return `<div class="al-table">${head}${body}${foot}</div>`;
@@ -345,8 +358,9 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   }
 
   function renderLoadMore() {
+    if (loadError) { elLoadMore.innerHTML = `<div class="ui-state ui-error" role="alert"><p>${escapeHtml(loadError)}</p><button class="ui-button ui-button-secondary ui-button-sm" data-role="retry">Try again</button></div>`; return; }
     if (isLoading) { elLoadMore.innerHTML = `<span class="al-loading">Loading older entries…</span>`; return; }
-    if (hasMore) { elLoadMore.innerHTML = `<button class="al-btn" data-role="loadMore">Load older entries</button><div class="al-sentinel" data-role="sentinel"></div>`; observeSentinel(); }
+    if (hasMore) { elLoadMore.innerHTML = `<button class="ui-button ui-button-sm" data-role="loadMore">Load older entries</button><div class="al-sentinel" data-role="sentinel"></div>`; observeSentinel(); }
     else { elLoadMore.innerHTML = `<span class="al-end">You’re viewing all activity</span>`; }
   }
 
@@ -377,6 +391,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
       liveCursor = 0;
     }
     isLoading = true;
+    loadError = null;
     renderLoadMore();
     fetchLogPage(opts.scope, range, null).then(page => {
       if (gen !== requestGeneration) return;
@@ -388,7 +403,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
       updateStats();
       renderList();
       updatePolling();
-    }).catch(() => { if (gen !== requestGeneration) return; isLoading = false; renderLoadMore(); });
+    }).catch(() => { if (gen !== requestGeneration) return; isLoading = false; loadError = "Couldn’t load activity."; renderLoadMore(); });
   }
 
   function loadMore() {
@@ -396,6 +411,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     const gen = requestGeneration;
     const range = timeRange;
     isLoading = true;
+    loadError = null;
     renderLoadMore();
     fetchLogPage(opts.scope, range, nextCursor).then(page => {
       if (gen !== requestGeneration) return;
@@ -408,7 +424,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
       if (refreshAfterLoad) { refreshAfterLoad = false; reload(); return; }
       updateStats();
       renderList();
-    }).catch(() => { if (gen !== requestGeneration) return; isLoading = false; renderLoadMore(); });
+    }).catch(() => { if (gen !== requestGeneration) return; isLoading = false; loadError = "Couldn’t load older activity."; renderLoadMore(); });
   }
 
   function updatePolling() {
@@ -485,15 +501,37 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     filter = elVerdict.value as VerdictFilter;
     renderList();
   });
-  elRetention.addEventListener("change", async () => {
+  elRetention.addEventListener("change", () => {
     const days = Number(elRetention.value);
-    try { await setRetention(days); reload(true); } catch (e) { alert(String(e)); }
+    const previous = elRetention.dataset.value ?? "30";
+    elRetention.value = previous;
+    const label = days === 0 ? "Forever" : `${days} days`;
+    confirmModal({
+      title: "Change activity retention?",
+      message: `Activity older than ${label} will be removed.`,
+      confirmLabel: `Keep ${label}`,
+      onConfirm: () => {
+        elRetention.value = String(days);
+        elRetention.dataset.value = String(days);
+        void setRetention(days).then(() => {
+          elRetentionStatus.textContent = `Activity retention set to ${label}.`;
+          reload(true);
+        }).catch(() => {
+          elRetentionStatus.textContent = "Couldn’t update activity retention. Try again.";
+          elRetention.value = previous;
+          elRetention.dataset.value = previous;
+        });
+      },
+    });
   });
   container.querySelector("[data-role='refresh']")?.addEventListener("click", () => reload());
   container.querySelector("[data-role='clear']")?.addEventListener("click", async () => {
-    const ok = confirm("Clear all activity for this integration? This cannot be undone.");
-    if (!ok) return;
-    try { await clearLogs(opts.scope); reload(true); } catch (e) { alert(String(e)); }
+    confirmModal({
+      title: "Clear activity history?",
+      message: "This permanently removes the recorded activity for this integration.",
+      confirmLabel: "Clear history",
+      onConfirm: () => void clearLogs(opts.scope).then(() => reload(true)).catch((e) => alert(String(e))),
+    });
   });
 
   // Delegated row events
@@ -541,9 +579,22 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     }
   });
 
+  elList.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const target = e.target as HTMLElement;
+    if (target.closest("button, a, input, select, textarea")) return;
+    const row = target.closest("[data-id]") as HTMLElement | null;
+    if (!row) return;
+    e.preventDefault();
+    const id = Number(row.getAttribute("data-id"));
+    expandedId = expandedId === id ? null : id;
+    renderList();
+  });
+
   elLoadMore.addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
     if (t.getAttribute("data-role") === "loadMore") loadMore();
+    if (t.getAttribute("data-role") === "retry") reload(true);
   });
 
   // initial load + live

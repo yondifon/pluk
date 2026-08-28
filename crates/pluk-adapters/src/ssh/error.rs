@@ -14,8 +14,8 @@ pub fn humanize_ssh_error(err: &AdapterError) -> String {
         return format!("{} {}", info.message, info.hint.unwrap_or_default());
     }
     // connection_failed or query_failed with hint
-    if info.hint.is_some() {
-        return format!("{} {}", info.message, info.hint.unwrap());
+    if let Some(hint) = info.hint {
+        return format!("{} {}", info.message, hint);
     }
     info.message
 }

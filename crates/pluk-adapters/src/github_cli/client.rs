@@ -10,12 +10,12 @@ use crate::error::AdapterError;
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 
 fn expand_home(p: &str) -> String {
-    if p.starts_with('~') {
+    if let Some(path) = p.strip_prefix('~') {
         if let Ok(home) = std::env::var("HOME") {
-            return format!("{}{}", home, &p[1..]);
+            return format!("{}{}", home, path);
         }
         if let Some(home) = dirs_home() {
-            return format!("{}{}", home, &p[1..]);
+            return format!("{}{}", home, path);
         }
     }
     p.to_string()
@@ -73,14 +73,13 @@ pub fn gh_config(conn: &Integration) -> GhConfig {
         .unwrap_or(DEFAULT_TIMEOUT_MS);
     // also handle f64 via serde_json Number
     let timeout_ms = if timeout_ms == DEFAULT_TIMEOUT_MS {
-        if let Some(v) = c.get("timeout_seconds") {
-            if let Some(f) = v.as_f64() {
+        if let Some(v) = c.get("timeout_seconds")
+            && let Some(f) = v.as_f64() {
                 let ms = (f * 1000.0).floor() as i64;
                 if ms > 0 {
                     return GhConfig { bin, default_repo, default_cwd, timeout_ms: ms as u64 };
                 }
             }
-        }
         timeout_ms
     } else {
         timeout_ms

@@ -188,7 +188,7 @@ fn check_segment(segment: &str) -> SegmentResult {
     if trimmed.is_empty() { return SegmentResult::Err("empty command segment".to_string()); }
     let tokens = tokenize(trimmed);
     if tokens.is_empty() { return SegmentResult::Err("empty command".to_string()); }
-    let bin = tokens[0].split('/').last().unwrap_or(&tokens[0]).to_string();
+    let bin = tokens[0].split('/').next_back().unwrap_or(&tokens[0]).to_string();
     let rule = match allow().get(&bin) {
         Some(r) => r,
         None => return SegmentResult::Err(format!("command not allowed: \"{bin}\"")),
@@ -273,12 +273,10 @@ pub fn evaluate_command(raw: &str) -> CommandVerdict {
 pub fn policy_summary() -> String {
     let mut bins: Vec<String> = allow().keys().cloned().collect();
     bins.sort();
-    vec![
-        format!("Allowed (allowlist only): {}.", bins.join(", ")),
+    [format!("Allowed (allowlist only): {}.", bins.join(", ")),
         "docker: inspection + `docker compose up/start/restart/ps/logs/config` — never exec/run/rm/down/kill/prune.".to_string(),
         "No shell chaining/redirection/substitution (; && || & ` $() > <). Pipes are allowed.".to_string(),
-        "Reading sensitive files (.env, private keys, ~/.ssh, ~/.aws, /etc/shadow, …) is blocked.".to_string(),
-    ].join("\n")
+        "Reading sensitive files (.env, private keys, ~/.ssh, ~/.aws, /etc/shadow, …) is blocked.".to_string()].join("\n")
 }
 
 pub fn sanitize_working_dir(dir: &str) -> Option<String> {

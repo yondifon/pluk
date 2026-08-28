@@ -2,6 +2,7 @@
  * Empty states — user-facing copy only, no internal vocabulary.
  * Banned: owner, manifest, verdict, projection, slug
  */
+import { createButton } from "./primitives";
 
 export type EmptyKind = "no-integrations" | "no-groups" | "nothing-selected" | "catalog-unavailable" | "no-matches";
 
@@ -18,8 +19,8 @@ export function emptyState(kind: EmptyKind, opts?: { query?: string }): EmptySta
     case "no-integrations":
       return {
         kind,
-        title: "Connect a service to get started",
-        body: "Add a database, Linear workspace, or another local service. Pluk keeps the server and access rules on this Mac.",
+      title: "Connect an integration to get started",
+      body: "Add a database, Linear workspace, or another local connection. Pluk keeps the server and access rules on this Mac.",
         actionLabel: "New Integration",
         actionId: "new-integration",
       };
@@ -27,7 +28,7 @@ export function emptyState(kind: EmptyKind, opts?: { query?: string }): EmptySta
       return {
         kind,
         title: "No groups yet",
-        body: "Groups bundle integrations behind one endpoint. Create a group to combine services for an agent.",
+        body: "Groups bundle integrations behind one endpoint. Create a group to combine connections for an agent.",
         actionLabel: "New Group",
         actionId: "new-group",
       };
@@ -41,8 +42,8 @@ export function emptyState(kind: EmptyKind, opts?: { query?: string }): EmptySta
     case "catalog-unavailable":
       return {
         kind,
-        title: "Couldn’t load services",
-        body: "The service catalog is unavailable. Check that the server is running and try again.",
+        title: "Couldn’t load integrations",
+        body: "The integration catalog is unavailable. Check that the server is running and try again.",
         actionLabel: "Retry",
         actionId: "retry-catalog",
       };
@@ -71,10 +72,7 @@ export function renderEmptyState(container: HTMLElement, state: EmptyState, onAc
   container.append(title, body);
 
   if (state.actionLabel && state.actionId) {
-    const btn = document.createElement("button");
-    btn.className = "btn btn-primary";
-    btn.textContent = state.actionLabel;
-    btn.setAttribute("aria-label", state.actionLabel);
+    const btn = createButton(state.actionLabel, { variant: "primary", ariaLabel: state.actionLabel });
     if (state.actionId === "new-integration") btn.setAttribute("data-shortcut", "⌘N");
     if (state.actionId === "new-group") btn.setAttribute("data-shortcut", "⇧⌘N");
     btn.addEventListener("click", () => onAction?.(state.actionId!));

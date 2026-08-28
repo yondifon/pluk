@@ -1,6 +1,5 @@
 pub mod client;
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -42,7 +41,7 @@ fn safe_part(v: &str) -> String {
 }
 fn attachment_name(name: Option<&str>, id: &str) -> String { safe_part(name.unwrap_or(&format!("attachment-{id}"))) }
 fn attachment_size(v: &Value) -> Option<i64> {
-    if let Some(n) = v.as_i64() { if n>=0 { Some(n) } else { None } } else if let Some(n) = v.as_u64() { Some(n as i64) } else { None }
+    if let Some(n) = v.as_i64() { if n>=0 { Some(n) } else { None } } else { v.as_u64().map(|n| n as i64) }
 }
 fn size_warning(listed: Option<i64>, actual: i64) -> Option<String> {
     match listed {
@@ -58,12 +57,11 @@ async fn download_attachment(cfg: &SentryConfig, project: &str, event_id: &str, 
     tokio::fs::create_dir_all(&dir).await.map_err(|e| AdapterError::new(e.to_string()))?;
     let path = dir.join(format!("{}-{}", safe_part(att_id), attachment_name(name, att_id)));
     // check cache
-    if let Ok(meta) = tokio::fs::metadata(&path).await {
-        if meta.is_file() && (meta.len()>0 || listed==Some(0)) {
+    if let Ok(meta) = tokio::fs::metadata(&path).await
+        && meta.is_file() && (meta.len()>0 || listed==Some(0)) {
             let w = size_warning(listed, meta.len() as i64);
             return Ok((path, w));
         }
-    }
     let bytes = sentry_request_bytes(cfg, "GET", &format!("/projects/{}/{}/events/{}/attachments/{}/", urlencoding::encode(&cfg.org), urlencoding::encode(project), urlencoding::encode(event_id), urlencoding::encode(att_id)), Some(json!({"download":1}))).await?;
     if bytes.bytes.is_empty() && listed!=Some(0) {
         return Err(AdapterError::new(format!("Attachment {att_id} downloaded empty — Sentry returned no bytes.")));
@@ -128,8 +126,8 @@ fn find_entry(entries: &Value, ty: &str) -> Option<Value> {
 fn reduce_frame(frame: &Map<String,Value>, all: bool, ctx: bool, vars: bool, full: bool) -> Map<String,Value> {
     let mut out = Map::new();
     for k in ["filename","function","lineNo","module"] { if let Some(v) = frame.get(k) { out.insert(k.into(), v.clone()); } }
-    if ctx || full { if let Some(v) = frame.get("context") { out.insert("context".into(), v.clone()); } }
-    if vars || full { if let Some(v) = frame.get("vars") { out.insert("vars".into(), v.clone()); } }
+    if (ctx || full) && let Some(v) = frame.get("context") { out.insert("context".into(), v.clone()); }
+    if (vars || full) && let Some(v) = frame.get("vars") { out.insert("vars".into(), v.clone()); }
     let _ = all;
     out
 }
@@ -235,7 +233,7 @@ impl Adapter for SentryAdapter {
                             },GateOpts::default()).await
                         })
                     });
-                    let mut props=$schema;
+                    let props=$schema;
                     let schema=if props.is_empty(){Map::new()}else{object_schema(props,&[])};
                     host.register_tool(ToolRegistration{name:$name.into(),description:$desc.into(),input_schema:schema,annotations:Map::new()},handler);
                 }
@@ -350,7 +348,7 @@ impl Adapter for SentryAdapter {
                 for att in arr {
                     let id=att.get("id").and_then(|v|v.as_str()).unwrap_or("").to_string();
                     let name=att.get("name").and_then(|v|v.as_str()).or(att.get("filename").and_then(|v|v.as_str())).unwrap_or(&format!("attachment-{id}")).to_string();
-                    let size=att.get("size").and_then(|v| attachment_size(v));
+                    let size=att.get("size").and_then(attachment_size);
                     let mimetype=att.get("mimetype").or(att.get("mime_type")).cloned().unwrap_or(Value::Null);
                     let date=att.get("dateCreated").cloned().unwrap_or(Value::Null);
                     let mut meta=Map::new();

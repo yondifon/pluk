@@ -38,10 +38,6 @@ fn contains(haystack: &str, needle: &str) -> bool {
     haystack.contains(needle)
 }
 
-fn matches_any(haystack: &str, patterns: &[&str]) -> bool {
-    patterns.iter().any(|p| haystack.contains(p))
-}
-
 pub fn classify_sql_error(err: &AdapterError) -> SqlErrorInfo {
     let msg = &err.message;
     let code = err.code.clone();

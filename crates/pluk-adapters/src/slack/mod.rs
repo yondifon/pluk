@@ -137,7 +137,7 @@ impl Adapter for SlackAdapter {
                         }, GateOpts::default()).await
                     })
                 });
-                let mut props = $schema;
+                let props = $schema;
                 let schema = if props.is_empty() { Map::new() } else { object_schema(props, &[]) };
                 host.register_tool(ToolRegistration { name: $name.into(), description: $desc.into(), input_schema: schema, annotations: Map::new() }, handler);
             }};

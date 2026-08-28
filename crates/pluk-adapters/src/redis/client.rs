@@ -60,8 +60,7 @@ pub fn redis_config_from(conn: &pluk_store::Integration) -> Result<RedisConfig, 
         _ => false,
     };
     let ssh = if use_ssh {
-        if let Some(ssh_host) = c.get("ssh_host").and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
-            Some(SshParams {
+        c.get("ssh_host").and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).map(|ssh_host| SshParams {
                 host: ssh_host,
                 port: c.get("ssh_port").and_then(|v| v.as_u64()).unwrap_or(22) as u16,
                 user: c.get("ssh_user").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -69,16 +68,13 @@ pub fn redis_config_from(conn: &pluk_store::Integration) -> Result<RedisConfig, 
                 key_path: c.get("ssh_key_path").and_then(|v| v.as_str()).map(|s| s.to_string()).filter(|s| !s.is_empty()),
                 passphrase: c.get("ssh_password").and_then(|v| v.as_str()).map(|s| s.to_string()).filter(|s| !s.is_empty()),
             })
-        } else {
-            None
-        }
     } else {
         None
     };
 
     let explicit = c.get("url").and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    if let Some(url) = explicit {
-        if ssh.is_none() {
+    if let Some(url) = explicit
+        && ssh.is_none() {
             return Ok(RedisConfig {
                 url: Some(url),
                 host: String::new(),
@@ -89,7 +85,6 @@ pub fn redis_config_from(conn: &pluk_store::Integration) -> Result<RedisConfig, 
                 ssh: None,
             });
         }
-    }
 
     let host = c.get("host").and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let host = match host {

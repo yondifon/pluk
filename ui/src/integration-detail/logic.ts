@@ -19,11 +19,11 @@ export function statusLabel(status: ConnStatus): string {
 export function statusColor(status: ConnStatus): string {
   switch (status) {
     case "ok":
-      return "var(--status-ok, #16a34a)";
+      return "var(--status-success)";
     case "failing":
-      return "var(--status-failing, #dc2626)";
+      return "var(--status-danger)";
     case "unknown":
-      return "var(--status-unknown, #6b7280)";
+      return "var(--surface-tertiary-label)";
   }
 }
 

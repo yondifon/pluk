@@ -5,6 +5,9 @@
  * Mirrors `swift/Sources/Toast.swift#ToastCenter`.
  */
 
+import { createIcon } from "./icon";
+import { createButton } from "./primitives";
+
 export type ToastKind = "error" | "success";
 
 export type Toast = {
@@ -149,8 +152,7 @@ export function renderToasts(
 
       const icon = document.createElement("span");
       icon.className = "toast-icon";
-      icon.textContent = toast.kind === "error" ? "⚠" : "✓";
-      icon.setAttribute("aria-hidden", "true");
+      icon.appendChild(createIcon(toast.kind === "error" ? "error" : "check"));
 
       const body = document.createElement("div");
       body.className = "toast-body";
@@ -163,17 +165,13 @@ export function renderToasts(
       body.append(title, msg);
 
       if (toast.kind === "error") {
-        const retry = document.createElement("button");
-        retry.className = "btn btn-sm";
-        retry.textContent = "Retry";
-        retry.setAttribute("aria-label", `Retry connection for ${toast.title}`);
-        retry.addEventListener("click", () => onRetry(toast.integrationId));
+        const retry = createButton("Retry", { size: "sm", ariaLabel: `Retry connection for ${toast.title}`, onClick: () => onRetry(toast.integrationId) });
         body.appendChild(retry);
       }
 
       const dismiss = document.createElement("button");
-      dismiss.className = "toast-dismiss";
-      dismiss.textContent = "×";
+      dismiss.className = "toast-dismiss icon-button";
+      dismiss.appendChild(createIcon("close"));
       dismiss.setAttribute("aria-label", "Dismiss notification");
       dismiss.addEventListener("click", () => center.dismiss(toast.id));
 

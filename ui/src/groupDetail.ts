@@ -7,6 +7,10 @@ import { slug, slugsWithCollision } from "./slug";
 import { mcpUrl } from "./integration-detail/logic";
 import type { Integration as DetailIntegration } from "./integration-detail/types";
 import { mountActivityLog } from "./activityLog/activityLog";
+import { createIcon } from "./icon";
+import { createButton, createBadge, openMenu } from "./primitives";
+import { glyphElement } from "./glyph";
+import { renderTabList } from "./integration-detail/tabs";
 
 export type Group = {
   id: string;
@@ -41,13 +45,12 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
   // Header
   const header = document.createElement("div");
   header.className = "detail-header";
-  header.style.padding = "16px 24px 24px";
 
   const top = document.createElement("div");
   top.className = "detail-header-top";
 
   const icon = document.createElement("div");
-  icon.textContent = "▦";
+  icon.appendChild(createIcon("group", { size: 20 }));
   icon.setAttribute("aria-hidden", "true");
   icon.className = "type-badge";
 
@@ -63,44 +66,12 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
   title.id = "group-title";
   title.tabIndex = 0;
 
-  const editBtn = document.createElement("button");
-  editBtn.textContent = "Edit";
-  editBtn.className = "btn btn-sm";
-  editBtn.setAttribute("aria-label", `Edit group ${group.name}`);
-  editBtn.addEventListener("click", onEdit);
+  const editBtn = createButton("Edit", { size: "sm", ariaLabel: `Edit group ${group.name}`, onClick: onEdit });
 
-  const menuBtn = document.createElement("button");
-  menuBtn.textContent = "⋯";
-  menuBtn.className = "btn btn-sm";
-  menuBtn.setAttribute("aria-label", "More actions");
+  const menuBtn = createButton("", { icon: "more", ariaLabel: "More actions" });
+  menuBtn.classList.add("icon-button");
   menuBtn.setAttribute("aria-haspopup", "menu");
-  menuBtn.addEventListener("click", () => {
-    const menu = document.createElement("div");
-    menu.setAttribute("role", "menu");
-    menu.style.position = "absolute";
-    menu.style.background = "var(--surface-panel)";
-    menu.style.border = "1px solid rgba(0,0,0,0.08)";
-    menu.style.borderRadius = "6px";
-    menu.style.padding = "4px";
-    menu.style.zIndex = "20";
-    const del = document.createElement("button");
-    del.textContent = "Delete…";
-    del.setAttribute("role", "menuitem");
-    del.style.color = "#dc2626";
-    del.addEventListener("click", () => {
-      menu.remove();
-      onDelete();
-    });
-    menu.appendChild(del);
-    menuBtn.parentElement!.appendChild(menu);
-    const close = (e: MouseEvent) => {
-      if (!menu.contains(e.target as Node) && e.target !== menuBtn) {
-        menu.remove();
-        window.removeEventListener("click", close);
-      }
-    };
-    setTimeout(() => window.addEventListener("click", close), 0);
-  });
+  menuBtn.addEventListener("click", () => openMenu(menuBtn, [{ label: "Delete…", danger: true, onSelect: onDelete }]));
 
   titleRow.append(title, editBtn, menuBtn);
 
@@ -116,38 +87,16 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
 
   // Tabs
   const tabBar = document.createElement("div");
-  tabBar.className = "tab-bar";
-  tabBar.style.display = "flex";
-  tabBar.style.gap = "16px";
-  tabBar.style.padding = "8px 24px 16px";
-  tabBar.setAttribute("role", "tablist");
   tabBar.setAttribute("aria-label", "Group sections");
-
-  const logsBtn = document.createElement("button");
-  logsBtn.textContent = "Logs";
-  logsBtn.setAttribute("role", "tab");
-  logsBtn.setAttribute("aria-selected", "true");
-  logsBtn.className = "tab active";
-  logsBtn.id = "tab-logs";
-
-  const overviewBtn = document.createElement("button");
-  overviewBtn.textContent = "Overview";
-  overviewBtn.setAttribute("role", "tab");
-  overviewBtn.setAttribute("aria-selected", "false");
-  overviewBtn.className = "tab";
-  overviewBtn.id = "tab-overview";
-
-  tabBar.append(logsBtn, overviewBtn);
+  let selectedTab: "logs" | "overview" = "logs";
 
   const content = document.createElement("div");
   content.className = "group-content";
-  content.style.padding = "16px 24px";
+  content.classList.add("group-content");
 
   function showLogs(): void {
-    logsBtn.classList.add("active");
-    overviewBtn.classList.remove("active");
-    logsBtn.setAttribute("aria-selected", "true");
-    overviewBtn.setAttribute("aria-selected", "false");
+    selectedTab = "logs";
+    renderTabs();
     content.innerHTML = "";
     // Reuse R21's activity log view scoped to group
     const logMount = document.createElement("div");
@@ -163,40 +112,31 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
   }
 
   function showOverview(): void {
-    overviewBtn.classList.add("active");
-    logsBtn.classList.remove("active");
-    overviewBtn.setAttribute("aria-selected", "true");
-    logsBtn.setAttribute("aria-selected", "false");
+    selectedTab = "overview";
+    renderTabs();
     content.innerHTML = "";
     const wrap = document.createElement("div");
-    wrap.style.display = "flex";
-    wrap.style.flexDirection = "column";
-    wrap.style.gap = "24px";
+     wrap.className = "stack-lg";
     wrap.setAttribute("role", "tabpanel");
     wrap.setAttribute("aria-labelledby", "tab-overview");
 
     // Endpoint card
     const endpoint = document.createElement("section");
-    endpoint.className = "card";
+     endpoint.className = "ui-card";
     endpoint.setAttribute("aria-label", "MCP endpoint");
     const epTitle = document.createElement("h2");
-    epTitle.className = "card-title";
+     epTitle.className = "ui-card-title";
     epTitle.textContent = "MCP endpoint";
     const urlRow = document.createElement("div");
-    urlRow.style.display = "flex";
-    urlRow.style.gap = "8px";
-    urlRow.style.alignItems = "center";
+     urlRow.className = "endpoint-row";
     const urlText = document.createElement("code");
     urlText.textContent = mcpUrl(group.token);
     urlText.className = "mono";
-    urlText.style.flex = "1";
-    urlText.style.overflow = "hidden";
-    urlText.style.textOverflow = "ellipsis";
-    urlText.style.whiteSpace = "nowrap";
-    const copyBtn = document.createElement("button");
-    copyBtn.textContent = "Copy";
-    copyBtn.className = "btn btn-primary btn-sm";
-    copyBtn.setAttribute("aria-label", "Copy endpoint URL");
+     const copyBtn = createButton("Copy", { variant: "primary", size: "sm", ariaLabel: "Copy endpoint URL" });
+     const copyLive = document.createElement("span");
+     copyLive.className = "sr-only";
+     copyLive.setAttribute("role", "status");
+     copyLive.setAttribute("aria-live", "polite");
     let copyTimer: ReturnType<typeof setTimeout> | null = null;
     copyBtn.addEventListener("click", async () => {
       const url = mcpUrl(group.token);
@@ -210,46 +150,40 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
         document.execCommand("copy");
         ta.remove();
       }
-      copyBtn.textContent = "Copied!";
+       copyBtn.replaceChildren(document.createTextNode("Copied!"));
+       copyLive.textContent = "Endpoint URL copied.";
       if (copyTimer) clearTimeout(copyTimer);
-      copyTimer = setTimeout(() => (copyBtn.textContent = "Copy"), 1500);
+        copyBtn.classList.add("copied");
+        copyTimer = setTimeout(() => {
+          copyBtn.replaceChildren(document.createTextNode("Copy"));
+          copyBtn.classList.remove("copied");
+        }, 1500);
     });
-    // Respect reduced motion for feedback animation
-    const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    copyBtn.addEventListener("click", () => {
-      if (!reduce) {
-        copyBtn.style.transition = "transform 150ms ease";
-        copyBtn.style.transform = "scale(0.96)";
-        setTimeout(() => (copyBtn.style.transform = ""), 150);
-      }
-    });
-    urlRow.append(urlText, copyBtn);
+     urlRow.append(urlText, copyBtn, copyLive);
     endpoint.append(epTitle, urlRow);
 
     // Client config reuse (group-level: R19)
     const configSection = document.createElement("section");
-    configSection.className = "card";
+     configSection.className = "ui-card";
     configSection.setAttribute("aria-label", "Agent setup");
     const cfgTitle = document.createElement("h2");
-    cfgTitle.className = "card-title";
+     cfgTitle.className = "ui-card-title";
     cfgTitle.textContent = "Agent setup";
     const cfgHint = document.createElement("p");
     cfgHint.className = "hint";
-    cfgHint.textContent = `Endpoint key: ${group.id}`;
+     cfgHint.textContent = `Endpoint name: ${group.name}`;
     const cfgUrl = document.createElement("code");
     cfgUrl.className = "mono";
     cfgUrl.textContent = mcpUrl(group.token);
-    cfgUrl.style.display = "block";
-    cfgUrl.style.marginTop = "8px";
-    cfgUrl.style.wordBreak = "break-all";
+     cfgUrl.classList.add("group-config-url");
     configSection.append(cfgTitle, cfgHint, cfgUrl);
 
     // Member list
     const membersSection = document.createElement("section");
-    membersSection.className = "card";
+     membersSection.className = "ui-card";
     membersSection.setAttribute("aria-label", "Integrations in this group");
     const mTitle = document.createElement("h2");
-    mTitle.className = "card-title";
+     mTitle.className = "ui-card-title";
     mTitle.textContent = "Integrations";
     membersSection.appendChild(mTitle);
 
@@ -268,42 +202,23 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
       const slugs = slugsWithCollision(names);
       members.forEach((conn, idx) => {
         const row = document.createElement("button");
-        row.className = "member-row";
-        row.setAttribute("role", "listitem");
+         row.className = "member-row";
+         row.setAttribute("role", "button");
         row.setAttribute("aria-label", `${conn.name}, tools under ${slugs[idx]}__`);
-        row.style.display = "flex";
-        row.style.width = "100%";
-        row.style.alignItems = "flex-start";
-        row.style.gap = "12px";
-        row.style.padding = "8px 12px";
-        row.style.border = "none";
-        row.style.background = "transparent";
-        row.style.cursor = "pointer";
-        row.style.textAlign = "left";
         row.tabIndex = 0;
 
-        const badge = document.createElement("span");
-        badge.className = "type-badge";
-        badge.textContent = conn.type.slice(0, 2).toUpperCase();
+         const badge = glyphElement(conn.type, 20);
+         badge.classList.add("member-glyph");
         badge.setAttribute("aria-hidden", "true");
 
         const info = document.createElement("div");
-        info.style.flex = "1";
-        info.style.minWidth = "0";
+         info.className = "member-info";
         const nameRow = document.createElement("div");
-        nameRow.style.display = "flex";
-        nameRow.style.gap = "8px";
-        nameRow.style.alignItems = "center";
+         nameRow.className = "member-name-row";
         const nameEl = document.createElement("span");
         nameEl.textContent = conn.name;
-        nameEl.style.fontWeight = "500";
-        const envTag = document.createElement("span");
-        envTag.textContent = envLabel(conn.environment as string);
-        envTag.className = "env-tag";
-        envTag.style.fontSize = "11px";
-        envTag.style.padding = "2px 6px";
-        envTag.style.borderRadius = "4px";
-        envTag.style.background = "rgba(0,0,0,0.06)";
+         nameEl.className = "member-name";
+         const envTag = createBadge(envLabel(conn.environment as string), "environment");
         nameRow.append(nameEl, envTag);
 
         info.appendChild(nameRow);
@@ -313,8 +228,7 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
         if (overrideKeys.length) {
           const ov = document.createElement("div");
           ov.className = "mono";
-          ov.style.fontSize = "11px";
-          ov.style.color = "var(--surface-tertiary-label)";
+           ov.className = "mono member-overrides";
           ov.textContent = overrideKeys
             .sort()
             .map((k) => `${k} → ${overrides[k]}`)
@@ -324,15 +238,14 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
 
         const prefix = document.createElement("code");
         prefix.className = "mono";
-        prefix.style.fontSize = "11px";
-        prefix.style.color = "var(--surface-tertiary-label)";
+         prefix.className = "mono member-prefix";
         prefix.textContent = `${slugs[idx]}__*`;
         prefix.setAttribute("aria-label", `Tool prefix ${slugs[idx]}__`);
 
         const chev = document.createElement("span");
-        chev.textContent = "›";
+         chev.appendChild(createIcon("chevron-right"));
         chev.setAttribute("aria-hidden", "true");
-        chev.style.color = "var(--surface-tertiary-label)";
+         chev.className = "member-chevron";
 
         row.append(badge, info, prefix, chev);
         row.addEventListener("click", () => onEditIntegration(conn.id));
@@ -342,7 +255,10 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
             onEditIntegration(conn.id);
           }
         });
-        list.appendChild(row);
+         const item = document.createElement("div");
+         item.setAttribute("role", "listitem");
+         item.appendChild(row);
+         list.appendChild(item);
       });
       membersSection.appendChild(list);
     }
@@ -351,22 +267,13 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
     content.appendChild(wrap);
   }
 
-  logsBtn.addEventListener("click", showLogs);
-  logsBtn.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowRight") {
-      e.preventDefault();
-      overviewBtn.focus();
-      showOverview();
-    }
-  });
-  overviewBtn.addEventListener("click", showOverview);
-  overviewBtn.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      logsBtn.focus();
-      showLogs();
-    }
-  });
+  function renderTabs(): void {
+    renderTabList(tabBar, [{ id: "logs", label: "Logs" }, { id: "overview", label: "Overview" }], selectedTab, (id) => {
+      if (id === "logs") showLogs();
+      else showOverview();
+    });
+    tabBar.setAttribute("aria-label", "Group sections");
+  }
 
   // Keyboard shortcuts
   container.addEventListener("keydown", (e) => {
@@ -379,10 +286,8 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
   container.append(header, tabBar, content);
   showLogs();
 
-  // Focus order: title -> tabs -> content
+  // Keep the active tab in the keyboard tab order.
   title.tabIndex = 0;
-  logsBtn.tabIndex = 0;
-  overviewBtn.tabIndex = 0;
 }
 
 function memberIntegrations(group: Group, integrations: DetailIntegration[]): DetailIntegration[] {

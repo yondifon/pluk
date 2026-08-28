@@ -49,29 +49,28 @@ async fn test_sql(conn: &Integration, _store: Option<Arc<Store>>) -> Result<(), 
     // Force-evict would go here: we have no global pool, so no-op
     let cfg = db_config_from(conn);
     // Use factory to test connection (it will create fake driver for postgres/mysql)
-    let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(|e| crate::sql::error::driver_error_to_adapter(e))?;
+    let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(crate::sql::error::driver_error_to_adapter)?;
     let res = dw.driver.test_connection().await;
     let _ = dw.driver.close().await;
-    res.map_err(|e| crate::sql::error::driver_error_to_adapter(e))
+    res.map_err(crate::sql::error::driver_error_to_adapter)
 }
 
 pub struct SqlAdapter {
     id: &'static str,
     label: &'static str,
-    port: Option<u16>,
     store: Arc<Store>,
     cancels: Arc<SqlCancelRegistry>,
 }
 
 impl SqlAdapter {
     pub fn postgres(store: Arc<Store>, cancels: Arc<SqlCancelRegistry>) -> Arc<Self> {
-        Arc::new(Self { id: "postgres", label: "PostgreSQL", port: Some(5432), store, cancels })
+        Arc::new(Self { id: "postgres", label: "PostgreSQL", store, cancels })
     }
     pub fn mysql(store: Arc<Store>, cancels: Arc<SqlCancelRegistry>) -> Arc<Self> {
-        Arc::new(Self { id: "mysql", label: "MySQL", port: Some(3306), store, cancels })
+        Arc::new(Self { id: "mysql", label: "MySQL", store, cancels })
     }
     pub fn sqlite(store: Arc<Store>, cancels: Arc<SqlCancelRegistry>) -> Arc<Self> {
-        Arc::new(Self { id: "sqlite", label: "SQLite", port: None, store, cancels })
+        Arc::new(Self { id: "sqlite", label: "SQLite", store, cancels })
     }
 }
 
@@ -126,13 +125,12 @@ impl Adapter for SqlAdapter {
         // global cancel
         if path.starts_with("/api/log/") && path.ends_with("/cancel") {
             let re = regex::Regex::new(r"^/api/log/(\d+)/cancel$").unwrap();
-            if let Some(caps) = re.captures(path) {
-                if request.method == "POST" {
+            if let Some(caps) = re.captures(path)
+                && request.method == "POST" {
                     let id: i64 = caps.get(1).unwrap().as_str().parse().unwrap_or(0);
                     let ok = self.cancels.cancel(id);
                     return Some(ApiResponse::json(200, &serde_json::json!({ "ok": ok })));
                 }
-            }
         }
         None
     }

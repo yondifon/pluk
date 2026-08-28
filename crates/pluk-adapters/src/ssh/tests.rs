@@ -4,7 +4,6 @@ use super::error::humanize_ssh_error;
 use super::server::{ssh_tool_specs, register_ssh_server};
 use crate::error::AdapterError;
 use crate::tool_host::{ToolHost, ToolRegistration};
-use crate::gate::ToolResult;
 use pluk_store::{Store, Integration};
 use serde_json::{json, Value, Map};
 use std::collections::HashMap;
@@ -116,9 +115,9 @@ fn policy_write_detection() {
 fn tool_specs_defaults() {
     let specs = ssh_tool_specs();
     let map: HashMap<_,_> = specs.into_iter().map(|s| (s.name, s.default_enabled)).collect();
-    assert_eq!(map["run_command"], true);
+    assert!(map["run_command"]);
     for k in ["run_batch","debug_snapshot","run_saved_command","list_saved_commands","open_forward","list_forwards","close_forward"] {
-        assert_eq!(map[k], false, "{} should be default off", k);
+        assert!(!map[k], "{} should be default off", k);
     }
 }
 
@@ -138,7 +137,7 @@ async fn timeout_enforcement_and_humanize() {
     });
     set_test_executor(exec);
     // Direct client call with timeout 1s
-    let res = super::client::run_command("owner1", &conn, "sleep 10", Some(1000)).await;
+    let res = super::client::run_command(&conn, "sleep 10", Some(1000)).await;
     assert!(res.is_err());
     let err = res.unwrap_err();
     let human = humanize_ssh_error(&err);
@@ -271,7 +270,7 @@ async fn saved_commands_only_projection_and_run() {
     // list with only location -> working_dir
     let res2 = list_handler(json!({"only":["location"]})).await;
     assert!(!res2.is_error);
-    let val2: Value = serde_json::from_str(res2.text()).unwrap();
+    let _val2: Value = serde_json::from_str(res2.text()).unwrap();
     // should contain working_dir
     assert!(res2.text().contains("working_dir"));
 

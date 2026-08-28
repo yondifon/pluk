@@ -28,7 +28,7 @@ export function mountIntegrationDetail(
   const headerEl = document.createElement("div");
   const tabsEl = document.createElement("div");
   const contentEl = document.createElement("div");
-  contentEl.className = "detail-content";
+  contentEl.className = "detail-content stack-lg";
   root.append(headerEl, tabsEl, contentEl);
 
   let currentHealth: ConnHealth | null | undefined = health ?? null;
@@ -75,7 +75,11 @@ export function mountIntegrationDetail(
 
     contentEl.innerHTML = "";
     if (selectedTab === "logs") {
-      contentEl.appendChild(logsMount);
+      const panel = document.createElement("div");
+      panel.setAttribute("role", "tabpanel");
+       panel.setAttribute("aria-labelledby", "tab-logs");
+      panel.appendChild(logsMount);
+      contentEl.appendChild(panel);
       logs ??= mountActivityLog(logsMount, {
         scope: { connectionId: integration.id },
         connectionTypes: new Map([[integration.id, integration.type]]),
@@ -83,11 +87,18 @@ export function mountIntegrationDetail(
     } else if (selectedTab === "overview") {
       const overviewWrap = document.createElement("div");
       const clientWrap = document.createElement("div");
+      overviewWrap.setAttribute("role", "tabpanel");
+       overviewWrap.setAttribute("aria-labelledby", "tab-overview");
       renderOverview(overviewWrap, integration, manifest ?? null, (copied) => actions.onCopyEndpoint?.(copied));
       renderClientConfig(clientWrap, integration, actions.inject);
+      overviewWrap.className = "stack-lg";
       contentEl.append(overviewWrap, clientWrap);
     } else {
-      renderTools(contentEl, integration, manifest ?? null);
+      const panel = document.createElement("div");
+      panel.setAttribute("role", "tabpanel");
+       panel.setAttribute("aria-labelledby", "tab-tools");
+      renderTools(panel, integration, manifest ?? null);
+      contentEl.appendChild(panel);
     }
   }
 

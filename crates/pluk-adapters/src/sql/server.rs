@@ -15,11 +15,11 @@ use pluk_store::{Integration, Store};
 use crate::config_field::{ConfigField, FieldType};
 use crate::gate::{CallTarget, GateMeta, GateOpts, Outcome, RunOutcome, ToolResult, cancelled_when_message_contains, err, ok, run_gated};
 use crate::instructions::{build_instructions, InstructionParts};
-use crate::projection::{apply_only, only_param_description, only_param_schema, FieldMap, Preset};
-use crate::tool_host::{object_schema, BoxFuture, PromptHandler, PromptMessage, PromptResult, PromptRole, ResourceContents, ToolHost, ToolRegistration};
+use crate::projection::{apply_only, only_param_schema, FieldMap, Preset};
+use crate::tool_host::{object_schema, BoxFuture, PromptMessage, PromptResult, PromptRole, ResourceContents, ToolHost, ToolRegistration};
 use crate::tool_spec::ToolSpec;
 
-use super::error::{driver_error_to_adapter, format_sql_error, humanize_sql_error};
+use super::error::{driver_error_to_adapter, format_sql_error};
 use pluk_db::types::{QueryResult as DbQueryResult, QueryOpts};
 use pluk_db::factory::{CreateDriverOpts, create_driver};
 use pluk_db::config::SqlConfig;
@@ -35,11 +35,11 @@ pub fn sql_label(type_name: &str) -> String {
 
 pub fn sql_agent_hint(type_name: &str) -> String {
     if type_name == "sqlite" {
-        format!("Use this to query and inspect a SQLite database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT before wider queries.")
+        "Use this to query and inspect a SQLite database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT before wider queries.".to_string()
     } else if type_name == "mysql" {
-        format!("Use this to query and inspect a MySQL database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT for production data.")
+        "Use this to query and inspect a MySQL database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT for production data.".to_string()
     } else {
-        format!("Use this to query and inspect a PostgreSQL database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT for production data.")
+        "Use this to query and inspect a PostgreSQL database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT for production data.".to_string()
     }
 }
 
@@ -151,9 +151,6 @@ impl SqlCancelRegistry {
     }
 }
 
-// Global pool eviction no-op for now (provided for test hook)
-static GLOBAL_POOL: std::sync::OnceLock<Arc<Mutex<HashMap<String, ()>>>> = std::sync::OnceLock::new();
-
 // Helpers
 fn pinned_db(conn: &Integration) -> Option<String> {
     conn.config.get("database").and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
@@ -210,9 +207,8 @@ fn sql_config_from(conn: &Integration, database_override: Option<&str>) -> SqlCo
     cfg.r#type = conn.r#type.clone();
     cfg.host = conn.config.get("host").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.port = conn.config.get("port").and_then(|v| v.as_u64()).map(|n| n as u16);
-    if cfg.port.is_none() {
-        if let Some(s) = conn.config.get("port").and_then(|v| v.as_str()) { cfg.port = s.parse().ok(); }
-    }
+    if cfg.port.is_none()
+        && let Some(s) = conn.config.get("port").and_then(|v| v.as_str()) { cfg.port = s.parse().ok(); }
     cfg.user = conn.config.get("user").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.password = conn.config.get("password").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.database = conn.config.get("database").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -229,7 +225,7 @@ fn sql_config_from(conn: &Integration, database_override: Option<&str>) -> SqlCo
     cfg.use_ssh = use_ssh_val;
     cfg.ssh_host = conn.config.get("ssh_host").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.ssh_port = conn.config.get("ssh_port").and_then(|v| v.as_u64()).map(|n| n as u16);
-    if cfg.ssh_port.is_none() { if let Some(s)=conn.config.get("ssh_port").and_then(|v| v.as_str()) { cfg.ssh_port = s.parse().ok(); } }
+    if cfg.ssh_port.is_none() && let Some(s)=conn.config.get("ssh_port").and_then(|v| v.as_str()) { cfg.ssh_port = s.parse().ok(); }
     cfg.ssh_user = conn.config.get("ssh_user").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.ssh_auth_type = conn.config.get("ssh_auth_type").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.ssh_key_path = conn.config.get("ssh_key_path").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -242,11 +238,10 @@ fn effective_db(pinned: Option<&String>, database: Option<&str>) -> Option<Strin
 }
 
 fn cap_rows_vec(rows: Vec<Value>, cap: Option<usize>) -> (Vec<Value>, bool, Option<usize>) {
-    if let Some(limit) = cap {
-        if rows.len() > limit {
+    if let Some(limit) = cap
+        && rows.len() > limit {
             return (rows.into_iter().take(limit).collect(), true, Some(limit));
         }
-    }
     let limit = cap;
     (rows, false, limit)
 }
@@ -286,11 +281,9 @@ pub fn register_sql_server(
 
     let masked_columns = store.list_masked_columns(&conn.id).unwrap_or_default();
     let pinned = pinned_db(conn);
-    let pinned_clone = pinned.clone();
     let supports_db = supports_db_arg(conn, pinned.as_ref());
     let supports_schema = supports_schema_arg(conn);
     let uses_ssh_flag = uses_ssh(conn);
-    let conn_clone_for_instructions = conn.clone();
 
     // Helpers for policy/cap
     let conn_name = conn.name.clone();
@@ -364,12 +357,6 @@ pub fn register_sql_server(
         );
     }
 
-    // helper to build driver per call
-    let make_driver = |database: Option<String>, conn: &Integration| {
-        let cfg = sql_config_from(conn, database.as_deref());
-        create_driver(CreateDriverOpts::new(cfg))
-    };
-
     // query tool
     if on("query") {
         let mut props = Map::new();
@@ -390,7 +377,7 @@ pub fn register_sql_server(
         let cancels_q = cancels.clone();
         let conn_q = conn.clone();
         let policy_q = policy.clone();
-        let dialect_q = dialect.clone();
+        let dialect_q = dialect;
         let pinned_q = pinned.clone();
         let masked_q = masked_columns.clone();
         let conn_name_q = conn_name.clone();
@@ -452,7 +439,8 @@ pub fn register_sql_server(
                     let only_c = only.clone();
                     let policy_c = policy.clone();
                     let limit_c = limit;
-                    let result = run_gated(&store, &target, meta, move |log_id| {
+                    
+                    run_gated(&store, &target, meta, move |log_id| {
                         let cancels = cancels.clone();
                         let conn = conn_for_driver.clone();
                         let sql = sql_clone.clone();
@@ -506,7 +494,7 @@ pub fn register_sql_server(
                             };
                             let total = res.rows.len();
                             let (mut rows, truncated, cap_limit) = {
-                                let rows_vec: Vec<Value> = res.rows.into_iter().map(|v| v).collect();
+                                let rows_vec: Vec<Value> = res.rows.into_iter().collect();
                                 cap_rows_vec(rows_vec, effective_cap)
                             };
                             // masking
@@ -526,7 +514,7 @@ pub fn register_sql_server(
                                 "returned_rows": rows.len()
                             });
                             let qmap = query_map();
-                            let mut text = projected_json(meta_val.clone(), only, &qmap).map_err(|e| crate::error::AdapterError::new(e))?;
+                            let mut text = projected_json(meta_val.clone(), only, &qmap).map_err(crate::error::AdapterError::new)?;
                             if truncated {
                                 let lim = cap_limit.unwrap_or(0);
                                 text.push_str(&format!("\n\n[Row limit: showing first {} of {} rows. Add a LIMIT clause to see all results.]", lim, total));
@@ -558,8 +546,7 @@ pub fn register_sql_server(
                                 format_sql_error(e)
                             }
                         })
-                    ).await;
-                    result
+                    ).await
                 })
             })
         );
@@ -577,7 +564,7 @@ pub fn register_sql_server(
         host.register_tool(
             ToolRegistration { name: "list_tables".into(), description: "List all tables in the database".into(), input_schema: schema, annotations: Map::new() },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
-                let store = store_lt.clone();
+                let _store = store_lt.clone();
                 let conn = conn_lt.clone();
                 let pinned = pinned_lt.clone();
                 Box::pin(async move {
@@ -589,7 +576,6 @@ pub fn register_sql_server(
                     let schema_opt = match resolve_schema(schema_val) { Ok(v)=>v, Err(e)=> return err(e) };
                     let db_opt = resolve_database(pinned.as_ref(), database).unwrap().clone();
                     let cfg = sql_config_from(&conn, db_opt.as_deref());
-                    let target = CallTarget { connection_id: conn.id.clone(), connection_name: conn.name.clone(), group: conn.via_group.clone() };
                     // introspection: use run_gated? In TS introspect uses getDriver directly with tool timeout, not gated log? Actually instrumented via sql_log . For Rust we just call driver directly and handle errors via err.
                     // Use run_gated with simple Ok path? Simpler: direct driver call and return ok/err without pending log (introspection is logged via driver layer)
                     match create_driver(CreateDriverOpts::new(cfg)).await {
@@ -991,8 +977,9 @@ pub fn register_sql_server(
                     let masked_c = masked.clone();
                     let policy_c = policy.clone();
                     let pinned_for_inner = pinned.clone();
-                    let pinned_for_precheck = pinned.clone();
-                    let result = run_gated(&store, &target, meta, move |log_id| {
+                    let _pinned_for_precheck = pinned.clone();
+                    
+                    run_gated(&store, &target, meta, move |log_id| {
                         let cancels = cancels.clone();
                         let conn = conn_c.clone();
                         let sql = sql_c.clone();
@@ -1068,8 +1055,7 @@ pub fn register_sql_server(
                         })
                         .classify_error(cancelled_when_message_contains("cancelled"))
                         .format_error(|e, v| if v==pluk_store::Verdict::Cancelled { format!("Cancelled: {}", e.message) } else { format_sql_error(e) })
-                    ).await;
-                    result
+                    ).await
                 })
             })
         );
@@ -1139,7 +1125,8 @@ pub fn register_sql_server(
                     let conn_type_c = conn_type.clone();
                     let pinned_c = pinned.clone();
                     let only_c = only.clone();
-                    let result = run_gated(&store, &target, meta, move |log_id| {
+                    
+                    run_gated(&store, &target, meta, move |log_id| {
                         let cancels = cancels.clone();
                         let conn = conn_c.clone();
                         let sql = sql_c.clone();
@@ -1188,7 +1175,7 @@ pub fn register_sql_server(
                                 "row_count": total,
                                 "returned_rows": rows.len()
                             });
-                            let mut text = projected_json(meta_val, only, &query_map()).map_err(|e| crate::error::AdapterError::new(e))?;
+                            let mut text = projected_json(meta_val, only, &query_map()).map_err(crate::error::AdapterError::new)?;
                             if truncated { text.push_str(&format!("\n\n[Row limit: showing first {} of {} rows. Add a LIMIT clause to see all results.]", cap_limit.unwrap_or(0), total)); }
                             let snapshot = pluk_store::QueryResult { fields, rows: rows.clone() };
                             Ok(Outcome::Ran(RunOutcome { text, result: Some(snapshot), ..Default::default() }))
@@ -1206,8 +1193,7 @@ pub fn register_sql_server(
                         })
                         .classify_error(cancelled_when_message_contains("cancelled"))
                         .format_error(|e, v| if v==pluk_store::Verdict::Cancelled { format!("Cancelled: {}", e.message) } else { format_sql_error(e) })
-                    ).await;
-                    result
+                    ).await
                 })
             })
         );
@@ -1253,7 +1239,7 @@ fn to_csv(rows: &[Value], fields: &[String]) -> String {
     let mut lines = vec![fields.join(",")];
     for row in rows {
         if let Value::Object(map) = row {
-            lines.push(fields.iter().map(|f| map.get(f).map(|v| escape(v)).unwrap_or_default()).collect::<Vec<_>>().join(","));
+            lines.push(fields.iter().map(|f| map.get(f).map(&escape).unwrap_or_default()).collect::<Vec<_>>().join(","));
         } else { lines.push(String::new()); }
     }
     lines.join("\n") + "\n"
@@ -1262,4 +1248,3 @@ fn to_csv(rows: &[Value], fields: &[String]) -> String {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
-

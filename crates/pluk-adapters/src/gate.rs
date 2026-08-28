@@ -273,9 +273,9 @@ where
     unsafe impl Sync for PendingGuard {}
     impl Drop for PendingGuard {
         fn drop(&mut self) {
-            if !self.finalized.load(std::sync::atomic::Ordering::SeqCst) {
-                if let Some(id) = self.id {
-                    if let Some(s) = unsafe { self.store.as_ref() } {
+            if !self.finalized.load(std::sync::atomic::Ordering::SeqCst)
+                && let Some(id) = self.id
+                    && let Some(s) = unsafe { self.store.as_ref() } {
                         let _ = s.update_log_entry(
                             id,
                             LogUpdate {
@@ -286,8 +286,6 @@ where
                             },
                         );
                     }
-                }
-            }
         }
     }
     let _guard = PendingGuard {

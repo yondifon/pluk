@@ -62,7 +62,7 @@ impl Adapter for SshAdapter {
     }
     async fn test_connection(&self, conn: &Integration) -> Result<(), AdapterError> {
         // test via exec "echo pluk-ok" with 15s timeout, no caching
-        match run_command("test", conn, "echo pluk-ok", Some(15_000)).await {
+        match run_command(conn, "echo pluk-ok", Some(15_000)).await {
             Ok(res) => {
                 if res.code.unwrap_or(1)==0 { Ok(()) } else { Err(AdapterError::new(format!("test command failed with exit {}", res.code.unwrap_or(-1)))) }
             },

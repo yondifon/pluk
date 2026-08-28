@@ -15,7 +15,7 @@ pub async fn handle_ssh_api(store: Arc<Store>, conn: &pluk_store::Integration, r
     match request.method.as_str() {
         "GET" => {
             let commands = store.list_saved_commands(&conn.id).unwrap_or_default();
-            return Some(ApiResponse::json(200, &serde_json::json!({ "ok": true, "commands": commands })));
+            Some(ApiResponse::json(200, &serde_json::json!({ "ok": true, "commands": commands })))
         },
         "POST" => {
             let body = json_body(request.body.as_deref());
@@ -31,24 +31,24 @@ pub async fn handle_ssh_api(store: Arc<Store>, conn: &pluk_store::Integration, r
             }
             let input = pluk_store::SavedCommandInput { connection_id: conn.id.clone(), name: name.clone(), command, working_dir };
             match store.create_saved_command(&input) {
-                Ok(cmd) => return Some(ApiResponse::json(200, &serde_json::json!({ "ok": true, "command": cmd }))),
+                Ok(cmd) => Some(ApiResponse::json(200, &serde_json::json!({ "ok": true, "command": cmd }))),
                 Err(e) => {
                     let msg = e.to_string();
                     if msg.contains("UNIQUE") || msg.contains("unique") {
                         return Some(ApiResponse::json(409, &serde_json::json!({ "ok": false, "error": "A saved command with that name already exists." })));
                     }
-                    return Some(ApiResponse::json(500, &serde_json::json!({ "ok": false, "error": msg })));
+                    Some(ApiResponse::json(500, &serde_json::json!({ "ok": false, "error": msg })))
                 }
             }
         },
         "DELETE" => {
             if let Some(name) = saved_name {
                 let ok = store.delete_saved_command(&conn.id, &name).unwrap_or(false);
-                return Some(ApiResponse::json(200, &serde_json::json!({ "ok": ok })));
+                Some(ApiResponse::json(200, &serde_json::json!({ "ok": ok })))
             } else {
-                return Some(ApiResponse::text(405, "Method not allowed"));
+                Some(ApiResponse::text(405, "Method not allowed"))
             }
         },
-        _ => return Some(ApiResponse::text(405, "Method not allowed")),
+        _ => Some(ApiResponse::text(405, "Method not allowed")),
     }
 }

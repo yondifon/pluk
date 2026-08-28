@@ -1065,12 +1065,6 @@ mod tests {
     #[tokio::test]
     async fn auth_error_breaks_retry_immediately() {
         // Simulate a factory that fails with auth error — should not be retried via reconnect
-        let factory = Arc::new(CountingFactory {
-            count: Arc::new(AtomicUsize::new(0)),
-            delay_ms: 0,
-            fail_with: Some("permission denied (publickey)".into()),
-        });
-        let pool = Arc::new(DriverPool::new(factory.clone()));
         let key = driver_key("owner-auth", "int-auth", None);
         crate::pending::clear_connect_episode(&key);
         // Directly test is_ssh_auth_error detection
@@ -1143,8 +1137,7 @@ mod tests {
         // The new driver's healthcheck is not yet done, but pool should return it via await_connect
         // For this test, we just verify pool still has an entry
         assert!(result.is_ok() || result.is_err());
-        // Pool should have attempted to create a new driver
-        assert!(factory.count.load(Ordering::SeqCst) >= 0);
+        assert!(factory.count.load(Ordering::SeqCst) <= 1);
     }
 
     #[test]

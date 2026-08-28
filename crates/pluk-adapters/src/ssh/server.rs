@@ -3,17 +3,15 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 use pluk_store::{Integration, Store};
 
-use crate::adapter::PolicyKind;
-use crate::config_field::{ConfigField, FieldType};
 use crate::gate::{CallTarget, GateMeta, GateOpts, Outcome, RunOutcome, ToolResult, err, ok, run_gated};
 use crate::instructions::{build_instructions, InstructionParts};
 use crate::projection::{FieldMap, Preset, apply_only};
 use crate::tool_host::{object_schema, BoxFuture, ToolHost, ToolRegistration};
 use crate::tool_spec::ToolSpec;
 
-use super::client::{run_command, open_forward, list_forwards, close_forward, ExecResult, MAX_COMMAND_TIMEOUT_S};
+use super::client::{run_command, open_forward, list_forwards, close_forward, MAX_COMMAND_TIMEOUT_S};
 use super::error::humanize_ssh_error;
-use super::policy::{evaluate_command, policy_summary};
+use super::policy::evaluate_command;
 
 pub const SSH_AGENT_HINT: &str = "Use this for SSH access to the remote host — run shell commands to inspect logs, processes, disk and memory, and Docker/systemd services for debugging and ops, and open local port forwards (ssh -L) so a remote service like a database or web UI is reachable at localhost on this machine. Every command runs as the SSH user and must be confirmed before it runs.";
 
@@ -28,8 +26,6 @@ const DEBUG_SNAPSHOT: &[(&str, &str)] = &[
 ];
 
 const MAX_BATCH: usize = 50;
-const MAX_PORT: u16 = 65535;
-
 fn saved_commands_map() -> FieldMap {
     FieldMap::new(&["name","command","working_dir"], &["name","command"])
         .with_preset("location", Preset::paths(&["working_dir"]))
@@ -92,74 +88,6 @@ pub fn register_ssh_server(host: &mut dyn ToolHost, conn: &Integration, owner_id
     let tool_defaults: HashMap<String,bool> = ssh_tool_specs().into_iter().map(|t| (t.name, t.default_enabled)).collect();
     let on = |name: &str| gate.enabled(name, *tool_defaults.get(name).unwrap_or(&true));
 
-    let conn_for_run = conn.clone();
-    let owner_for_run = owner_id.to_string();
-    let store_for_run = store.clone();
-
-    // Helper runOne
-    let run_one = move |command: String, working_dir: Option<String>, tool_name: String, timeout_secs: Option<u64>| {
-        let conn = conn_for_run.clone();
-        let owner = owner_for_run.clone();
-        let store = store_for_run.clone();
-        async move {
-            let trimmed = command.trim().to_string();
-            if trimmed.is_empty() {
-                return err("Error: empty command.");
-            }
-            let detail = if let Some(ref wd) = working_dir { format!("[{}] {}", wd, trimmed) } else { trimmed.clone() };
-            let final_command = if let Some(wd) = working_dir {
-                format!("cd {} && {}", quote_dir(&wd), trimmed)
-            } else { trimmed.clone() };
-
-            // policy check — block more rather than less; apply to ad-hoc commands
-            let verdict = evaluate_command(&final_command);
-            if !verdict.ok {
-                let reason = verdict.reason.unwrap_or_else(|| "blocked".to_string());
-                // still log? Use run_gated with precheck? For simplicity return blocked err and log via store directly
-                let draft = pluk_store::LogDraft {
-                    connection_id: conn.id.clone(),
-                    connection_name: conn.name.clone(),
-                    sql: final_command.clone(),
-                    verdict: pluk_store::Verdict::Blocked,
-                    categories: Some("command".to_string()),
-                    reason: Some(reason.clone()),
-                    source: Some(tool_name.clone()),
-                    group: conn.via_group.clone(),
-                    database: None,
-                };
-                let _ = store.create_log_entry(draft);
-                return err(format!("Blocked: {}", reason));
-            }
-
-            let timeout_ms = timeout_secs.map(|t| t*1000);
-            let target = CallTarget { connection_id: conn.id.clone(), connection_name: conn.name.clone(), group: conn.via_group.clone() };
-            let meta = GateMeta { category: "command".to_string(), action: tool_name.clone(), detail: detail.clone(), database: None, command: Some(final_command.clone()) };
-            let final_command_clone = final_command.clone();
-            let detail_clone = detail.clone();
-            let conn_clone = conn.clone();
-            let owner_clone = owner.clone();
-            run_gated(&store, &target, meta, move |log_id| {
-                let conn = conn_clone.clone();
-                let owner = owner_clone.clone();
-                let final_command = final_command_clone.clone();
-                let detail = detail_clone.clone();
-                async move {
-                    let res: ExecResult = run_command(&owner, &conn, &final_command, timeout_ms).await.map_err(|e| crate::error::AdapterError::new(e.message).with_code(e.code.unwrap_or_default()))?;
-                    let text = format_result(&res.stdout, &res.stderr, res.code, res.truncated);
-                    let output = format!("{}{}{}{}", res.stdout, res.stderr, if res.truncated { "\n[output truncated at 1 MB]" } else { "" }, "");
-                    let response = if output.trim().is_empty() { text.clone() } else { output };
-                    let result = pluk_store::QueryResult { fields: vec!["exit_code".to_string()], rows: vec![serde_json::json!(res.code)] };
-                    if res.code.unwrap_or(0)==0 {
-                        Ok(Outcome::Ran(RunOutcome { text: text.clone(), is_error: false, reason: None, result: Some(result), response_text: Some(response), command: Some(final_command) }))
-                    } else {
-                        Ok(Outcome::Ran(RunOutcome { text: text.clone(), is_error: true, reason: Some(format!("exit {}", res.code.unwrap_or(0))), result: Some(result), response_text: Some(response), command: Some(final_command) }))
-                    }
-                }
-            }, GateOpts::default().on_error(|_e| {} ).format_error(|e, _| humanize_ssh_error(e))).await
-        }
-    };
-
-    // We need to capture run_one for each tool; clone it
     // run_command tool
     if on("run_command") {
         let mut props = Map::new();
@@ -167,12 +95,6 @@ pub fn register_ssh_server(host: &mut dyn ToolHost, conn: &Integration, owner_id
         props.insert("working_dir".into(), serde_json::json!({"type":"string","description":"Directory to run in (e.g. /srv/app). Optional."}));
         props.insert("timeout".into(), serde_json::json!({"type":"number","description": format!("Max seconds to wait before aborting the command (default 60).")}));
         let schema = object_schema(props, &["command"]);
-        let run_one_clone = {
-            let f = run_one.clone();
-            // need to capture as Arc for move
-            Arc::new(f)
-        };
-        // Instead of trying to share closure, define inline per tool using duplicated logic
         let conn_c = conn.clone();
         let owner_c = owner_id.to_string();
         let store_c = store.clone();
@@ -189,7 +111,7 @@ pub fn register_ssh_server(host: &mut dyn ToolHost, conn: &Integration, owner_id
                     let command = obj.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     let working_dir = obj.get("working_dir").and_then(|v| v.as_str()).map(|s| s.to_string());
                     let timeout = obj.get("timeout").and_then(|v| v.as_u64());
-                    if let Some(t) = timeout { if t>MAX_COMMAND_TIMEOUT_S { return err(format!("timeout must be <= {}", MAX_COMMAND_TIMEOUT_S)); } }
+                    if let Some(t) = timeout && t>MAX_COMMAND_TIMEOUT_S { return err(format!("timeout must be <= {}", MAX_COMMAND_TIMEOUT_S)); }
                     let trimmed = command.trim().to_string();
                     if trimmed.is_empty() { return err("Error: empty command."); }
                     let detail = if let Some(ref wd)=working_dir { format!("[{}] {}", wd, trimmed) } else { trimmed.clone() };
@@ -206,10 +128,10 @@ pub fn register_ssh_server(host: &mut dyn ToolHost, conn: &Integration, owner_id
                     let meta = GateMeta { category: "command".into(), action: "run_command".into(), detail, database: None, command: Some(final_command.clone()) };
                     run_gated(&store, &target, meta, move |_log_id| {
                         let conn = conn.clone();
-                        let owner = owner.clone();
+                        let _owner = owner.clone();
                         let final_command = final_command.clone();
                         async move {
-                            match run_command(&owner, &conn, &final_command, timeout_ms).await {
+                            match run_command(&conn, &final_command, timeout_ms).await {
                                 Ok(res) => {
                                     let text = format_result(&res.stdout, &res.stderr, res.code, res.truncated);
                                     let output = format!("{}{}{}", res.stdout, res.stderr, if res.truncated { "\n[output truncated at 1 MB]" } else { "" });
@@ -274,16 +196,16 @@ pub fn register_ssh_server(host: &mut dyn ToolHost, conn: &Integration, owner_id
                         let store_clone = store.clone();
                         let res = run_gated(&store_clone, &target, meta, move |_log_id| {
                             let conn = conn_clone.clone();
-                            let owner = owner_clone.clone();
+                            let _owner = owner_clone.clone();
                             let final_command = final_clone.clone();
                             async move {
-                                match run_command(&owner, &conn, &final_command, None).await {
+                                match run_command(&conn, &final_command, None).await {
                                     Ok(r) => {
                                         let text = format_result(&r.stdout, &r.stderr, r.code, r.truncated);
                                         let output = format!("{}{}{}", r.stdout, r.stderr, if r.truncated { "\n[output truncated at 1 MB]" } else { "" });
                                         let response = if output.trim().is_empty() { text.clone() } else { output };
                                         let result = pluk_store::QueryResult { fields: vec!["exit_code".into()], rows: vec![serde_json::json!(r.code)] };
-                                        if r.code.unwrap_or(0)==0 { Ok(Outcome::Ran(RunOutcome { text, is_error: false, reason: None, result: Some(result), response_text: Some(response), command: Some(final_command), ..Default::default() })) }
+                                        if r.code.unwrap_or(0)==0 { Ok(Outcome::Ran(RunOutcome { text, is_error: false, reason: None, result: Some(result), response_text: Some(response), command: Some(final_command) })) }
                                         else { Ok(Outcome::Ran(RunOutcome { text, is_error: true, reason: Some(format!("exit {}", r.code.unwrap_or(0))), result: Some(result), response_text: Some(response), command: Some(final_command) })) }
                                     },
                                     Err(e) => Err(crate::error::AdapterError::new(e.message).with_code(e.code.unwrap_or_default())),
@@ -331,16 +253,16 @@ pub fn register_ssh_server(host: &mut dyn ToolHost, conn: &Integration, owner_id
                         let store_clone = store.clone();
                         let res = run_gated(&store_clone, &target, meta, move |_log_id| {
                             let conn = conn_clone.clone();
-                            let owner = owner_clone.clone();
+                            let _owner = owner_clone.clone();
                             let final_command = final_clone.clone();
                             async move {
-                                match run_command(&owner, &conn, &final_command, None).await {
+                                match run_command(&conn, &final_command, None).await {
                                     Ok(r) => {
                                         let text = format_result(&r.stdout, &r.stderr, r.code, r.truncated);
                                         let output = format!("{}{}{}", r.stdout, r.stderr, if r.truncated { "\n[output truncated at 1 MB]" } else { "" });
                                         let response = if output.trim().is_empty() { text.clone() } else { output };
                                         let result = pluk_store::QueryResult { fields: vec!["exit_code".into()], rows: vec![serde_json::json!(r.code)] };
-                                        if r.code.unwrap_or(0)==0 { Ok(Outcome::Ran(RunOutcome { text, is_error: false, reason: None, result: Some(result), response_text: Some(response), command: Some(final_command), ..Default::default() })) }
+                                        if r.code.unwrap_or(0)==0 { Ok(Outcome::Ran(RunOutcome { text, is_error: false, reason: None, result: Some(result), response_text: Some(response), command: Some(final_command) })) }
                                         else { Ok(Outcome::Ran(RunOutcome { text, is_error: true, reason: Some(format!("exit {}", r.code.unwrap_or(0))), result: Some(result), response_text: Some(response), command: Some(final_command) })) }
                                     },
                                     Err(e) => Err(crate::error::AdapterError::new(e.message).with_code(e.code.unwrap_or_default())),
@@ -385,16 +307,16 @@ pub fn register_ssh_server(host: &mut dyn ToolHost, conn: &Integration, owner_id
                     let meta = GateMeta { category: "command".into(), action: "run_saved_command".into(), detail, database: None, command: Some(final_command.clone()) };
                     run_gated(&store, &target, meta, move |_log_id| {
                         let conn = conn.clone();
-                        let owner = owner.clone();
+                        let _owner = owner.clone();
                         let final_command = final_command.clone();
                         async move {
-                            match run_command(&owner, &conn, &final_command, None).await {
+                            match run_command(&conn, &final_command, None).await {
                                 Ok(r) => {
                                     let text = format_result(&r.stdout, &r.stderr, r.code, r.truncated);
                                     let output = format!("{}{}{}", r.stdout, r.stderr, if r.truncated { "\n[output truncated at 1 MB]" } else { "" });
                                     let response = if output.trim().is_empty() { text.clone() } else { output };
                                     let result = pluk_store::QueryResult { fields: vec!["exit_code".into()], rows: vec![serde_json::json!(r.code)] };
-                                    if r.code.unwrap_or(0)==0 { Ok(Outcome::Ran(RunOutcome { text, is_error: false, reason: None, result: Some(result), response_text: Some(response), command: Some(final_command), ..Default::default() })) }
+                                    if r.code.unwrap_or(0)==0 { Ok(Outcome::Ran(RunOutcome { text, is_error: false, reason: None, result: Some(result), response_text: Some(response), command: Some(final_command) })) }
                                     else { Ok(Outcome::Ran(RunOutcome { text, is_error: true, reason: Some(format!("exit {}", r.code.unwrap_or(0))), result: Some(result), response_text: Some(response), command: Some(final_command) })) }
                                 },
                                 Err(e) => Err(crate::error::AdapterError::new(e.message).with_code(e.code.unwrap_or_default())),
@@ -461,7 +383,7 @@ pub fn register_ssh_server(host: &mut dyn ToolHost, conn: &Integration, owner_id
                     let remote_host_trim = remote_host.trim();
                     let rh = if remote_host_trim.is_empty() { "localhost".to_string() } else { remote_host_trim.to_string() };
                     let local_port = obj.get("local_port").and_then(|v| v.as_u64()).map(|n| n as u16);
-                    if let Some(p)=local_port { if p==0 { return err("local_port must be 1-65535"); } }
+                    if let Some(p)=local_port && p==0 { return err("local_port must be 1-65535"); }
                     let detail = format!("open_forward localhost:{} -> {}:{}", local_port.map(|p| p.to_string()).unwrap_or_else(|| "auto".into()), rh, remote_port);
                     let target = CallTarget { connection_id: conn.id.clone(), connection_name: conn.name.clone(), group: conn.via_group.clone() };
                     let meta = GateMeta { category: "forward".into(), action: "open_forward".into(), detail, database: None, command: None };

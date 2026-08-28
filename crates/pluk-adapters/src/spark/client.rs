@@ -11,13 +11,13 @@ const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_MAX_PAGE: u64 = 25;
 
 fn expand_home(p: &str) -> String {
-    if p.starts_with('~') {
+    if let Some(path) = p.strip_prefix('~') {
         if let Ok(home) = std::env::var("HOME") {
-            return format!("{}{}", home, &p[1..]);
+            return format!("{}{}", home, path);
         }
         #[allow(deprecated)]
         if let Some(home) = std::env::home_dir() {
-            return format!("{}{}", home.to_string_lossy(), &p[1..]);
+            return format!("{}{}", home.to_string_lossy(), path);
         }
     }
     p.to_string()
@@ -59,15 +59,15 @@ pub struct SparkCfg {
 
 pub fn spark_config(conn: &Integration) -> SparkCfg {
     let c = &conn.config;
-    let bin_raw = c.get("spark_bin").map(|v| str_val(v)).unwrap_or_default();
+    let bin_raw = c.get("spark_bin").map(str_val).unwrap_or_default();
     let bin = if bin_raw.is_empty() {
         DEFAULT_BIN.to_string()
     } else {
         expand_home(&bin_raw)
     };
-    let account = c.get("default_account").map(|v| str_val(v)).unwrap_or_default();
-    let folder = c.get("default_folder").map(|v| str_val(v)).unwrap_or_default();
-    let team = c.get("default_team").map(|v| str_val(v)).unwrap_or_default();
+    let account = c.get("default_account").map(str_val).unwrap_or_default();
+    let folder = c.get("default_folder").map(str_val).unwrap_or_default();
+    let team = c.get("default_team").map(str_val).unwrap_or_default();
     let max_page_size = positive_u64(c.get("max_page_size"), DEFAULT_MAX_PAGE);
     let timeout_ms = positive_u64(c.get("timeout_seconds"), 30) * 1000;
     let timeout_ms = if timeout_ms == 0 { DEFAULT_TIMEOUT_MS } else { timeout_ms };
@@ -186,12 +186,11 @@ pub fn toggle(args: &mut Vec<String>, name: &str, value: bool) {
 }
 
 pub fn paging(args: &mut Vec<String>, cfg: &SparkCfg, page: Option<i64>, page_size: Option<i64>) {
-    if let Some(p) = page {
-        if p > 1 {
+    if let Some(p) = page
+        && p > 1 {
             args.push("--page".to_string());
             args.push(p.to_string());
         }
-    }
     let size = match page_size {
         Some(n) if n > 0 => n as u64,
         _ => cfg.max_page_size,

@@ -1,6 +1,7 @@
 import "./style.css";
+import { suppressWebViewContextMenu } from "./contextMenu.ts";
 import { zoom } from "./zoom.ts";
-import { createShell, renderBanners } from "./shell.ts";
+import { createShell } from "./shell.ts";
 import { createSidebar, type SidebarState } from "./sidebar.ts";
 import { emptyState, renderEmptyState } from "./emptyStates.ts";
 import { mountIntegrationDetail } from "./integration-detail/index.ts";
@@ -18,6 +19,7 @@ import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupFo
 import type { AdapterManifest as CatalogManifest, ToolState } from "./forms/catalog.ts";
 import { ToastCenter, renderToasts } from "./toast.ts";
 import { humanizeHealthError } from "./health.ts";
+import { renderLoadingState } from "./primitives.ts";
 import { invoke, hasHost } from "./host.ts";
 import { isMac } from "./platform.ts";
 import type { Integration, Group, Environment, Health } from "./types.ts";
@@ -25,6 +27,7 @@ import type { Integration, Group, Environment, Health } from "./types.ts";
 const app = document.getElementById("app")!;
 
 if (isMac()) document.documentElement.classList.add("platform-macos");
+suppressWebViewContextMenu(import.meta.env.DEV);
 
 zoom.apply();
 zoom.syncFromHost();
@@ -79,6 +82,8 @@ let groupDraft: GroupDraft | null = null;
 let detailHandle: { destroy: () => void; updateHealth: (next: DetailHealth | null) => void } | null = null;
 let detachDetail: (() => void) | null = null;
 
+type SidebarElement = HTMLElement & { _destroy?: () => void };
+
 const toasts = new ToastCenter();
 
 function manifestFor(type: string): CatalogManifest | undefined {
@@ -122,14 +127,13 @@ function renderDetail(mount: HTMLElement): void {
   mount.innerHTML = "";
 
   const wrap = document.createElement("div");
-  wrap.style.height = "100%";
+  wrap.className = "detail-mount";
   mount.appendChild(wrap);
 
   switch (selection.kind) {
     case "none": {
       if (state.loading) {
-        wrap.className = "detail-loading";
-        wrap.textContent = "Loading…";
+        renderLoadingState(wrap);
       } else if (!state.integrations.length && !state.groups.length) {
         renderEmptyState(wrap, emptyState("no-integrations"), (action) => {
           if (action === "new-integration") startNewIntegration();
@@ -404,6 +408,7 @@ function refreshSidebar(): void {
   if (!shellMounts) return;
   const sidebarWrap = shellMounts.root.querySelector(".shell-sidebar");
   if (sidebarWrap) {
+    (sidebarWrap.firstElementChild as SidebarElement | null)?._destroy?.();
     sidebarWrap.innerHTML = "";
     sidebarWrap.appendChild(buildSidebar());
   }
@@ -508,6 +513,7 @@ function refresh(): void {
   if (!shellMounts) return;
   const sidebarWrap = shellMounts.root.querySelector(".shell-sidebar");
   if (sidebarWrap) {
+    (sidebarWrap.firstElementChild as SidebarElement | null)?._destroy?.();
     sidebarWrap.innerHTML = "";
     sidebarWrap.appendChild(buildSidebar());
   }
@@ -516,12 +522,11 @@ function refresh(): void {
 
 async function bootstrap(): Promise<void> {
   detailEl = document.createElement("div");
-  detailEl.style.height = "100%";
+  detailEl.className = "detail-mount";
   shellMounts = createShell(buildSidebar(), detailEl);
   app.innerHTML = "";
   app.appendChild(shellMounts.root);
   renderToasts(shellMounts.toastMount, toasts, (id) => void testIntegration(id));
-  renderBanners(shellMounts.bottomMount, { serverStatus: "running" }, () => {}, () => {});
 
   if (!hasHost()) {
     state.loading = false;

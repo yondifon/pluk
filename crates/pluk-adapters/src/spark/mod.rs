@@ -6,7 +6,6 @@ use std::sync::Arc;
 use serde_json::{json, Map, Value};
 
 use pluk_policy::ActionCategory;
-use pluk_store::Integration;
 
 use crate::action::{ActionAdapter, ActionAdapterSpec, ActionOutput, ActionTool};
 use crate::error::AdapterError;
@@ -25,9 +24,6 @@ const ACCESS: &str = "Reads mail, calendar, contacts, meetings and teams from th
 fn s(args: &Value, key: &str) -> Option<String> {
     args.get(key).and_then(|v| v.as_str()).map(|x| x.to_string()).filter(|x| !x.trim().is_empty())
 }
-fn s_opt(args: &Value, key: &str) -> Option<String> {
-    args.get(key).and_then(|v| v.as_str()).map(|x| x.to_string())
-}
 fn b(args: &Value, key: &str) -> Option<bool> {
     args.get(key).and_then(|v| v.as_bool())
 }
@@ -43,10 +39,6 @@ fn arr_str(args: &Value, key: &str) -> Vec<String> {
         Some(Value::String(x)) if !x.trim().is_empty() => vec![x.trim().to_string()],
         _ => vec![],
     }
-}
-fn arr_opt(args: &Value, key: &str) -> Option<Vec<String>> {
-    let v = arr_str(args, key);
-    if v.is_empty() { None } else { Some(v) }
 }
 
 fn prop_str(desc: &str) -> Value { json!({"type":"string","description":desc}) }
@@ -178,7 +170,7 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
                     } else { asked };
                     let mut a = vec!["emails".to_string()];
                     for f in folders {
-                        match assert_positional(&f, "folder").and_then(|v| scoped(c, Some(&v), "folder").map_err(|e| e)) {
+                        match assert_positional(&f, "folder").and_then(|v| scoped(c, Some(&v), "folder")) {
                             Ok(v) => a.push(v),
                             Err(e) => return format!("list_emails error: {}", e.message),
                         }
@@ -1115,7 +1107,7 @@ pub fn spark_adapter_spec() -> ActionAdapterSpec<SparkCfg> {
             async move { client::test_spark(&conn).await }
         })
         .tools(|_, cfg| spark_tools(cfg.clone()))
-        .humanize_error(|e| client::humanize_spark_error(e))
+        .humanize_error(client::humanize_spark_error)
 }
 
 pub fn spark_adapter(store: Arc<pluk_store::Store>) -> Arc<ActionAdapter<SparkCfg>> {

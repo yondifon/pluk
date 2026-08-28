@@ -1,5 +1,8 @@
 import { deriveStatus, formatMetaLine, formatRelativeTime, statusLabel } from "./logic";
 import type { AdapterManifest, ConnHealth, Integration } from "./types";
+import { createIcon } from "../icon";
+import { createButton, createBadge, openMenu } from "../primitives";
+import { humanizeHealthError } from "../health";
 
 export type HeaderActions = {
   onTest: () => void;
@@ -9,19 +12,6 @@ export type HeaderActions = {
 };
 
 export type TestState = "idle" | "testing" | "ok" | { kind: "fail"; error: string };
-
-function humanize(raw: string): string {
-  if (!raw) return "Connection failed. Check the setup and try again.";
-  const low = raw.toLowerCase();
-  let msg: string;
-  if (low.includes("refused") || low.includes("connection")) msg = "Couldn’t connect. Check that the service is reachable and try again.";
-  else if (low.includes("auth") || low.includes("unauthorized") || low.includes("forbidden")) msg = "Authentication failed. Check the credentials and try again.";
-  else if (low.includes("timeout")) msg = "Connection timed out. Check the network and try again.";
-  else if (low.includes("tunnel") || low.includes("ssh")) msg = "Secure tunnel failed. Check SSH settings and try again.";
-  else msg = raw.trim();
-  if (!msg.toLowerCase().includes("try again")) msg = msg.replace(/\.?$/, ".") + " Check the setup and try again.";
-  return msg;
-}
 
 export function renderHeader(
   container: HTMLElement,
@@ -51,6 +41,7 @@ export function renderHeader(
   const title = document.createElement("h1");
   title.className = "detail-title";
   title.textContent = integration.name;
+  title.title = integration.name;
 
   const status = deriveStatus(health ?? null);
   const chip = document.createElement("span");
@@ -75,59 +66,39 @@ export function renderHeader(
   const testWrap = document.createElement("span");
   testWrap.className = "test-wrap";
 
-  const glyph = document.createElement("span");
-  glyph.className = "test-glyph";
-  glyph.setAttribute("aria-hidden", "true");
-  if (testState === "testing") glyph.textContent = "…";
-  else if (testState === "ok") glyph.textContent = "✓";
-  else if (typeof testState === "object" && testState.kind === "fail") glyph.textContent = "✕";
-  if (glyph.textContent) testWrap.appendChild(glyph);
+  const glyph = testState === "testing"
+    ? createIcon("spinner")
+    : testState === "ok"
+      ? createIcon("check")
+      : typeof testState === "object" && testState.kind === "fail"
+      ? createIcon("close")
+        : null;
+  if (glyph) {
+    glyph.classList.add("test-glyph");
+    testWrap.appendChild(glyph);
+  }
 
-  const testBtn = document.createElement("button");
-  testBtn.type = "button";
-  testBtn.className = "btn btn-secondary btn-sm";
-  testBtn.setAttribute("aria-label", "Test connection");
+  const testBtn = createButton("Test", { variant: "secondary", size: "sm", ariaLabel: "Test connection", onClick: actions.onTest });
+  testBtn.classList.add("test-button");
   if (testState === "testing") {
-    testBtn.textContent = "Testing…";
+    testBtn.replaceChildren(document.createTextNode("Testing…"));
     testBtn.disabled = true;
     testBtn.setAttribute("aria-busy", "true");
   } else {
-    testBtn.textContent = "Test";
+    testBtn.replaceChildren(document.createTextNode("Test"));
     testBtn.disabled = false;
     testBtn.removeAttribute("aria-busy");
   }
-  testBtn.addEventListener("click", actions.onTest);
   testWrap.appendChild(testBtn);
 
-  const menu = document.createElement("details");
-  menu.className = "overflow-menu";
-  const summary = document.createElement("summary");
-  summary.textContent = "⋯";
-  summary.setAttribute("aria-label", "More actions");
-  menu.appendChild(summary);
-  const menuList = document.createElement("div");
-  menuList.className = "overflow-menu-list";
-  const editBtn = document.createElement("button");
-  editBtn.textContent = "Edit…";
-  editBtn.addEventListener("click", () => {
-    menu.removeAttribute("open");
-    actions.onEdit();
-  });
-  const dupBtn = document.createElement("button");
-  dupBtn.textContent = "Duplicate";
-  dupBtn.addEventListener("click", () => {
-    menu.removeAttribute("open");
-    actions.onDuplicate();
-  });
-  const delBtn = document.createElement("button");
-  delBtn.textContent = "Delete…";
-  delBtn.className = "danger";
-  delBtn.addEventListener("click", () => {
-    menu.removeAttribute("open");
-    actions.onDelete();
-  });
-  menuList.append(editBtn, dupBtn, document.createElement("hr"), delBtn);
-  menu.appendChild(menuList);
+  const menu = createButton("", { icon: "more", ariaLabel: "More actions" });
+  menu.classList.add("icon-button");
+  menu.setAttribute("aria-haspopup", "menu");
+  menu.addEventListener("click", () => openMenu(menu, [
+    { label: "Edit…", onSelect: actions.onEdit },
+    { label: "Duplicate", onSelect: actions.onDuplicate },
+    { label: "Delete…", danger: true, onSelect: actions.onDelete },
+  ]));
 
   titleRow.append(title, chip, testWrap, menu);
 
@@ -135,9 +106,7 @@ export function renderHeader(
   metaRow.className = "detail-meta";
   metaRow.textContent = formatMetaLine(integration, manifest ?? null);
   if (integration.readOnly) {
-    const tag = document.createElement("span");
-    tag.className = "tag tag-readonly";
-    tag.textContent = "Read-only";
+    const tag = createBadge("Read-only", "readonly");
     metaRow.appendChild(tag);
   }
 
@@ -151,7 +120,7 @@ export function renderHeader(
     live.setAttribute("aria-atomic", "true");
     if (testState === "testing") live.textContent = "Testing connection…";
     else if (testState === "ok") live.textContent = "Connected — your integration is working.";
-    else live.textContent = humanize(testState.error);
+    else live.textContent = humanizeHealthError(testState.error);
     stack.appendChild(live);
   }
 

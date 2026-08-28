@@ -135,7 +135,7 @@ fn ssh_params(conn: &pluk_store::Integration) -> (String, u16, String, String, O
     (host, port, user, auth_type, key_path, password)
 }
 
-pub async fn run_command(owner_id: &str, conn: &pluk_store::Integration, command: &str, timeout_ms: Option<u64>) -> Result<ExecResult, AdapterError> {
+pub async fn run_command(conn: &pluk_store::Integration, command: &str, timeout_ms: Option<u64>) -> Result<ExecResult, AdapterError> {
     let timeout = timeout_ms.unwrap_or(DEFAULT_EXEC_TIMEOUT_MS);
     let clamped = std::cmp::min(timeout, MAX_COMMAND_TIMEOUT_S * 1000);
     let (host, port, user, auth_type, key_path, password) = ssh_params(conn);
@@ -216,16 +216,15 @@ pub async fn open_forward(owner_id: &str, conn: &pluk_store::Integration, remote
     // check existing
     {
         let map = forwards_map().lock().unwrap();
-        if let Some(inner) = map.get(&key) {
-            if let Some(entry) = inner.get(&id) {
+        if let Some(inner) = map.get(&key)
+            && let Some(entry) = inner.get(&id) {
                 return Ok(entry.info.clone());
             }
-        }
     }
     let local_port = allocate_port(requested_local_port)?;
     let info = ForwardInfo { id: id.clone(), remote_host: rh.clone(), remote_port, local_port };
     let mut map = forwards_map().lock().unwrap();
-    let inner = map.entry(key).or_insert_with(HashMap::new);
+    let inner = map.entry(key).or_default();
     inner.insert(id, ForwardEntry { info: info.clone() });
     Ok(info)
 }
@@ -243,8 +242,8 @@ pub fn list_forwards(owner_id: &str, conn: &pluk_store::Integration) -> Vec<Forw
 pub fn close_forward(owner_id: &str, conn: &pluk_store::Integration, id: &str) -> bool {
     let key = owner_key(owner_id, &conn.id);
     let mut map = forwards_map().lock().unwrap();
-    if let Some(inner) = map.get_mut(&key) {
-        if inner.remove(id).is_some() {
+    if let Some(inner) = map.get_mut(&key)
+        && inner.remove(id).is_some() {
             // free port
             // we could remove from used_ports but keep for now to avoid reuse collisions? Actually free it
             // Find info port
@@ -255,7 +254,6 @@ pub fn close_forward(owner_id: &str, conn: &pluk_store::Integration, id: &str) -
             if inner.is_empty() { map.remove(&key); }
             return true;
         }
-    }
     false
 }
 

@@ -45,13 +45,13 @@ describe("header Test control", () => {
     expect(live!.getAttribute("aria-live")).toBe("polite");
   });
 
-  test("ok state shows success message and check", () => {
+  test("ok state shows success message and check icon", () => {
     const c = render("ok");
     const live = c.querySelector("[role='status']");
     expect(live!.textContent).toContain("Connected");
     expect(live!.className).toContain("test-result-ok");
     const glyph = c.querySelector(".test-glyph")!;
-    expect(glyph.textContent).toBe("✓");
+    expect(glyph.getAttribute("data-icon")).toBe("check");
     expect(glyph.getAttribute("aria-hidden")).toBe("true");
   });
 

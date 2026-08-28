@@ -6,12 +6,10 @@ use std::sync::Arc;
 use serde_json::{json, Map, Value};
 
 use pluk_policy::ActionCategory;
-use pluk_store::Integration;
 
 use crate::action::{ActionAdapter, ActionAdapterSpec, ActionOutput, ActionTool};
 use crate::error::AdapterError;
 use crate::projection::{apply_only, only_param_description, FieldMap, Preset};
-use crate::tool_host::ToolHost;
 
 pub use client::{gh_command, gh_config, gh_cwd, gh_text, gh_json, humanize_gh_error, positional, repo_flag, resolve_repo, run_gh, set_gh_runner, test_gh, GhConfig, GhRunResult, GhRunner};
 pub use fields::github_cli_fields;
@@ -388,7 +386,7 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                         let limit = extract_i64(args, "limit").unwrap_or(30);
                         let (owner, repo_name) = resolve_repo(&c, repo.as_deref()).unwrap_or(("?".to_string(), "?".to_string()));
                         let url = format!("repos/{owner}/{repo_name}/pulls/{n}/files?per_page={limit}");
-                        gh_command(&c, &vec!["api".to_string(), "--method".to_string(), "GET".to_string(), url])
+                        gh_command(&c, &["api".to_string(), "--method".to_string(), "GET".to_string(), url])
                     }
                 })
                 .run({
@@ -440,7 +438,7 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                         let q = extract_str(args, "query").unwrap_or_default();
                         let limit = extract_i64(args, "limit").unwrap_or(30);
                         let url = format!("search/code?q={}&per_page={limit}", urlencoding::encode(&q));
-                        gh_command(&c, &vec!["api".to_string(), "--method".to_string(), "GET".to_string(), url])
+                        gh_command(&c, &["api".to_string(), "--method".to_string(), "GET".to_string(), url])
                     }
                 })
                 .run({
@@ -497,7 +495,7 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                         let (owner, repo_name) = resolve_repo(&c, repo.as_deref()).unwrap_or(("?".to_string(), "?".to_string()));
                         let ref_q = r.map(|v| format!("?ref={}", urlencoding::encode(&v))).unwrap_or_default();
                         let url = format!("repos/{owner}/{repo_name}/contents/{}" , urlencoding::encode(&path)) + &ref_q;
-                        gh_command(&c, &vec!["api".to_string(), "--method".to_string(), "GET".to_string(), url])
+                        gh_command(&c, &["api".to_string(), "--method".to_string(), "GET".to_string(), url])
                     }
                 })
                 .run({
@@ -554,7 +552,7 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                         let r = extract_str(args, "ref").unwrap_or_default();
                         let (owner, repo_name) = resolve_repo(&c, repo.as_deref()).unwrap_or(("?".to_string(), "?".to_string()));
                         let url = format!("repos/{owner}/{repo_name}/commits/{}/status", urlencoding::encode(&r));
-                        gh_command(&c, &vec!["api".to_string(), "--method".to_string(), "GET".to_string(), url])
+                        gh_command(&c, &["api".to_string(), "--method".to_string(), "GET".to_string(), url])
                     }
                 })
                 .run({
@@ -842,7 +840,7 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                         let mut a = vec!["issue".to_string(), "create".to_string()];
                         a.extend(repo_flag(&c, repo.as_deref()));
                         a.extend(vec!["--title".to_string(), title]);
-                        if let Some(b) = body { if !b.is_empty() { a.extend(vec!["--body".to_string(), b]); } }
+                        if let Some(b) = body && !b.is_empty() { a.extend(vec!["--body".to_string(), b]); }
                         gh_command(&c, &a)
                     }
                 })
@@ -858,7 +856,7 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                             let mut a = vec!["issue".to_string(), "create".to_string()];
                             a.extend(repo_flag(&c, repo.as_deref()));
                             a.extend(vec!["--title".to_string(), title]);
-                            if let Some(b) = body { if !b.is_empty() { a.extend(vec!["--body".to_string(), b]); } }
+                            if let Some(b) = body && !b.is_empty() { a.extend(vec!["--body".to_string(), b]); }
                             let cmd = gh_command(&c, &a);
                             let text = gh_text(&c, a, cwd.as_deref()).await?;
                             Ok(ActionOutput::with_command(Value::String(text), cmd))
@@ -902,9 +900,9 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                         let mut a = vec!["pr".to_string(), "create".to_string()];
                         a.extend(repo_flag(&c, repo.as_deref()));
                         a.extend(vec!["--title".to_string(), title]);
-                        if let Some(b) = body { if !b.is_empty() { a.extend(vec!["--body".to_string(), b]); } }
-                        if let Some(b) = base { if !b.is_empty() { a.extend(vec!["--base".to_string(), b]); } }
-                        if let Some(h) = head { if !h.is_empty() { a.extend(vec!["--head".to_string(), h]); } }
+                        if let Some(b) = body && !b.is_empty() { a.extend(vec!["--body".to_string(), b]); }
+                        if let Some(b) = base && !b.is_empty() { a.extend(vec!["--base".to_string(), b]); }
+                        if let Some(h) = head && !h.is_empty() { a.extend(vec!["--head".to_string(), h]); }
                         if draft { a.push("--draft".to_string()); }
                         gh_command(&c, &a)
                     }
@@ -924,9 +922,9 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                             let mut a = vec!["pr".to_string(), "create".to_string()];
                             a.extend(repo_flag(&c, repo.as_deref()));
                             a.extend(vec!["--title".to_string(), title]);
-                            if let Some(b) = body { if !b.is_empty() { a.extend(vec!["--body".to_string(), b]); } }
-                            if let Some(b) = base { if !b.is_empty() { a.extend(vec!["--base".to_string(), b]); } }
-                            if let Some(h) = head { if !h.is_empty() { a.extend(vec!["--head".to_string(), h]); } }
+                            if let Some(b) = body && !b.is_empty() { a.extend(vec!["--body".to_string(), b]); }
+                            if let Some(b) = base && !b.is_empty() { a.extend(vec!["--base".to_string(), b]); }
+                            if let Some(h) = head && !h.is_empty() { a.extend(vec!["--head".to_string(), h]); }
                             if draft { a.push("--draft".to_string()); }
                             let cmd = gh_command(&c, &a);
                             let text = gh_text(&c, a, cwd.as_deref()).await?;
@@ -968,7 +966,7 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                         let mut a = vec!["pr".to_string(), "review".to_string(), n.to_string()];
                         a.extend(repo_flag(&c, repo.as_deref()));
                         a.extend(vec![flag.to_string()]);
-                        if let Some(b) = body { if !b.is_empty() { a.extend(vec!["--body".to_string(), b]); } }
+                        if let Some(b) = body && !b.is_empty() { a.extend(vec!["--body".to_string(), b]); }
                         gh_command(&c, &a)
                     }
                 })
@@ -986,7 +984,7 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                             let mut a = vec!["pr".to_string(), "review".to_string(), n.to_string()];
                             a.extend(repo_flag(&c, repo.as_deref()));
                             a.extend(vec![flag.to_string()]);
-                            if let Some(b) = body { if !b.is_empty() { a.extend(vec!["--body".to_string(), b]); } }
+                            if let Some(b) = body && !b.is_empty() { a.extend(vec!["--body".to_string(), b]); }
                             let cmd = gh_command(&c, &a);
                             let text = gh_text(&c, a, cwd.as_deref()).await?;
                             Ok(ActionOutput::with_command(Value::String(text), cmd))
@@ -1029,8 +1027,8 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                         let prerelease = extract_bool(args, "prerelease").unwrap_or(false);
                         let mut a = vec!["release".to_string(), "create".to_string(), pos];
                         a.extend(repo_flag(&c, repo.as_deref()));
-                        if let Some(t) = title { if !t.is_empty() { a.extend(vec!["--title".to_string(), t]); } }
-                        if let Some(n) = notes { if !n.is_empty() { a.extend(vec!["--notes".to_string(), n]); } }
+                        if let Some(t) = title && !t.is_empty() { a.extend(vec!["--title".to_string(), t]); }
+                        if let Some(n) = notes && !n.is_empty() { a.extend(vec!["--notes".to_string(), n]); }
                         if draft { a.push("--draft".to_string()); }
                         if prerelease { a.push("--prerelease".to_string()); }
                         gh_command(&c, &a)
@@ -1051,8 +1049,8 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                             let cwd = extract_str(&args, "cwd");
                             let mut a = vec!["release".to_string(), "create".to_string(), pos];
                             a.extend(repo_flag(&c, repo.as_deref()));
-                            if let Some(t) = title { if !t.is_empty() { a.extend(vec!["--title".to_string(), t]); } }
-                            if let Some(n) = notes { if !n.is_empty() { a.extend(vec!["--notes".to_string(), n]); } }
+                            if let Some(t) = title && !t.is_empty() { a.extend(vec!["--title".to_string(), t]); }
+                            if let Some(n) = notes && !n.is_empty() { a.extend(vec!["--notes".to_string(), n]); }
                             if draft { a.push("--draft".to_string()); }
                             if prerelease { a.push("--prerelease".to_string()); }
                             let cmd = gh_command(&c, &a);
@@ -1067,7 +1065,7 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
     tools
 }
 
-pub fn github_cli_adapter_spec(store: Arc<pluk_store::Store>) -> ActionAdapterSpec<GhConfig> {
+pub fn github_cli_adapter_spec(_store: Arc<pluk_store::Store>) -> ActionAdapterSpec<GhConfig> {
     ActionAdapterSpec::new("github-cli", "GitHub CLI", "code-host")
         .agent_hint(AGENT_HINT)
         .access("Runs the locally installed gh CLI with your own GitHub login — Pluk stores no credentials. Reads issues, PRs, diffs, code search, file contents, CI status, and releases; comments and opens issues/PRs/releases when write is permitted. Every action is policy-checked and recorded in the activity log.")
@@ -1075,7 +1073,7 @@ pub fn github_cli_adapter_spec(store: Arc<pluk_store::Store>) -> ActionAdapterSp
         .config_fields(github_cli_fields())
         .client(|conn, _owner| Ok(gh_config(conn)))
         .test_connection(|conn| { let owned = conn.clone(); async move { test_gh(&owned).await } })
-        .humanize_error(|e| humanize_gh_error(e))
+        .humanize_error(humanize_gh_error)
         .tools(|_conn, cfg| github_cli_tools(cfg.clone()))
 }
 
@@ -1088,8 +1086,8 @@ pub fn build_github_cli_adapter(store: Arc<pluk_store::Store>) -> ActionAdapter<
 mod tests {
     use super::*;
     use crate::adapter::Adapter;
-    use crate::tool_host::{ToolHost, ToolRegistration, PromptHandler, ResourceHandler, BoxFuture, PromptResult, ResourceContents, ToolHandler};
-    use pluk_store::{Store, Integration, Environment};
+    
+    use pluk_store::{Store, Integration};
     use serde_json::{json, Value, Map};
     use std::sync::{Arc, Mutex};
 
@@ -1103,16 +1101,16 @@ mod tests {
         gh_config(&conn(m))
     }
 
-    struct Calls { bin: String, args: Vec<String>, cwd: String }
+    struct Calls { args: Vec<String>, cwd: String }
 
     fn set_fake(calls: Arc<Mutex<Vec<Calls>>>, responder: Arc<dyn Fn(&Vec<String>) -> (i32, String, String) + Send + Sync>) {
         let c = calls.clone();
-        let runner: GhRunner = Arc::new(move |bin, args, cwd, _timeout| {
+        let runner: GhRunner = Arc::new(move |_bin, args, cwd, _timeout| {
             let c = c.clone();
             let responder = responder.clone();
             let args_clone = args.clone();
             Box::pin(async move {
-                c.lock().unwrap().push(Calls{ bin: bin.clone(), args: args_clone.clone(), cwd: cwd.clone() });
+                c.lock().unwrap().push(Calls{ args: args_clone.clone(), cwd: cwd.clone() });
                 let (code, out, err) = responder(&args_clone);
                 Ok(GhRunResult{ code, stdout: out, stderr: err })
             })

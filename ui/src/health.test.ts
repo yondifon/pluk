@@ -24,7 +24,7 @@ describe("humanizeHealthError", () => {
   });
 
   test("does not duplicate try again", () => {
-    const withTry = "Couldn’t connect. Check that the service is reachable and try again.";
+    const withTry = "Couldn’t connect. Check that the connection is reachable and try again.";
     expect(humanizeHealthError(withTry)).toBe(withTry);
   });
 

@@ -173,7 +173,7 @@ impl Adapter for RedisAdapter {
                             .await
                         })
                     });
-                    let mut props = $schema;
+                    let props = $schema;
                     let schema = if props.is_empty() { Map::new() } else { object_schema(props, &[]) };
                     host.register_tool(
                         ToolRegistration {
@@ -220,18 +220,16 @@ impl Adapter for RedisAdapter {
                     let res = acc.raw("SCAN", cmd_args).await?;
                     // runner returns JSON; if real redis, res is Value from redis crate (which decodes to Value)
                     // For SCAN, expect [cursor, [keys]] or object {cursor,keys}
-                    if let Some(obj) = res.as_object() {
-                        if obj.contains_key("cursor") {
+                    if let Some(obj) = res.as_object()
+                        && obj.contains_key("cursor") {
                             return Ok::<Value, AdapterError>(res);
                         }
-                    }
-                    if let Some(arr) = res.as_array() {
-                        if arr.len() == 2 {
+                    if let Some(arr) = res.as_array()
+                        && arr.len() == 2 {
                             let cursor = arr[0].clone();
                             let keys = arr[1].clone();
                             return Ok::<Value, AdapterError>(json!({"cursor": cursor, "keys": keys}));
                         }
-                    }
                     Ok::<Value, AdapterError>(res)
                 })
             }

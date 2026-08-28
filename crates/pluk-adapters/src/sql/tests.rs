@@ -1,7 +1,6 @@
 use super::{register_sql_server, SqlCancelRegistry, sql_tool_specs};
 use crate::adapter::Adapter;
-use crate::tool_host::{ToolHost, ToolRegistration, PromptHandler, ResourceHandler, ToolHandler, BoxFuture, PromptResult, ResourceContents};
-use crate::gate::ToolResult;
+use crate::tool_host::{ToolHost, ToolRegistration, PromptHandler, ResourceHandler, ToolHandler};
 use pluk_store::{Store, Integration, LogScope, LogRange};
 use serde_json::{json, Value, Map};
 use std::sync::Arc;
@@ -44,7 +43,7 @@ impl ToolHost for CaptureHost {
     fn register_prompt(&mut self, name: &str, desc: &str, args: Option<Map<String, Value>>, _h: PromptHandler) {
         self.prompts.insert(name.to_string(), (desc.to_string(), args));
     }
-    fn register_resource(&mut self, name: &str, uri: &str, mime: &str, desc: Option<&str>, _h: ResourceHandler) {
+    fn register_resource(&mut self, name: &str, uri: &str, mime: &str, _desc: Option<&str>, _h: ResourceHandler) {
         self.resources.insert(uri.to_string(), (name.to_string(), mime.to_string()));
     }
 }
@@ -201,12 +200,12 @@ fn row_cap_truncation_notice_and_order() {
     // simulate cap 2
     let cap = Some(2);
     let (mut capped, truncated, limit) = {
-        let total = rows.len();
+        let _total = rows.len();
         if rows.len() > cap.unwrap() { (rows.into_iter().take(2).collect::<Vec<_>>(), true, cap) } else { (rows.clone(), false, cap) }
     };
     // mask after cap
     for row in &mut capped {
-        if let Value::Object(m) = row { if m.contains_key("secret") { m.insert("secret".into(), Value::String("***".into())); } }
+        if let Value::Object(m) = row && m.contains_key("secret") { m.insert("secret".into(), Value::String("***".into())); }
     }
     assert_eq!(capped.len(),2);
     assert!(truncated);
@@ -245,9 +244,9 @@ async fn masking_applied_before_response_and_log() {
     // result_json should be masked if rows contained secret, but fake doesn't have secret, so just ensure it doesn't contain raw secret (not applicable)
     // Instead test direct mask
     let mut rows = vec![json!({"secret":"hunter2","name":"alice"})];
-    let masked = vec!["secret".to_string()];
+    let masked = ["secret".to_string()];
     for row in &mut rows {
-        if let Value::Object(m) = row { if masked.contains(&"secret".to_string()) { m.insert("secret".into(), Value::String("***".into())); } }
+        if let Value::Object(m) = row && masked.contains(&"secret".to_string()) { m.insert("secret".into(), Value::String("***".into())); }
     }
     assert_eq!(rows[0]["secret"], "***");
     let serialized = serde_json::to_string(&rows).unwrap();
@@ -275,11 +274,11 @@ async fn blocked_statement_produces_no_pending_row() {
 #[tokio::test]
 async fn cancelled_query_recorded_as_cancelled() {
     let (_dir, store) = temp_store();
-    let conn = make_integration("pg1", "postgres", json!({"host":"localhost"}), None);
+    let _conn = make_integration("pg1", "postgres", json!({"host":"localhost"}), None);
     // Use gate directly to simulate cancellation via driver error
-    use crate::gate::{run_gated, CallTarget, GateMeta, GateOpts, Outcome, cancelled_when_message_contains};
+    use crate::gate::{run_gated, CallTarget, GateMeta, GateOpts, cancelled_when_message_contains};
     use crate::error::AdapterError;
-    use pluk_store::Verdict;
+    
     let target = CallTarget::new("pg1","test-pg1");
     let meta = GateMeta::new("read","query","SELECT pg_sleep(10)");
     let res = run_gated(&store, &target, meta, |_| async { Err(AdapterError::new("Query cancelled")) }, GateOpts::default().classify_error(cancelled_when_message_contains("cancelled"))).await;
@@ -340,7 +339,7 @@ fn error_humanising_cancel_vs_failure() {
     use crate::sql::error::{classify_sql_error, humanize_sql_error};
     use crate::error::AdapterError;
     let cancelled = AdapterError::new("Query cancelled");
-    let info = classify_sql_error(&cancelled);
+    let _info = classify_sql_error(&cancelled);
     // not pending, not auth, should be query_failed with message "Query cancelled"
     assert!(humanize_sql_error(&cancelled).contains("Query cancelled") || humanize_sql_error(&cancelled).contains("cancelled"));
     let auth = AdapterError::new("SASL authentication failed").with_code("28P01");
@@ -412,7 +411,7 @@ async fn api_saved_query_and_masked_column_crud() {
     let req_get = crate::adapter::ApiRequest { method: "GET".into(), url: "/api/integrations/pg1/masked_columns".into(), body: None };
     let resp4 = adapter.as_ref().handle_api(&conn, req_get, "/masked_columns").await.unwrap();
     let body4: Value = serde_json::from_slice(&resp4.body).unwrap();
-    assert!(body4["columns"].as_array().unwrap().len() >= 1);
+    assert!(!body4["columns"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -422,11 +421,10 @@ async fn connection_testing_opens_and_closes() {
     let cancels = Arc::new(SqlCancelRegistry::default());
     let adapter = crate::sql::SqlAdapter::postgres(store, cancels);
     let res = adapter.as_ref().test_connection(&conn).await;
-    if let Err(e) = &res {
-        if e.to_string().contains("connection failed") {
+    if let Err(e) = &res
+        && e.to_string().contains("connection failed") {
             eprintln!("skip connection_testing: no postgres reachable: {e}");
             return;
         }
-    }
     assert!(res.is_ok(), "test_connection should succeed: {:?}", res.err());
 }

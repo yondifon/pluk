@@ -80,8 +80,8 @@ describe("chooser accessibility", () => {
     const el = renderTypeChooser([manifest("postgres", "PostgreSQL"), manifest("linear", "Linear")], () => {}, { onCancel: () => {} });
     const heading = el.querySelector("h2");
     expect(heading).not.toBeNull();
-    expect(heading!.textContent).toBe("Choose a service");
-    expect(el.getAttribute("aria-label")).toBe("Choose a service");
+    expect(heading!.textContent).toBe("Choose an integration");
+    expect(el.getAttribute("aria-label")).toBe("Choose an integration");
     const btns = el.querySelectorAll<HTMLButtonElement>(".chooser-row");
     for (const b of btns) {
       expect(b.getAttribute("aria-label")).toBeTruthy();
@@ -94,9 +94,9 @@ describe("chooser accessibility", () => {
 
   it("shows loading and error without internal vocab", () => {
     const loading = renderTypeChooser([], () => {}, {});
-    expect(loading.textContent).toContain("Loading services");
+    expect(loading.textContent).toContain("Loading integrations");
     const failed = renderTypeChooser([], () => {}, { adaptersLoadFailed: true, onCancel: () => {} });
-    expect(failed.textContent).toContain("Couldn’t load services");
+    expect(failed.textContent).toContain("Couldn’t load integrations");
     expect(failed.textContent).not.toMatch(/manifest|projection|slug/i);
   });
 });

@@ -98,22 +98,20 @@ pub fn thread_comments(nodes: Vec<Value>) -> Vec<Value> {
     let mut is_child: std::collections::HashSet<String> = std::collections::HashSet::new();
     for n in &nodes {
         let id = n.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if let Some(pid) = n.get("parentId").and_then(|v| v.as_str()) {
-            if by_id.contains_key(pid) {
+        if let Some(pid) = n.get("parentId").and_then(|v| v.as_str())
+            && by_id.contains_key(pid) {
                 children.entry(pid.to_string()).or_default().push(id.clone());
                 is_child.insert(id.clone());
             }
-        }
     }
     // build nested structures recursively
     fn build(id: &str, by_id: &BTreeMap<String, Value>, children: &BTreeMap<String, Vec<String>>) -> Value {
         let mut node = by_id.get(id).cloned().unwrap_or(Value::Null);
-        if let Value::Object(ref mut m) = node {
-            if let Some(kids) = children.get(id) {
+        if let Value::Object(ref mut m) = node
+            && let Some(kids) = children.get(id) {
                 let replies: Vec<Value> = kids.iter().map(|kid| build(kid, by_id, children)).collect();
                 m.insert("replies".to_string(), Value::Array(replies));
             }
-        }
         node
     }
     for n in &nodes {
@@ -140,7 +138,7 @@ pub fn thread_comments(nodes: Vec<Value>) -> Vec<Value> {
         } else {
             // orphan whose parent missing already not in is_child? Actually orphans are not marked as child if parent missing
             let pid = n.get("parentId").and_then(|v| v.as_str());
-            if let Some(pid) = pid { if !by_id.contains_key(pid) { final_roots.push(build(&id, &by_id, &children)); } }
+            if let Some(pid) = pid && !by_id.contains_key(pid) { final_roots.push(build(&id, &by_id, &children)); }
         }
     }
     // Deduplicate by id preserve order
@@ -175,39 +173,10 @@ fn summarize_project(p: Value) -> Value {
 fn only_from_args(args: &Value) -> Option<Vec<String>> {
     args.get("only").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
 }
-fn wrap_ok(value: Value) -> RunOutcome {
-    let text = match &value { Value::String(s) => s.clone(), _ => serde_json::to_string_pretty(&value).unwrap_or("{}".to_string()) };
-    let rows = match &value { Value::Array(a) => a.clone(), other => vec![other.clone()] };
-    RunOutcome { text: text.clone(), is_error: false, result: Some(pluk_store::QueryResult { fields: vec![], rows }), response_text: Some(text), ..Default::default() }
-}
 fn project_value(data: Value, only: Option<Vec<String>>, map: &FieldMap) -> Result<Value, AdapterError> {
     apply_only(&data, only.as_ref(), map).map_err(|e| AdapterError::new(e.to_string()))
 }
 
-fn handler<F, Fut>(store: Arc<pluk_store::Store>, conn: Integration, meta_fn: impl Fn(&Value)->String + Send + Sync + 'static, category: &'static str, tool_name: &'static str, f: F) -> ToolHandler
-where F: Fn(Value, String, Option<String>) -> Fut + Send + Sync + 'static, Fut: std::future::Future<Output=Result<Value, AdapterError>> + Send + 'static {
-    let store = store.clone();
-    let conn_clone = conn.clone();
-    Arc::new(move |args: Value| {
-        let store = store.clone();
-        let conn = conn_clone.clone();
-        let meta_fn = &meta_fn;
-        let detail = meta_fn(&args);
-        let (api_key, default_team) = linear_config(&conn);
-        let fut = f(args.clone(), api_key.clone(), default_team.clone());
-        let meta = GateMeta::new(category, tool_name, detail);
-        let target = CallTarget::from(&conn);
-        Box::pin(async move {
-            run_gated(&store, &target, meta, |_| async {
-                let v = fut.await?;
-                Ok(Outcome::Ran(wrap_ok(v)))
-            }, GateOpts::default()).await.into()
-        }) as _ // tool result already
-    })
-}
-
-// Instead use direct gate: we computed wrap above; run_gated returns ToolResult
-// Need trait workaround: use helper
 
 pub struct LinearAdapter { store: Arc<pluk_store::Store> }
 impl LinearAdapter {
@@ -280,7 +249,7 @@ impl Adapter for LinearAdapter {
                             }, GateOpts::default()).await
                         })
                     });
-                    let mut props = $schema;
+                    let props = $schema;
                     let schema = if props.is_empty() { Map::new() } else { object_schema(props, &[]) };
                     host.register_tool(ToolRegistration { name: $name.into(), description: $desc.into(), input_schema: schema, annotations: Map::new() }, handler);
                 }

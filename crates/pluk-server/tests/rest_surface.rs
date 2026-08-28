@@ -174,7 +174,7 @@ async fn logs_page_across_a_keyset_boundary_without_gaps_or_duplicates() {
     expected.sort_unstable();
     assert_eq!(seen, expected, "no gaps");
     assert_eq!(second["hasMore"], false);
-    assert!(second["entries"].as_array().unwrap().len() >= 1);
+    assert!(!second["entries"].as_array().unwrap().is_empty());
 }
 
 fn urlencoding_encode(raw: &str) -> String {

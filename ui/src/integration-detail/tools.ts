@@ -11,15 +11,15 @@ export function renderTools(
 
   const tools = manifest?.tools ?? [];
   const card = document.createElement("section");
-  card.className = "card";
+  card.className = "ui-card";
 
   if (!tools.length) {
     const title = document.createElement("h2");
-    title.className = "card-title";
+    title.className = "ui-card-title";
     title.textContent = "Tools";
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = "Tool list unavailable — the local service isn’t responding.";
+    empty.textContent = "Tool list unavailable — the local connection isn’t responding.";
     card.append(title, empty);
     container.appendChild(card);
     return;
@@ -27,7 +27,7 @@ export function renderTools(
 
   const enabled = tools.filter((t) => isToolEnabled(t, integration.toolConfig)).length;
   const title = document.createElement("h2");
-  title.className = "card-title";
+  title.className = "ui-card-title";
   title.textContent = `${enabled} of ${tools.length} tools available to the agent`;
   card.appendChild(title);
 
@@ -60,6 +60,11 @@ export function renderTools(
         s.textContent = summary;
         main.appendChild(s);
       }
+    } else {
+      const off = document.createElement("div");
+      off.className = "tool-summary";
+      off.textContent = "Off — enable in Edit.";
+      main.appendChild(off);
     }
     row.append(dot, main);
     card.appendChild(row);

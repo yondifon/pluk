@@ -54,12 +54,11 @@ pub async fn linear_graphql(api_key: &str, query: &str, variables: Value) -> Res
     let status = res.status().as_u16();
     let text = res.text().await.map_err(|e| AdapterError::new(format!("Linear API request failed: {e}")))?;
     let json: Value = serde_json::from_str(&text).map_err(|_| AdapterError::new(format!("Linear API {status}: non-JSON response")))?;
-    if let Some(errors) = json.get("errors").and_then(|v| v.as_array()) {
-        if !errors.is_empty() {
+    if let Some(errors) = json.get("errors").and_then(|v| v.as_array())
+        && !errors.is_empty() {
             let msgs: Vec<String> = errors.iter().filter_map(|e| e.get("message").and_then(|m| m.as_str()).map(|s| s.to_string())).collect();
             return Err(AdapterError::new(format!("Linear: {}", msgs.join("; "))));
         }
-    }
     if status >= 400 {
         return Err(AdapterError::new(format!("Linear API {status}")));
     }

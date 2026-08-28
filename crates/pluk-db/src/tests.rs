@@ -284,13 +284,6 @@ mod tests {
 
     #[tokio::test]
     async fn tunnel_uses_pluk_ssh_provider_by_default_without_manual_injection() {
-        struct FailingTunnel;
-        #[async_trait::async_trait]
-        impl crate::config::SshTunnelProvider for FailingTunnel {
-            async fn open_tunnel(&self, _cfg: &crate::config::SqlConfig, _remote_host: &str, _remote_port: u16) -> Result<crate::config::TunnelEndpoint, crate::error::DriverError> {
-                panic!("should not be called when default provider is PlukSshTunnelProvider");
-            }
-        }
         let cfg = crate::config::SqlConfig {
             r#type: "postgres".into(),
             host: Some("db.internal".into()),

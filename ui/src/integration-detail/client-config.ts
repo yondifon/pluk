@@ -1,8 +1,9 @@
 import { formatFanOutMessage, mcpUrl } from "./logic";
 import type { ConfigScope, Integration, McpClientId } from "./types";
+import { createButton } from "../primitives";
 
 const CLIENTS: Array<{ id: McpClientId; label: string; supportsProject: boolean; globalPath: string; projectPath: string | null; language: string }> = [
-  { id: "opencode", label: "opencode", supportsProject: true, globalPath: "~/.config/opencode/opencode.json", projectPath: "opencode.json", language: "json" },
+  { id: "opencode", label: "OpenCode", supportsProject: true, globalPath: "~/.config/opencode/opencode.json", projectPath: "opencode.json", language: "json" },
   { id: "codex", label: "Codex", supportsProject: false, globalPath: "~/.codex/config.toml", projectPath: null, language: "toml" },
   { id: "claudeCode", label: "Claude Code", supportsProject: true, globalPath: "~/.mcp.json", projectPath: ".mcp.json", language: "json" },
   { id: "cursor", label: "Cursor", supportsProject: true, globalPath: "~/.cursor/mcp.json", projectPath: ".cursor/mcp.json", language: "json" },
@@ -41,9 +42,9 @@ export function renderClientConfig(
   opts?: { installed?: McpClientId[] },
 ): void {
   container.innerHTML = "";
-  container.className = "card";
+  container.className = "ui-card";
   const title = document.createElement("h2");
-  title.className = "card-title";
+  title.className = "ui-card-title";
   title.textContent = "Agent setup";
   title.id = "agent-setup-title";
   container.appendChild(title);
@@ -98,16 +99,8 @@ export function renderClientConfig(
     });
   }
 
-  const addBtn = document.createElement("button");
-  addBtn.type = "button";
-  addBtn.className = "btn btn-secondary btn-sm";
-  addBtn.textContent = "Install";
-  addBtn.setAttribute("aria-label", "Install into selected clients");
-  const copyBtn = document.createElement("button");
-  copyBtn.type = "button";
-  copyBtn.className = "btn btn-secondary btn-sm";
-  copyBtn.textContent = "Copy";
-  copyBtn.setAttribute("aria-label", "Copy snippet to clipboard");
+  const addBtn = createButton("Install", { variant: "secondary", size: "sm", ariaLabel: "Install into selected clients" });
+  const copyBtn = createButton("Copy", { variant: "secondary", size: "sm", ariaLabel: "Copy snippet to clipboard" });
   const snippetPre = document.createElement("pre");
   snippetPre.className = "snippet";
   snippetPre.tabIndex = 0;
@@ -153,7 +146,7 @@ export function renderClientConfig(
       const list = document.createElement("div");
       list.className = "all-target-list";
       if (t.length === 0) {
-        list.textContent = "No clients detected";
+        list.textContent = "No MCP client found. Paste the snippet manually.";
       } else {
         for (const id of t) {
           const row = document.createElement("div");

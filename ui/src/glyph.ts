@@ -1,7 +1,4 @@
-/**
- * Adapter glyphs — per-adapter colours and logo fallback.
- * Colours copied from swift/Sources/ContentView.swift AdapterStyle.color
- */
+import { createIcon } from "./icon";
 
 export const adapterColors: Record<string, string> = {
   postgres: "#4d75a8", // 0.30,0.46,0.66
@@ -33,15 +30,6 @@ export function adapterAbbrev(type: string): string {
   }
 }
 
-export function adapterSymbol(type: string): string | null {
-  if (type === "ssh") return "⌥"; // terminal symbol placeholder; CSS will style
-  return null;
-}
-
-/**
- * Render glyph element: tries image if available, else symbol, else abbrev.
- * Caller should check if an image URL exists; we expose a helper.
- */
 export function glyphElement(type: string, size = 12): HTMLElement {
   const wrap = document.createElement("span");
   wrap.className = "adapter-glyph";
@@ -56,14 +44,11 @@ export function glyphElement(type: string, size = 12): HTMLElement {
   wrap.style.fontWeight = "600";
   wrap.style.color = adapterColor(type);
 
-  const symbol = adapterSymbol(type);
-  if (symbol) {
-    wrap.textContent = symbol;
-    wrap.style.fontSize = `${size * 0.9}px`;
+  if (type === "ssh") {
+    wrap.appendChild(createIcon("terminal", { size }));
     return wrap;
   }
 
-  // Abbrev fallback (logos would be <img> here if bundled; none bundled today)
   wrap.textContent = adapterAbbrev(type);
   wrap.style.fontFamily = "var(--font-mono)";
   wrap.title = type;

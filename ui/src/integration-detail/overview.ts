@@ -1,5 +1,6 @@
 import { mcpUrl, overviewRows } from "./logic";
 import type { AdapterManifest, Integration } from "./types";
+import { createButton } from "../primitives";
 
 export function renderOverview(
   container: HTMLElement,
@@ -8,13 +9,13 @@ export function renderOverview(
   onCopyConfirm: (copied: boolean) => void,
 ): void {
   container.innerHTML = "";
-  container.className = "overview-tab";
+  container.className = "overview-tab stack-lg";
 
   // Endpoint card
   const endpoint = document.createElement("section");
-  endpoint.className = "card";
+   endpoint.className = "ui-card";
   const epTitle = document.createElement("h2");
-  epTitle.className = "card-title";
+   epTitle.className = "ui-card-title";
   epTitle.textContent = "MCP endpoint";
   const epRow = document.createElement("div");
   epRow.className = "inspector-row";
@@ -25,9 +26,12 @@ export function renderOverview(
   const urlText = document.createElement("code");
   urlText.className = "mono";
   urlText.textContent = url;
-  const copyBtn = document.createElement("button");
-  copyBtn.className = "btn btn-primary btn-sm";
-  copyBtn.textContent = "Copy";
+  urlText.title = url;
+  const copyBtn = createButton("Copy", { variant: "primary", size: "sm", ariaLabel: "Copy endpoint URL" });
+  const live = document.createElement("span");
+  live.className = "sr-only";
+  live.setAttribute("role", "status");
+  live.setAttribute("aria-live", "polite");
   let copiedTimer: ReturnType<typeof setTimeout> | null = null;
   copyBtn.addEventListener("click", async () => {
     try {
@@ -41,17 +45,18 @@ export function renderOverview(
       document.execCommand("copy");
       ta.remove();
     }
-    copyBtn.textContent = "Copied!";
+     copyBtn.replaceChildren(document.createTextNode("Copied!"));
+     live.textContent = "Endpoint URL copied.";
     copyBtn.classList.add("copied");
     onCopyConfirm(true);
     if (copiedTimer) clearTimeout(copiedTimer);
     copiedTimer = setTimeout(() => {
-      copyBtn.textContent = "Copy";
-      copyBtn.classList.remove("copied");
-      onCopyConfirm(false);
+       copyBtn.replaceChildren(document.createTextNode("Copy"));
+       copyBtn.classList.remove("copied");
+       onCopyConfirm(false);
     }, 1500);
   });
-  epRow.append(epLabel, urlText, copyBtn);
+   epRow.append(epLabel, urlText, copyBtn, live);
   endpoint.append(epTitle, epRow);
   if (manifest?.agentHint) {
     const hintRow = document.createElement("div");
@@ -68,9 +73,9 @@ export function renderOverview(
 
   // Configuration card
   const config = document.createElement("section");
-  config.className = "card";
+   config.className = "ui-card";
   const cfgTitle = document.createElement("h2");
-  cfgTitle.className = "card-title";
+   cfgTitle.className = "ui-card-title";
   cfgTitle.textContent = "Configuration";
   config.appendChild(cfgTitle);
 

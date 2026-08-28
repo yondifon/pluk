@@ -1,4 +1,5 @@
 import "./shell.css";
+import { createButton } from "./primitives";
 
 export type BannerState = {
   update?: { commit?: string; updating: boolean };
@@ -18,6 +19,10 @@ export function createShell(
 
   const resizer = document.createElement("div");
   resizer.className = "shell-resizer";
+  resizer.setAttribute("role", "separator");
+  resizer.setAttribute("aria-label", "Resize sidebar");
+  resizer.setAttribute("aria-orientation", "vertical");
+  resizer.tabIndex = 0;
   // simple drag resize
   let startX = 0;
   let startW = 0;
@@ -35,6 +40,18 @@ export function createShell(
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+  });
+  resizer.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home") return;
+    e.preventDefault();
+    const current = sidebarWrap.getBoundingClientRect().width;
+    const next = e.key === "Home" ? 244 : current + (e.key === "ArrowRight" ? 16 : -16);
+    sidebarWrap.style.width = `${Math.max(220, Math.min(320, next))}px`;
+    resizer.setAttribute("aria-valuenow", String(Math.round(Math.max(220, Math.min(320, next)))));
+  });
+  resizer.addEventListener("dblclick", () => {
+    sidebarWrap.style.width = "244px";
+    resizer.setAttribute("aria-valuenow", "244");
   });
 
   const main = document.createElement("div");
@@ -73,11 +90,7 @@ export function renderBanners(mount: HTMLElement, state: BannerState, onRestart:
       const short = state.update.commit ? state.update.commit.slice(0, 7) : "new commit";
       banner.textContent = `Update available — ${short} on remote`;
       banner.setAttribute("aria-label", `Update available ${short}`);
-      const btn = document.createElement("button");
-      btn.textContent = "Update & Relaunch";
-      btn.className = "btn btn-sm";
-      btn.setAttribute("aria-label", "Update and relaunch app");
-      btn.onclick = onUpdate;
+      const btn = createButton("Update & Relaunch", { size: "sm", ariaLabel: "Update and relaunch app", onClick: onUpdate });
       banner.appendChild(btn);
     }
     if (!reduce) banner.style.transition = "transform 200ms ease, opacity 200ms ease";
@@ -90,11 +103,7 @@ export function renderBanners(mount: HTMLElement, state: BannerState, onRestart:
     banner.setAttribute("aria-live", state.serverStatus === "stopped" ? "assertive" : "polite");
     banner.textContent = state.serverStatus === "starting" ? "Server starting…" : "Server not running";
     if (state.serverStatus === "stopped") {
-      const btn = document.createElement("button");
-      btn.textContent = "Restart";
-      btn.className = "btn btn-sm";
-      btn.setAttribute("aria-label", "Restart server");
-      btn.onclick = onRestart;
+      const btn = createButton("Restart", { size: "sm", ariaLabel: "Restart server", onClick: onRestart });
       banner.appendChild(btn);
     }
     if (!reduce) banner.style.transition = "transform 200ms ease, opacity 200ms ease";

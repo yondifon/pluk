@@ -2,6 +2,10 @@ import "./sidebar.css";
 import type { Group, Integration, AdapterManifest, Environment, Health } from "./types";
 import { envLabel } from "./types";
 import { adapterColor, glyphElement } from "./glyph";
+import { createIcon } from "./icon";
+import { confirmModal } from "./modal";
+import { createButton, openMenu, renderErrorState } from "./primitives";
+import { emptyState } from "./emptyStates";
 import {
   filteredGroups,
   filteredIntegrations,
@@ -27,11 +31,13 @@ export type SidebarCallbacks = {
   onRetryAdapters: () => void;
 };
 
+type SidebarElement = HTMLElement & { _destroy?: () => void };
+
 export function createSidebar(
   state: SidebarState,
   selectedId: string | null,
   cbs: SidebarCallbacks,
-): HTMLElement {
+): SidebarElement {
   const root = document.createElement("div");
   root.style.display = "flex";
   root.style.flexDirection = "column";
@@ -41,16 +47,14 @@ export function createSidebar(
   // Top bar
   const toolbar = document.createElement("div");
   toolbar.className = "sidebar-topbar";
-  const btnNewInt = document.createElement("button");
-  btnNewInt.textContent = "+";
+  const btnNewInt = createButton("", { icon: "add", ariaLabel: "New Integration", onClick: cbs.onCreateIntegration });
+  btnNewInt.classList.add("icon-button");
   btnNewInt.title = "New Integration (⌘N)";
   btnNewInt.setAttribute("aria-label", "New Integration");
-  btnNewInt.onclick = cbs.onCreateIntegration;
-  const btnNewGroup = document.createElement("button");
-  btnNewGroup.textContent = "⊞";
+  const btnNewGroup = createButton("", { icon: "group-add", ariaLabel: "New Group", onClick: cbs.onCreateGroup });
+  btnNewGroup.classList.add("icon-button");
   btnNewGroup.title = "New Group (⇧⌘N)";
   btnNewGroup.setAttribute("aria-label", "New Group");
-  btnNewGroup.onclick = cbs.onCreateGroup;
   toolbar.append(btnNewInt, btnNewGroup);
 
   // Search row
@@ -60,28 +64,25 @@ export function createSidebar(
   const searchWrap = document.createElement("div");
   searchWrap.className = "sidebar-search";
   const searchIcon = document.createElement("span");
-  searchIcon.textContent = "⌕";
-  searchIcon.style.color = "var(--surface-tertiary-label)";
+  searchIcon.className = "sidebar-search-icon";
+  searchIcon.appendChild(createIcon("search"));
   const input = document.createElement("input");
   input.placeholder = "Filter integrations";
   input.setAttribute("aria-label", "Filter integrations");
   input.id = "sidebar-search";
-  const clearBtn = document.createElement("button");
-  clearBtn.textContent = "×";
+  const clearBtn = createButton("", { icon: "close", ariaLabel: "Clear search" });
+  clearBtn.classList.add("icon-button", "sidebar-search-clear");
   clearBtn.title = "Clear";
   clearBtn.style.display = "none";
-  clearBtn.style.border = "none";
-  clearBtn.style.background = "transparent";
-  clearBtn.style.cursor = "pointer";
   searchWrap.append(searchIcon, input, clearBtn);
 
-  const filterBtn = document.createElement("button");
-  filterBtn.className = "sidebar-filter-btn";
-  filterBtn.textContent = "☰";
+  const filterBtn = createButton("", { icon: "filter", ariaLabel: "Filter by type and environment" });
+  filterBtn.classList.add("sidebar-filter-btn", "icon-button");
   filterBtn.title = "Filter by type and environment";
   filterBtn.setAttribute("aria-label", "Filter by type and environment");
 
   let popover: HTMLElement | null = null;
+  let closePopover: (() => void) | null = null;
   let query = "";
   let typeFilter = new Set<string>();
   let envFilter = new Set<Environment>();
@@ -93,45 +94,40 @@ export function createSidebar(
 
   function showPopover() {
     if (popover) {
-      popover.remove();
-      popover = null;
+      closePopover?.();
       return;
     }
     const types = availableTypesSorted(state.integrations, state.adapters);
     const envs = availableEnvs(state.integrations, state.groups);
     const el = document.createElement("div");
     el.className = "popover";
-    el.style.position = "absolute";
-    // simple inline popover under filterBtn via container relative
     const header = document.createElement("div");
-    header.style.display = "flex";
-    header.style.justifyContent = "space-between";
-    header.style.padding = "8px 12px";
+    header.className = "popover-header";
     header.innerHTML = `<strong>Filters</strong>`;
-    const clear = document.createElement("button");
-    clear.textContent = "Clear";
+    const clear = createButton("Clear", { size: "sm" });
+    clear.classList.add("popover-clear");
     clear.style.display = typeFilter.size || envFilter.size ? "" : "none";
-    clear.onclick = () => {
-      typeFilter.clear();
-      envFilter.clear();
-      updateFilterBtn();
-      el.remove();
-      popover = null;
-      renderList();
-    };
+      clear.addEventListener("click", () => {
+       typeFilter.clear();
+       envFilter.clear();
+       updateFilterBtn();
+       closePopover?.();
+       filterBtn.focus();
+       renderList();
+      });
     header.appendChild(clear);
     el.appendChild(header);
 
     if (types.length) {
       const sec = document.createElement("div");
-      sec.style.padding = "8px 12px";
-      sec.innerHTML = `<div style="font-size:11px;color:var(--surface-sidebar-tertiary);font-weight:600;margin-bottom:4px">Type</div>`;
+      sec.className = "popover-section";
+      const sectionTitle = document.createElement("div");
+      sectionTitle.className = "popover-section-title";
+      sectionTitle.textContent = "Type";
+      sec.appendChild(sectionTitle);
       for (const t of types) {
         const row = document.createElement("label");
-        row.style.display = "flex";
-        row.style.alignItems = "center";
-        row.style.gap = "8px";
-        row.style.cursor = "pointer";
+        row.className = "popover-option";
         const cb = document.createElement("input");
         cb.type = "checkbox";
         cb.checked = typeFilter.has(t);
@@ -151,14 +147,14 @@ export function createSidebar(
     }
     if (envs.length) {
       const sec = document.createElement("div");
-      sec.style.padding = "8px 12px";
-      sec.innerHTML = `<div style="font-size:11px;color:var(--surface-sidebar-tertiary);font-weight:600;margin-bottom:4px">Environment</div>`;
+      sec.className = "popover-section";
+      const sectionTitle = document.createElement("div");
+      sectionTitle.className = "popover-section-title";
+      sectionTitle.textContent = "Environment";
+      sec.appendChild(sectionTitle);
       for (const e of envs) {
         const row = document.createElement("label");
-        row.style.display = "flex";
-        row.style.alignItems = "center";
-        row.style.gap = "8px";
-        row.style.cursor = "pointer";
+        row.className = "popover-option";
         const cb = document.createElement("input");
         cb.type = "checkbox";
         cb.checked = envFilter.has(e);
@@ -169,11 +165,7 @@ export function createSidebar(
           renderList();
         };
         const dot = document.createElement("span");
-        dot.style.width = "7px";
-        dot.style.height = "7px";
-        dot.style.borderRadius = "50%";
-        dot.style.display = "inline-block";
-        dot.style.background = envDotColor(e);
+        dot.className = `environment-dot environment-${e}`;
         const lab = document.createElement("span");
         lab.textContent = envLabel(e);
         row.append(cb, dot, lab);
@@ -181,14 +173,38 @@ export function createSidebar(
       }
       el.appendChild(sec);
     }
-    // mount near filterBtn
-    filterBtn.style.position = "relative";
-    // Place popover as child of searchRow with absolute anchoring
-    searchRow.style.position = "relative";
-    el.style.top = "44px";
-    el.style.right = "12px";
-    searchRow.appendChild(el);
+    const position = () => {
+      const rect = filterBtn.getBoundingClientRect();
+      el.style.left = `${Math.max(0, rect.right - 224)}px`;
+      el.style.top = `${rect.bottom + 4}px`;
+    };
+    position();
+    document.body.appendChild(el);
     popover = el;
+    closePopover = () => {
+      el.remove();
+      popover = null;
+      closePopover = null;
+      window.removeEventListener("resize", position);
+      window.removeEventListener("scroll", position, true);
+      document.removeEventListener("pointerdown", close);
+    };
+    const close = (event: PointerEvent) => {
+      if (event.target !== filterBtn && !el.contains(event.target as Node)) {
+        closePopover?.();
+      }
+    };
+    window.addEventListener("resize", position);
+    window.addEventListener("scroll", position, true);
+    document.addEventListener("pointerdown", close);
+    el.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closePopover?.();
+        filterBtn.focus();
+      }
+    });
+    queueMicrotask(() => el.querySelector<HTMLElement>("button, input")?.focus());
   }
 
   filterBtn.addEventListener("click", showPopover);
@@ -199,55 +215,13 @@ export function createSidebar(
   list.className = "sidebar-list";
   list.setAttribute("role", "list");
 
-  // Delete confirmation
-  const confirmOverlay = document.createElement("div");
-  confirmOverlay.style.position = "fixed";
-  confirmOverlay.style.inset = "0";
-  confirmOverlay.style.display = "none";
-  confirmOverlay.style.placeItems = "center";
-  confirmOverlay.style.background = "rgba(0,0,0,0.24)";
-  confirmOverlay.style.zIndex = "100";
-  confirmOverlay.style.padding = "24px";
   function showConfirm(kind: "integration" | "group", id: string, name: string) {
-    confirmOverlay.style.display = "grid";
-    confirmOverlay.innerHTML = "";
-    const dialog = document.createElement("div");
-    dialog.setAttribute("role", "dialog");
-    dialog.style.background = "var(--surface-panel)";
-    dialog.style.padding = "20px";
-    dialog.style.borderRadius = "10px";
-    dialog.style.maxWidth = "360px";
-    dialog.style.boxShadow = "0 12px 32px rgba(0,0,0,0.2)";
-    const title = document.createElement("h3");
-    title.style.margin = "0 0 8px";
-    title.textContent = `Delete ${kind} “${name}”?`;
-    const msg = document.createElement("p");
-    msg.style.margin = "0 0 16px";
-    msg.style.color = "var(--surface-tertiary-label)";
-    msg.textContent = "This can’t be undone.";
-    const actions = document.createElement("div");
-    actions.style.display = "flex";
-    actions.style.justifyContent = "flex-end";
-    actions.style.gap = "8px";
-    const cancel = document.createElement("button");
-    cancel.textContent = "Cancel";
-    cancel.onclick = () => (confirmOverlay.style.display = "none");
-    const del = document.createElement("button");
-    del.textContent = "Delete";
-    del.style.background = "#ef4444";
-    del.style.color = "white";
-    del.style.border = "none";
-    del.style.padding = "6px 12px";
-    del.style.borderRadius = "6px";
-    del.style.cursor = "pointer";
-    del.onclick = () => {
-      confirmOverlay.style.display = "none";
-      cbs.onDelete(kind, id, name);
-    };
-    actions.append(cancel, del);
-    dialog.append(title, msg, actions);
-    confirmOverlay.appendChild(dialog);
-    del.focus();
+    confirmModal({
+      title: `Delete ${kind} “${name}”?`,
+      message: "This cannot be undone.",
+      confirmLabel: `Delete ${kind}`,
+      onConfirm: () => cbs.onDelete(kind, id, name),
+    });
   }
 
   function renderList() {
@@ -260,14 +234,7 @@ export function createSidebar(
       return;
     }
     if (state.adaptersLoadFailed) {
-      const err = document.createElement("div");
-      err.className = "sidebar-empty";
-      err.textContent = "Couldn’t load the integration catalog. ";
-      const retry = document.createElement("button");
-      retry.textContent = "Try again";
-      retry.onclick = cbs.onRetryAdapters;
-      err.appendChild(retry);
-      list.appendChild(err);
+      renderErrorState(list, "Couldn’t load the integration catalog.", cbs.onRetryAdapters);
       return;
     }
 
@@ -289,7 +256,8 @@ export function createSidebar(
           ? `No results for “${query.trim()}”`
           : "No integrations match the selected filters.";
       } else if (!state.integrations.length && !state.groups.length) {
-        empty.textContent = "No integrations yet. Add your first one to get started.";
+         const state = emptyState("no-integrations");
+         empty.textContent = `${state.title}. ${state.body}`;
       } else {
         empty.textContent = "No matches.";
       }
@@ -306,55 +274,29 @@ export function createSidebar(
         const row = document.createElement("div");
         row.className = "sidebar-row";
         if (g.id === selectedId) row.classList.add("selected");
-        row.setAttribute("role", "listitem");
+         row.setAttribute("role", "button");
+         row.setAttribute("aria-label", `${g.name}, group`);
         row.tabIndex = 0;
         row.onclick = () => cbs.onSelect(g.id);
         row.onkeydown = (e) => {
-          if (e.key === "Enter") cbs.onSelect(g.id);
+           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); cbs.onSelect(g.id); }
+           if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+             e.preventDefault();
+             openMenu(row, [{ label: "Delete", danger: true, onSelect: () => showConfirm("group", g.id, g.name) }], { x: row.getBoundingClientRect().left, y: row.getBoundingClientRect().bottom });
+           }
         };
         // context menu
         row.addEventListener("contextmenu", (e) => {
           e.preventDefault();
-          // simple inline menu: show confirm delete
-          // For R18 we trigger delete confirmation directly on right-click? Use prompt.
-          // Instead show a tiny menu with Delete
-          const menu = document.createElement("div");
-          menu.style.position = "fixed";
-          menu.style.left = `${e.clientX}px`;
-          menu.style.top = `${e.clientY}px`;
-          menu.style.background = "var(--surface-panel)";
-          menu.style.border = "1px solid rgba(0,0,0,0.1)";
-          menu.style.borderRadius = "6px";
-          menu.style.padding = "4px";
-          menu.style.zIndex = "60";
-          const del = document.createElement("button");
-          del.textContent = "Delete";
-          del.style.display = "block";
-          del.style.width = "100%";
-          del.style.textAlign = "left";
-          del.style.background = "transparent";
-          del.style.border = "none";
-          del.style.padding = "6px 12px";
-          del.style.cursor = "pointer";
-          del.onclick = () => {
-            menu.remove();
-            showConfirm("group", g.id, g.name);
-          };
-          menu.appendChild(del);
-          document.body.appendChild(menu);
-          const close = () => {
-            menu.remove();
-            window.removeEventListener("click", close);
-          };
-          setTimeout(() => window.addEventListener("click", close), 0);
+          openMenu(row, [{ label: "Delete", danger: true, onSelect: () => showConfirm("group", g.id, g.name) }], { x: e.clientX, y: e.clientY });
         });
         const icon = document.createElement("span");
-        icon.textContent = "▦";
-        icon.style.color = "var(--surface-tertiary-label)";
-        icon.style.fontSize = "11px";
-        const name = document.createElement("span");
-        name.className = "sidebar-row-name";
-        name.textContent = g.name;
+        icon.className = "sidebar-group-icon";
+         icon.appendChild(createIcon("group"));
+         const name = document.createElement("span");
+         name.className = "sidebar-row-name";
+         name.textContent = g.name;
+         name.title = g.name;
         const count = document.createElement("span");
         count.className = "sidebar-row-env";
         count.textContent = `· ${g.memberIds.length} integration${g.memberIds.length === 1 ? "" : "s"}`;
@@ -372,87 +314,54 @@ export function createSidebar(
         const row = document.createElement("div");
         row.className = "sidebar-row";
         if (c.id === selectedId) row.classList.add("selected");
-        row.setAttribute("role", "listitem");
+         row.setAttribute("role", "button");
+         row.setAttribute("aria-label", `${c.name}, integration`);
         row.tabIndex = 0;
         row.onclick = () => cbs.onSelect(c.id);
         row.onkeydown = (e) => {
-          if (e.key === "Enter") cbs.onSelect(c.id);
+           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); cbs.onSelect(c.id); }
+           if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+             e.preventDefault();
+             openMenu(row, [
+               { label: "Duplicate", onSelect: () => cbs.onDuplicate(c.id) },
+               { label: "Delete", danger: true, onSelect: () => showConfirm("integration", c.id, c.name) },
+             ], { x: row.getBoundingClientRect().left, y: row.getBoundingClientRect().bottom });
+           }
         };
         row.addEventListener("contextmenu", (e) => {
           e.preventDefault();
-          const menu = document.createElement("div");
-          menu.style.position = "fixed";
-          menu.style.left = `${e.clientX}px`;
-          menu.style.top = `${e.clientY}px`;
-          menu.style.background = "var(--surface-panel)";
-          menu.style.border = "1px solid rgba(0,0,0,0.1)";
-          menu.style.borderRadius = "6px";
-          menu.style.padding = "4px";
-          menu.style.zIndex = "60";
-          const dup = document.createElement("button");
-          dup.textContent = "Duplicate";
-          dup.style.display = "block";
-          dup.style.width = "100%";
-          dup.style.textAlign = "left";
-          dup.style.background = "transparent";
-          dup.style.border = "none";
-          dup.style.padding = "6px 12px";
-          dup.style.cursor = "pointer";
-          dup.onclick = () => {
-            menu.remove();
-            cbs.onDuplicate(c.id);
-          };
-          const del = document.createElement("button");
-          del.textContent = "Delete";
-          del.style.display = "block";
-          del.style.width = "100%";
-          del.style.textAlign = "left";
-          del.style.background = "transparent";
-          del.style.border = "none";
-          del.style.padding = "6px 12px";
-          del.style.cursor = "pointer";
-          del.onclick = () => {
-            menu.remove();
-            showConfirm("integration", c.id, c.name);
-          };
-          menu.append(dup, del);
-          document.body.appendChild(menu);
-          const close = () => {
-            menu.remove();
-            window.removeEventListener("click", close);
-          };
-          setTimeout(() => window.addEventListener("click", close), 0);
+          openMenu(row, [
+            { label: "Duplicate", onSelect: () => cbs.onDuplicate(c.id) },
+            { label: "Delete", danger: true, onSelect: () => showConfirm("integration", c.id, c.name) },
+          ], { x: e.clientX, y: e.clientY });
         });
 
         const glyph = glyphElement(c.type, 12);
         glyph.style.background = hexToRgba(adapterColor(c.type), 0.14);
-        glyph.style.borderRadius = "3px";
-        glyph.style.padding = "2px";
-        const nameEl = document.createElement("span");
-        nameEl.className = "sidebar-row-name";
-        nameEl.textContent = c.name;
+         glyph.classList.add("sidebar-glyph");
+         const nameEl = document.createElement("span");
+         nameEl.className = "sidebar-row-name";
+         nameEl.textContent = c.name;
+         nameEl.title = c.name;
         const env = document.createElement("span");
         env.className = "sidebar-row-env";
         env.textContent = `· ${envLabel(c.environment)}`;
         const spacer = document.createElement("span");
-        spacer.style.flex = "1";
+         spacer.className = "sidebar-row-spacer";
         row.append(glyph, nameEl, env, spacer);
         if (c.readOnly) {
           const lock = document.createElement("span");
-          lock.textContent = "🔒";
+           lock.appendChild(createIcon("lock"));
           lock.title = "Read-only";
-          lock.style.fontSize = "10px";
-          lock.style.color = "var(--surface-sidebar-tertiary)";
+           lock.className = "sidebar-lock";
           row.appendChild(lock);
         }
         const health = state.health[c.id];
-        if (health) {
-          const dot = document.createElement("span");
-          dot.className = `health-dot ${health.status === "error" ? "error" : "ok"}`;
-          dot.title = health.status === "error" ? health.error ?? "Connection failing" : "Healthy";
-          row.appendChild(dot);
-        }
-        // absent health renders nothing — third state
+        const dot = document.createElement("span");
+        dot.className = `health-dot ${health ? (health.status === "error" ? "error" : "ok") : "unknown"}`;
+        dot.title = health ? (health.status === "error" ? health.error ?? "Connection failing" : "Healthy") : "Not checked";
+        dot.setAttribute("aria-label", dot.title);
+        row.appendChild(dot);
 
         list.appendChild(row);
       }
@@ -472,7 +381,7 @@ export function createSidebar(
     renderList();
   });
   // keyboard shortcut Cmd+F focuses search
-  window.addEventListener("keydown", (e) => {
+  const onKeydown = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
       e.preventDefault();
       input.focus();
@@ -485,31 +394,25 @@ export function createSidebar(
       e.preventDefault();
       cbs.onCreateGroup();
     }
-  });
+  };
+  window.addEventListener("keydown", onKeydown);
 
   // initial render
   updateFilterBtn();
   renderList();
 
-  root.append(toolbar, searchRow, list, confirmOverlay);
+  root.append(toolbar, searchRow, list);
 
   // expose helper to update state externally
   (root as unknown as { _render: () => void })._render = renderList;
 
+  (root as SidebarElement)._destroy = () => {
+    window.removeEventListener("keydown", onKeydown);
+    if (popover) {
+      closePopover?.();
+    }
+  };
   return root;
-}
-
-function envDotColor(e: Environment): string {
-  switch (e) {
-    case "production":
-      return "#ef4444";
-    case "staging":
-      return "#f97316";
-    case "development":
-      return "#3b82f6";
-    case "local":
-      return "#6b7280";
-  }
 }
 
 function hexToRgba(hex: string, alpha: number): string {

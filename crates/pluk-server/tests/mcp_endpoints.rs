@@ -231,7 +231,7 @@ async fn group_members_get_collision_free_namespaces_and_their_tools_work() {
 async fn a_call_through_a_group_is_attributed_to_it_in_the_log() {
     let app = spawn_app().await;
     let (member_id, _) = integration(&app, "Attribution DB");
-    let token = group(&app, "Front Group", &[member_id.clone()]);
+    let token = group(&app, "Front Group", std::slice::from_ref(&member_id));
     let group_row = app.store.list_groups().unwrap().into_iter().next().unwrap();
 
     app.mcp_post(
