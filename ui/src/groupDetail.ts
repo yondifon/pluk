@@ -71,7 +71,7 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
   const menuBtn = createButton("", { icon: "more", ariaLabel: "More actions" });
   menuBtn.classList.add("icon-button");
   menuBtn.setAttribute("aria-haspopup", "menu");
-  menuBtn.addEventListener("click", () => openMenu(menuBtn, [{ label: "Delete…", danger: true, onSelect: onDelete }]));
+  menuBtn.addEventListener("click", () => openMenu(menuBtn, [{ label: "Delete…", icon: "trash", danger: true, onSelect: onDelete }]));
 
   titleRow.append(title, editBtn, menuBtn);
 

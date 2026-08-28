@@ -16,7 +16,7 @@ function manifest(id: string, label: string, category = "database"): AdapterMani
 }
 
 describe("type chooser draws from live catalog", () => {
-  it("renders one button per adapter, grouped by category", () => {
+  it("renders one button per adapter", () => {
     const adapters = [manifest("postgres", "PostgreSQL", "database"), manifest("linear", "Linear", "issue-tracker"), manifest("redis", "Redis", "database")];
     let chosen: AdapterManifest | null = null;
     const el = renderTypeChooser(adapters, (m) => (chosen = m));
@@ -25,9 +25,6 @@ describe("type chooser draws from live catalog", () => {
     expect(el.textContent).toContain("PostgreSQL");
     expect(el.textContent).toContain("Linear");
     expect(el.textContent).toContain("Redis");
-    // grouped: database and issue-tracker headings
-    expect(el.textContent).toContain("Database");
-    expect(el.textContent).toContain("Issue Tracker");
     // click chooses
     btns[0].click();
     expect(chosen!.id).toBe("postgres");
@@ -87,9 +84,8 @@ describe("chooser accessibility", () => {
       expect(b.getAttribute("aria-label")).toBeTruthy();
       expect(b.type).toBe("button");
     }
-    // sections have group role
-    const sections = el.querySelectorAll('section[role="group"]');
-    expect(sections.length).toBeGreaterThan(0);
+    // the list is a labelled group
+    expect(el.querySelectorAll('[role="group"]').length).toBeGreaterThan(0);
   });
 
   it("shows loading and error without internal vocab", () => {

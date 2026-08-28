@@ -1,4 +1,4 @@
-use crate::config::{SshExecProvider, SshTunnelProvider, SqlConfig, TunnelEndpoint, resolve_ssl};
+use crate::config::{SqlConfig, SshExecProvider, SshTunnelProvider, TunnelEndpoint, resolve_ssl};
 use crate::driver::Driver;
 use crate::error::DriverError;
 use crate::ssh_provider::{PlukSshExecProvider, PlukSshTunnelProvider};
@@ -11,10 +11,26 @@ pub struct CreateDriverOpts {
 }
 
 impl CreateDriverOpts {
-    pub fn new(cfg: SqlConfig) -> Self { Self { cfg, database_override: None, ssh_provider: None, ssh_exec_provider: None } }
-    pub fn with_database(mut self, db: impl Into<String>) -> Self { self.database_override = Some(db.into()); self }
-    pub fn with_ssh_provider(mut self, p: Box<dyn SshTunnelProvider>) -> Self { self.ssh_provider = Some(p); self }
-    pub fn with_ssh_exec(mut self, p: Box<dyn SshExecProvider>) -> Self { self.ssh_exec_provider = Some(p); self }
+    pub fn new(cfg: SqlConfig) -> Self {
+        Self {
+            cfg,
+            database_override: None,
+            ssh_provider: None,
+            ssh_exec_provider: None,
+        }
+    }
+    pub fn with_database(mut self, db: impl Into<String>) -> Self {
+        self.database_override = Some(db.into());
+        self
+    }
+    pub fn with_ssh_provider(mut self, p: Box<dyn SshTunnelProvider>) -> Self {
+        self.ssh_provider = Some(p);
+        self
+    }
+    pub fn with_ssh_exec(mut self, p: Box<dyn SshExecProvider>) -> Self {
+        self.ssh_exec_provider = Some(p);
+        self
+    }
 }
 
 /// Result of `create_driver`: a boxed driver and an optional tunnel handle that
@@ -27,14 +43,18 @@ pub struct DriverWithTunnel {
 
 impl std::fmt::Debug for DriverWithTunnel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DriverWithTunnel").field("tunnel", &self.tunnel.as_ref().map(|t| &t.local_port)).finish()
+        f.debug_struct("DriverWithTunnel")
+            .field("tunnel", &self.tunnel.as_ref().map(|t| &t.local_port))
+            .finish()
     }
 }
 
 impl DriverWithTunnel {
     pub async fn close(&self) -> Result<(), DriverError> {
         let r = self.driver.close().await;
-        if let Some(t) = &self.tunnel { t.close(); }
+        if let Some(t) = &self.tunnel {
+            t.close();
+        }
         r
     }
 }
@@ -56,9 +76,12 @@ pub async fn create_driver(mut opts: CreateDriverOpts) -> Result<DriverWithTunne
 
     let use_ssh = opts.cfg.is_use_ssh();
     if opts.cfg.r#type != "sqlite" && use_ssh && opts.cfg.ssh_host.is_some() {
-        let provider: Box<dyn SshTunnelProvider> =
-            opts.ssh_provider.unwrap_or_else(|| Box::new(PlukSshTunnelProvider));
-        let t = provider.open_tunnel(&opts.cfg, &effective_host, effective_port).await?;
+        let provider: Box<dyn SshTunnelProvider> = opts
+            .ssh_provider
+            .unwrap_or_else(|| Box::new(PlukSshTunnelProvider));
+        let t = provider
+            .open_tunnel(&opts.cfg, &effective_host, effective_port)
+            .await?;
         effective_host = t.local_host.clone();
         effective_port = t.local_port;
         tunnel = Some(t);
@@ -68,22 +91,34 @@ pub async fn create_driver(mut opts: CreateDriverOpts) -> Result<DriverWithTunne
         "sqlite" => {
             let is_ssh = opts.cfg.is_use_ssh();
             if is_ssh {
-                if opts.cfg.ssh_host.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+                if opts
+                    .cfg
+                    .ssh_host
+                    .as_deref()
+                    .map(|s| s.trim().is_empty())
+                    .unwrap_or(true)
+                {
                     return Err(DriverError::Connection(
                         "SQLite SSH host is missing. Set it in the connection settings.".into(),
                     ));
                 }
                 let filename = opts.cfg.sqlite_filename().ok_or_else(|| {
-                    DriverError::Connection("SQLite path is missing. Set the remote database file path.".into())
+                    DriverError::Connection(
+                        "SQLite path is missing. Set the remote database file path.".into(),
+                    )
                 })?;
                 let exec: Box<dyn SshExecProvider> = opts.ssh_exec_provider.unwrap_or_else(|| {
                     let cfg = opts.cfg.clone();
                     Box::new(PlukSshExecProvider::new(cfg))
                 });
-                Box::new(crate::sqlite_remote::RemoteSqliteDriver::new(filename, exec))
+                Box::new(crate::sqlite_remote::RemoteSqliteDriver::new(
+                    filename, exec,
+                ))
             } else {
                 let filename = opts.cfg.sqlite_filename().ok_or_else(|| {
-                    DriverError::Connection("SQLite path is missing. Set the database file path.".into())
+                    DriverError::Connection(
+                        "SQLite path is missing. Set the database file path.".into(),
+                    )
                 })?;
                 Box::new(crate::sqlite::SqliteDriver::open(&filename)?)
             }

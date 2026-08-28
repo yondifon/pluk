@@ -62,6 +62,7 @@ export function renderClientConfig(
   clientLabel.textContent = "Client";
   clientLabel.htmlFor = "pluk-client-select";
   const clientSelect = document.createElement("select");
+  clientSelect.className = "ui-select";
   clientSelect.id = "pluk-client-select";
   clientSelect.setAttribute("aria-label", "AI client");
   const allOpt = document.createElement("option");
@@ -81,6 +82,7 @@ export function renderClientConfig(
   scopeLabel.htmlFor = "pluk-scope-select";
   scopeLabel.id = "pluk-scope-label";
   const scopeSelect = document.createElement("select");
+  scopeSelect.className = "ui-select";
   scopeSelect.id = "pluk-scope-select";
   scopeSelect.setAttribute("aria-labelledby", "pluk-scope-label");
   for (const s of ["project", "global"] as const) {

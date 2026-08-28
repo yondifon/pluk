@@ -11,41 +11,41 @@ mod adapter;
 mod config_field;
 mod error;
 mod gate;
-mod instructions;
-mod projection;
-mod registry;
-mod ssh_fields;
-mod tool_host;
-mod tool_spec;
 pub mod github_cli;
+mod instructions;
 pub mod linear;
+mod projection;
 pub mod redis;
+mod registry;
 pub mod sentry;
 pub mod slack;
 pub mod spark;
 pub mod sql;
 pub mod ssh;
+mod ssh_fields;
+mod tool_host;
+mod tool_spec;
 
 pub use action::{
-    action_adapter, ActionAdapter, ActionAdapterSpec, ActionOutput, ActionTool, ClientFn,
-    HumanizeFn, TestConnectionFn, ToolErrorHook, ToolsFn,
+    ActionAdapter, ActionAdapterSpec, ActionOutput, ActionTool, ClientFn, HumanizeFn,
+    TestConnectionFn, ToolErrorHook, ToolsFn, action_adapter,
 };
 pub use adapter::{Adapter, ApiRequest, ApiResponse, PolicyKind};
-pub use config_field::{normalize_scalar, ConfigField, FieldType, SelectOption, ShowIf};
+pub use config_field::{ConfigField, FieldType, SelectOption, ShowIf, normalize_scalar};
 pub use error::{AdapterError, SSH_CONNECT_PENDING_CODE};
 pub use gate::{
-    cancelled_when_message_contains, err, ok, run_gated, CallTarget, GateMeta, GateOpts, Outcome,
-    RunOutcome, TextContent, ToolResult,
+    CallTarget, GateMeta, GateOpts, Outcome, RunOutcome, TextContent, ToolResult,
+    cancelled_when_message_contains, err, ok, run_gated,
 };
-pub use instructions::{build_instructions, InstructionParts};
+pub use instructions::{InstructionParts, build_instructions};
 pub use projection::{
-    apply_only, only_param_description, only_param_schema, only_value, pick_paths, FieldMap,
-    OnlyError, Preset, ReduceFn,
+    FieldMap, OnlyError, Preset, ReduceFn, apply_only, only_param_description, only_param_schema,
+    only_value, pick_paths,
 };
-pub use registry::{default_registry, AdapterRegistry};
+pub use registry::{AdapterRegistry, default_registry};
 pub use ssh_fields::ssh_auth_fields;
 pub use tool_host::{
-    object_schema, BoxFuture, PromptHandler, PromptMessage, PromptResult, PromptRole,
-    ResourceContents, ResourceHandler, ToolHandler, ToolHost, ToolRegistration,
+    BoxFuture, PromptHandler, PromptMessage, PromptResult, PromptRole, ResourceContents,
+    ResourceHandler, ToolHandler, ToolHost, ToolRegistration, object_schema,
 };
 pub use tool_spec::ToolSpec;

@@ -70,8 +70,19 @@ pub fn spark_config(conn: &Integration) -> SparkCfg {
     let team = c.get("default_team").map(str_val).unwrap_or_default();
     let max_page_size = positive_u64(c.get("max_page_size"), DEFAULT_MAX_PAGE);
     let timeout_ms = positive_u64(c.get("timeout_seconds"), 30) * 1000;
-    let timeout_ms = if timeout_ms == 0 { DEFAULT_TIMEOUT_MS } else { timeout_ms };
-    SparkCfg { bin, account, folder, team, max_page_size, timeout_ms }
+    let timeout_ms = if timeout_ms == 0 {
+        DEFAULT_TIMEOUT_MS
+    } else {
+        timeout_ms
+    };
+    SparkCfg {
+        bin,
+        account,
+        folder,
+        team,
+        max_page_size,
+        timeout_ms,
+    }
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────
@@ -82,7 +93,9 @@ pub fn assert_positional(value: &str, what: &str) -> Result<String, AdapterError
         return Err(AdapterError::new(format!("{what} is required.")));
     }
     if v.starts_with('-') {
-        return Err(AdapterError::new(format!("Invalid {what} \"{value}\" — it must not start with \"-\".")));
+        return Err(AdapterError::new(format!(
+            "Invalid {what} \"{value}\" — it must not start with \"-\"."
+        )));
     }
     Ok(v)
 }
@@ -131,7 +144,11 @@ pub fn scoped(cfg: &SparkCfg, value: Option<&str>, what: &str) -> Result<String,
     Err(out_of_scope(&cfg.account, what, &v))
 }
 
-pub fn same_account(cfg: &SparkCfg, value: Option<&str>, what: &str) -> Result<String, AdapterError> {
+pub fn same_account(
+    cfg: &SparkCfg,
+    value: Option<&str>,
+    what: &str,
+) -> Result<String, AdapterError> {
     let v = value.unwrap_or("").trim().to_string();
     if cfg.account.is_empty() {
         return Ok(v);
@@ -148,7 +165,12 @@ pub fn same_account(cfg: &SparkCfg, value: Option<&str>, what: &str) -> Result<S
 pub fn list_values(value: Option<&serde_json::Value>) -> Vec<String> {
     match value {
         None => vec![],
-        Some(serde_json::Value::Array(arr)) => arr.iter().filter_map(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
         Some(serde_json::Value::String(s)) if !s.trim().is_empty() => vec![s.trim().to_string()],
         Some(other) => {
             let s = str_val(other);
@@ -187,10 +209,11 @@ pub fn toggle(args: &mut Vec<String>, name: &str, value: bool) {
 
 pub fn paging(args: &mut Vec<String>, cfg: &SparkCfg, page: Option<i64>, page_size: Option<i64>) {
     if let Some(p) = page
-        && p > 1 {
-            args.push("--page".to_string());
-            args.push(p.to_string());
-        }
+        && p > 1
+    {
+        args.push("--page".to_string());
+        args.push(p.to_string());
+    }
     let size = match page_size {
         Some(n) if n > 0 => n as u64,
         _ => cfg.max_page_size,
@@ -200,7 +223,12 @@ pub fn paging(args: &mut Vec<String>, cfg: &SparkCfg, page: Option<i64>, page_si
     args.push(capped.to_string());
 }
 
-pub fn range_args(args: &mut Vec<String>, start: Option<&str>, end: Option<&str>, range: Option<&str>) {
+pub fn range_args(
+    args: &mut Vec<String>,
+    start: Option<&str>,
+    end: Option<&str>,
+    range: Option<&str>,
+) {
     let s = start.unwrap_or("").trim().to_string();
     let e = end.unwrap_or("").trim().to_string();
     if !s.is_empty() || !e.is_empty() {
@@ -225,7 +253,16 @@ pub struct SparkRunResult {
     pub stderr: String,
 }
 
-pub type SparkRunner = Arc<dyn Fn(String, Vec<String>, Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SparkRunResult, AdapterError>> + Send>> + Send + Sync>;
+pub type SparkRunner = Arc<
+    dyn Fn(
+            String,
+            Vec<String>,
+            Duration,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<SparkRunResult, AdapterError>> + Send>,
+        > + Send
+        + Sync,
+>;
 
 static GLOBAL_RUNNER: OnceLock<Mutex<Option<SparkRunner>>> = OnceLock::new();
 
@@ -237,7 +274,11 @@ pub fn set_spark_runner(runner: Option<SparkRunner>) {
     *global_runner_slot().lock().unwrap() = runner;
 }
 
-async fn spawn_spark(bin: &str, args: &[String], timeout: Duration) -> Result<SparkRunResult, AdapterError> {
+async fn spawn_spark(
+    bin: &str,
+    args: &[String],
+    timeout: Duration,
+) -> Result<SparkRunResult, AdapterError> {
     if bin.contains('/') && !Path::new(bin).exists() {
         return Err(AdapterError::new(format!(
             "Spark CLI not found: {bin}. Install Spark Desktop, or set the CLI path on this integration."
@@ -264,7 +305,11 @@ async fn spawn_spark(bin: &str, args: &[String], timeout: Duration) -> Result<Sp
             let code = output.status.code().unwrap_or(0);
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            Ok(SparkRunResult { code, stdout, stderr })
+            Ok(SparkRunResult {
+                code,
+                stdout,
+                stderr,
+            })
         }
         Ok(Err(e)) => Err(AdapterError::new(e.to_string())),
         Err(_) => Err(AdapterError::new(format!(
@@ -289,12 +334,20 @@ pub async fn run_spark(cfg: &SparkCfg, args: Vec<String>) -> Result<String, Adap
         } else if !result.stdout.trim().is_empty() {
             result.stdout.trim().to_string()
         } else {
-            format!("spark {} failed (exit {}).", args.first().map(|s| s.as_str()).unwrap_or(""), result.code)
+            format!(
+                "spark {} failed (exit {}).",
+                args.first().map(|s| s.as_str()).unwrap_or(""),
+                result.code
+            )
         };
         return Err(AdapterError::new(msg));
     }
     let out = result.stdout.trim().to_string();
-    if out.is_empty() { Ok("(no output)".to_string()) } else { Ok(out) }
+    if out.is_empty() {
+        Ok("(no output)".to_string())
+    } else {
+        Ok(out)
+    }
 }
 
 pub fn spark_command(cfg: &SparkCfg, args: &[String]) -> String {
@@ -317,11 +370,22 @@ pub fn spark_command(cfg: &SparkCfg, args: &[String]) -> String {
 pub fn humanize_spark_error(error: &AdapterError) -> String {
     let msg = &error.message;
     let lower = msg.to_lowercase();
-    if lower.contains("spark desktop running") || lower.contains("connection refused") || lower.contains("connect") {
-        return format!("{msg}\n\nSpark Desktop must be running with its CLI server enabled (Settings → AI Agents).");
+    if lower.contains("spark desktop running")
+        || lower.contains("connection refused")
+        || lower.contains("connect")
+    {
+        return format!(
+            "{msg}\n\nSpark Desktop must be running with its CLI server enabled (Settings → AI Agents)."
+        );
     }
-    if lower.contains("access level") || lower.contains("read-only") || lower.contains("triage") || lower.contains("send access") {
-        return format!("{msg}\n\nRaise the account's access level in Spark Desktop → Settings → AI Agents.");
+    if lower.contains("access level")
+        || lower.contains("read-only")
+        || lower.contains("triage")
+        || lower.contains("send access")
+    {
+        return format!(
+            "{msg}\n\nRaise the account's access level in Spark Desktop → Settings → AI Agents."
+        );
     }
     msg.clone()
 }
@@ -334,10 +398,14 @@ pub async fn test_spark(conn: &Integration) -> Result<(), AdapterError> {
 }
 
 #[cfg(test)]
-pub(crate) static RUNNER_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+pub(crate) static RUNNER_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
 #[cfg(test)]
 pub(crate) fn runner_lock() -> std::sync::MutexGuard<'static, ()> {
-    RUNNER_LOCK.get_or_init(|| std::sync::Mutex::new(())).lock().unwrap()
+    RUNNER_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -346,7 +414,14 @@ mod tests {
     use serde_json::json;
 
     fn cfg_with_account(account: &str) -> SparkCfg {
-        SparkCfg { bin: "/usr/local/bin/spark".to_string(), account: account.to_string(), folder: String::new(), team: String::new(), max_page_size: 25, timeout_ms: 5000 }
+        SparkCfg {
+            bin: "/usr/local/bin/spark".to_string(),
+            account: account.to_string(),
+            folder: String::new(),
+            team: String::new(),
+            max_page_size: 25,
+            timeout_ms: 5000,
+        }
     }
 
     #[test]
@@ -366,7 +441,12 @@ mod tests {
     #[test]
     fn range_prefers_start_end_over_shortcut() {
         let mut a = Vec::new();
-        range_args(&mut a, Some("2026-01-01"), Some("2026-01-02"), Some("today"));
+        range_args(
+            &mut a,
+            Some("2026-01-01"),
+            Some("2026-01-02"),
+            Some("today"),
+        );
         assert_eq!(a, vec!["--start", "2026-01-01", "--end", "2026-01-02"]);
         let mut b = Vec::new();
         range_args(&mut b, None, None, Some("week"));
@@ -379,7 +459,11 @@ mod tests {
     #[test]
     fn repeated_flag_appends_each() {
         let mut a = Vec::new();
-        flag_each(&mut a, "--to", &["a@b.com".to_string(), "c@d.com".to_string()]);
+        flag_each(
+            &mut a,
+            "--to",
+            &["a@b.com".to_string(), "c@d.com".to_string()],
+        );
         assert_eq!(a, vec!["--to", "a@b.com", "--to", "c@d.com"]);
         let mut b = Vec::new();
         flag(&mut b, "--filter", Some("from:joe"));
@@ -415,8 +499,14 @@ mod tests {
     #[test]
     fn scoped_qualifies_bare_and_refuses_other() {
         let cfg = cfg_with_account("you@co.com");
-        assert_eq!(scoped(&cfg, Some("Inbox"), "folder").unwrap(), "you@co.com:Inbox");
-        assert_eq!(scoped(&cfg, Some("you@co.com:Archive"), "folder").unwrap(), "you@co.com:Archive");
+        assert_eq!(
+            scoped(&cfg, Some("Inbox"), "folder").unwrap(),
+            "you@co.com:Inbox"
+        );
+        assert_eq!(
+            scoped(&cfg, Some("you@co.com:Archive"), "folder").unwrap(),
+            "you@co.com:Archive"
+        );
         assert!(scoped(&cfg, Some("other@co.com:Inbox"), "folder").is_err());
         assert!(scoped(&cfg, Some("Team Name:Folder"), "folder").is_err());
         let cfg2 = cfg_with_account("");
@@ -426,11 +516,17 @@ mod tests {
     #[test]
     fn same_account_refuses_other() {
         let cfg = cfg_with_account("you@co.com");
-        assert_eq!(same_account(&cfg, Some("you@co.com"), "account").unwrap(), "you@co.com");
+        assert_eq!(
+            same_account(&cfg, Some("you@co.com"), "account").unwrap(),
+            "you@co.com"
+        );
         assert!(same_account(&cfg, Some("other@co.com"), "account").is_err());
         assert_eq!(same_account(&cfg, None, "account").unwrap(), "you@co.com");
         let cfg2 = cfg_with_account("");
-        assert_eq!(same_account(&cfg2, Some("other@co.com"), "account").unwrap(), "other@co.com");
+        assert_eq!(
+            same_account(&cfg2, Some("other@co.com"), "account").unwrap(),
+            "other@co.com"
+        );
     }
 
     #[test]
@@ -449,17 +545,43 @@ mod tests {
     async fn missing_binary_produces_clear_error() {
         let _g = crate::spark::client::runner_lock();
         set_spark_runner(None);
-        let cfg = SparkCfg { bin: "/nonexistent/spark-binary-xyz".to_string(), account: String::new(), folder: String::new(), team: String::new(), max_page_size: 25, timeout_ms: 1000 };
-        let err = run_spark(&cfg, vec!["accounts".to_string()]).await.unwrap_err();
-        assert!(err.message.contains("Spark CLI not found"), "got: {}", err.message);
+        let cfg = SparkCfg {
+            bin: "/nonexistent/spark-binary-xyz".to_string(),
+            account: String::new(),
+            folder: String::new(),
+            team: String::new(),
+            max_page_size: 25,
+            timeout_ms: 1000,
+        };
+        let err = run_spark(&cfg, vec!["accounts".to_string()])
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("Spark CLI not found"),
+            "got: {}",
+            err.message
+        );
     }
 
     #[tokio::test]
     async fn verbatim_passthrough_trims_output() {
         let _g = crate::spark::client::runner_lock();
-        let cfg = SparkCfg { bin: "/usr/local/bin/spark".to_string(), account: String::new(), folder: String::new(), team: String::new(), max_page_size: 25, timeout_ms: 5000 };
+        let cfg = SparkCfg {
+            bin: "/usr/local/bin/spark".to_string(),
+            account: String::new(),
+            folder: String::new(),
+            team: String::new(),
+            max_page_size: 25,
+            timeout_ms: 5000,
+        };
         let runner: crate::spark::client::SparkRunner = std::sync::Arc::new(|_, _, _| {
-            Box::pin(async { Ok(SparkRunResult { code: 0, stdout: "  hello world  \n".to_string(), stderr: String::new() }) })
+            Box::pin(async {
+                Ok(SparkRunResult {
+                    code: 0,
+                    stdout: "  hello world  \n".to_string(),
+                    stderr: String::new(),
+                })
+            })
         });
         set_spark_runner(Some(runner));
         let out = run_spark(&cfg, vec!["accounts".to_string()]).await.unwrap();
@@ -476,13 +598,24 @@ mod tests {
 
     #[test]
     fn spark_config_reads_integration() {
-        let conn = pluk_store::Integration { id: "1".into(), name: "x".into(), r#type: "spark".into(), config: {
-            let mut m = serde_json::Map::new();
-            m.insert("spark_bin".into(), json!("/tmp/spark"));
-            m.insert("default_account".into(), json!("you@co.com"));
-            m.insert("max_page_size".into(), json!(10));
-            m
-        }, environment: None, read_only: 0, query_policy: None, token: "tok".into(), created_at: String::new(), via_group: None };
+        let conn = pluk_store::Integration {
+            id: "1".into(),
+            name: "x".into(),
+            r#type: "spark".into(),
+            config: {
+                let mut m = serde_json::Map::new();
+                m.insert("spark_bin".into(), json!("/tmp/spark"));
+                m.insert("default_account".into(), json!("you@co.com"));
+                m.insert("max_page_size".into(), json!(10));
+                m
+            },
+            environment: None,
+            read_only: 0,
+            query_policy: None,
+            token: "tok".into(),
+            created_at: String::new(),
+            via_group: None,
+        };
         let c = spark_config(&conn);
         assert_eq!(c.bin, "/tmp/spark");
         assert_eq!(c.account, "you@co.com");

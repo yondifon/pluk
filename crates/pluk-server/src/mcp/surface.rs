@@ -8,11 +8,11 @@
 use std::sync::Arc;
 
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
-    GetPromptRequestParams, GetPromptResult, GetPromptResponse, Implementation,
-    ListPromptsResult, ListResourcesResult, ListToolsResult, Prompt, PromptArgument,
-    PromptMessage, ReadResourceRequestParams, ReadResourceResponse,
-    ReadResourceResult, ResourceContents, Role, ServerCapabilities, ServerInfo, ToolsCapability,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, GetPromptRequestParams,
+    GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult, ListResourcesResult,
+    ListToolsResult, Prompt, PromptArgument, PromptMessage, ReadResourceRequestParams,
+    ReadResourceResponse, ReadResourceResult, ResourceContents, Role, ServerCapabilities,
+    ServerInfo, ToolsCapability,
 };
 use rmcp::{ErrorData as McpError, ServerHandler};
 use serde_json::{Map, Value};
@@ -74,7 +74,11 @@ impl SurfaceBuilder {
 
 impl pluk_adapters::ToolHost for SurfaceBuilder {
     fn register_tool(&mut self, registration: ToolRegistration, handler: ToolHandler) {
-        if self.tools.iter().any(|(name, _)| *name == registration.name) {
+        if self
+            .tools
+            .iter()
+            .any(|(name, _)| *name == registration.name)
+        {
             self.duplicate = Some(format!("tool {}", registration.name));
             return;
         }
@@ -102,7 +106,11 @@ impl pluk_adapters::ToolHost for SurfaceBuilder {
         }
         self.prompts.push((
             name.to_string(),
-            RegisteredPrompt { description: description.to_string(), args_schema, handler },
+            RegisteredPrompt {
+                description: description.to_string(),
+                args_schema,
+                handler,
+            },
         ));
     }
 
@@ -210,16 +218,16 @@ fn prompt_role(role: PromptRole) -> Role {
 
 impl ServerHandler for Surface {
     fn get_info(&self) -> ServerInfo {
-    let mut capabilities = ServerCapabilities::default();
-    if !self.prompts.is_empty() {
-        capabilities.prompts = Some(rmcp::model::PromptsCapability::default());
-    }
-    if !self.resources.is_empty() {
-        capabilities.resources = Some(rmcp::model::ResourcesCapability::default());
-    }
-    if !self.tools.is_empty() {
-        capabilities.tools = Some(ToolsCapability::default());
-    }
+        let mut capabilities = ServerCapabilities::default();
+        if !self.prompts.is_empty() {
+            capabilities.prompts = Some(rmcp::model::PromptsCapability::default());
+        }
+        if !self.resources.is_empty() {
+            capabilities.resources = Some(rmcp::model::ResourcesCapability::default());
+        }
+        if !self.tools.is_empty() {
+            capabilities.tools = Some(ToolsCapability::default());
+        }
         // The negotiated revision is filled in per initialize request; this
         // default advertises the SDK's latest supported version otherwise.
         let mut info = ServerInfo::new(capabilities)
@@ -258,7 +266,9 @@ impl ServerHandler for Surface {
             .tools
             .iter()
             .find(|(name, _)| *name == request.name.as_ref())
-            .ok_or_else(|| McpError::invalid_params(format!("Unknown tool: {}", request.name), None))?;
+            .ok_or_else(|| {
+                McpError::invalid_params(format!("Unknown tool: {}", request.name), None)
+            })?;
 
         let arguments = Value::Object(request.arguments.unwrap_or_default());
         let result = (tool.handler)(arguments).await;
@@ -282,7 +292,11 @@ impl ServerHandler for Surface {
             .prompts
             .iter()
             .map(|(name, prompt)| {
-                Prompt::new(name.clone(), Some(prompt.description.clone()), prompt_arguments(&prompt.args_schema))
+                Prompt::new(
+                    name.clone(),
+                    Some(prompt.description.clone()),
+                    prompt_arguments(&prompt.args_schema),
+                )
             })
             .collect();
         Ok(ListPromptsResult::with_all_items(prompts))
@@ -297,14 +311,19 @@ impl ServerHandler for Surface {
             .prompts
             .iter()
             .find(|(name, _)| *name == request.name.as_ref())
-            .ok_or_else(|| McpError::invalid_params(format!("Unknown prompt: {}", request.name), None))?;
+            .ok_or_else(|| {
+                McpError::invalid_params(format!("Unknown prompt: {}", request.name), None)
+            })?;
 
         let result = (prompt.handler)(request.arguments.unwrap_or_default()).await;
         let messages = result
             .messages
             .iter()
             .map(|message| {
-                PromptMessage::new(prompt_role(message.role), ContentBlock::text(message.text.clone()))
+                PromptMessage::new(
+                    prompt_role(message.role),
+                    ContentBlock::text(message.text.clone()),
+                )
             })
             .collect();
         Ok(GetPromptResponse::Complete(GetPromptResult::new(messages)))
@@ -319,8 +338,7 @@ impl ServerHandler for Surface {
             .resources
             .iter()
             .map(|(uri, resource)| {
-                let mut entry =
-                    rmcp::model::Resource::new(uri.clone(), resource.name.clone());
+                let mut entry = rmcp::model::Resource::new(uri.clone(), resource.name.clone());
                 entry.description = resource.description.clone();
                 entry.mime_type = Some(resource.mime_type.clone());
                 entry
@@ -343,8 +361,10 @@ impl ServerHandler for Surface {
             })?;
 
         let contents = (resource.handler)().await;
-        let contents = ResourceContents::text(contents.text, contents.uri)
-            .with_mime_type(contents.mime_type);
-        Ok(ReadResourceResponse::Complete(ReadResourceResult::new(vec![contents])))
+        let contents =
+            ResourceContents::text(contents.text, contents.uri).with_mime_type(contents.mime_type);
+        Ok(ReadResourceResponse::Complete(ReadResourceResult::new(
+            vec![contents],
+        )))
     }
 }

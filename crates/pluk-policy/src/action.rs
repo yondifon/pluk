@@ -63,7 +63,11 @@ pub fn parse_action_policy(raw: Option<&str>, read_only: bool) -> ActionPolicy {
     let allowed = if read_only {
         vec![ActionCategory::Read]
     } else {
-        vec![ActionCategory::Read, ActionCategory::Write, ActionCategory::Delete]
+        vec![
+            ActionCategory::Read,
+            ActionCategory::Write,
+            ActionCategory::Delete,
+        ]
     };
     ActionPolicy { allowed }
 }
@@ -73,7 +77,12 @@ pub fn action_allowed(policy: &ActionPolicy, category: ActionCategory) -> bool {
 }
 
 pub fn action_policy_description(policy: &ActionPolicy) -> String {
-    let list = policy.allowed.iter().map(ActionCategory::as_str).collect::<Vec<_>>().join(", ");
+    let list = policy
+        .allowed
+        .iter()
+        .map(ActionCategory::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
     format!("Allowed actions: {list}.")
 }
 
@@ -89,7 +98,11 @@ mod tests {
         );
         assert_eq!(
             parse_action_policy(Some(""), false).allowed,
-            vec![ActionCategory::Read, ActionCategory::Write, ActionCategory::Delete]
+            vec![
+                ActionCategory::Read,
+                ActionCategory::Write,
+                ActionCategory::Delete
+            ]
         );
         // admin is never granted implicitly.
         assert!(!action_allowed(
@@ -101,7 +114,10 @@ mod tests {
     #[test]
     fn explicit_action_list_wins_and_can_grant_admin() {
         let policy = parse_action_policy(Some(r#"{"actions":["read","admin"]}"#), false);
-        assert_eq!(policy.allowed, vec![ActionCategory::Read, ActionCategory::Admin]);
+        assert_eq!(
+            policy.allowed,
+            vec![ActionCategory::Read, ActionCategory::Admin]
+        );
         assert!(action_allowed(&policy, ActionCategory::Admin));
         assert!(!action_allowed(&policy, ActionCategory::Write));
     }
@@ -113,7 +129,11 @@ mod tests {
         // All-unknown → falls back to the flag.
         assert_eq!(
             parse_action_policy(Some(r#"{"actions":["purge"]}"#), false).allowed,
-            vec![ActionCategory::Read, ActionCategory::Write, ActionCategory::Delete]
+            vec![
+                ActionCategory::Read,
+                ActionCategory::Write,
+                ActionCategory::Delete
+            ]
         );
     }
 

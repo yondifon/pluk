@@ -13,9 +13,10 @@ pub struct SshConfigEntry {
 
 pub fn expand_home(p: &str) -> String {
     if let Some(rest) = p.strip_prefix("~/")
-        && let Some(home) = pluk_core::platform::home_dir() {
-            return format!("{}/{}", home.display(), rest);
-        }
+        && let Some(home) = pluk_core::platform::home_dir()
+    {
+        return format!("{}/{}", home.display(), rest);
+    }
     p.to_string()
 }
 
@@ -94,9 +95,10 @@ pub fn parse_ssh_config_str(content: &str, target_host: &str) -> SshConfigEntry 
             }
             "port" => {
                 if result.port.is_none()
-                    && let Ok(p) = val.parse::<u16>() {
-                        result.port = Some(p);
-                    }
+                    && let Ok(p) = val.parse::<u16>()
+                {
+                    result.port = Some(p);
+                }
             }
             _ => {}
         }
@@ -243,7 +245,9 @@ pub fn resolve_agent_socket(host: &str) -> Option<String> {
     if let Some(s) = from_config {
         return Some(s);
     }
-    std::env::var("SSH_AUTH_SOCK").ok().filter(|s| !s.is_empty())
+    std::env::var("SSH_AUTH_SOCK")
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 /// Like `expand_home` but returns PathBuf.
@@ -282,7 +286,12 @@ mod tests {
 
     #[test]
     fn expand_proxy_replaces_tokens() {
-        let cmd = expand_proxy_command("cloudflared access ssh --hostname %h --port %p --user %r", "db.example.com", 22, "alice");
+        let cmd = expand_proxy_command(
+            "cloudflared access ssh --hostname %h --port %p --user %r",
+            "db.example.com",
+            22,
+            "alice",
+        );
         assert!(cmd.contains("db.example.com"));
         assert!(cmd.contains("22"));
         assert!(cmd.contains("alice"));
@@ -293,7 +302,10 @@ mod tests {
         assert_eq!(split_command("a b c"), vec!["a", "b", "c"]);
         assert_eq!(split_command("a \"b c\" d"), vec!["a", "b c", "d"]);
         assert_eq!(split_command("a 'b c' d"), vec!["a", "b c", "d"]);
-        assert_eq!(split_command("a \"b \\\"c\\\"\" d"), vec!["a", "b \"c\"", "d"]);
+        assert_eq!(
+            split_command("a \"b \\\"c\\\"\" d"),
+            vec!["a", "b \"c\"", "d"]
+        );
     }
 
     #[test]
@@ -314,7 +326,12 @@ Host *
         assert_eq!(e.host_name.as_deref(), Some("bastion.example.com"));
         assert_eq!(e.user.as_deref(), Some("admin"));
         assert_eq!(e.port, Some(2222));
-        assert!(e.identity_agent.as_deref().unwrap().ends_with("my-agent.sock"));
+        assert!(
+            e.identity_agent
+                .as_deref()
+                .unwrap()
+                .ends_with("my-agent.sock")
+        );
         assert!(e.proxy_command.is_some());
 
         let e2 = parse_ssh_config_str(cfg, "other");

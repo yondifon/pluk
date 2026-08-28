@@ -52,7 +52,10 @@ async fn rows_written_after_connect_are_pushed_live() {
     let frame = reader.next_frame().await;
     assert_eq!(frame.event, "event");
     assert_eq!(frame.data["id"], id);
-    assert_eq!(frame.data["connectionId"], "conn-b", "wire shape is camelCase");
+    assert_eq!(
+        frame.data["connectionId"], "conn-b",
+        "wire shape is camelCase"
+    );
     assert_eq!(frame.data["verdict"], "blocked");
 
     // Updates to existing rows are pushed too.
@@ -95,7 +98,13 @@ async fn keepalives_flow_while_idle_and_carry_the_high_water() {
 #[tokio::test]
 async fn a_malformed_cursor_is_a_400() {
     let app = spawn_app().await;
-    for query in ["?after=abc", "?after=-1", "?after=1.5", "?after=12abc", "?after="] {
+    for query in [
+        "?after=abc",
+        "?after=-1",
+        "?after=1.5",
+        "?after=12abc",
+        "?after=",
+    ] {
         let response = reqwest::get(format!("{}/api/events{query}", app.base_url))
             .await
             .unwrap();

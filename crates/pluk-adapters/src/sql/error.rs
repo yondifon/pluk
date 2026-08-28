@@ -61,11 +61,17 @@ pub fn classify_sql_error(err: &AdapterError) -> SqlErrorInfo {
         };
     }
 
-    if code.as_deref() == Some(SSH_AGENT_DENIED_CODE) || regex::Regex::new(r"agent refused operation|signing failed .* agent").unwrap().is_match(msg) {
+    if code.as_deref() == Some(SSH_AGENT_DENIED_CODE)
+        || regex::Regex::new(r"agent refused operation|signing failed .* agent")
+            .unwrap()
+            .is_match(msg)
+    {
         return SqlErrorInfo {
             category: SqlErrorCategory::AuthFailed,
             message: "Your SSH agent refused to sign.".to_string(),
-            hint: Some("Check 1Password for a pending approval, or unlock it, then retry.".to_string()),
+            hint: Some(
+                "Check 1Password for a pending approval, or unlock it, then retry.".to_string(),
+            ),
             code: SSH_AGENT_DENIED_CODE.to_string(),
         };
     }
@@ -97,39 +103,111 @@ pub fn classify_sql_error(err: &AdapterError) -> SqlErrorInfo {
         };
     }
 
-    if code.as_deref() == Some("28P01") || code.as_deref() == Some("28000") || regex::Regex::new(r"password authentication failed|SASL authentication failed").unwrap().is_match(msg) {
-        return SqlErrorInfo { category: SqlErrorCategory::AuthFailed, message: "Database authentication failed.".to_string(), hint: Some("Check username and password.".to_string()), code: code.unwrap_or_else(|| "DB_AUTH_FAILED".to_string()) };
+    if code.as_deref() == Some("28P01")
+        || code.as_deref() == Some("28000")
+        || regex::Regex::new(r"password authentication failed|SASL authentication failed")
+            .unwrap()
+            .is_match(msg)
+    {
+        return SqlErrorInfo {
+            category: SqlErrorCategory::AuthFailed,
+            message: "Database authentication failed.".to_string(),
+            hint: Some("Check username and password.".to_string()),
+            code: code.unwrap_or_else(|| "DB_AUTH_FAILED".to_string()),
+        };
     }
 
-    if code.as_deref() == Some("3D000") || regex::Regex::new(r"database .* does not exist").unwrap().is_match(msg) {
-        return SqlErrorInfo { category: SqlErrorCategory::ConnectionFailed, message: "Database not found.".to_string(), hint: Some("Check the database name.".to_string()), code: code.unwrap_or_else(|| "DB_NOT_FOUND".to_string()) };
+    if code.as_deref() == Some("3D000")
+        || regex::Regex::new(r"database .* does not exist")
+            .unwrap()
+            .is_match(msg)
+    {
+        return SqlErrorInfo {
+            category: SqlErrorCategory::ConnectionFailed,
+            message: "Database not found.".to_string(),
+            hint: Some("Check the database name.".to_string()),
+            code: code.unwrap_or_else(|| "DB_NOT_FOUND".to_string()),
+        };
     }
 
     if code.as_deref() == Some("ECONNREFUSED") || contains(msg, "ECONNREFUSED") {
-        return SqlErrorInfo { category: SqlErrorCategory::ConnectionFailed, message: "Connection refused.".to_string(), hint: Some("Check host, port, firewall, and SSH tunnel config.".to_string()), code: code.unwrap_or_else(|| "ECONNREFUSED".to_string()) };
+        return SqlErrorInfo {
+            category: SqlErrorCategory::ConnectionFailed,
+            message: "Connection refused.".to_string(),
+            hint: Some("Check host, port, firewall, and SSH tunnel config.".to_string()),
+            code: code.unwrap_or_else(|| "ECONNREFUSED".to_string()),
+        };
     }
 
-    if code.as_deref() == Some("ENOTFOUND") || regex::Regex::new(r"no such host|name or service not known").unwrap().is_match(msg) {
-        return SqlErrorInfo { category: SqlErrorCategory::ConnectionFailed, message: "Host not found.".to_string(), hint: Some("Check the host name.".to_string()), code: code.unwrap_or_else(|| "ENOTFOUND".to_string()) };
+    if code.as_deref() == Some("ENOTFOUND")
+        || regex::Regex::new(r"no such host|name or service not known")
+            .unwrap()
+            .is_match(msg)
+    {
+        return SqlErrorInfo {
+            category: SqlErrorCategory::ConnectionFailed,
+            message: "Host not found.".to_string(),
+            hint: Some("Check the host name.".to_string()),
+            code: code.unwrap_or_else(|| "ENOTFOUND".to_string()),
+        };
     }
 
-    if regex::Regex::new(r"self.signed|certificate|\bssl\b|\btls\b").unwrap().is_match(&msg.to_lowercase()) {
-        return SqlErrorInfo { category: SqlErrorCategory::ConnectionFailed, message: "SSL error.".to_string(), hint: Some("Check SSL mode and certificates.".to_string()), code: code.unwrap_or_else(|| "SSL_ERROR".to_string()) };
+    if regex::Regex::new(r"self.signed|certificate|\bssl\b|\btls\b")
+        .unwrap()
+        .is_match(&msg.to_lowercase())
+    {
+        return SqlErrorInfo {
+            category: SqlErrorCategory::ConnectionFailed,
+            message: "SSL error.".to_string(),
+            hint: Some("Check SSL mode and certificates.".to_string()),
+            code: code.unwrap_or_else(|| "SSL_ERROR".to_string()),
+        };
     }
 
-    if regex::Regex::new(r"timed out|connection timeout|timeout expired").unwrap().is_match(&msg.to_lowercase()) {
-        return SqlErrorInfo { category: SqlErrorCategory::ConnectionFailed, message: "Timed out.".to_string(), hint: Some("Check host, port, SSH tunnel, and firewall/VPC rules.".to_string()), code: code.unwrap_or_else(|| "TIMEOUT".to_string()) };
+    if regex::Regex::new(r"timed out|connection timeout|timeout expired")
+        .unwrap()
+        .is_match(&msg.to_lowercase())
+    {
+        return SqlErrorInfo {
+            category: SqlErrorCategory::ConnectionFailed,
+            message: "Timed out.".to_string(),
+            hint: Some("Check host, port, SSH tunnel, and firewall/VPC rules.".to_string()),
+            code: code.unwrap_or_else(|| "TIMEOUT".to_string()),
+        };
     }
 
-    if regex::Regex::new(r"no usable private key|cannot parse privatekey|encrypted.*passphrase|bad passphrase").unwrap().is_match(msg) {
-        return SqlErrorInfo { category: SqlErrorCategory::AuthFailed, message: "SSH key problem.".to_string(), hint: Some("Check key path and passphrase.".to_string()), code: code.unwrap_or_else(|| "SSH_KEY_INVALID".to_string()) };
+    if regex::Regex::new(
+        r"no usable private key|cannot parse privatekey|encrypted.*passphrase|bad passphrase",
+    )
+    .unwrap()
+    .is_match(msg)
+    {
+        return SqlErrorInfo {
+            category: SqlErrorCategory::AuthFailed,
+            message: "SSH key problem.".to_string(),
+            hint: Some("Check key path and passphrase.".to_string()),
+            code: code.unwrap_or_else(|| "SSH_KEY_INVALID".to_string()),
+        };
     }
 
-    if regex::Regex::new(r"host key|hostkey").unwrap().is_match(&msg.to_lowercase()) {
-        return SqlErrorInfo { category: SqlErrorCategory::AuthFailed, message: "SSH host key was rejected.".to_string(), hint: None, code: code.unwrap_or_else(|| "SSH_HOST_KEY_REJECTED".to_string()) };
+    if regex::Regex::new(r"host key|hostkey")
+        .unwrap()
+        .is_match(&msg.to_lowercase())
+    {
+        return SqlErrorInfo {
+            category: SqlErrorCategory::AuthFailed,
+            message: "SSH host key was rejected.".to_string(),
+            hint: None,
+            code: code.unwrap_or_else(|| "SSH_HOST_KEY_REJECTED".to_string()),
+        };
     }
 
-    SqlErrorInfo { category: SqlErrorCategory::QueryFailed, message: msg.clone(), hint: None, code: code.unwrap_or_else(|| "QUERY_FAILED".to_string()) }
+    SqlErrorInfo {
+        category: SqlErrorCategory::QueryFailed,
+        message: msg.clone(),
+        hint: None,
+        code: code.unwrap_or_else(|| "QUERY_FAILED".to_string()),
+    }
 }
 
 pub fn humanize_sql_error(err: &AdapterError) -> String {
@@ -145,22 +223,35 @@ pub fn format_sql_error(err: &AdapterError) -> String {
     let info = classify_sql_error(err);
     let mut obj = serde_json::Map::new();
     let mut inner = serde_json::Map::new();
-    inner.insert("category".into(), serde_json::Value::String(info.category.as_str().to_string()));
+    inner.insert(
+        "category".into(),
+        serde_json::Value::String(info.category.as_str().to_string()),
+    );
     inner.insert("message".into(), serde_json::Value::String(info.message));
     if let Some(hint) = info.hint {
         inner.insert("hint".into(), serde_json::Value::String(hint));
     }
     inner.insert("code".into(), serde_json::Value::String(info.code));
     obj.insert("error".into(), serde_json::Value::Object(inner));
-    format!("Error: {}", serde_json::to_string_pretty(&serde_json::Value::Object(obj)).unwrap())
+    format!(
+        "Error: {}",
+        serde_json::to_string_pretty(&serde_json::Value::Object(obj)).unwrap()
+    )
 }
 
 pub fn driver_error_to_adapter(err: DriverError) -> AdapterError {
     match err {
         DriverError::Cancelled => AdapterError::new("Query cancelled"),
         DriverError::Timeout(ms) => AdapterError::new(format!("Timed out after {}ms", ms)),
-        DriverError::InvalidDatabaseName(n) => AdapterError::new(format!("Invalid database name \"{}\". Allowed: letters, digits, _, $, -.", n)),
-        DriverError::DatabasePinned(db) => AdapterError::new(format!("This connection is locked to database \"{}\". USE is blocked.", db)).with_code("DB_PINNED"),
+        DriverError::InvalidDatabaseName(n) => AdapterError::new(format!(
+            "Invalid database name \"{}\". Allowed: letters, digits, _, $, -.",
+            n
+        )),
+        DriverError::DatabasePinned(db) => AdapterError::new(format!(
+            "This connection is locked to database \"{}\". USE is blocked.",
+            db
+        ))
+        .with_code("DB_PINNED"),
         DriverError::Connection(m) => AdapterError::new(m),
         DriverError::Query(m) => AdapterError::new(m),
         DriverError::Ssl(m) => AdapterError::new(m),

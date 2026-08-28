@@ -34,7 +34,11 @@ impl std::fmt::Display for InjectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InjectError::ParseFailed { path } => {
-                write!(f, "Couldn't parse the existing config at {}.", path.display())
+                write!(
+                    f,
+                    "Couldn't parse the existing config at {}.",
+                    path.display()
+                )
             }
             InjectError::Write { path, reason } => {
                 write!(f, "Couldn't write {}: {}", path.display(), reason)
@@ -149,7 +153,13 @@ pub fn inject(
     let existing = fs::read_to_string(&path).ok();
 
     match client.config_format() {
-        ConfigFormat::Json => inject_json(&path, client.container_key(), key, entry_object(client, url), existing.as_deref()),
+        ConfigFormat::Json => inject_json(
+            &path,
+            client.container_key(),
+            key,
+            entry_object(client, url),
+            existing.as_deref(),
+        ),
         ConfigFormat::Toml => inject_toml(&path, key, url, existing.as_deref()),
     }
 }
@@ -185,12 +195,13 @@ fn inject_json(
     let had_existing = existing.is_some();
 
     if let Some(text) = existing
-        && !text.trim().is_empty() {
-            let obj = parse_object(text).ok_or_else(|| InjectError::ParseFailed {
-                path: path.to_path_buf(),
-            })?;
-            root = obj;
-        }
+        && !text.trim().is_empty()
+    {
+        let obj = parse_object(text).ok_or_else(|| InjectError::ParseFailed {
+            path: path.to_path_buf(),
+        })?;
+        root = obj;
+    }
 
     let map = root.as_object_mut().expect("root is object");
     let servers_val = map
@@ -233,9 +244,10 @@ fn parse_object(text: &str) -> Option<Value> {
     }
     let sanitized = sanitize_jsonc(text);
     if let Ok(v) = serde_json::from_str::<Value>(&sanitized)
-        && v.is_object() {
-            return Some(v);
-        }
+        && v.is_object()
+    {
+        return Some(v);
+    }
     None
 }
 
@@ -370,11 +382,12 @@ fn inject_toml(
 ) -> Result<InjectResult, InjectError> {
     let header = format!("[mcp_servers.{key}]");
     if let Some(text) = existing
-        && toml_has_table(text, &header) {
-            return Ok(InjectResult::Skipped {
-                path: path.to_path_buf(),
-            });
-        }
+        && toml_has_table(text, &header)
+    {
+        return Ok(InjectResult::Skipped {
+            path: path.to_path_buf(),
+        });
+    }
     let block = format!("{header}\nurl = \"{url}\"\n");
     let output = if let Some(text) = existing {
         if text.is_empty() {
@@ -395,20 +408,20 @@ fn inject_toml(
 }
 
 pub fn toml_has_table(text: &str, header: &str) -> bool {
-    text.lines()
-        .any(|line| line.trim() == header)
+    text.lines().any(|line| line.trim() == header)
 }
 
 // ── File I/O helpers ──────────────────────────────────────────────────────
 
 fn backup_and_write(path: &Path, contents: &str, had_existing: bool) -> Result<(), InjectError> {
     if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).map_err(|e| InjectError::Write {
-                path: path.to_path_buf(),
-                reason: e.to_string(),
-            })?;
-        }
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|e| InjectError::Write {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        })?;
+    }
     if had_existing && path.exists() {
         let bak_path = PathBuf::from(format!("{}.bak", path.display()));
         let _ = fs::remove_file(&bak_path);
@@ -573,7 +586,10 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         assert!(serde_json::from_str::<Value>(&content).is_ok());
         // tmp file cleaned up
-        let tmp_file = path.parent().unwrap().join(format!(".mcp.json.tmp.{}", std::process::id()));
+        let tmp_file = path
+            .parent()
+            .unwrap()
+            .join(format!(".mcp.json.tmp.{}", std::process::id()));
         assert!(!tmp_file.exists());
     }
 
@@ -719,9 +735,15 @@ mod tests {
         assert!(!toml_has_table(text, "[mcp_servers.foo]"));
         assert!(toml_has_table(text, "[mcp_servers.foo.bar]"));
         // whitespace trimmed
-        assert!(toml_has_table("  [mcp_servers.foo]  \n", "[mcp_servers.foo]"));
+        assert!(toml_has_table(
+            "  [mcp_servers.foo]  \n",
+            "[mcp_servers.foo]"
+        ));
         // commented line ignored
-        assert!(!toml_has_table("# [mcp_servers.foo]\n", "[mcp_servers.foo]"));
+        assert!(!toml_has_table(
+            "# [mcp_servers.foo]\n",
+            "[mcp_servers.foo]"
+        ));
     }
 
     #[test]
@@ -755,7 +777,14 @@ mod tests {
         // We cannot easily override mcp_config_path without env; test inject_json directly
         // TOML client path would be ~/.codex/config.toml normally; use inject_toml directly
         let path = dir.path().join("any.json");
-        let res = inject_json(&path, "mcpServers", "k", serde_json::json!({"url":"u"}), None).unwrap();
+        let res = inject_json(
+            &path,
+            "mcpServers",
+            "k",
+            serde_json::json!({"url":"u"}),
+            None,
+        )
+        .unwrap();
         assert!(matches!(res, InjectResult::Added { .. }));
         let tpath = dir.path().join("any.toml");
         let res2 = inject_toml(&tpath, "k", "http://u", None).unwrap();
@@ -779,7 +808,9 @@ mod tests {
     #[test]
     fn client_choice_targets_filters_by_scope_and_install() {
         // Without any installed clients, All yields empty; One yields single regardless.
-        let proj = ConfigScope::Project { root: PathBuf::from("/tmp/repo") };
+        let proj = ConfigScope::Project {
+            root: PathBuf::from("/tmp/repo"),
+        };
         let one = ClientChoice::One(McpClient::Codex);
         assert_eq!(one.targets(&proj), vec![McpClient::Codex]);
         // All with project scope on a clean temp machine: likely 0 installed -> empty
@@ -850,7 +881,14 @@ mod tests {
         let dir = tmp();
         let path = dir.path().join("a/b/c/mcp.json");
         // inject_json will create parent dirs
-        inject_json(&path, "mcpServers", "k", serde_json::json!({"url":"http://x"}), None).unwrap();
+        inject_json(
+            &path,
+            "mcpServers",
+            "k",
+            serde_json::json!({"url":"http://x"}),
+            None,
+        )
+        .unwrap();
         assert!(path.exists());
     }
 }

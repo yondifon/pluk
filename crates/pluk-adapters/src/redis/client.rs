@@ -13,7 +13,9 @@ fn redis_value_to_json(v: redis::Value) -> Value {
         redis::Value::BulkString(b) => String::from_utf8_lossy(&b).into(),
         redis::Value::SimpleString(s) => Value::String(s),
         redis::Value::Okay => Value::String("OK".into()),
-        redis::Value::Array(arr) => Value::Array(arr.into_iter().map(redis_value_to_json).collect()),
+        redis::Value::Array(arr) => {
+            Value::Array(arr.into_iter().map(redis_value_to_json).collect())
+        }
         redis::Value::Map(m) => {
             let mut map = serde_json::Map::new();
             for (k, v2) in m {
@@ -60,45 +62,86 @@ pub fn redis_config_from(conn: &pluk_store::Integration) -> Result<RedisConfig, 
         _ => false,
     };
     let ssh = if use_ssh {
-        c.get("ssh_host").and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).map(|ssh_host| SshParams {
+        c.get("ssh_host")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(|ssh_host| SshParams {
                 host: ssh_host,
                 port: c.get("ssh_port").and_then(|v| v.as_u64()).unwrap_or(22) as u16,
-                user: c.get("ssh_user").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                auth_type: c.get("ssh_auth_type").and_then(|v| v.as_str()).unwrap_or("agent").to_string(),
-                key_path: c.get("ssh_key_path").and_then(|v| v.as_str()).map(|s| s.to_string()).filter(|s| !s.is_empty()),
-                passphrase: c.get("ssh_password").and_then(|v| v.as_str()).map(|s| s.to_string()).filter(|s| !s.is_empty()),
+                user: c
+                    .get("ssh_user")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                auth_type: c
+                    .get("ssh_auth_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("agent")
+                    .to_string(),
+                key_path: c
+                    .get("ssh_key_path")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .filter(|s| !s.is_empty()),
+                passphrase: c
+                    .get("ssh_password")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .filter(|s| !s.is_empty()),
             })
     } else {
         None
     };
 
-    let explicit = c.get("url").and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let explicit = c
+        .get("url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     if let Some(url) = explicit
-        && ssh.is_none() {
-            return Ok(RedisConfig {
-                url: Some(url),
-                host: String::new(),
-                port: 0,
-                db: 0,
-                tls: false,
-                password: String::new(),
-                ssh: None,
-            });
-        }
+        && ssh.is_none()
+    {
+        return Ok(RedisConfig {
+            url: Some(url),
+            host: String::new(),
+            port: 0,
+            db: 0,
+            tls: false,
+            password: String::new(),
+            ssh: None,
+        });
+    }
 
-    let host = c.get("host").and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let host = c
+        .get("host")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let host = match host {
         Some(h) => h,
-        None => return Err(AdapterError::new("Redis host is missing. Set it in the integration config.")),
+        None => {
+            return Err(AdapterError::new(
+                "Redis host is missing. Set it in the integration config.",
+            ));
+        }
     };
     let port = c.get("port").and_then(|v| v.as_u64()).unwrap_or(6379) as u16;
-    let db = c.get("db").and_then(|v| v.as_i64()).unwrap_or(c.get("db").and_then(|v| v.as_u64().map(|n| n as i64)).unwrap_or(0));
+    let db = c.get("db").and_then(|v| v.as_i64()).unwrap_or(
+        c.get("db")
+            .and_then(|v| v.as_u64().map(|n| n as i64))
+            .unwrap_or(0),
+    );
     let tls = match c.get("tls") {
         Some(Value::Bool(b)) => *b,
         Some(Value::String(s)) => s == "true",
         _ => false,
     };
-    let password = c.get("password").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let password = c
+        .get("password")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     Ok(RedisConfig {
         url: None,
@@ -129,8 +172,11 @@ pub struct RedisResource {
 
 // Test hook: override opening
 pub type RedisFactory = Arc<
-    dyn Fn(RedisConfig) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Arc<RedisResource>, AdapterError>> + Send>>
-        + Send
+    dyn Fn(
+            RedisConfig,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Arc<RedisResource>, AdapterError>> + Send>,
+        > + Send
         + Sync,
 >;
 
@@ -147,8 +193,12 @@ fn get_factory() -> Option<RedisFactory> {
 
 // Runner for command execution (used by tools)
 pub type RedisRunner = Arc<
-    dyn Fn(String, Vec<String>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AdapterError>> + Send>>
-        + Send
+    dyn Fn(
+            String,
+            Vec<String>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Value, AdapterError>> + Send>,
+        > + Send
         + Sync,
 >;
 
@@ -188,7 +238,13 @@ async fn open_resource(cfg: RedisConfig) -> Result<Arc<RedisResource>, AdapterEr
         let tunnel = pluk_ssh::open_ssh_tunnel(tunnel_cfg, None)
             .await
             .map_err(|e| AdapterError::new(format!("SSH tunnel failed: {e}")))?;
-        let url = build_url("redis", "127.0.0.1", tunnel.local_port, cfg.db, &cfg.password);
+        let url = build_url(
+            "redis",
+            "127.0.0.1",
+            tunnel.local_port,
+            cfg.db,
+            &cfg.password,
+        );
         return Ok(Arc::new(RedisResource {
             url,
             tunnel: Some(Arc::new(tunnel)),
@@ -251,18 +307,25 @@ impl RedisAccessor {
         self.raw("TTL", vec![key.to_string()]).await
     }
     pub async fn set(&self, key: &str, value: &str) -> Result<Value, AdapterError> {
-        self.raw("SET", vec![key.to_string(), value.to_string()]).await
+        self.raw("SET", vec![key.to_string(), value.to_string()])
+            .await
     }
     pub async fn expire(&self, key: &str, seconds: i64) -> Result<Value, AdapterError> {
-        self.raw("EXPIRE", vec![key.to_string(), seconds.to_string()]).await
+        self.raw("EXPIRE", vec![key.to_string(), seconds.to_string()])
+            .await
     }
     pub async fn del(&self, key: &str) -> Result<Value, AdapterError> {
         self.raw("DEL", vec![key.to_string()]).await
     }
 }
 
-async fn run_real_redis_command(url: &str, cmd: &str, args: Vec<String>) -> Result<Value, AdapterError> {
-    let client = redis::Client::open(url.to_string()).map_err(|e| AdapterError::new(format!("Redis client error: {e}")))?;
+async fn run_real_redis_command(
+    url: &str,
+    cmd: &str,
+    args: Vec<String>,
+) -> Result<Value, AdapterError> {
+    let client = redis::Client::open(url.to_string())
+        .map_err(|e| AdapterError::new(format!("Redis client error: {e}")))?;
     let mut conn = client
         .get_multiplexed_async_connection()
         .await
@@ -291,7 +354,8 @@ pub async fn test_redis(conn: &pluk_store::Integration) -> Result<(), AdapterErr
         return Ok(());
     }
     // real ping
-    let client = redis::Client::open(resource.url.clone()).map_err(|e| AdapterError::new(format!("Redis client error: {e}")))?;
+    let client = redis::Client::open(resource.url.clone())
+        .map_err(|e| AdapterError::new(format!("Redis client error: {e}")))?;
     let mut c = client
         .get_multiplexed_async_connection()
         .await

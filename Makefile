@@ -1,17 +1,19 @@
 APP       := Pluk
-BUNDLE_ID := com.pluk.app
+BUNDLE_ID := com.desgnspace.pluk
 DIST      := dist
 VERSION   := $(shell cat VERSION 2>/dev/null | tr -d ' \n')
 COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: dev deps build build-ui bundle bundle-unsigned install test lint clean sync-version swift-build swift-bundle help
+.PHONY: dev deps build build-ui bundle bundle-unsigned bundle-signed install test lint clean sync-version check-tauri swift-build swift-bundle help
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:
 	@printf "Rust (Tauri) targets — primary:\n"
 	@printf "  make dev              Run the Rust app in dev (webview -> http://localhost:1420)\n"
 	@printf "  make build            Frontend + cargo build (debug)\n"
-	@printf "  make bundle           Frontend + cargo tauri build (release bundles)\n"
+	@printf "  make bundle           Frontend + cargo tauri build (release bundles, unsigned if no identity)\n"
+	@printf "  make bundle-signed    Signed + notarized via 1Password (op run --env-file=.env.1password)\n"
+	@printf "  make bundle-unsigned  Force ad-hoc signing (no identity)\n"
 	@printf "  make install          Build bundles and install Pluk.app to /Applications (macOS)\n"
 	@printf "  make test             cargo test --workspace\n"
 	@printf "  make lint             cargo clippy + frontend typecheck\n"
@@ -54,22 +56,48 @@ build: build-ui
 	@printf "→ cargo build --workspace\n"
 	cargo build --workspace
 
+# ── Prereq ────────────────────────────────────────────────────────────────────
+check-tauri:
+	@if ! cargo tauri --version >/dev/null 2>&1; then \
+		echo "error: cargo-tauri not found."; \
+		echo "  install it with: cargo install tauri-cli --version \"^2\" --locked"; \
+		echo "  then verify: cargo tauri --version"; \
+		exit 1; \
+	fi
+
 # ── Bundle (Tauri) ───────────────────────────────────────────────────────────
-# Honest bundling: Tauri produces per-platform artefacts. On macOS this makes
-# Pluk.app + Pluk_*.dmg; on Linux it makes .deb + .AppImage (see tauri.conf.json
-# targets). Signing is configured to accept a real identity at build time via
-# env vars — see docs/release-checklist.md — and the binary is otherwise
-# unsigned (or ad-hoc signed on macOS when APPLE_SIGNING_IDENTITY is unset).
-bundle: sync-version build-ui
+# Bundling artefacts:
+#   macOS: Pluk.app + Pluk_*.dmg; Linux: .deb + .AppImage (see tauri.conf.json targets).
+#   Signing (macOS): bundle.macOS.signingIdentity in tauri.conf.json is null so
+#   APPLE_SIGNING_IDENTITY from the environment is used. Hardened runtime and
+#   entitlements are declared in tauri.conf.json (entitlements.plist). Notarization
+#   via notarytool is triggered automatically when APPLE_ID + APPLE_PASSWORD +
+#   APPLE_TEAM_ID are set (or API key vars). See .env.1password and bundle-signed.
+#   Unsigned local builds (no Apple ID needed) remain the default — just run make bundle.
+bundle: check-tauri sync-version build-ui
 	@printf "→ bundling $(APP) v$(VERSION) ($(COMMIT)) via Tauri\n"
-	@printf "  macOS artefacts: dist/bundle/macos/*.{app,dmg}  (this machine if macOS)\n"
-	@printf "  Linux artefacts: dist/bundle/linux/*.{deb,AppImage}  (needs Linux or CI)\n"
+	@printf "  macOS artefacts: target/release/bundle/macos/*.app + target/release/bundle/dmg/*.dmg\n"
 	@printf "  signing: APPLE_SIGNING_IDENTITY=\"\$$APPLE_SIGNING_IDENTITY\" (macOS), TAURI_SIGNING_PRIVATE_KEY for updater\n"
+	@printf "  unsigned? omit APPLE_SIGNING_IDENTITY (ad-hoc). signed? make bundle-signed\n"
 	cargo tauri build
 
-bundle-unsigned: sync-version build-ui
+bundle-unsigned: check-tauri sync-version build-ui
 	@printf "→ bundling without signing (ad-hoc / unsigned)\n"
-	APPLE_SIGNING_IDENTITY="-" cargo tauri build || cargo tauri build
+	APPLE_SIGNING_IDENTITY="-" cargo tauri build
+
+bundle-signed: check-tauri sync-version build-ui
+	@printf "→ bundling signed + notarized via 1Password\n"
+	@if ! command -v op >/dev/null 2>&1; then \
+		echo "error: 1Password CLI (op) not found."; \
+		echo "  install: https://developer.1password.com/docs/cli/get-started/"; \
+		echo "  then run: op signin && make bundle-signed"; \
+		exit 1; \
+	fi
+	@if [ ! -f .env.1password ]; then \
+		echo "error: .env.1password not found (template .env.1password should be committed)."; \
+		exit 1; \
+	fi
+	op run --env-file=.env.1password -- cargo tauri build
 
 # ── Install (macOS) ─────────────────────────────────────────────────────────
 install: bundle

@@ -73,7 +73,12 @@ pub struct ToolRegistration {
 
 impl ToolRegistration {
     pub fn no_args(name: impl Into<String>, description: impl Into<String>) -> Self {
-        ToolRegistration { name: name.into(), description: description.into(), input_schema: Map::new(), annotations: Map::new() }
+        ToolRegistration {
+            name: name.into(),
+            description: description.into(),
+            input_schema: Map::new(),
+            annotations: Map::new(),
+        }
     }
 
     /// Attach annotation hints (camelCase keys).
@@ -91,7 +96,12 @@ pub fn object_schema(properties: Map<String, Value>, required: &[&str]) -> Map<S
     if !required.is_empty() {
         schema.insert(
             "required".into(),
-            Value::Array(required.iter().map(|r| Value::String((*r).to_string())).collect()),
+            Value::Array(
+                required
+                    .iter()
+                    .map(|r| Value::String((*r).to_string()))
+                    .collect(),
+            ),
         );
     }
     schema
@@ -100,6 +110,19 @@ pub fn object_schema(properties: Map<String, Value>, required: &[&str]) -> Map<S
 /// Where adapters register their surface. Implemented by the server crate.
 pub trait ToolHost {
     fn register_tool(&mut self, registration: ToolRegistration, handler: ToolHandler);
-    fn register_prompt(&mut self, name: &str, description: &str, args_schema: Option<Map<String, Value>>, handler: PromptHandler);
-    fn register_resource(&mut self, name: &str, uri: &str, mime_type: &str, description: Option<&str>, handler: ResourceHandler);
+    fn register_prompt(
+        &mut self,
+        name: &str,
+        description: &str,
+        args_schema: Option<Map<String, Value>>,
+        handler: PromptHandler,
+    );
+    fn register_resource(
+        &mut self,
+        name: &str,
+        uri: &str,
+        mime_type: &str,
+        description: Option<&str>,
+        handler: ResourceHandler,
+    );
 }

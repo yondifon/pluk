@@ -1,15 +1,19 @@
+use pluk_store::{Integration, Store};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use serde_json::{Map, Value};
-use pluk_store::{Integration, Store};
 
-use crate::gate::{CallTarget, GateMeta, GateOpts, Outcome, RunOutcome, ToolResult, err, ok, run_gated};
-use crate::instructions::{build_instructions, InstructionParts};
+use crate::gate::{
+    CallTarget, GateMeta, GateOpts, Outcome, RunOutcome, ToolResult, err, ok, run_gated,
+};
+use crate::instructions::{InstructionParts, build_instructions};
 use crate::projection::{FieldMap, Preset, apply_only};
-use crate::tool_host::{object_schema, BoxFuture, ToolHost, ToolRegistration};
+use crate::tool_host::{BoxFuture, ToolHost, ToolRegistration, object_schema};
 use crate::tool_spec::ToolSpec;
 
-use super::client::{run_command, open_forward, list_forwards, close_forward, MAX_COMMAND_TIMEOUT_S};
+use super::client::{
+    MAX_COMMAND_TIMEOUT_S, close_forward, list_forwards, open_forward, run_command,
+};
 use super::error::humanize_ssh_error;
 use super::policy::evaluate_command;
 
@@ -27,7 +31,7 @@ const DEBUG_SNAPSHOT: &[(&str, &str)] = &[
 
 const MAX_BATCH: usize = 50;
 fn saved_commands_map() -> FieldMap {
-    FieldMap::new(&["name","command","working_dir"], &["name","command"])
+    FieldMap::new(&["name", "command", "working_dir"], &["name", "command"])
         .with_preset("location", Preset::paths(&["working_dir"]))
 }
 
@@ -46,19 +50,53 @@ pub fn ssh_instructions(conn: &Integration) -> String {
 }
 
 pub fn ssh_tool_specs() -> Vec<ToolSpec> {
-    let opt_in: std::collections::HashSet<&str> = ["run_batch","debug_snapshot","run_saved_command","list_saved_commands","open_forward","list_forwards","close_forward"].into_iter().collect();
+    let opt_in: std::collections::HashSet<&str> = [
+        "run_batch",
+        "debug_snapshot",
+        "run_saved_command",
+        "list_saved_commands",
+        "open_forward",
+        "list_forwards",
+        "close_forward",
+    ]
+    .into_iter()
+    .collect();
     let mk = |name: &str, desc: &str| {
         ToolSpec::new(name, desc, "read").with_default_enabled(!opt_in.contains(name))
     };
     vec![
-        mk("run_command", "Run a shell command on the remote host over SSH."),
-        mk("run_batch", "Run several shell commands in sequence on the remote host."),
-        mk("debug_snapshot", "Capture a quick health snapshot of the remote host."),
-        mk("run_saved_command", "Run a pre-selected (saved) command by name."),
-        mk("list_saved_commands", "List the saved commands available for this integration."),
-        mk("open_forward", "Open a local port forward (ssh -L) to a remote service."),
-        mk("list_forwards", "List the open local port forwards for this connection."),
-        mk("close_forward", "Close an open local port forward by its id."),
+        mk(
+            "run_command",
+            "Run a shell command on the remote host over SSH.",
+        ),
+        mk(
+            "run_batch",
+            "Run several shell commands in sequence on the remote host.",
+        ),
+        mk(
+            "debug_snapshot",
+            "Capture a quick health snapshot of the remote host.",
+        ),
+        mk(
+            "run_saved_command",
+            "Run a pre-selected (saved) command by name.",
+        ),
+        mk(
+            "list_saved_commands",
+            "List the saved commands available for this integration.",
+        ),
+        mk(
+            "open_forward",
+            "Open a local port forward (ssh -L) to a remote service.",
+        ),
+        mk(
+            "list_forwards",
+            "List the open local port forwards for this connection.",
+        ),
+        mk(
+            "close_forward",
+            "Close an open local port forward by its id.",
+        ),
     ]
 }
 
@@ -67,11 +105,23 @@ fn quote_dir(dir: &str) -> String {
 }
 
 fn format_result(stdout: &str, stderr: &str, code: Option<i32>, truncated: bool) -> String {
-    let mut parts = vec![format!("exit code: {}", code.map(|c| c.to_string()).unwrap_or_else(|| "unknown".to_string()))];
-    if !stdout.trim().is_empty() { parts.push(format!("stdout:\n{}", stdout.trim_end())); }
-    if !stderr.trim().is_empty() { parts.push(format!("stderr:\n{}", stderr.trim_end())); }
-    if stdout.trim().is_empty() && stderr.trim().is_empty() { parts.push("(no output)".to_string()); }
-    if truncated { parts.push("[output truncated at 1 MB]".to_string()); }
+    let mut parts = vec![format!(
+        "exit code: {}",
+        code.map(|c| c.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    )];
+    if !stdout.trim().is_empty() {
+        parts.push(format!("stdout:\n{}", stdout.trim_end()));
+    }
+    if !stderr.trim().is_empty() {
+        parts.push(format!("stderr:\n{}", stderr.trim_end()));
+    }
+    if stdout.trim().is_empty() && stderr.trim().is_empty() {
+        parts.push("(no output)".to_string());
+    }
+    if truncated {
+        parts.push("[output truncated at 1 MB]".to_string());
+    }
     parts.join("\n\n")
 }
 
@@ -80,12 +130,23 @@ fn forward_row(f: &super::client::ForwardInfo) -> Value {
 }
 
 fn text_of(res: &ToolResult) -> String {
-    res.content.first().map(|c| c.text.clone()).unwrap_or_default()
+    res.content
+        .first()
+        .map(|c| c.text.clone())
+        .unwrap_or_default()
 }
 
-pub fn register_ssh_server(host: &mut dyn ToolHost, conn: &Integration, owner_id: &str, store: Arc<Store>) -> Result<(), crate::error::AdapterError> {
+pub fn register_ssh_server(
+    host: &mut dyn ToolHost,
+    conn: &Integration,
+    owner_id: &str,
+    store: Arc<Store>,
+) -> Result<(), crate::error::AdapterError> {
     let gate = pluk_policy::tool_gate(conn.query_policy.as_deref());
-    let tool_defaults: HashMap<String,bool> = ssh_tool_specs().into_iter().map(|t| (t.name, t.default_enabled)).collect();
+    let tool_defaults: HashMap<String, bool> = ssh_tool_specs()
+        .into_iter()
+        .map(|t| (t.name, t.default_enabled))
+        .collect();
     let on = |name: &str| gate.enabled(name, *tool_defaults.get(name).unwrap_or(&true));
 
     // run_command tool
@@ -332,22 +393,55 @@ pub fn register_ssh_server(host: &mut dyn ToolHost, conn: &Integration, owner_id
         let store_c = store.clone();
         let conn_c = conn.clone();
         host.register_tool(
-            ToolRegistration { name: "list_saved_commands".into(), description: "List the pre-selected (saved) commands available for this SSH integration.".into(), input_schema: object_schema({ let mut m=Map::new(); m.insert("only".into(), crate::projection::only_param_schema(&["location"])); m }, &[]), annotations: { let mut m=Map::new(); m.insert("readOnlyHint".into(), Value::Bool(true)); m.insert("openWorldHint".into(), Value::Bool(false)); m } },
+            ToolRegistration {
+                name: "list_saved_commands".into(),
+                description:
+                    "List the pre-selected (saved) commands available for this SSH integration."
+                        .into(),
+                input_schema: object_schema(
+                    {
+                        let mut m = Map::new();
+                        m.insert(
+                            "only".into(),
+                            crate::projection::only_param_schema(&["location"]),
+                        );
+                        m
+                    },
+                    &[],
+                ),
+                annotations: {
+                    let mut m = Map::new();
+                    m.insert("readOnlyHint".into(), Value::Bool(true));
+                    m.insert("openWorldHint".into(), Value::Bool(false));
+                    m
+                },
+            },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
                 let store = store_c.clone();
                 let _conn = conn_c.clone();
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
-                    let only = obj.get("only").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect::<Vec<_>>());
+                    let only = obj.get("only").and_then(|v| v.as_array()).map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect::<Vec<_>>()
+                    });
                     let saved = store.list_saved_commands(&_conn.id).unwrap_or_default();
-                    if saved.is_empty() { return ok("No saved commands for this integration."); }
-                    let vals: Vec<Value> = saved.into_iter().map(|c| {
-                        let mut m=Map::new();
-                        m.insert("name".into(), Value::String(c.name));
-                        m.insert("command".into(), Value::String(c.command));
-                        if let Some(wd)=c.working_dir { m.insert("working_dir".into(), Value::String(wd)); }
-                        Value::Object(m)
-                    }).collect();
+                    if saved.is_empty() {
+                        return ok("No saved commands for this integration.");
+                    }
+                    let vals: Vec<Value> = saved
+                        .into_iter()
+                        .map(|c| {
+                            let mut m = Map::new();
+                            m.insert("name".into(), Value::String(c.name));
+                            m.insert("command".into(), Value::String(c.command));
+                            if let Some(wd) = c.working_dir {
+                                m.insert("working_dir".into(), Value::String(wd));
+                            }
+                            Value::Object(m)
+                        })
+                        .collect();
                     let val = Value::Array(vals);
                     let map = saved_commands_map();
                     match apply_only(&val, only.as_ref(), &map) {
@@ -355,7 +449,7 @@ pub fn register_ssh_server(host: &mut dyn ToolHost, conn: &Integration, owner_id
                         Err(e) => err(e.to_string()),
                     }
                 })
-            })
+            }),
         );
     }
 

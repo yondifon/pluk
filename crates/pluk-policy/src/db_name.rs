@@ -53,17 +53,34 @@ mod tests {
         for ok in ["app", "app_prod", "billing-2", "db$x", "A1"] {
             assert!(is_valid_database_name(ok), "{ok} should be valid");
         }
-        for bad in ["", "a b", "a;b", "a`b", "a\"b", "a.b", "a'b", "a/*x*/", "a\nb", &"x".repeat(129)] {
+        for bad in [
+            "",
+            "a b",
+            "a;b",
+            "a`b",
+            "a\"b",
+            "a.b",
+            "a'b",
+            "a/*x*/",
+            "a\nb",
+            &"x".repeat(129),
+        ] {
             assert!(!is_valid_database_name(bad), "{bad:?} should be invalid");
         }
     }
 
     #[test]
     fn no_override_falls_back_to_configured() {
-        assert_eq!(resolve_override_database(Some("appdb"), None), Ok(Some("appdb".into())));
+        assert_eq!(
+            resolve_override_database(Some("appdb"), None),
+            Ok(Some("appdb".into()))
+        );
         assert_eq!(resolve_override_database(None, None), Ok(None));
         // Empty override counts as absent, like JS falsiness.
-        assert_eq!(resolve_override_database(Some("appdb"), Some("")), Ok(Some("appdb".into())));
+        assert_eq!(
+            resolve_override_database(Some("appdb"), Some("")),
+            Ok(Some("appdb".into()))
+        );
     }
 
     #[test]

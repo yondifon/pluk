@@ -26,8 +26,18 @@ pub struct ServerHandle {
 impl ServerHandle {
     /// Start the loopback server. `port` overrides `PORT`/`4242` when `Some`.
     /// Returns once the listener is bound (so agents can connect immediately).
-    pub async fn start(store: Arc<Store>, registry: Arc<AdapterRegistry>, port: Option<u16>) -> std::io::Result<Self> {
-        Self::start_with_cancels(store, registry, Arc::new(pluk_server::CancelRegistry::default()), port).await
+    pub async fn start(
+        store: Arc<Store>,
+        registry: Arc<AdapterRegistry>,
+        port: Option<u16>,
+    ) -> std::io::Result<Self> {
+        Self::start_with_cancels(
+            store,
+            registry,
+            Arc::new(pluk_server::CancelRegistry::default()),
+            port,
+        )
+        .await
     }
 
     pub async fn start_with_cancels(
@@ -39,7 +49,8 @@ impl ServerHandle {
         let shutdown = CancellationToken::new();
         let owners = Arc::new(pluk_server::OwnerPool::default());
         let health = Arc::new(pluk_server::HealthMap::default());
-        let rate_state = pluk_server::AppState::new(store.clone(), registry.clone(), owners, health);
+        let rate_state =
+            pluk_server::AppState::new(store.clone(), registry.clone(), owners, health);
         let mut state_inner = rate_state;
         state_inner.cancels = cancels;
         let state = Arc::new(state_inner);
@@ -63,11 +74,18 @@ impl ServerHandle {
                 .await
         });
 
-        Ok(Self { state, shutdown, task: Some(task) })
+        Ok(Self {
+            state,
+            shutdown,
+            task: Some(task),
+        })
     }
 
     /// Convenience: start on the platform default port (4242 / `$PORT`).
-    pub async fn start_default(store: Arc<Store>, registry: Arc<AdapterRegistry>) -> std::io::Result<Self> {
+    pub async fn start_default(
+        store: Arc<Store>,
+        registry: Arc<AdapterRegistry>,
+    ) -> std::io::Result<Self> {
         Self::start(store, registry, None).await
     }
 
@@ -104,8 +122,6 @@ impl Drop for ServerHandle {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,7 +144,9 @@ mod tests {
     #[tokio::test]
     async fn server_starts_on_random_port_and_responds_to_health() {
         let store = temp_store();
-        let mut handle = ServerHandle::start(store, registry(), Some(0)).await.expect("bind");
+        let mut handle = ServerHandle::start(store, registry(), Some(0))
+            .await
+            .expect("bind");
         // Discover the bound port via the health endpoint: we don't expose it,
         // so bind a second handle on port 0 and probe it directly via router.
         // Instead verify the handle reports running and the state is usable.
@@ -142,7 +160,9 @@ mod tests {
     #[tokio::test]
     async fn reload_aborts_owners_resources() {
         let store = temp_store();
-        let mut handle = ServerHandle::start(store, registry(), Some(0)).await.unwrap();
+        let mut handle = ServerHandle::start(store, registry(), Some(0))
+            .await
+            .unwrap();
         let owners = handle.state().owners.clone();
         let t1 = owners.open_owner("owner-a");
         let t2 = owners.open_owner("owner-b");
@@ -166,7 +186,9 @@ mod tests {
     #[tokio::test]
     async fn stop_closes_event_hub_and_cancels_token() {
         let store = temp_store();
-        let mut handle = ServerHandle::start(store, registry(), Some(0)).await.unwrap();
+        let mut handle = ServerHandle::start(store, registry(), Some(0))
+            .await
+            .unwrap();
         assert!(!handle.shutdown_token().is_cancelled());
         handle.stop().await;
         assert!(handle.shutdown_token().is_cancelled());
@@ -176,8 +198,12 @@ mod tests {
 
     #[tokio::test]
     async fn port_zero_binds_and_second_random_port_also_binds() {
-        let s1 = ServerHandle::start(temp_store(), registry(), Some(0)).await.unwrap();
-        let s2 = ServerHandle::start(temp_store(), registry(), Some(0)).await.unwrap();
+        let s1 = ServerHandle::start(temp_store(), registry(), Some(0))
+            .await
+            .unwrap();
+        let s2 = ServerHandle::start(temp_store(), registry(), Some(0))
+            .await
+            .unwrap();
         assert!(s1.is_running());
         assert!(s2.is_running());
         // Drop without explicit stop also cancels.

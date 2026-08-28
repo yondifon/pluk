@@ -53,8 +53,12 @@ pub fn resolve_channel(cfg: &SlackConfig, arg: Option<&str>) -> Result<String, A
 
 // Test hook: intercept slack requests
 pub type SlackRunner = Arc<
-    dyn Fn(String, Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AdapterError>> + Send>>
-        + Send
+    dyn Fn(
+            String,
+            Value,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Value, AdapterError>> + Send>,
+        > + Send
         + Sync,
 >;
 
@@ -69,7 +73,11 @@ fn get_runner() -> Option<SlackRunner> {
     slot().lock().unwrap().clone()
 }
 
-pub async fn slack_request(cfg: &SlackConfig, method: &str, params: Value) -> Result<Value, AdapterError> {
+pub async fn slack_request(
+    cfg: &SlackConfig,
+    method: &str,
+    params: Value,
+) -> Result<Value, AdapterError> {
     if let Some(runner) = get_runner() {
         return runner(method.to_string(), params).await;
     }

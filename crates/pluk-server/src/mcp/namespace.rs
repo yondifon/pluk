@@ -47,7 +47,10 @@ pub struct NamespacedHost<'a> {
 
 impl<'a> NamespacedHost<'a> {
     pub fn new(inner: &'a mut dyn ToolHost, ns: impl Into<String>) -> Self {
-        NamespacedHost { inner, ns: ns.into() }
+        NamespacedHost {
+            inner,
+            ns: ns.into(),
+        }
     }
 
     fn prefix(&self, name: &str) -> String {
@@ -61,7 +64,10 @@ impl ToolHost for NamespacedHost<'_> {
         registration: pluk_adapters::ToolRegistration,
         handler: pluk_adapters::ToolHandler,
     ) {
-        let registration = pluk_adapters::ToolRegistration { name: self.prefix(&registration.name), ..registration };
+        let registration = pluk_adapters::ToolRegistration {
+            name: self.prefix(&registration.name),
+            ..registration
+        };
         self.inner.register_tool(registration, handler);
     }
 
@@ -72,7 +78,8 @@ impl ToolHost for NamespacedHost<'_> {
         args_schema: Option<serde_json::Map<String, serde_json::Value>>,
         handler: pluk_adapters::PromptHandler,
     ) {
-        self.inner.register_prompt(&self.prefix(name), description, args_schema, handler);
+        self.inner
+            .register_prompt(&self.prefix(name), description, args_schema, handler);
     }
 
     fn register_resource(
@@ -84,15 +91,16 @@ impl ToolHost for NamespacedHost<'_> {
         handler: pluk_adapters::ResourceHandler,
     ) {
         let uri = namespace_uri(&self.ns, uri);
-        self.inner.register_resource(&self.prefix(name), &uri, mime_type, description, handler);
+        self.inner
+            .register_resource(&self.prefix(name), &uri, mime_type, description, handler);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use pluk_adapters::{PromptHandler, ResourceHandler, ToolHandler};
+    use std::sync::Arc;
 
     #[derive(Default)]
     struct RecordingHost {
@@ -100,15 +108,32 @@ mod tests {
     }
 
     impl ToolHost for RecordingHost {
-        fn register_tool(&mut self, registration: pluk_adapters::ToolRegistration, _handler: ToolHandler) {
+        fn register_tool(
+            &mut self,
+            registration: pluk_adapters::ToolRegistration,
+            _handler: ToolHandler,
+        ) {
             self.calls.push(format!("tool:{}", registration.name));
         }
 
-        fn register_prompt(&mut self, name: &str, _description: &str, _args_schema: Option<serde_json::Map<String, serde_json::Value>>, _handler: PromptHandler) {
+        fn register_prompt(
+            &mut self,
+            name: &str,
+            _description: &str,
+            _args_schema: Option<serde_json::Map<String, serde_json::Value>>,
+            _handler: PromptHandler,
+        ) {
             self.calls.push(format!("prompt:{name}"));
         }
 
-        fn register_resource(&mut self, name: &str, uri: &str, _mime_type: &str, _description: Option<&str>, _handler: ResourceHandler) {
+        fn register_resource(
+            &mut self,
+            name: &str,
+            uri: &str,
+            _mime_type: &str,
+            _description: Option<&str>,
+            _handler: ResourceHandler,
+        ) {
             self.calls.push(format!("res:{name}:{uri}"));
         }
     }
@@ -130,9 +155,23 @@ mod tests {
         let mut fake = RecordingHost::default();
         {
             let mut host = NamespacedHost::new(&mut fake, "metrics_db");
-            host.register_tool(pluk_adapters::ToolRegistration::no_args("query", "Q"), noop_tool());
-            host.register_prompt("summarize_schema", "S", None, Arc::new(|_| Box::pin(async { unreachable!() })));
-            host.register_resource("schema", "schema://full", "text/plain", None, Arc::new(|| Box::pin(async { unreachable!() })));
+            host.register_tool(
+                pluk_adapters::ToolRegistration::no_args("query", "Q"),
+                noop_tool(),
+            );
+            host.register_prompt(
+                "summarize_schema",
+                "S",
+                None,
+                Arc::new(|_| Box::pin(async { unreachable!() })),
+            );
+            host.register_resource(
+                "schema",
+                "schema://full",
+                "text/plain",
+                None,
+                Arc::new(|| Box::pin(async { unreachable!() })),
+            );
         }
         assert_eq!(
             fake.calls,

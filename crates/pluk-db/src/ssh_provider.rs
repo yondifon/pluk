@@ -26,7 +26,10 @@ impl SshTunnelProvider for PlukSshTunnelProvider {
         let ssh_port = cfg.ssh_port.unwrap_or(22);
         let ssh_user = cfg.ssh_user.clone().unwrap_or_default();
 
-        let auth_type = cfg.ssh_auth_type.clone().unwrap_or_else(|| "agent".to_string());
+        let auth_type = cfg
+            .ssh_auth_type
+            .clone()
+            .unwrap_or_else(|| "agent".to_string());
         let key_path = cfg.ssh_key_path.clone();
         let passphrase = cfg.ssh_password.clone();
 
@@ -75,7 +78,11 @@ impl SshExecProvider for PlukSshExecProvider {
         // Open an exec channel, run command, collect output with timeout.
         // For now, delegate to a simple SSH exec via russh or OpenSSH `ssh host command`.
         // Use OpenSSH `ssh` binary for simplicity (works for all auth types via ControlMaster).
-        let ssh_host = self.cfg.ssh_host.clone().unwrap_or_else(|| self.cfg.effective_host());
+        let ssh_host = self
+            .cfg
+            .ssh_host
+            .clone()
+            .unwrap_or_else(|| self.cfg.effective_host());
         let ssh_port = self.cfg.ssh_port.unwrap_or(22);
         let ssh_user = self.cfg.ssh_user.clone().unwrap_or_default();
 
@@ -103,23 +110,20 @@ impl SshExecProvider for PlukSshExecProvider {
         args.push(command.clone());
 
         let timeout = timeout_ms.unwrap_or(30_000);
-        let output = tokio::time::timeout(
-            std::time::Duration::from_millis(timeout),
-            async {
-                let out = tokio::process::Command::new("ssh")
-                    .args(&args)
-                    .output()
-                    .await
-                    .map_err(|e| DriverError::Connection(format!("ssh exec spawn failed: {e}")))?;
-                if !out.status.success() {
-                    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                    let msg = if !stderr.is_empty() { stderr } else { stdout };
-                    return Err(DriverError::Query(format!("ssh exec failed: {msg}")));
-                }
-                Ok::<String, DriverError>(String::from_utf8_lossy(&out.stdout).to_string())
-            },
-        )
+        let output = tokio::time::timeout(std::time::Duration::from_millis(timeout), async {
+            let out = tokio::process::Command::new("ssh")
+                .args(&args)
+                .output()
+                .await
+                .map_err(|e| DriverError::Connection(format!("ssh exec spawn failed: {e}")))?;
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let msg = if !stderr.is_empty() { stderr } else { stdout };
+                return Err(DriverError::Query(format!("ssh exec failed: {msg}")));
+            }
+            Ok::<String, DriverError>(String::from_utf8_lossy(&out.stdout).to_string())
+        })
         .await
         .map_err(|_| DriverError::Timeout(timeout))??;
 

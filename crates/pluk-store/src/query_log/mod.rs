@@ -252,8 +252,7 @@ impl ActivityFeed {
     }
 }
 
-const ACTIVITY_COLUMNS: &str =
-    "id, connection_id, connection_name, sql, verdict, reason, categories, source, \
+const ACTIVITY_COLUMNS: &str = "id, connection_id, connection_name, sql, verdict, reason, categories, source, \
      group_id, group_name, database, row_count, created_at";
 
 fn map_activity(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogActivity> {
@@ -273,7 +272,6 @@ fn map_activity(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogActivity> {
         created_at: row.get(12)?,
     })
 }
-
 
 impl Store {
     /// Insert a new log entry and return its row id for later finalization.

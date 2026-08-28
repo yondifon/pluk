@@ -1,11 +1,12 @@
 import type { AdapterManifest, ConfigFieldDef, ToolDef } from "./catalog.ts";
-import { groupedByCategory, prettyCategory, visibleFields, groupedFields } from "./catalog.ts";
+import { visibleFields, groupedFields } from "./catalog.ts";
 import type { ConnectionDraft, Environment } from "./connectionDraft.ts";
 import { canSave, setEnvironment, splitTools } from "./connectionDraft.ts";
 import type { GroupDraft } from "./groupForm.ts";
 import { overridableFields, inheritPlaceholder, canSaveGroup } from "./groupForm.ts";
 import { createIcon } from "../icon";
 import { createButton, createBadge } from "../primitives";
+import { typeBadge } from "../glyph";
 
 export function renderTypeChooser(
   adapters: AdapterManifest[],
@@ -23,12 +24,6 @@ export function renderTypeChooser(
    heading.textContent = "Choose an integration";
   heading.setAttribute("tabindex", "-1");
   wrap.appendChild(heading);
-
-  const hint = document.createElement("p");
-  hint.className = "hint";
-  hint.id = "chooser-hint";
-   hint.textContent = "Select an integration to set it up.";
-  wrap.appendChild(hint);
 
   if (!adapters.length) {
     const card = document.createElement("div");
@@ -54,29 +49,22 @@ export function renderTypeChooser(
     }
     wrap.appendChild(card);
   } else {
-    for (const { category, items } of groupedByCategory(adapters)) {
-      const section = document.createElement("section");
-       section.className = "ui-card";
-      section.setAttribute("role", "group");
-      const h = document.createElement("h3");
-       h.className = "ui-card-title";
-      const cid = `chooser-cat-${category}`;
-      h.id = cid;
-      h.textContent = prettyCategory(category);
-      section.setAttribute("aria-labelledby", cid);
-      section.appendChild(h);
-      for (const a of items) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "chooser-row";
-        btn.setAttribute("aria-label", `${a.label}`);
-        btn.innerHTML = `<span class="type-badge" aria-hidden="true">${a.id[0].toUpperCase()}</span><span>${a.label}</span><span class="chooser-chevron" aria-hidden="true"></span>`;
-        btn.querySelector(".chooser-chevron")?.appendChild(createIcon("chevron-right"));
-        btn.addEventListener("click", () => onChoose(a));
-        section.appendChild(btn);
-      }
-      wrap.appendChild(section);
+    const grid = document.createElement("div");
+    grid.className = "chooser-grid";
+    grid.setAttribute("role", "group");
+    grid.setAttribute("aria-labelledby", "chooser-heading");
+    for (const a of adapters) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chooser-row";
+      btn.setAttribute("aria-label", `${a.label}`);
+      btn.innerHTML = `<span>${a.label}</span><span class="chooser-chevron" aria-hidden="true"></span>`;
+      btn.prepend(typeBadge(a.id, a.label));
+      btn.querySelector(".chooser-chevron")?.appendChild(createIcon("chevron-right"));
+      btn.addEventListener("click", () => onChoose(a));
+      grid.appendChild(btn);
     }
+    wrap.appendChild(grid);
   }
 
   const footer = document.createElement("div");
@@ -99,6 +87,18 @@ export function renderTypeChooser(
   });
 
   return wrap;
+}
+
+/** Flags a required control the person left empty, once they try to save. */
+function markMissing(control: HTMLElement, wrap: HTMLElement, message: string): void {
+  control.setAttribute("aria-invalid", "true");
+  control.focus();
+  if (wrap.querySelector(".field-error")) return;
+  const error = document.createElement("div");
+  error.className = "field-error";
+  error.setAttribute("role", "alert");
+  error.textContent = message;
+  wrap.appendChild(error);
 }
 
 export function renderField(field: ConfigFieldDef, value: string, onChange: (v: string) => void): HTMLElement {
@@ -381,25 +381,6 @@ export function renderIntegrationForm(
   const wrap = document.createElement("div");
   wrap.className = "form-body";
 
-  // Header with environment picker
-  const header = document.createElement("div");
-  header.className = "detail-header";
-  header.innerHTML = `<div class="detail-title">${draft.name || "Integration settings"}</div>`;
-  const envPicker = document.createElement("select");
-  envPicker.className = "field-select";
-  envPicker.setAttribute("aria-label", "Environment");
-  for (const env of ["production", "staging", "development", "local"] as Environment[]) {
-    const o = document.createElement("option");
-    o.value = env; o.textContent = env[0].toUpperCase() + env.slice(1);
-    if (env === draft.environment) o.selected = true;
-    envPicker.appendChild(o);
-  }
-   envPicker.addEventListener("change", () => onDraftChange(setEnvironment(draft, envPicker.value as Environment)));
-  // Proxy through setEnvironment logic would happen at caller via connectionDraft.setEnvironment
-  const headerRow = document.createElement("div");
-  headerRow.className = "form-header-row"; headerRow.append(header, envPicker);
-  wrap.appendChild(headerRow);
-
   // Name + Type row
   const general = document.createElement("div");
   general.className = "ui-card";
@@ -412,22 +393,39 @@ export function renderIntegrationForm(
   nameInput.value = draft.name; nameInput.className = "field-input"; nameInput.id = "integration-name";
   nameInput.addEventListener("input", () => onDraftChange({ ...draft, name: nameInput.value }));
   const nameWrap = document.createElement("div"); nameWrap.className = "field-control"; nameWrap.appendChild(nameInput);
-  if (!draft.name.trim()) {
-    const error = document.createElement("div"); error.className = "field-error"; error.setAttribute("role", "alert"); error.textContent = "Enter a name to continue."; nameWrap.appendChild(error);
-  }
   nameRow.appendChild(nameWrap);
   general.appendChild(nameRow);
 
   if (manifest) {
     const typeRow = document.createElement("div");
     typeRow.className = "inspector-row";
-    typeRow.innerHTML = `<div class="inspector-label">Type</div><span class="mono">${manifest.label}</span>`;
+    typeRow.innerHTML = `<div class="inspector-label">Type</div>`;
+    const typeValue = document.createElement("div");
+    typeValue.className = "field-control field-inline";
+    typeValue.innerHTML = `<span class="mono">${manifest.label}</span>`;
     if (onTypeChangeClick) {
-      const btn = createButton("Change", { size: "sm", onClick: onTypeChangeClick });
-      typeRow.appendChild(btn);
+      typeValue.appendChild(createButton("Change", { size: "sm", onClick: onTypeChangeClick }));
     }
+    typeRow.appendChild(typeValue);
     general.appendChild(typeRow);
   }
+
+  const envRow = document.createElement("div");
+  envRow.className = "inspector-row";
+  envRow.innerHTML = `<div class="inspector-label">Environment</div>`;
+  const envPicker = document.createElement("select");
+  envPicker.className = "field-select";
+  envPicker.setAttribute("aria-label", "Environment");
+  for (const env of ["production", "staging", "development", "local"] as Environment[]) {
+    const o = document.createElement("option");
+    o.value = env; o.textContent = env[0].toUpperCase() + env.slice(1);
+    if (env === draft.environment) o.selected = true;
+    envPicker.appendChild(o);
+  }
+  envPicker.addEventListener("change", () => onDraftChange(setEnvironment(draft, envPicker.value as Environment)));
+  const envWrap = document.createElement("div"); envWrap.className = "field-control"; envWrap.appendChild(envPicker);
+  envRow.appendChild(envWrap);
+  general.appendChild(envRow);
   wrap.appendChild(general);
 
   if (draft.policyKind === "sql" && (draft.environment === "development" || draft.environment === "local") && draft.toolConfig.query?.settings.mode === "mutations") {
@@ -473,8 +471,7 @@ export function renderIntegrationForm(
   const save = createButton("Save", { variant: "primary" });
   save.addEventListener("click", () => {
     if (!draft.name.trim()) {
-      nameInput.setAttribute("aria-invalid", "true");
-      nameInput.focus();
+      markMissing(nameInput, nameWrap, "Enter a name to continue.");
       return;
     }
     if (canSave(draft)) {
@@ -518,7 +515,6 @@ export function renderGroupForm(
   nameInput.type = "text"; nameInput.placeholder = "Group name"; nameInput.value = draft.name; nameInput.className = "field-input"; nameInput.id = "group-name";
   nameInput.addEventListener("input", () => onDraftChange({ ...draft, name: nameInput.value }));
   const w = document.createElement("div"); w.className = "field-control"; w.appendChild(nameInput); row.appendChild(w);
-  if (!draft.name.trim()) { const error = document.createElement("div"); error.className = "field-error"; error.setAttribute("role", "alert"); error.textContent = "Enter a name to continue."; w.appendChild(error); }
   nameRow.appendChild(row);
 
   // Environment picker with Any
@@ -560,8 +556,9 @@ export function renderGroupForm(
         const manifest = adapters.find((a) => a.id === conn.type);
         const fields = overridableFields(manifest);
         if (fields.length) {
+          const panel = document.createElement("div"); panel.className = "member-form-panel";
           const hint = document.createElement("div"); hint.className = "hint"; hint.textContent = "Overrides for this group (blank = inherit)";
-          row2.appendChild(hint);
+          panel.appendChild(hint);
           for (const f of fields) {
             const orRow = document.createElement("div"); orRow.className = "inspector-row";
             orRow.innerHTML = `<div class="inspector-label">${f.label}</div>`;
@@ -578,8 +575,9 @@ export function renderGroupForm(
               onDraftChange({ ...draft, overrides: { ...draft.overrides, [conn.id]: ov } });
             });
              const ww = document.createElement("div"); ww.className = "field-control"; ww.appendChild(inp); orRow.appendChild(ww);
-            row2.appendChild(orRow);
+            panel.appendChild(orRow);
           }
+          row2.appendChild(panel);
         }
       }
       listCard.appendChild(row2);
@@ -591,7 +589,7 @@ export function renderGroupForm(
   const cancel = createButton("Cancel", { onClick: onCancel });
   const save = createButton("Save", { variant: "primary" });
   save.addEventListener("click", () => {
-    if (!draft.name.trim()) { nameInput.setAttribute("aria-invalid", "true"); nameInput.focus(); return; }
+    if (!draft.name.trim()) { markMissing(nameInput, w, "Enter a name to continue."); return; }
     if (canSaveGroup(draft)) onSave(draft);
   });
   footer.append(cancel, save); wrap.appendChild(footer);

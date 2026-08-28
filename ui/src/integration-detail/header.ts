@@ -3,6 +3,7 @@ import type { AdapterManifest, ConnHealth, Integration } from "./types";
 import { createIcon } from "../icon";
 import { createButton, createBadge, openMenu } from "../primitives";
 import { humanizeHealthError } from "../health";
+import { typeBadge } from "../glyph";
 
 export type HeaderActions = {
   onTest: () => void;
@@ -27,10 +28,7 @@ export function renderHeader(
   const top = document.createElement("div");
   top.className = "detail-header-top";
 
-  const badge = document.createElement("div");
-  badge.className = "type-badge";
-  badge.textContent = (manifest?.label ?? integration.type).slice(0, 2).toUpperCase();
-  badge.setAttribute("aria-hidden", "true");
+  const badge = typeBadge(integration.type, manifest?.label ?? integration.type);
 
   const stack = document.createElement("div");
   stack.className = "detail-header-stack";
@@ -95,9 +93,10 @@ export function renderHeader(
   menu.classList.add("icon-button");
   menu.setAttribute("aria-haspopup", "menu");
   menu.addEventListener("click", () => openMenu(menu, [
-    { label: "Edit…", onSelect: actions.onEdit },
-    { label: "Duplicate", onSelect: actions.onDuplicate },
-    { label: "Delete…", danger: true, onSelect: actions.onDelete },
+    { label: "Edit…", icon: "edit", onSelect: actions.onEdit },
+    { label: "Duplicate", icon: "copy", onSelect: actions.onDuplicate },
+    { separator: true },
+    { label: "Delete…", icon: "trash", danger: true, onSelect: actions.onDelete },
   ]));
 
   titleRow.append(title, chip, testWrap, menu);

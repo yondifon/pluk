@@ -2,9 +2,9 @@
 //! pending logic, and provides a `Driver`-typed pool.
 
 pub use pluk_ssh::pool::{
-    driver_key, CONNECT_TIMEOUT_DIRECT_MS, CONNECT_TIMEOUT_SSH_MS, HEALTHCHECK_TIMEOUT_MS, IDLE_MS,
+    CONNECT_TIMEOUT_DIRECT_MS, CONNECT_TIMEOUT_SSH_MS, HEALTHCHECK_TIMEOUT_MS, IDLE_MS,
     MAX_RECONNECT_ATTEMPTS, RECONNECT_AUTH_DELAY_MS, RECONNECT_DELAYS_MS, STALE_AFTER_MS,
-    TOOL_TIMEOUT_MS,
+    TOOL_TIMEOUT_MS, driver_key,
 };
 
 pub use pluk_ssh::pool::{DriverPool, PoolDriver, PoolError};
@@ -90,7 +90,10 @@ impl pluk_ssh::pool::DriverFactory for DbDriverFactory {
             }
         }
         if tunnel.is_some() {
-            Ok(Arc::new(TunnelDriver { inner: driver, tunnel }))
+            Ok(Arc::new(TunnelDriver {
+                inner: driver,
+                tunnel,
+            }))
         } else {
             Ok(Arc::new(DbDriverAdapter(driver)))
         }

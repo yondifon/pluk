@@ -21,7 +21,9 @@ pub fn cap_rows(rows: Vec<Value>, limit: usize) -> (Vec<Value>, bool, usize) {
 /// `masked_columns` are column names to mask. Order: after capping, before
 /// response/log — caller must ensure log snapshot also uses masked rows.
 pub fn mask_columns(rows: &mut [Value], masked_columns: &[String]) {
-    if masked_columns.is_empty() { return; }
+    if masked_columns.is_empty() {
+        return;
+    }
     for row in rows.iter_mut() {
         if let Value::Object(map) = row {
             for col in masked_columns {
@@ -74,10 +76,16 @@ mod tests {
     #[test]
     fn audit_log_never_sees_unmasked() {
         // Simulate R09 order: cap -> mask -> log snapshot
-        let rows = vec![json!({"ssn":"123","id":1}), json!({"ssn":"456","id":2}), json!({"ssn":"789","id":3})];
+        let rows = vec![
+            json!({"ssn":"123","id":1}),
+            json!({"ssn":"456","id":2}),
+            json!({"ssn":"789","id":3}),
+        ];
         let (masked, _, _) = cap_and_mask(rows, 2, &["ssn".to_string()]);
         assert_eq!(masked.len(), 2);
-        for r in &masked { assert_eq!(r["ssn"], "***"); }
+        for r in &masked {
+            assert_eq!(r["ssn"], "***");
+        }
         // Ensure original values not present in serialized log snapshot
         let serialized = serde_json::to_string(&masked).unwrap();
         assert!(!serialized.contains("123"));

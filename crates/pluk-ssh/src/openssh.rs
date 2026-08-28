@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-use crate::config::{expand_home, parse_ssh_config, SshConfigEntry};
+use crate::config::{SshConfigEntry, expand_home, parse_ssh_config};
 use crate::pending::is_ssh_auth_error;
 
 pub const HANDSHAKE_TIMEOUT_MS: u64 = 180_000;
@@ -70,7 +70,11 @@ impl SshError {
 
 /// The args that identify one master: they feed `%C`, so every command that has
 /// to find the same socket must pass them.
-fn master_target(config: &SshTunnelConfig, ssh_config: &SshConfigEntry, username: &str) -> Vec<String> {
+fn master_target(
+    config: &SshTunnelConfig,
+    ssh_config: &SshConfigEntry,
+    username: &str,
+) -> Vec<String> {
     let mut args = vec!["-o".to_string(), format!("ControlPath={}", control_path())];
     if !username.is_empty() {
         args.push("-l".to_string());
@@ -212,20 +216,25 @@ async fn ensure_master(
     args.extend_from_slice(target);
 
     if config.auth_type == "key"
-        && let Some(ref kp) = config.key_path {
-            args.push("-i".to_string());
-            args.push(expand_home(kp));
-            args.push("-o".to_string());
-            args.push("IdentitiesOnly=yes".to_string());
-            args.push("-o".to_string());
-            args.push("IdentityAgent=none".to_string());
-        }
+        && let Some(ref kp) = config.key_path
+    {
+        args.push("-i".to_string());
+        args.push(expand_home(kp));
+        args.push("-o".to_string());
+        args.push("IdentitiesOnly=yes".to_string());
+        args.push("-o".to_string());
+        args.push("IdentityAgent=none".to_string());
+    }
 
     if config.auth_type == "agent" {
         let agent = crate::agent::resolve_live_agent(&config.host).await;
         match agent {
             Some(a) => {
-                eprintln!("[pluk] SSH agent socket: {} ({})", a.socket, a.probe.state_str());
+                eprintln!(
+                    "[pluk] SSH agent socket: {} ({})",
+                    a.socket,
+                    a.probe.state_str()
+                );
                 // Quote socket path for ssh's tokenizer
                 args.push("-o".to_string());
                 args.push(format!("IdentityAgent=\"{}\"", a.socket));
@@ -320,10 +329,18 @@ pub async fn open_openssh_tunnel(
     ensure_master(config, &target, readiness_timeout_ms).await?;
 
     let local_port = reserve_local_port().await.map_err(SshError::Io)?;
-    let spec = format!("127.0.0.1:{local_port}:{}:{}", config.remote_host, config.remote_port);
+    let spec = format!(
+        "127.0.0.1:{local_port}:{}:{}",
+        config.remote_host, config.remote_port
+    );
 
     let fwd_args: Vec<String> = {
-        let mut a = vec!["-O".to_string(), "forward".to_string(), "-L".to_string(), spec.clone()];
+        let mut a = vec![
+            "-O".to_string(),
+            "forward".to_string(),
+            "-L".to_string(),
+            spec.clone(),
+        ];
         a.extend_from_slice(&target);
         a.push(config.host.clone());
         a
@@ -343,7 +360,12 @@ pub async fn open_openssh_tunnel(
 
     if let Err(e) = wait_for_port(local_port, remaining).await {
         let cancel_args: Vec<String> = {
-            let mut a = vec!["-O".to_string(), "cancel".to_string(), "-L".to_string(), spec.clone()];
+            let mut a = vec![
+                "-O".to_string(),
+                "cancel".to_string(),
+                "-L".to_string(),
+                spec.clone(),
+            ];
             a.extend_from_slice(&target);
             a.push(config.host.clone());
             a
@@ -422,11 +444,15 @@ pub async fn open_ssh_tunnel_via_openssh(
             .unwrap_or_else(|_| "root".into())
     };
 
-    let use_openssh = config.auth_type == "agent"
-        || (config.auth_type == "key" && config.passphrase.is_none());
+    let use_openssh =
+        config.auth_type == "agent" || (config.auth_type == "key" && config.passphrase.is_none());
 
     if use_openssh {
-        let attempts: u32 = if ssh_config.proxy_command.is_some() { 3 } else { 1 };
+        let attempts: u32 = if ssh_config.proxy_command.is_some() {
+            3
+        } else {
+            1
+        };
         let deadline = std::time::Instant::now() + Duration::from_millis(HANDSHAKE_TIMEOUT_MS);
         let mut last_err: Option<SshError> = None;
 
@@ -439,7 +465,9 @@ pub async fn open_ssh_tunnel_via_openssh(
                 break;
             }
             let started = std::time::Instant::now();
-            match open_openssh_tunnel(&config, &ssh_config, &username, remaining, on_fatal.clone()).await {
+            match open_openssh_tunnel(&config, &ssh_config, &username, remaining, on_fatal.clone())
+                .await
+            {
                 Ok(t) => return Ok(t),
                 Err(e) => {
                     if e.is_auth() {
@@ -459,7 +487,9 @@ pub async fn open_ssh_tunnel_via_openssh(
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| SshError::Tunnel("SSH tunnel did not become ready before connect deadline".into())))
+        Err(last_err.unwrap_or_else(|| {
+            SshError::Tunnel("SSH tunnel did not become ready before connect deadline".into())
+        }))
     } else {
         Err(SshError::Tunnel(
             "password/encrypted-key tunnel requires russh feature".into(),
@@ -475,7 +505,11 @@ mod tests {
     fn control_path_under_104_bytes() {
         let cp = control_path();
         // Template with %C is short; real expanded path must also be checked at runtime
-        assert!(cp.len() < 104, "control path template too long: {cp} ({} bytes)", cp.len());
+        assert!(
+            cp.len() < 104,
+            "control path template too long: {cp} ({} bytes)",
+            cp.len()
+        );
         let dir = control_dir();
         // ssh_control_dir must be short enough that dir + "/cm-" + 40-char hash < 104
         let expanded_len = format!("{}/cm-{}", dir.display(), "a".repeat(40)).len();
@@ -498,7 +532,10 @@ mod tests {
             remote_host: "db.internal".into(),
             remote_port: 5432,
         };
-        let ssh_cfg = SshConfigEntry { port: Some(2200), ..Default::default() };
+        let ssh_cfg = SshConfigEntry {
+            port: Some(2200),
+            ..Default::default()
+        };
         let t = master_target(&cfg, &ssh_cfg, "alice");
         assert!(t.contains(&"-o".to_string()));
         assert!(t.contains(&"alice".to_string()));

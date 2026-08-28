@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use pluk_adapters::{Adapter, AdapterRegistry, ConfigField, FieldType};
 use super::namespace::slug;
+use pluk_adapters::{Adapter, AdapterRegistry, ConfigField, FieldType};
 use pluk_store::{Group, Integration, LogGroup, Store};
 
 use super::namespace::NamespacedHost;
@@ -18,7 +18,10 @@ use crate::logging;
 /// What an `/mcp/<token>` path resolves to.
 pub enum Owner {
     /// A single integration served by its own adapter.
-    Integration { integration: Box<Integration>, adapter: Arc<dyn Adapter> },
+    Integration {
+        integration: Box<Integration>,
+        adapter: Arc<dyn Adapter>,
+    },
     /// A group fronting several member integrations.
     Group { group: Box<Group> },
 }
@@ -34,15 +37,27 @@ impl Owner {
 
 /// Resolve an endpoint token against live store state: an integration's token
 /// wins, then a group's. Returns `None` when the token matches neither.
-pub fn resolve_owner(store: &Store, registry: &AdapterRegistry, token: &str) -> Result<Option<Owner>, String> {
-    if let Some(integration) = store.integration_by_token(token).map_err(|e| e.to_string())? {
+pub fn resolve_owner(
+    store: &Store,
+    registry: &AdapterRegistry,
+    token: &str,
+) -> Result<Option<Owner>, String> {
+    if let Some(integration) = store
+        .integration_by_token(token)
+        .map_err(|e| e.to_string())?
+    {
         return match registry.get(&integration.r#type) {
-            Some(adapter) => Ok(Some(Owner::Integration { integration: Box::new(integration), adapter })),
+            Some(adapter) => Ok(Some(Owner::Integration {
+                integration: Box::new(integration),
+                adapter,
+            })),
             None => Err(format!("No adapter for type: {}", integration.r#type)),
         };
     }
     if let Some(group) = store.group_by_token(token).map_err(|e| e.to_string())? {
-        return Ok(Some(Owner::Group { group: Box::new(group) }));
+        return Ok(Some(Owner::Group {
+            group: Box::new(group),
+        }));
     }
     Ok(None)
 }
@@ -50,19 +65,28 @@ pub fn resolve_owner(store: &Store, registry: &AdapterRegistry, token: &str) -> 
 /// Build the MCP surface for one owner, from current store state. Called on
 /// every protocol request — never cached — so configuration edits and tool
 /// enable/disable take effect immediately.
-pub fn build_owner_surface(owner: &Owner, store: &Store, registry: &AdapterRegistry) -> Result<Surface, String> {
+pub fn build_owner_surface(
+    owner: &Owner,
+    store: &Store,
+    registry: &AdapterRegistry,
+) -> Result<Surface, String> {
     let owner_id = owner.owner_id();
     match owner {
-        Owner::Integration { integration, adapter } => {
-            build_integration_surface(adapter.as_ref(), integration.as_ref(), owner_id)
-        }
+        Owner::Integration {
+            integration,
+            adapter,
+        } => build_integration_surface(adapter.as_ref(), integration.as_ref(), owner_id),
         Owner::Group { group } => build_group_surface(group, store, registry, owner_id),
     }
 }
 
 /// A standalone MCP surface for a single integration: its adapter's
 /// instructions, with its full surface registered unnamespaced.
-pub fn build_integration_surface(adapter: &dyn Adapter, conn: &Integration, owner_id: &str) -> Result<Surface, String> {
+pub fn build_integration_surface(
+    adapter: &dyn Adapter,
+    conn: &Integration,
+    owner_id: &str,
+) -> Result<Surface, String> {
     let mut builder = SurfaceBuilder::default();
     builder.set_server_name(conn.name.clone());
     builder.set_instructions(Some(adapter.instructions(conn)));
@@ -92,8 +116,10 @@ pub fn apply_overrides(
     let Some(overrides) = overrides.filter(|o| !o.is_empty()) else {
         return integration.clone();
     };
-    let type_by_key: HashMap<&str, FieldType> =
-        fields.iter().map(|f| (f.key.as_str(), f.field_type)).collect();
+    let type_by_key: HashMap<&str, FieldType> = fields
+        .iter()
+        .map(|f| (f.key.as_str(), f.field_type))
+        .collect();
 
     let mut coerced = serde_json::Map::new();
     for (key, value) in overrides {
@@ -117,9 +143,9 @@ pub fn apply_overrides(
                     }),
                 other => other.clone(),
             },
-            Some(FieldType::Toggle) => {
-                serde_json::Value::Bool(*value == serde_json::Value::Bool(true) || value.as_str() == Some("true"))
-            }
+            Some(FieldType::Toggle) => serde_json::Value::Bool(
+                *value == serde_json::Value::Bool(true) || value.as_str() == Some("true"),
+            ),
             _ => value.clone(),
         };
         coerced.insert(key.clone(), coerced_value);
@@ -158,7 +184,11 @@ pub fn build_group_surface(
         let base = slug(&member.integration.name);
         let seen = used_ns.entry(base.clone()).or_insert(0);
         *seen += 1;
-        let ns = if *seen > 1 { format!("{base}_{seen}") } else { base };
+        let ns = if *seen > 1 {
+            format!("{base}_{seen}")
+        } else {
+            base
+        };
 
         let mut scoped = apply_overrides(
             &member.integration,
@@ -166,8 +196,15 @@ pub fn build_group_surface(
             adapter.config_fields(),
         );
         // Tag the member so its log rows attribute to this group.
-        scoped.via_group = Some(LogGroup { id: group.id.clone(), name: group.name.clone() });
-        resolved.push(GroupedMember { ns, adapter, scoped });
+        scoped.via_group = Some(LogGroup {
+            id: group.id.clone(),
+            name: group.name.clone(),
+        });
+        resolved.push(GroupedMember {
+            ns,
+            adapter,
+            scoped,
+        });
     }
 
     let instructions = group_instructions(&group.name, &resolved);
@@ -271,18 +308,33 @@ mod tests {
     fn blank_overrides_inherit_and_empties_are_noops() {
         let base = integration(serde_json::json!({ "team_key": "ENG" }));
 
-        let blank = serde_json::json!({ "team_key": "" }).as_object().cloned().unwrap();
-        assert_eq!(apply_overrides(&base, Some(&blank), &fields()).config["team_key"], serde_json::json!("ENG"));
+        let blank = serde_json::json!({ "team_key": "" })
+            .as_object()
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            apply_overrides(&base, Some(&blank), &fields()).config["team_key"],
+            serde_json::json!("ENG")
+        );
 
         assert_eq!(apply_overrides(&base, None, &fields()).config, base.config);
-        assert_eq!(apply_overrides(&base, Some(&Default::default()), &fields()).config, base.config);
+        assert_eq!(
+            apply_overrides(&base, Some(&Default::default()), &fields()).config,
+            base.config
+        );
     }
 
     #[test]
     fn numeric_override_that_parses_becomes_a_number() {
         let base = integration(serde_json::json!({}));
-        let overrides = serde_json::json!({ "limit": "abc" }).as_object().cloned().unwrap();
+        let overrides = serde_json::json!({ "limit": "abc" })
+            .as_object()
+            .cloned()
+            .unwrap();
         // Unparsable strings stay verbatim instead of collapsing to null.
-        assert_eq!(apply_overrides(&base, Some(&overrides), &fields()).config["limit"], serde_json::json!("abc"));
+        assert_eq!(
+            apply_overrides(&base, Some(&overrides), &fields()).config["limit"],
+            serde_json::json!("abc")
+        );
     }
 }

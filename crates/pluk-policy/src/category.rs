@@ -168,8 +168,17 @@ mod tests {
 
     #[test]
     fn display_names_match_the_ts_server() {
-        assert_eq!(StatementCategory::Inspect.display_name(), "DESCRIBE/EXPLAIN/SHOW");
-        assert_eq!(StatementCategory::Transaction.display_name(), "BEGIN/COMMIT/ROLLBACK");
-        assert_eq!(StatementCategory::Maintenance.display_name(), "VACUUM/ANALYZE");
+        assert_eq!(
+            StatementCategory::Inspect.display_name(),
+            "DESCRIBE/EXPLAIN/SHOW"
+        );
+        assert_eq!(
+            StatementCategory::Transaction.display_name(),
+            "BEGIN/COMMIT/ROLLBACK"
+        );
+        assert_eq!(
+            StatementCategory::Maintenance.display_name(),
+            "VACUUM/ANALYZE"
+        );
     }
 }

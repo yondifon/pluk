@@ -54,16 +54,22 @@ where
 {
     // Use task-local if we are inside a Tokio runtime; otherwise thread-local fallback is handled by caller.
     // We set both so record hooks can read either.
-    SQL_LOG_CTX.with(|c| { c.replace(Some(ctx.clone())); });
+    SQL_LOG_CTX.with(|c| {
+        c.replace(Some(ctx.clone()));
+    });
     let res = TASK_SQL_LOG_CTX.scope(ctx.clone(), f).await;
-    SQL_LOG_CTX.with(|c| { c.replace(None); });
+    SQL_LOG_CTX.with(|c| {
+        c.replace(None);
+    });
     res
 }
 
 /// Record one executed statement. No-op outside a logging context.
 pub fn record_executed_sql(sql: &str, row_count: Option<i64>, error: Option<&str>) {
     // Try task-local first, then thread-local.
-    let ctx = TASK_SQL_LOG_CTX.try_with(|c| c.clone()).ok()
+    let ctx = TASK_SQL_LOG_CTX
+        .try_with(|c| c.clone())
+        .ok()
         .or_else(|| SQL_LOG_CTX.with(|c| c.borrow().clone()));
     if let Some(ctx) = ctx {
         // In real integration this would call Store::logExecutedStatement via callback.
@@ -74,7 +80,8 @@ pub fn record_executed_sql(sql: &str, row_count: Option<i64>, error: Option<&str
 
 type LogHook = Box<dyn Fn(&SqlLogContext, &str, Option<i64>, Option<&str>) + Send + Sync>;
 
-static LOG_HOOK: std::sync::OnceLock<std::sync::Mutex<Option<LogHook>>> = std::sync::OnceLock::new();
+static LOG_HOOK: std::sync::OnceLock<std::sync::Mutex<Option<LogHook>>> =
+    std::sync::OnceLock::new();
 
 fn hook_slot() -> &'static std::sync::Mutex<Option<LogHook>> {
     LOG_HOOK.get_or_init(|| std::sync::Mutex::new(None))
@@ -104,12 +111,22 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen2 = seen.clone();
         set_log_hook(Box::new(move |ctx, sql, row_count, _| {
-            seen2.lock().unwrap().push((ctx.source.clone(), sql.to_string(), row_count));
+            seen2
+                .lock()
+                .unwrap()
+                .push((ctx.source.clone(), sql.to_string(), row_count));
         }));
-        let ctx = SqlLogContext { conn_id: "c1".into(), conn_name: "db".into(), source: "list_tables".into(), group: None, database: None };
+        let ctx = SqlLogContext {
+            conn_id: "c1".into(),
+            conn_name: "db".into(),
+            source: "list_tables".into(),
+            group: None,
+            database: None,
+        };
         run_with_sql_log_async(ctx, async {
             record_executed_sql("SELECT 1", Some(1), None);
-        }).await;
+        })
+        .await;
         let v = seen.lock().unwrap().clone();
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].0, "list_tables");
@@ -122,7 +139,9 @@ mod tests {
         // Should not panic even with hook set to observe nothing
         let called = std::sync::Arc::new(std::sync::Mutex::new(false));
         let c2 = called.clone();
-        set_log_hook(Box::new(move |_, _, _, _| { *c2.lock().unwrap() = true; }));
+        set_log_hook(Box::new(move |_, _, _, _| {
+            *c2.lock().unwrap() = true;
+        }));
         record_executed_sql("SELECT 1", None, None);
         assert!(!*called.lock().unwrap());
         clear_log_hook();

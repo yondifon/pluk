@@ -6,7 +6,10 @@ pub const MAX_COMMAND_TIMEOUT_S: u64 = 600;
 pub fn humanize_ssh_error(err: &AdapterError) -> String {
     // timeout case: message contains "timed out"
     if err.message.to_ascii_lowercase().contains("timed out") {
-        return format!("{} The command exceeded the timeout — retry with a higher `timeout` (up to {} seconds).", err.message, MAX_COMMAND_TIMEOUT_S);
+        return format!(
+            "{} The command exceeded the timeout — retry with a higher `timeout` (up to {} seconds).",
+            err.message, MAX_COMMAND_TIMEOUT_S
+        );
     }
     let info = classify_sql_error(err);
     // pending already handled in classify as PendingApproval

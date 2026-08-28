@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-
 use crate::config::parse_ssh_config;
 use crate::openssh::{SshError, SshTunnelConfig};
 
@@ -103,7 +102,13 @@ mod russh_impl {
         let close_fn: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || {
             let h = close_handle.clone();
             tokio::spawn(async move {
-                let _ = h.disconnect(russh::Disconnect::ByApplication, String::new(), String::new()).await;
+                let _ = h
+                    .disconnect(
+                        russh::Disconnect::ByApplication,
+                        String::new(),
+                        String::new(),
+                    )
+                    .await;
             });
             accept_handle.abort();
         });
@@ -236,10 +241,7 @@ mod russh_impl {
                     let ok = handle
                         .authenticate_publickey(
                             username,
-                            russh_keys::key::PrivateKeyWithHashAlg::new(
-                                Arc::new(key_pair),
-                                None,
-                            ),
+                            russh_keys::key::PrivateKeyWithHashAlg::new(Arc::new(key_pair), None),
                         )
                         .await
                         .map_err(|e| SshError::Tunnel(e.to_string()))?;

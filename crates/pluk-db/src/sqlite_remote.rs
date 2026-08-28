@@ -35,8 +35,11 @@ fn parse_json_output(output: &str) -> Result<Vec<serde_json::Value>, DriverError
     if trimmed.is_empty() {
         return Ok(vec![]);
     }
-    serde_json::from_str::<Vec<serde_json::Value>>(trimmed)
-        .map_err(|e| DriverError::Query(format!("failed to parse sqlite3 -json output: {e}; output was: {trimmed}")))
+    serde_json::from_str::<Vec<serde_json::Value>>(trimmed).map_err(|e| {
+        DriverError::Query(format!(
+            "failed to parse sqlite3 -json output: {e}; output was: {trimmed}"
+        ))
+    })
 }
 
 pub struct RemoteSqliteDriver {
@@ -93,55 +96,104 @@ impl RemoteSqliteDriver {
 
 #[async_trait]
 impl Driver for RemoteSqliteDriver {
-    async fn query(&self, sql: &str, params: &[serde_json::Value], opts: Option<QueryOpts>) -> Result<QueryResult, DriverError> {
+    async fn query(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+        opts: Option<QueryOpts>,
+    ) -> Result<QueryResult, DriverError> {
         reject_params(params)?;
         let rows = self.run_json(sql, false, opts).await?;
         Ok(Self::rows_to_query_result(rows))
     }
 
-    async fn query_read_only(&self, sql: &str, params: &[serde_json::Value], opts: Option<QueryOpts>) -> Result<QueryResult, DriverError> {
+    async fn query_read_only(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+        opts: Option<QueryOpts>,
+    ) -> Result<QueryResult, DriverError> {
         reject_params(params)?;
         let rows = self.run_json(sql, true, opts).await?;
         Ok(Self::rows_to_query_result(rows))
     }
 
-    async fn explain(&self, sql: &str, params: &[serde_json::Value]) -> Result<QueryResult, DriverError> {
+    async fn explain(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<QueryResult, DriverError> {
         reject_params(params)?;
-        let rows = self.run_json(&format!("EXPLAIN QUERY PLAN {sql}"), false, None).await?;
+        let rows = self
+            .run_json(&format!("EXPLAIN QUERY PLAN {sql}"), false, None)
+            .await?;
         Ok(Self::rows_to_query_result(rows))
     }
 
     async fn list_tables(&self, _schema: Option<&str>) -> Result<Vec<String>, DriverError> {
         let rows = self
-            .run_json("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", false, None)
+            .run_json(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+                false,
+                None,
+            )
             .await?;
         Ok(rows
             .into_iter()
-            .filter_map(|v| v.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()))
+            .filter_map(|v| {
+                v.get("name")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+            })
             .collect())
     }
 
-    async fn describe_table(&self, table: &str, _schema: Option<&str>) -> Result<Vec<ColumnInfo>, DriverError> {
+    async fn describe_table(
+        &self,
+        table: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<ColumnInfo>, DriverError> {
         let rows = self
-            .run_json(&format!("PRAGMA table_info({})", quote_ident(table)), false, None)
+            .run_json(
+                &format!("PRAGMA table_info({})", quote_ident(table)),
+                false,
+                None,
+            )
             .await?;
         Ok(rows
             .into_iter()
             .map(|r| ColumnInfo {
-                column: r.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                r#type: r.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                column: r
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                r#type: r
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 nullable: r.get("notnull").and_then(|v| v.as_i64()).unwrap_or(0) == 0,
             })
             .collect())
     }
 
-    async fn sample_table(&self, table: &str, limit: i64, _schema: Option<&str>) -> Result<QueryResult, DriverError> {
+    async fn sample_table(
+        &self,
+        table: &str,
+        limit: i64,
+        _schema: Option<&str>,
+    ) -> Result<QueryResult, DriverError> {
         let sql = format!("SELECT * FROM {} LIMIT {}", quote_ident(table), limit);
         let rows = self.run_json(&sql, false, None).await?;
         Ok(Self::rows_to_query_result(rows))
     }
 
-    async fn search_schema(&self, term: &str, _schema: Option<&str>) -> Result<Vec<SchemaSearchResult>, DriverError> {
+    async fn search_schema(
+        &self,
+        term: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<SchemaSearchResult>, DriverError> {
         // Keep parity with TS remote: tables via LIKE with escaped pattern, columns via Rust contains
         let pattern = format!("%{}%", term.replace('%', "\\%").replace('_', "\\_"));
         // Escape single quotes for sqlite string literal
@@ -155,7 +207,11 @@ impl Driver for RemoteSqliteDriver {
             .await?;
         let mut results: Vec<SchemaSearchResult> = rows
             .into_iter()
-            .filter_map(|v| v.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()))
+            .filter_map(|v| {
+                v.get("name")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+            })
             .map(|t| SchemaSearchResult {
                 kind: "table".into(),
                 table: t,
@@ -185,7 +241,11 @@ impl Driver for RemoteSqliteDriver {
         Ok(results)
     }
 
-    async fn list_relationships(&self, table: Option<&str>, _schema: Option<&str>) -> Result<Vec<RelationshipInfo>, DriverError> {
+    async fn list_relationships(
+        &self,
+        table: Option<&str>,
+        _schema: Option<&str>,
+    ) -> Result<Vec<RelationshipInfo>, DriverError> {
         let tables: Vec<String> = if let Some(t) = table {
             vec![t.to_string()]
         } else {
@@ -194,14 +254,30 @@ impl Driver for RemoteSqliteDriver {
         let mut out = Vec::new();
         for t in tables {
             let rows = self
-                .run_json(&format!("PRAGMA foreign_key_list({})", quote_ident(&t)), false, None)
+                .run_json(
+                    &format!("PRAGMA foreign_key_list({})", quote_ident(&t)),
+                    false,
+                    None,
+                )
                 .await?;
             for r in rows {
                 out.push(RelationshipInfo {
                     from_table: t.clone(),
-                    from_column: r.get("from").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    to_table: r.get("table").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    to_column: r.get("to").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    from_column: r
+                        .get("from")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    to_table: r
+                        .get("table")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    to_column: r
+                        .get("to")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     constraint_name: Some(format!(
                         "fk_{}_{}",
                         t,
@@ -213,22 +289,46 @@ impl Driver for RemoteSqliteDriver {
         Ok(out)
     }
 
-    async fn table_stats(&self, table: &str, _schema: Option<&str>) -> Result<TableStats, DriverError> {
+    async fn table_stats(
+        &self,
+        table: &str,
+        _schema: Option<&str>,
+    ) -> Result<TableStats, DriverError> {
         let idx_rows = self
-            .run_json(&format!("PRAGMA index_list({})", quote_ident(table)), false, None)
+            .run_json(
+                &format!("PRAGMA index_list({})", quote_ident(table)),
+                false,
+                None,
+            )
             .await?;
         let mut indexes = Vec::new();
         for idx in idx_rows {
-            let name = idx.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let name = idx
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let unique = idx.get("unique").and_then(|v| v.as_i64()).unwrap_or(0) == 1;
             let cols_rows = self
-                .run_json(&format!("PRAGMA index_info({})", quote_ident(&name)), false, None)
+                .run_json(
+                    &format!("PRAGMA index_info({})", quote_ident(&name)),
+                    false,
+                    None,
+                )
                 .await?;
             let cols: Vec<String> = cols_rows
                 .into_iter()
-                .filter_map(|v| v.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()))
+                .filter_map(|v| {
+                    v.get("name")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect();
-            indexes.push(IndexInfo { name, columns: cols, unique });
+            indexes.push(IndexInfo {
+                name,
+                columns: cols,
+                unique,
+            });
         }
         Ok(TableStats {
             table: table.to_string(),
@@ -246,7 +346,11 @@ impl Driver for RemoteSqliteDriver {
         let rows = self.run_json("PRAGMA database_list", false, None).await?;
         Ok(rows
             .into_iter()
-            .filter_map(|v| v.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()))
+            .filter_map(|v| {
+                v.get("name")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+            })
             .collect())
     }
 
@@ -263,7 +367,10 @@ impl Driver for RemoteSqliteDriver {
             }
             lines.push(")".into());
             for fk in fks {
-                lines.push(format!("FK {}.{} -> {}.{}", t, fk.from_column, fk.to_table, fk.to_column));
+                lines.push(format!(
+                    "FK {}.{} -> {}.{}",
+                    t, fk.from_column, fk.to_table, fk.to_column
+                ));
             }
             lines.push(String::new());
         }
@@ -271,9 +378,16 @@ impl Driver for RemoteSqliteDriver {
     }
 
     async fn test_connection(&self) -> Result<(), DriverError> {
-        self.run_json("SELECT 1 AS ok", false, Some(QueryOpts { timeout_ms: Some(15_000), cancel: None }))
-            .await
-            .map(|_| ())
+        self.run_json(
+            "SELECT 1 AS ok",
+            false,
+            Some(QueryOpts {
+                timeout_ms: Some(15_000),
+                cancel: None,
+            }),
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn close(&self) -> Result<(), DriverError> {
@@ -315,14 +429,28 @@ mod tests {
         struct NoopExec;
         #[async_trait::async_trait]
         impl SshExecProvider for NoopExec {
-            async fn exec(&self, _cmd: String, _tm: Option<u64>) -> Result<String, DriverError> { Ok("[]".into()) }
+            async fn exec(&self, _cmd: String, _tm: Option<u64>) -> Result<String, DriverError> {
+                Ok("[]".into())
+            }
         }
         let d = RemoteSqliteDriver::new("/tmp/x.db".into(), Box::new(NoopExec));
-        let err = d.query("SELECT 1", &[serde_json::json!(1)], None).await.unwrap_err();
-        assert!(err.to_string().contains("Bind parameters are not supported"));
+        let err = d
+            .query("SELECT 1", &[serde_json::json!(1)], None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Bind parameters are not supported")
+        );
         assert!(err.to_string().contains("injection"));
-        let err2 = d.query_read_only("SELECT 1", &[serde_json::json!(1)], None).await.unwrap_err();
-        assert!(err2.to_string().contains("Bind parameters are not supported"));
+        let err2 = d
+            .query_read_only("SELECT 1", &[serde_json::json!(1)], None)
+            .await
+            .unwrap_err();
+        assert!(
+            err2.to_string()
+                .contains("Bind parameters are not supported")
+        );
     }
 
     #[test]
@@ -331,7 +459,17 @@ mod tests {
         let out_tables = r#"[{"name":"orders"},{"name":"users"}]"#;
         let rows = parse_json_output(out_tables).unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0]["name"], "users".to_string().chars().next().map(|_| ()).is_some().then(|| rows[0]["name"].clone()).unwrap_or(rows[0]["name"].clone()));
+        assert_eq!(
+            rows[0]["name"],
+            "users"
+                .to_string()
+                .chars()
+                .next()
+                .map(|_| ())
+                .is_some()
+                .then(|| rows[0]["name"].clone())
+                .unwrap_or(rows[0]["name"].clone())
+        );
         // pragma table_info shape
         let out_cols = r#"[{"cid":0,"name":"id","type":"INTEGER","notnull":0,"dflt_value":null,"pk":1},{"cid":1,"name":"email","type":"TEXT","notnull":1,"dflt_value":null,"pk":0}]"#;
         let cols = parse_json_output(out_cols).unwrap();
@@ -343,7 +481,11 @@ mod tests {
         // Malformed JSON should error with output included
         let bad = parse_json_output("not json");
         assert!(bad.is_err());
-        assert!(bad.unwrap_err().to_string().contains("failed to parse sqlite3"));
+        assert!(
+            bad.unwrap_err()
+                .to_string()
+                .contains("failed to parse sqlite3")
+        );
     }
 
     #[tokio::test]
@@ -395,14 +537,25 @@ mod tests {
             }
         }
         let shared = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
-        let d2 = RemoteSqliteDriver::new("/tmp/my db.sqlite".into(), Box::new(SharedCapture(shared.clone())));
+        let d2 = RemoteSqliteDriver::new(
+            "/tmp/my db.sqlite".into(),
+            Box::new(SharedCapture(shared.clone())),
+        );
         d2.query_read_only("SELECT 1", &[], None).await.unwrap();
         let cmds = shared.lock().unwrap().clone();
         assert_eq!(cmds.len(), 1);
-        assert!(cmds[0].contains("-readonly"), "read-only must pass -readonly: {}", cmds[0]);
+        assert!(
+            cmds[0].contains("-readonly"),
+            "read-only must pass -readonly: {}",
+            cmds[0]
+        );
         assert!(cmds[0].contains("-json"), "must use -json");
         // Shell quoting of path with space
-        assert!(cmds[0].contains("'/tmp/my db.sqlite'"), "path must be shell-quoted: {}", cmds[0]);
+        assert!(
+            cmds[0].contains("'/tmp/my db.sqlite'"),
+            "path must be shell-quoted: {}",
+            cmds[0]
+        );
     }
 
     #[tokio::test]

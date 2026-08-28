@@ -16,7 +16,11 @@ pub fn ssh_auth_fields(prefix: &str, group: &str, show_if: Option<ShowIf>) -> Ve
         ConfigField::new(k("auth_type"), "Auth", FieldType::Select)
             .group(group)
             .default_value(&serde_json::json!("agent"))
-            .options(&[("agent", "Agent"), ("key", "Private Key"), ("password", "Password")]),
+            .options(&[
+                ("agent", "Agent"),
+                ("key", "Private Key"),
+                ("password", "Password"),
+            ]),
         ConfigField::new(k("key_path"), "Private Key", FieldType::File)
             .group(group)
             .show_if(ShowIf::eq_str(k("auth_type"), "key")),
@@ -47,13 +51,20 @@ mod tests {
 
     #[test]
     fn prefixed_keys_stay_stable_across_integrations() {
-        let fields = ssh_auth_fields("ssh_", "SSH Tunnel", Some(ShowIf::new("use_ssh", &json!(true))));
+        let fields = ssh_auth_fields(
+            "ssh_",
+            "SSH Tunnel",
+            Some(ShowIf::new("use_ssh", &json!(true))),
+        );
         let keys: Vec<&str> = fields.iter().map(|f| f.key.as_str()).collect();
         assert_eq!(keys, ["ssh_auth_type", "ssh_key_path", "ssh_password"]);
         // Every field except the key picker carries the block's own
         // visibility condition; the picker is keyed to key auth instead.
         assert_eq!(fields[0].show_if, Some(ShowIf::eq_str("use_ssh", "true")));
-        assert_eq!(fields[1].show_if, Some(ShowIf::eq_str("ssh_auth_type", "key")));
+        assert_eq!(
+            fields[1].show_if,
+            Some(ShowIf::eq_str("ssh_auth_type", "key"))
+        );
         assert_eq!(fields[2].show_if, Some(ShowIf::eq_str("use_ssh", "true")));
         // And the block ships agent auth as its default.
         assert_eq!(fields[0].default.as_deref(), Some("agent"));

@@ -3,6 +3,8 @@ export type IconName =
   | "check"
   | "chevron-right"
   | "close"
+  | "copy"
+  | "edit"
   | "error"
   | "filter"
   | "group"
@@ -13,6 +15,7 @@ export type IconName =
   | "search"
   | "spinner"
   | "terminal"
+  | "trash"
   | "tray";
 
 type IconOptions = {
@@ -25,6 +28,8 @@ const paths: Record<IconName, string[]> = {
   check: ["m5 12 4 4L19 6"],
   "chevron-right": ["m9 5 7 7-7 7"],
   close: ["m6 6 12 12", "M18 6 6 18"],
+  copy: ["M9 9h10v11H9z", "M15 6H5v11"],
+  edit: ["m4 20 1-4.5L16.6 3.9a2.2 2.2 0 0 1 3.1 3.1L8.5 19 4 20Z", "m14.5 6 3.5 3.5"],
   error: ["M12 3 21 20H3L12 3Z", "M12 9v4", "M12 17h.01"],
   filter: ["M4 7h16", "M7 12h10", "M10 17h4"],
   group: ["M5 8.5h11v10H5z", "M8 5h11v10H8z"],
@@ -35,6 +40,7 @@ const paths: Record<IconName, string[]> = {
   search: ["m20 20-4.5-4.5", "M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0Z"],
   spinner: ["M12 4a8 8 0 1 0 8 8"],
   terminal: ["M4 5h16v14H4z", "m7 9 3 3-3 3", "M12 15h5"],
+  trash: ["M5 7h14", "M9.5 7V4.5h5V7", "m7 7 1 12.5h8L17 7"],
   tray: ["M4 5h16v14H4z", "M4 14h5l1.5 2h3L15 14h5"],
 };
 

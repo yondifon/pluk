@@ -1,5 +1,5 @@
-use crate::ssl::{build_ssl_config, SslConfig};
 use crate::error::DriverError;
+use crate::ssl::{SslConfig, build_ssl_config};
 
 #[derive(Debug, Clone, Default)]
 pub struct SqlConfig {
@@ -26,10 +26,15 @@ pub struct SqlConfig {
 }
 
 impl SqlConfig {
-    pub fn effective_host(&self) -> String { self.host.clone().unwrap_or_else(|| "localhost".into()) }
+    pub fn effective_host(&self) -> String {
+        self.host.clone().unwrap_or_else(|| "localhost".into())
+    }
     pub fn effective_port(&self) -> u16 {
-        if self.r#type == "sqlite" { return self.port.unwrap_or(0); }
-        self.port.unwrap_or_else(|| if self.r#type == "mysql" { 3306 } else { 5432 })
+        if self.r#type == "sqlite" {
+            return self.port.unwrap_or(0);
+        }
+        self.port
+            .unwrap_or_else(|| if self.r#type == "mysql" { 3306 } else { 5432 })
     }
     pub fn sqlite_filename(&self) -> Option<String> {
         self.filename.clone().or_else(|| self.database.clone())
@@ -51,7 +56,12 @@ pub fn resolve_ssl(cfg: &SqlConfig) -> Result<Option<SslConfig>, DriverError> {
 
 #[async_trait::async_trait]
 pub trait SshTunnelProvider: Send + Sync {
-    async fn open_tunnel(&self, cfg: &SqlConfig, remote_host: &str, remote_port: u16) -> Result<TunnelEndpoint, DriverError>;
+    async fn open_tunnel(
+        &self,
+        cfg: &SqlConfig,
+        remote_host: &str,
+        remote_port: u16,
+    ) -> Result<TunnelEndpoint, DriverError>;
 }
 
 #[derive(Clone)]
@@ -62,7 +72,11 @@ pub struct TunnelEndpoint {
 }
 
 impl TunnelEndpoint {
-    pub fn close(&self) { if let Some(f) = &self.close_fn { f(); } }
+    pub fn close(&self) {
+        if let Some(f) = &self.close_fn {
+            f();
+        }
+    }
 }
 
 #[async_trait::async_trait]

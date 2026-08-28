@@ -58,13 +58,17 @@ fn parse_log_cursor(time: Option<&str>, id: Option<&str>) -> Result<Option<LogCu
     if parsed_id <= 0 {
         return Err(());
     }
-    Ok(Some(LogCursor { created_at: time.to_string(), id: parsed_id }))
+    Ok(Some(LogCursor {
+        created_at: time.to_string(),
+        id: parsed_id,
+    }))
 }
 
 /// Exactly one scope must be present and non-empty.
 fn parse_log_scope(connection_id: Option<&str>, group_id: Option<&str>) -> Option<LogScope> {
     if let Some(connection_id) = connection_id {
-        return (group_id.is_none() && !connection_id.is_empty()).then(|| LogScope::Connection(connection_id.to_string()));
+        return (group_id.is_none() && !connection_id.is_empty())
+            .then(|| LogScope::Connection(connection_id.to_string()));
     }
     let group_id = group_id?;
     (!group_id.is_empty()).then(|| LogScope::Group(group_id.to_string()))
@@ -138,7 +142,12 @@ pub fn handle(store: &Store, path: &str, method: &str, query: &str) -> Option<Re
         return None;
     }
     let params = parse_query(query);
-    let get = |key: &str| params.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_str());
+    let get = |key: &str| {
+        params
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.as_str())
+    };
 
     let Some(scope) = parse_log_scope(get("connectionId"), get("groupId")) else {
         return Some(error_response("Exactly one log scope is required"));
@@ -151,18 +160,20 @@ pub fn handle(store: &Store, path: &str, method: &str, query: &str) -> Option<Re
         Err(()) => return Some(error_response("Invalid cursor")),
     };
 
-    let page: LogPage = store.read_log_page(&scope, range, cursor.as_ref()).unwrap_or(LogPage {
-        entries: Vec::new(),
-        next_cursor: None,
-        has_more: false,
-    });
+    let page: LogPage = store
+        .read_log_page(&scope, range, cursor.as_ref())
+        .unwrap_or(LogPage {
+            entries: Vec::new(),
+            next_cursor: None,
+            has_more: false,
+        });
 
     let body = PageJson {
         entries: page.entries.into_iter().map(from_entry).collect(),
-        next_cursor: page
-            .next_cursor
-            .as_ref()
-            .map(|c| CursorJson { created_at: &c.created_at, id: c.id }),
+        next_cursor: page.next_cursor.as_ref().map(|c| CursorJson {
+            created_at: &c.created_at,
+            id: c.id,
+        }),
         has_more: page.has_more,
     };
     Some(axum::Json(body).into_response())
@@ -191,7 +202,10 @@ pub(crate) fn parse_query(query: &str) -> Vec<(String, String)> {
                 }
                 b'%' if bytes.len() >= index + 3 => {
                     let hex = bytes.get(index + 1..index + 3);
-                    match hex.and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    match hex
+                        .and_then(|h| std::str::from_utf8(h).ok())
+                        .and_then(|h| u8::from_str_radix(h, 16).ok())
+                    {
                         Some(byte) => {
                             out.push(byte);
                             index += 3;
@@ -240,15 +254,27 @@ mod tests {
         assert_eq!(parse_log_cursor(Some("nope"), Some("1")), Err(()));
         assert_eq!(
             parse_log_cursor(Some("2026-01-01 00:00:00"), Some("7")),
-            Ok(Some(LogCursor { created_at: "2026-01-01 00:00:00".into(), id: 7 }))
+            Ok(Some(LogCursor {
+                created_at: "2026-01-01 00:00:00".into(),
+                id: 7
+            }))
         );
-        assert_eq!(parse_log_cursor(Some("2026-01-01 00:00:00"), Some("0")), Err(()));
+        assert_eq!(
+            parse_log_cursor(Some("2026-01-01 00:00:00"), Some("0")),
+            Err(())
+        );
     }
 
     #[test]
     fn scope_requires_exactly_one_side() {
-        assert_eq!(parse_log_scope(Some("c1"), None), Some(LogScope::Connection("c1".into())));
-        assert_eq!(parse_log_scope(None, Some("g1")), Some(LogScope::Group("g1".into())));
+        assert_eq!(
+            parse_log_scope(Some("c1"), None),
+            Some(LogScope::Connection("c1".into()))
+        );
+        assert_eq!(
+            parse_log_scope(None, Some("g1")),
+            Some(LogScope::Group("g1".into()))
+        );
         assert_eq!(parse_log_scope(None, None), None);
         assert_eq!(parse_log_scope(Some(""), None), None);
         assert_eq!(parse_log_scope(Some("c1"), Some("g1")), None);

@@ -30,13 +30,23 @@ pub struct Frame {
 
 impl Default for Frame {
     fn default() -> Self {
-        Self { x: None, y: None, width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT }
+        Self {
+            x: None,
+            y: None,
+            width: DEFAULT_WIDTH,
+            height: DEFAULT_HEIGHT,
+        }
     }
 }
 
 impl Frame {
     pub fn new(width: f64, height: f64) -> Self {
-        Self { x: None, y: None, width, height }
+        Self {
+            x: None,
+            y: None,
+            width,
+            height,
+        }
     }
 
     /// Clamp the frame up to the content minimum, matching Swift's
@@ -65,9 +75,10 @@ pub fn default_file_path() -> PathBuf {
 /// Load the persisted frame, or the default when absent / corrupt.
 pub fn load(path: &PathBuf) -> Frame {
     if let Ok(data) = std::fs::read_to_string(path)
-        && let Ok(frame) = serde_json::from_str::<Frame>(&data) {
-            return frame.clamped();
-        }
+        && let Ok(frame) = serde_json::from_str::<Frame>(&data)
+    {
+        return frame.clamped();
+    }
     Frame::default()
 }
 
@@ -94,7 +105,12 @@ mod tests {
 
     #[test]
     fn clamp_raises_small_frame_to_content_minimum() {
-        let small = Frame { x: Some(0.0), y: Some(0.0), width: 400.0, height: 300.0 };
+        let small = Frame {
+            x: Some(0.0),
+            y: Some(0.0),
+            width: 400.0,
+            height: 300.0,
+        };
         assert!(small.needs_clamp());
         let clamped = small.clamped();
         assert_eq!(clamped.width, CONTENT_MIN_WIDTH);
@@ -116,14 +132,24 @@ mod tests {
     fn round_trips_through_file_and_clamps_corrupt_restores() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("frame.json");
-        let frame = Frame { x: Some(10.0), y: Some(20.0), width: 500.0, height: 500.0 };
+        let frame = Frame {
+            x: Some(10.0),
+            y: Some(20.0),
+            width: 500.0,
+            height: 500.0,
+        };
         save(&path, &frame).unwrap();
         let loaded = load(&path);
         // Saved small frame is clamped on load.
         assert_eq!(loaded.width, CONTENT_MIN_WIDTH);
         assert_eq!(loaded.height, CONTENT_MIN_HEIGHT);
         // Valid frame round-trips clamped value.
-        let big = Frame { x: Some(5.0), y: Some(5.0), width: 1200.0, height: 800.0 };
+        let big = Frame {
+            x: Some(5.0),
+            y: Some(5.0),
+            width: 1200.0,
+            height: 800.0,
+        };
         save(&path, &big).unwrap();
         assert_eq!(load(&path), big);
     }
@@ -145,7 +171,12 @@ mod tests {
 
     #[test]
     fn serialization_is_stable() {
-        let f = Frame { x: Some(1.0), y: Some(2.0), width: 1040.0, height: 660.0 };
+        let f = Frame {
+            x: Some(1.0),
+            y: Some(2.0),
+            width: 1040.0,
+            height: 660.0,
+        };
         let json = serde_json::to_string(&f).unwrap();
         let back: Frame = serde_json::from_str(&json).unwrap();
         assert_eq!(f, back);

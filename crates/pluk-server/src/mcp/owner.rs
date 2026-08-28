@@ -26,14 +26,15 @@ impl OwnerPool {
     /// bodies and pooled resources watch it to stop promptly on teardown.
     pub fn open_owner(&self, owner_id: &str) -> CancellationToken {
         let mut aborts = self.aborts.lock().expect("owner lock");
-        aborts
-            .entry(owner_id.to_string())
-            .or_default()
-            .clone()
+        aborts.entry(owner_id.to_string()).or_default().clone()
     }
 
     pub fn owner_token(&self, owner_id: &str) -> Option<CancellationToken> {
-        self.aborts.lock().expect("owner lock").get(owner_id).cloned()
+        self.aborts
+            .lock()
+            .expect("owner lock")
+            .get(owner_id)
+            .cloned()
     }
 
     /// Register a hook run whenever any owner closes (adapter-owned pools
@@ -59,8 +60,21 @@ impl OwnerPool {
     /// Returns how many scopes were closed.
     pub fn reset_owners(&self, owner_id: Option<&str>) -> usize {
         let ids: Vec<String> = match owner_id {
-            Some(id) => self.aborts.lock().expect("owner lock").contains_key(id).then(|| id.to_string()).into_iter().collect(),
-            None => self.aborts.lock().expect("owner lock").keys().cloned().collect(),
+            Some(id) => self
+                .aborts
+                .lock()
+                .expect("owner lock")
+                .contains_key(id)
+                .then(|| id.to_string())
+                .into_iter()
+                .collect(),
+            None => self
+                .aborts
+                .lock()
+                .expect("owner lock")
+                .keys()
+                .cloned()
+                .collect(),
         };
         let count = ids.len();
         for id in ids {

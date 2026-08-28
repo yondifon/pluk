@@ -3,7 +3,7 @@ pub mod fields;
 
 use std::sync::Arc;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use pluk_policy::ActionCategory;
 
@@ -11,8 +11,8 @@ use crate::action::{ActionAdapter, ActionAdapterSpec, ActionOutput, ActionTool};
 use crate::error::AdapterError;
 
 pub use client::{
-    assert_message_id, assert_positional, flag, flag_each, paging, range_args, same_account, scoped,
-    set_spark_runner, spark_command, spark_config, toggle, SparkCfg,
+    SparkCfg, assert_message_id, assert_positional, flag, flag_each, paging, range_args,
+    same_account, scoped, set_spark_runner, spark_command, spark_config, toggle,
 };
 pub use fields::spark_fields;
 
@@ -22,7 +22,10 @@ const ACCESS: &str = "Reads mail, calendar, contacts, meetings and teams from th
 // ── helpers for JSON arg extraction ───────────────────────────────────────
 
 fn s(args: &Value, key: &str) -> Option<String> {
-    args.get(key).and_then(|v| v.as_str()).map(|x| x.to_string()).filter(|x| !x.trim().is_empty())
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(|x| x.to_string())
+        .filter(|x| !x.trim().is_empty())
 }
 fn b(args: &Value, key: &str) -> Option<bool> {
     args.get(key).and_then(|v| v.as_bool())
@@ -31,18 +34,28 @@ fn b_true(args: &Value, key: &str) -> bool {
     b(args, key).unwrap_or(false)
 }
 fn i64_opt(args: &Value, key: &str) -> Option<i64> {
-    args.get(key).and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|n| n as i64)))
+    args.get(key)
+        .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|n| n as i64)))
 }
 fn arr_str(args: &Value, key: &str) -> Vec<String> {
     match args.get(key) {
-        Some(Value::Array(arr)) => arr.iter().filter_map(|v| v.as_str()).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(),
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str())
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect(),
         Some(Value::String(x)) if !x.trim().is_empty() => vec![x.trim().to_string()],
         _ => vec![],
     }
 }
 
-fn prop_str(desc: &str) -> Value { json!({"type":"string","description":desc}) }
-fn prop_opt_str(desc: &str) -> Value { json!({"type":"string","description":desc}) }
+fn prop_str(desc: &str) -> Value {
+    json!({"type":"string","description":desc})
+}
+fn prop_opt_str(desc: &str) -> Value {
+    json!({"type":"string","description":desc})
+}
 
 // ── tool builders ─────────────────────────────────────────────────────────
 
@@ -50,19 +63,54 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
     let mut tools: Vec<ActionTool> = Vec::new();
 
     let email_actions = [
-        "pin","unpin","mute","unmute","snooze","unsnooze","changeReminder","clearReminder",
-        "setAside","archive","moveToInbox","moveToTrash","moveToFolder","attachLabel","detachLabel",
-        "markAsDone","markAsUndone","markAsSeen","markAsUnseen","markAsSpam",
-        "markThreadAsPriority","unmarkThreadAsPriority","unsubscribe",
-        "changeCategoryPersonal","changeCategoryNotification","changeCategoryNewsletters",
-        "shareInTeam","assign","delegationComplete","delegationReopen",
+        "pin",
+        "unpin",
+        "mute",
+        "unmute",
+        "snooze",
+        "unsnooze",
+        "changeReminder",
+        "clearReminder",
+        "setAside",
+        "archive",
+        "moveToInbox",
+        "moveToTrash",
+        "moveToFolder",
+        "attachLabel",
+        "detachLabel",
+        "markAsDone",
+        "markAsUndone",
+        "markAsSeen",
+        "markAsUnseen",
+        "markAsSpam",
+        "markThreadAsPriority",
+        "unmarkThreadAsPriority",
+        "unsubscribe",
+        "changeCategoryPersonal",
+        "changeCategoryNotification",
+        "changeCategoryNewsletters",
+        "shareInTeam",
+        "assign",
+        "delegationComplete",
+        "delegationReopen",
     ];
     let contact_actions = [
-        "changeCategoryPersonal","changeCategoryNotification","changeCategoryNewsletters",
-        "groupEmailsFromContact","groupEmailsFromContactAndShowInInbox","ungroupEmailsFromContact",
-        "markContactAsImportant","unmarkContactAsImportant","markContactAsPrimary","unmarkContactAsPrimary",
-        "acceptContact","blockContact","acceptDomain","blockDomain",
-        "enableAutosummaryForContact","disableAutosummaryForContact",
+        "changeCategoryPersonal",
+        "changeCategoryNotification",
+        "changeCategoryNewsletters",
+        "groupEmailsFromContact",
+        "groupEmailsFromContactAndShowInInbox",
+        "ungroupEmailsFromContact",
+        "markContactAsImportant",
+        "unmarkContactAsImportant",
+        "markContactAsPrimary",
+        "unmarkContactAsPrimary",
+        "acceptContact",
+        "blockContact",
+        "acceptDomain",
+        "blockDomain",
+        "enableAutosummaryForContact",
+        "disableAutosummaryForContact",
     ];
 
     // accounts
@@ -147,9 +195,15 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let mut props = Map::new();
         props.insert("folders".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Folder ids from folders, e.g. \"you@co.com:Archive\". The integration's inbox — or the cross-account Unified Inbox when it names no account — when omitted"}));
         props.insert("filter".to_string(), prop_opt_str("Gmail-style filter, combinable: from: to: cc: subject: before:yyyy/MM/dd after: newer_than:7d older_than:30d has:attachment is:unread is:starred is:pinned category:priority assigned_to:me filename:"));
-        props.insert("order".to_string(), json!({"type":"string","enum":["ascending","descending"]}));
+        props.insert(
+            "order".to_string(),
+            json!({"type":"string","enum":["ascending","descending"]}),
+        );
         props.insert("new_senders".to_string(), json!({"type":"boolean","description":"Only mail from senders GateKeeper is holding back"}));
-        props.insert("page".to_string(), json!({"type":"integer","minimum":1,"description":"Page number, 1-based"}));
+        props.insert(
+            "page".to_string(),
+            json!({"type":"integer","minimum":1,"description":"Page number, 1-based"}),
+        );
         props.insert("page_size".to_string(), json!({"type":"integer","minimum":1,"description":"Rows per page; capped by the integration"}));
         tools.push(
             ActionTool::new("list_emails", "List emails in a folder — id, account, sender, date, subject, flags. Browsing only: use search_emails to find mail across every folder.", ActionCategory::Read)
@@ -214,11 +268,17 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("about".to_string(), prop_opt_str("Topic to search for; omit to list by filter instead"));
+        props.insert(
+            "about".to_string(),
+            prop_opt_str("Topic to search for; omit to list by filter instead"),
+        );
         props.insert("filter".to_string(), prop_opt_str("Gmail-style filter, combinable: from: to: cc: subject: before:yyyy/MM/dd after: newer_than:7d older_than:30d has:attachment is:unread is:starred is:pinned category:priority assigned_to:me filename:"));
         props.insert("in".to_string(), prop_opt_str("Scope: account, \"Team Name\", shared inbox or a qualified folder. The integration's account — or every folder when it names none — when omitted"));
         props.insert("order".to_string(), json!({"type":"string","enum":["ascending","descending"],"description":"List mode only"}));
-        props.insert("page".to_string(), json!({"type":"integer","minimum":1,"description":"Page number, 1-based"}));
+        props.insert(
+            "page".to_string(),
+            json!({"type":"integer","minimum":1,"description":"Page number, 1-based"}),
+        );
         props.insert("page_size".to_string(), json!({"type":"integer","minimum":1,"description":"Rows per page; capped by the integration"}));
         tools.push(
             ActionTool::new("search_emails", "Search mail across every folder. With about it does keyword + semantic matching and returns bodies — use it to answer questions. Without it, filters across all folders.", ActionCategory::Read)
@@ -275,7 +335,10 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("message_id".to_string(), prop_str("Message id from list_emails / search_emails, or a Spark deep link"));
+        props.insert(
+            "message_id".to_string(),
+            prop_str("Message id from list_emails / search_emails, or a Spark deep link"),
+        );
         props.insert("download_attachments".to_string(), json!({"type":"boolean","description":"Fetch attachments that aren't cached locally yet"}));
         tools.push(
             ActionTool::new("read_thread", "Read a full thread — headers, plain-text bodies, attachment table and the thread's custom labels.", ActionCategory::Read)
@@ -342,38 +405,93 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_run = c.clone();
         let mut props = Map::new();
         props.insert("range".to_string(), json!({"type":"string","enum":["today","tomorrow","week"],"description":"Range shortcut; ignored when start/end are given"}));
-        props.insert("start".to_string(), prop_opt_str("Start date: yyyy-MM-dd, dd/MM/yyyy or yyyy-MM-ddTHH:mm"));
-        props.insert("end".to_string(), prop_opt_str("End date, same formats as start"));
+        props.insert(
+            "start".to_string(),
+            prop_opt_str("Start date: yyyy-MM-dd, dd/MM/yyyy or yyyy-MM-ddTHH:mm"),
+        );
+        props.insert(
+            "end".to_string(),
+            prop_opt_str("End date, same formats as start"),
+        );
         props.insert("in".to_string(), prop_opt_str("Account or calendar, e.g. \"you@co.com:Work\". The integration's account — or every calendar when it names none — when omitted"));
         tools.push(
-            ActionTool::new("list_events", "List calendar events for a time range. Defaults to the rest of today.", ActionCategory::Read)
-                .schema(props)
-                .detail_fn(|args| format!("list_events {}", s(args, "range").unwrap_or_else(|| format!("{}..{}", s(args, "start").unwrap_or_default(), s(args, "end").unwrap_or_default()))))
-                .command_fn(move |args, _| {
-                    let c = &c_cmd;
-                    let mut a = vec!["events".to_string()];
-                    range_args(&mut a, s(args, "start").as_deref(), s(args, "end").as_deref(), s(args, "range").as_deref());
-                    let cal = match scoped(c, s(args, "in").as_deref(), "calendar") {
-                        Ok(v) => if v.is_empty() { c.account.clone() } else { v },
-                        Err(e) => return format!("list_events error: {}", e.message),
-                    };
-                    flag(&mut a, "--in", if cal.is_empty() { None } else { Some(cal.as_str()) });
-                    client::spark_command(c, &a)
-                })
-                .run(move |args, _| {
-                    let c = c_run.clone();
-                    async move {
-                        let mut a = vec!["events".to_string()];
-                        range_args(&mut a, s(&args, "start").as_deref(), s(&args, "end").as_deref(), s(&args, "range").as_deref());
-                        let cal_raw = s(&args, "in");
-                        let cal = scoped(&c, cal_raw.as_deref(), "calendar")?;
-                        let cal_val = if cal.is_empty() { c.account.clone() } else { cal };
-                        flag(&mut a, "--in", if cal_val.is_empty() { None } else { Some(cal_val.as_str()) });
-                        let cmd = client::spark_command(&c, &a);
-                        let out = client::run_spark(&c, a).await?;
-                        Ok(ActionOutput::with_command(Value::String(out), cmd))
+            ActionTool::new(
+                "list_events",
+                "List calendar events for a time range. Defaults to the rest of today.",
+                ActionCategory::Read,
+            )
+            .schema(props)
+            .detail_fn(|args| {
+                format!(
+                    "list_events {}",
+                    s(args, "range").unwrap_or_else(|| format!(
+                        "{}..{}",
+                        s(args, "start").unwrap_or_default(),
+                        s(args, "end").unwrap_or_default()
+                    ))
+                )
+            })
+            .command_fn(move |args, _| {
+                let c = &c_cmd;
+                let mut a = vec!["events".to_string()];
+                range_args(
+                    &mut a,
+                    s(args, "start").as_deref(),
+                    s(args, "end").as_deref(),
+                    s(args, "range").as_deref(),
+                );
+                let cal = match scoped(c, s(args, "in").as_deref(), "calendar") {
+                    Ok(v) => {
+                        if v.is_empty() {
+                            c.account.clone()
+                        } else {
+                            v
+                        }
                     }
-                }),
+                    Err(e) => return format!("list_events error: {}", e.message),
+                };
+                flag(
+                    &mut a,
+                    "--in",
+                    if cal.is_empty() {
+                        None
+                    } else {
+                        Some(cal.as_str())
+                    },
+                );
+                client::spark_command(c, &a)
+            })
+            .run(move |args, _| {
+                let c = c_run.clone();
+                async move {
+                    let mut a = vec!["events".to_string()];
+                    range_args(
+                        &mut a,
+                        s(&args, "start").as_deref(),
+                        s(&args, "end").as_deref(),
+                        s(&args, "range").as_deref(),
+                    );
+                    let cal_raw = s(&args, "in");
+                    let cal = scoped(&c, cal_raw.as_deref(), "calendar")?;
+                    let cal_val = if cal.is_empty() {
+                        c.account.clone()
+                    } else {
+                        cal
+                    };
+                    flag(
+                        &mut a,
+                        "--in",
+                        if cal_val.is_empty() {
+                            None
+                        } else {
+                            Some(cal_val.as_str())
+                        },
+                    );
+                    let cmd = client::spark_command(&c, &a);
+                    let out = client::run_spark(&c, a).await?;
+                    Ok(ActionOutput::with_command(Value::String(out), cmd))
+                }
+            }),
         );
     }
     // availability
@@ -384,32 +502,77 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let mut props = Map::new();
         props.insert("attendees".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Attendee addresses; your own calendar when omitted"}));
         props.insert("range".to_string(), json!({"type":"string","enum":["today","tomorrow","week"],"description":"Range shortcut; ignored when start/end are given"}));
-        props.insert("start".to_string(), prop_opt_str("Start date: yyyy-MM-dd, dd/MM/yyyy or yyyy-MM-ddTHH:mm"));
-        props.insert("end".to_string(), prop_opt_str("End date, same formats as start"));
+        props.insert(
+            "start".to_string(),
+            prop_opt_str("Start date: yyyy-MM-dd, dd/MM/yyyy or yyyy-MM-ddTHH:mm"),
+        );
+        props.insert(
+            "end".to_string(),
+            prop_opt_str("End date, same formats as start"),
+        );
         tools.push(
-            ActionTool::new("availability", "Find free time slots — your own, or the mutual windows for a set of attendees.", ActionCategory::Read)
-                .schema(props)
-                .detail_fn(|args| format!("availability {}", if arr_str(args, "attendees").is_empty() { "self".to_string() } else { arr_str(args, "attendees").join(",") }))
-                .command_fn(move |args, _| {
-                    let c = &c_cmd;
-                    let mut a = vec!["availability".to_string()];
-                    range_args(&mut a, s(args, "start").as_deref(), s(args, "end").as_deref(), s(args, "range").as_deref());
-                    let attendees = arr_str(args, "attendees").join(",");
-                    flag(&mut a, "--attendees", if attendees.is_empty() { None } else { Some(attendees.as_str()) });
-                    client::spark_command(c, &a)
-                })
-                .run(move |args, _| {
-                    let c = c_run.clone();
-                    async move {
-                        let mut a = vec!["availability".to_string()];
-                        range_args(&mut a, s(&args, "start").as_deref(), s(&args, "end").as_deref(), s(&args, "range").as_deref());
-                        let attendees = arr_str(&args, "attendees").join(",");
-                        flag(&mut a, "--attendees", if attendees.is_empty() { None } else { Some(attendees.as_str()) });
-                        let cmd = client::spark_command(&c, &a);
-                        let out = client::run_spark(&c, a).await?;
-                        Ok(ActionOutput::with_command(Value::String(out), cmd))
+            ActionTool::new(
+                "availability",
+                "Find free time slots — your own, or the mutual windows for a set of attendees.",
+                ActionCategory::Read,
+            )
+            .schema(props)
+            .detail_fn(|args| {
+                format!(
+                    "availability {}",
+                    if arr_str(args, "attendees").is_empty() {
+                        "self".to_string()
+                    } else {
+                        arr_str(args, "attendees").join(",")
                     }
-                }),
+                )
+            })
+            .command_fn(move |args, _| {
+                let c = &c_cmd;
+                let mut a = vec!["availability".to_string()];
+                range_args(
+                    &mut a,
+                    s(args, "start").as_deref(),
+                    s(args, "end").as_deref(),
+                    s(args, "range").as_deref(),
+                );
+                let attendees = arr_str(args, "attendees").join(",");
+                flag(
+                    &mut a,
+                    "--attendees",
+                    if attendees.is_empty() {
+                        None
+                    } else {
+                        Some(attendees.as_str())
+                    },
+                );
+                client::spark_command(c, &a)
+            })
+            .run(move |args, _| {
+                let c = c_run.clone();
+                async move {
+                    let mut a = vec!["availability".to_string()];
+                    range_args(
+                        &mut a,
+                        s(&args, "start").as_deref(),
+                        s(&args, "end").as_deref(),
+                        s(&args, "range").as_deref(),
+                    );
+                    let attendees = arr_str(&args, "attendees").join(",");
+                    flag(
+                        &mut a,
+                        "--attendees",
+                        if attendees.is_empty() {
+                            None
+                        } else {
+                            Some(attendees.as_str())
+                        },
+                    );
+                    let cmd = client::spark_command(&c, &a);
+                    let out = client::run_spark(&c, a).await?;
+                    Ok(ActionOutput::with_command(Value::String(out), cmd))
+                }
+            }),
         );
     }
     // find_contacts
@@ -450,7 +613,10 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("name".to_string(), prop_opt_str("Team name or a partial match"));
+        props.insert(
+            "name".to_string(),
+            prop_opt_str("Team name or a partial match"),
+        );
         tools.push(
             ActionTool::new("team_info", "Show a team's members, shared inboxes and assignments. Omit the name to list the available teams.", ActionCategory::Read)
                 .schema(props)
@@ -488,31 +654,55 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("filter".to_string(), prop_opt_str("subject:<text>, before:/after:yyyy/MM/dd, newer_than:30d, older_than:30d"));
-        props.insert("page".to_string(), json!({"type":"integer","minimum":1,"description":"Page number, 1-based"}));
+        props.insert(
+            "filter".to_string(),
+            prop_opt_str(
+                "subject:<text>, before:/after:yyyy/MM/dd, newer_than:30d, older_than:30d",
+            ),
+        );
+        props.insert(
+            "page".to_string(),
+            json!({"type":"integer","minimum":1,"description":"Page number, 1-based"}),
+        );
         props.insert("page_size".to_string(), json!({"type":"integer","minimum":1,"description":"Rows per page; capped by the integration"}));
         tools.push(
-            ActionTool::new("list_meetings", "List the meeting transcripts Spark recorded, newest first.", ActionCategory::Read)
-                .schema(props)
-                .detail_fn(|args| format!("list_meetings{}", s(args, "filter").map(|x| format!(" [{x}]")).unwrap_or_default()))
-                .command_fn(move |args, _| {
-                    let c = &c_cmd;
+            ActionTool::new(
+                "list_meetings",
+                "List the meeting transcripts Spark recorded, newest first.",
+                ActionCategory::Read,
+            )
+            .schema(props)
+            .detail_fn(|args| {
+                format!(
+                    "list_meetings{}",
+                    s(args, "filter")
+                        .map(|x| format!(" [{x}]"))
+                        .unwrap_or_default()
+                )
+            })
+            .command_fn(move |args, _| {
+                let c = &c_cmd;
+                let mut a = vec!["meetings".to_string()];
+                flag(&mut a, "--filter", s(args, "filter").as_deref());
+                paging(&mut a, c, i64_opt(args, "page"), i64_opt(args, "page_size"));
+                client::spark_command(c, &a)
+            })
+            .run(move |args, _| {
+                let c = c_run.clone();
+                async move {
                     let mut a = vec!["meetings".to_string()];
-                    flag(&mut a, "--filter", s(args, "filter").as_deref());
-                    paging(&mut a, c, i64_opt(args, "page"), i64_opt(args, "page_size"));
-                    client::spark_command(c, &a)
-                })
-                .run(move |args, _| {
-                    let c = c_run.clone();
-                    async move {
-                        let mut a = vec!["meetings".to_string()];
-                        flag(&mut a, "--filter", s(&args, "filter").as_deref());
-                        paging(&mut a, &c, i64_opt(&args, "page"), i64_opt(&args, "page_size"));
-                        let cmd = client::spark_command(&c, &a);
-                        let out = client::run_spark(&c, a).await?;
-                        Ok(ActionOutput::with_command(Value::String(out), cmd))
-                    }
-                }),
+                    flag(&mut a, "--filter", s(&args, "filter").as_deref());
+                    paging(
+                        &mut a,
+                        &c,
+                        i64_opt(&args, "page"),
+                        i64_opt(&args, "page_size"),
+                    );
+                    let cmd = client::spark_command(&c, &a);
+                    let out = client::run_spark(&c, a).await?;
+                    Ok(ActionOutput::with_command(Value::String(out), cmd))
+                }
+            }),
         );
     }
     // read_meeting
@@ -521,9 +711,18 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("message_id".to_string(), prop_str("Meeting id from list_meetings, or a Spark deep link"));
-        props.insert("transcript".to_string(), json!({"type":"boolean","description":"Include the full transcript"}));
-        props.insert("notes".to_string(), json!({"type":"boolean","description":"Include the user's notes"}));
+        props.insert(
+            "message_id".to_string(),
+            prop_str("Meeting id from list_meetings, or a Spark deep link"),
+        );
+        props.insert(
+            "transcript".to_string(),
+            json!({"type":"boolean","description":"Include the full transcript"}),
+        );
+        props.insert(
+            "notes".to_string(),
+            json!({"type":"boolean","description":"Include the user's notes"}),
+        );
         tools.push(
             ActionTool::new("read_meeting", "Read a meeting's summary, and optionally its full transcript and the user's notes.", ActionCategory::Read)
                 .schema(props)
@@ -562,34 +761,52 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("personal".to_string(), json!({"type":"boolean","description":"Only templates not tied to a team"}));
-        props.insert("team".to_string(), prop_opt_str("Only this team's templates"));
-        props.insert("page".to_string(), json!({"type":"integer","minimum":1,"description":"Page number, 1-based"}));
+        props.insert(
+            "personal".to_string(),
+            json!({"type":"boolean","description":"Only templates not tied to a team"}),
+        );
+        props.insert(
+            "team".to_string(),
+            prop_opt_str("Only this team's templates"),
+        );
+        props.insert(
+            "page".to_string(),
+            json!({"type":"integer","minimum":1,"description":"Page number, 1-based"}),
+        );
         props.insert("page_size".to_string(), json!({"type":"integer","minimum":1,"description":"Rows per page; capped by the integration"}));
         tools.push(
-            ActionTool::new("list_templates", "List the user's saved message templates, personal and team.", ActionCategory::Read)
-                .schema(props)
-                .detail_fn(|_| "list_templates".to_string())
-                .command_fn(move |args, _| {
-                    let c = &c_cmd;
+            ActionTool::new(
+                "list_templates",
+                "List the user's saved message templates, personal and team.",
+                ActionCategory::Read,
+            )
+            .schema(props)
+            .detail_fn(|_| "list_templates".to_string())
+            .command_fn(move |args, _| {
+                let c = &c_cmd;
+                let mut a = vec!["templates".to_string()];
+                toggle(&mut a, "--personal", b_true(args, "personal"));
+                flag(&mut a, "--team", s(args, "team").as_deref());
+                paging(&mut a, c, i64_opt(args, "page"), i64_opt(args, "page_size"));
+                client::spark_command(c, &a)
+            })
+            .run(move |args, _| {
+                let c = c_run.clone();
+                async move {
                     let mut a = vec!["templates".to_string()];
-                    toggle(&mut a, "--personal", b_true(args, "personal"));
-                    flag(&mut a, "--team", s(args, "team").as_deref());
-                    paging(&mut a, c, i64_opt(args, "page"), i64_opt(args, "page_size"));
-                    client::spark_command(c, &a)
-                })
-                .run(move |args, _| {
-                    let c = c_run.clone();
-                    async move {
-                        let mut a = vec!["templates".to_string()];
-                        toggle(&mut a, "--personal", b_true(&args, "personal"));
-                        flag(&mut a, "--team", s(&args, "team").as_deref());
-                        paging(&mut a, &c, i64_opt(&args, "page"), i64_opt(&args, "page_size"));
-                        let cmd = client::spark_command(&c, &a);
-                        let out = client::run_spark(&c, a).await?;
-                        Ok(ActionOutput::with_command(Value::String(out), cmd))
-                    }
-                }),
+                    toggle(&mut a, "--personal", b_true(&args, "personal"));
+                    flag(&mut a, "--team", s(&args, "team").as_deref());
+                    paging(
+                        &mut a,
+                        &c,
+                        i64_opt(&args, "page"),
+                        i64_opt(&args, "page_size"),
+                    );
+                    let cmd = client::spark_command(&c, &a);
+                    let out = client::run_spark(&c, a).await?;
+                    Ok(ActionOutput::with_command(Value::String(out), cmd))
+                }
+            }),
         );
     }
     // read_template
@@ -630,19 +847,45 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("to".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Recipient addresses"}));
-        props.insert("cc".to_string(), json!({"type":"array","items":{"type":"string"}}));
-        props.insert("bcc".to_string(), json!({"type":"array","items":{"type":"string"}}));
+        props.insert(
+            "to".to_string(),
+            json!({"type":"array","items":{"type":"string"},"description":"Recipient addresses"}),
+        );
+        props.insert(
+            "cc".to_string(),
+            json!({"type":"array","items":{"type":"string"}}),
+        );
+        props.insert(
+            "bcc".to_string(),
+            json!({"type":"array","items":{"type":"string"}}),
+        );
         props.insert("subject".to_string(), prop_opt_str("Subject"));
-        props.insert("body".to_string(), prop_opt_str("Body in markdown; required for a new draft unless a template supplies one"));
+        props.insert(
+            "body".to_string(),
+            prop_opt_str(
+                "Body in markdown; required for a new draft unless a template supplies one",
+            ),
+        );
         props.insert("account".to_string(), prop_opt_str("From address; the integration's account when omitted, and refused when it names a different one"));
-        props.insert("edit".to_string(), prop_opt_str("Message id of an existing draft to update"));
-        props.insert("reply_to".to_string(), prop_opt_str("Message id to reply to — required to stay in an existing thread"));
+        props.insert(
+            "edit".to_string(),
+            prop_opt_str("Message id of an existing draft to update"),
+        );
+        props.insert(
+            "reply_to".to_string(),
+            prop_opt_str("Message id to reply to — required to stay in an existing thread"),
+        );
         props.insert("forward".to_string(), prop_opt_str("Message id to forward"));
         props.insert("attach".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Absolute paths Spark can read; max 25 MB each"}));
-        props.insert("template".to_string(), prop_opt_str("Template id or name to apply"));
+        props.insert(
+            "template".to_string(),
+            prop_opt_str("Template id or name to apply"),
+        );
         props.insert("placeholder".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Fill a manual template placeholder: \"name=value\""}));
-        props.insert("no_signature".to_string(), json!({"type":"boolean","description":"Drop the account's default signature"}));
+        props.insert(
+            "no_signature".to_string(),
+            json!({"type":"boolean","description":"Drop the account's default signature"}),
+        );
         tools.push(
             ActionTool::new("draft", "Create or edit an email draft (body in markdown). Never sends. Replying to an existing conversation? Pass reply_to with the thread's last message id, or the draft starts a new thread.", ActionCategory::Write)
                 .schema(props)
@@ -728,11 +971,20 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("message_id".to_string(), prop_opt_str("A message in the thread to comment on"));
+        props.insert(
+            "message_id".to_string(),
+            prop_opt_str("A message in the thread to comment on"),
+        );
         props.insert("body".to_string(), prop_str("Comment text"));
-        props.insert("team".to_string(), prop_opt_str("Team name; the integration's default team when omitted"));
+        props.insert(
+            "team".to_string(),
+            prop_opt_str("Team name; the integration's default team when omitted"),
+        );
         props.insert("user".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Teammates to share with when the thread isn't shared yet"}));
-        props.insert("edit".to_string(), prop_opt_str("Message id of an existing comment to edit instead"));
+        props.insert(
+            "edit".to_string(),
+            prop_opt_str("Message id of an existing comment to edit instead"),
+        );
         tools.push(
             ActionTool::new("comment", "Post a team comment on a thread, sharing the thread with the team first when it isn't shared yet.", ActionCategory::Write)
                 .schema(props)
@@ -790,14 +1042,35 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("action".to_string(), json!({"type":"string","enum": email_actions, "description":"The verb to apply"}));
-        props.insert("message_ids".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Message ids to act on"}));
-        props.insert("date".to_string(), prop_opt_str("Required by snooze and changeReminder; the due date for assign"));
-        props.insert("folder".to_string(), prop_opt_str("Qualified folder for moveToFolder, attachLabel and detachLabel"));
-        props.insert("team".to_string(), prop_opt_str("Team for team actions; the integration's default when omitted"));
+        props.insert(
+            "action".to_string(),
+            json!({"type":"string","enum": email_actions, "description":"The verb to apply"}),
+        );
+        props.insert(
+            "message_ids".to_string(),
+            json!({"type":"array","items":{"type":"string"},"description":"Message ids to act on"}),
+        );
+        props.insert(
+            "date".to_string(),
+            prop_opt_str("Required by snooze and changeReminder; the due date for assign"),
+        );
+        props.insert(
+            "folder".to_string(),
+            prop_opt_str("Qualified folder for moveToFolder, attachLabel and detachLabel"),
+        );
+        props.insert(
+            "team".to_string(),
+            prop_opt_str("Team for team actions; the integration's default when omitted"),
+        );
         props.insert("user".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Teammates for shareInTeam"}));
-        props.insert("assignee".to_string(), prop_opt_str("Teammate address for assign"));
-        props.insert("comment".to_string(), prop_opt_str("Comment attached to an assign"));
+        props.insert(
+            "assignee".to_string(),
+            prop_opt_str("Teammate address for assign"),
+        );
+        props.insert(
+            "comment".to_string(),
+            prop_opt_str("Comment attached to an assign"),
+        );
         tools.push(
             ActionTool::new("email_action", "Act on one or more emails: archive, pin, snooze, move, label, categorize, share, assign, mark read/unread and so on. Sending drafts is a separate tool.", ActionCategory::Write)
                 .schema(props)
@@ -854,7 +1127,10 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("action".to_string(), json!({"type":"string","enum": contact_actions, "description":"The verb to apply"}));
+        props.insert(
+            "action".to_string(),
+            json!({"type":"string","enum": contact_actions, "description":"The verb to apply"}),
+        );
         props.insert("emails".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Contact addresses to act on"}));
         tools.push(
             ActionTool::new("contact_action", "Act on contacts: block or accept a sender or their domain, recategorize their mail, toggle priority, notifications or auto-summary.", ActionCategory::Write)
@@ -891,18 +1167,33 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("mode".to_string(), json!({"type":"string","enum":["create","update","rsvp"]}));
+        props.insert(
+            "mode".to_string(),
+            json!({"type":"string","enum":["create","update","rsvp"]}),
+        );
         props.insert("event_id".to_string(), prop_opt_str("Required for update and rsvp: a calendar event id, or the invitation email's message id"));
         props.insert("status".to_string(), json!({"type":"string","enum":["accept","decline","maybe"],"description":"Required for rsvp"}));
         props.insert("title".to_string(), prop_opt_str("Title"));
-        props.insert("start".to_string(), prop_opt_str("Start date: yyyy-MM-dd, dd/MM/yyyy or yyyy-MM-ddTHH:mm"));
-        props.insert("end".to_string(), prop_opt_str("End date, same formats as start"));
+        props.insert(
+            "start".to_string(),
+            prop_opt_str("Start date: yyyy-MM-dd, dd/MM/yyyy or yyyy-MM-ddTHH:mm"),
+        );
+        props.insert(
+            "end".to_string(),
+            prop_opt_str("End date, same formats as start"),
+        );
         props.insert("all_day".to_string(), json!({"type":"boolean"}));
         props.insert("description".to_string(), prop_opt_str("Description"));
         props.insert("location".to_string(), prop_opt_str("Location"));
         props.insert("calendar".to_string(), prop_opt_str("Target calendar for create: \"you@co.com\" or \"you@co.com:Work\". The integration's account when omitted"));
-        props.insert("video_conference".to_string(), json!({"type":"string","enum":["auto","meet","zoom","teams"]}));
-        props.insert("alerts".to_string(), prop_opt_str("Comma-separated offsets in seconds (300s,600s) or absolute dates"));
+        props.insert(
+            "video_conference".to_string(),
+            json!({"type":"string","enum":["auto","meet","zoom","teams"]}),
+        );
+        props.insert(
+            "alerts".to_string(),
+            prop_opt_str("Comma-separated offsets in seconds (300s,600s) or absolute dates"),
+        );
         props.insert("add".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Attendees to invite — they receive an invitation"}));
         props.insert("remove".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Attendees to remove on update — they receive a cancellation"}));
         tools.push(
@@ -990,30 +1281,40 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("event_id".to_string(), prop_str("Calendar event id from list_events"));
+        props.insert(
+            "event_id".to_string(),
+            prop_str("Calendar event id from list_events"),
+        );
         tools.push(
-            ActionTool::new("delete_event", "Delete a calendar event. An event with attendees also mails them a cancellation.", ActionCategory::Delete)
-                .schema(props)
-                .detail_fn(|args| format!("delete_event {}", s(args, "event_id").unwrap_or_default()))
-                .command_fn(move |args, _| {
-                    let c = &c_cmd;
-                    match s(args, "event_id").map(|v| assert_positional(&v, "event id")) {
-                        Some(Ok(v)) => client::spark_command(c, &["event".to_string(), "delete".to_string(), v]),
-                        Some(Err(e)) => format!("delete_event error: {}", e.message),
-                        None => "delete_event error: event_id required".to_string(),
+            ActionTool::new(
+                "delete_event",
+                "Delete a calendar event. An event with attendees also mails them a cancellation.",
+                ActionCategory::Delete,
+            )
+            .schema(props)
+            .detail_fn(|args| format!("delete_event {}", s(args, "event_id").unwrap_or_default()))
+            .command_fn(move |args, _| {
+                let c = &c_cmd;
+                match s(args, "event_id").map(|v| assert_positional(&v, "event id")) {
+                    Some(Ok(v)) => {
+                        client::spark_command(c, &["event".to_string(), "delete".to_string(), v])
                     }
-                })
-                .run(move |args, _| {
-                    let c = c_run.clone();
-                    async move {
-                        let eid = s(&args, "event_id").ok_or_else(|| AdapterError::new("event_id is required."))?;
-                        let pos = assert_positional(&eid, "event id")?;
-                        let a = vec!["event".to_string(), "delete".to_string(), pos.clone()];
-                        let cmd = client::spark_command(&c, &a);
-                        let out = client::run_spark(&c, a).await?;
-                        Ok(ActionOutput::with_command(Value::String(out), cmd))
-                    }
-                }),
+                    Some(Err(e)) => format!("delete_event error: {}", e.message),
+                    None => "delete_event error: event_id required".to_string(),
+                }
+            })
+            .run(move |args, _| {
+                let c = c_run.clone();
+                async move {
+                    let eid = s(&args, "event_id")
+                        .ok_or_else(|| AdapterError::new("event_id is required."))?;
+                    let pos = assert_positional(&eid, "event id")?;
+                    let a = vec!["event".to_string(), "delete".to_string(), pos.clone()];
+                    let cmd = client::spark_command(&c, &a);
+                    let out = client::run_spark(&c, a).await?;
+                    Ok(ActionOutput::with_command(Value::String(out), cmd))
+                }
+            }),
         );
     }
     // send_draft
@@ -1022,8 +1323,14 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("message_ids".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Draft ids to send"}));
-        props.insert("date".to_string(), prop_opt_str("Future date to schedule for (Send Later); sends now when omitted"));
+        props.insert(
+            "message_ids".to_string(),
+            json!({"type":"array","items":{"type":"string"},"description":"Draft ids to send"}),
+        );
+        props.insert(
+            "date".to_string(),
+            prop_opt_str("Future date to schedule for (Send Later); sends now when omitted"),
+        );
         tools.push(
             ActionTool::new("send_draft", "Send an existing draft now, or schedule it with a future date. The only tool here that emits mail.", ActionCategory::Admin)
                 .schema(props)
@@ -1063,7 +1370,10 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
         let c_cmd = c.clone();
         let c_run = c.clone();
         let mut props = Map::new();
-        props.insert("message_ids".to_string(), json!({"type":"array","items":{"type":"string"},"description":"Scheduled message ids"}));
+        props.insert(
+            "message_ids".to_string(),
+            json!({"type":"array","items":{"type":"string"},"description":"Scheduled message ids"}),
+        );
         tools.push(
             ActionTool::new("unschedule_draft", "Cancel a scheduled send and return the message to drafts. Spark mints a new draft id, so re-list Drafts afterwards.", ActionCategory::Admin)
                 .schema(props)
@@ -1136,51 +1446,115 @@ mod tests {
         let adapter = spark_adapter(store);
         let specs = adapter.tool_specs();
         let find = |name: &str| specs.iter().find(|s| s.name == name).unwrap();
-        for name in ["accounts","folders","list_emails","search_emails","read_thread","read_attachment","list_events","availability","find_contacts","team_info","list_meetings","read_meeting","list_templates","read_template"] {
+        for name in [
+            "accounts",
+            "folders",
+            "list_emails",
+            "search_emails",
+            "read_thread",
+            "read_attachment",
+            "list_events",
+            "availability",
+            "find_contacts",
+            "team_info",
+            "list_meetings",
+            "read_meeting",
+            "list_templates",
+            "read_template",
+        ] {
             assert!(find(name).default_enabled, "{name} must default on");
         }
-        for name in ["draft","comment","email_action","contact_action","event_write"] {
+        for name in [
+            "draft",
+            "comment",
+            "email_action",
+            "contact_action",
+            "event_write",
+        ] {
             assert!(!find(name).default_enabled, "{name} must default off");
         }
         assert!(!find("delete_event").default_enabled, "delete_event off");
         assert!(!find("send_draft").default_enabled, "send_draft off");
-        assert!(!find("unschedule_draft").default_enabled, "unschedule_draft off");
+        assert!(
+            !find("unschedule_draft").default_enabled,
+            "unschedule_draft off"
+        );
     }
 
     #[test]
     fn no_tool_exposes_only_param() {
-        let cfg = SparkCfg { bin: "/usr/local/bin/spark".to_string(), account: String::new(), folder: String::new(), team: String::new(), max_page_size: 25, timeout_ms: 5000 };
+        let cfg = SparkCfg {
+            bin: "/usr/local/bin/spark".to_string(),
+            account: String::new(),
+            folder: String::new(),
+            team: String::new(),
+            max_page_size: 25,
+            timeout_ms: 5000,
+        };
         for tool in spark_tools(cfg) {
             if let Some(schema) = tool.schema {
-                assert!(!schema.contains_key("only"), "tool {} must not expose only", tool.name);
+                assert!(
+                    !schema.contains_key("only"),
+                    "tool {} must not expose only",
+                    tool.name
+                );
             }
         }
     }
 
     #[test]
     fn account_scope_refusal_in_tool_command() {
-        let cfg = SparkCfg { bin: "/usr/local/bin/spark".to_string(), account: "you@co.com".to_string(), folder: String::new(), team: String::new(), max_page_size: 25, timeout_ms: 5000 };
+        let cfg = SparkCfg {
+            bin: "/usr/local/bin/spark".to_string(),
+            account: "you@co.com".to_string(),
+            folder: String::new(),
+            team: String::new(),
+            max_page_size: 25,
+            timeout_ms: 5000,
+        };
         let tools = spark_tools(cfg);
         let folders = tools.iter().find(|t| t.name == "folders").unwrap();
-        let cmd = (folders.command.as_ref().unwrap())(&json!({"accounts":["other@co.com"]}), &serde_json::Map::new());
-        assert!(cmd.contains("another mailbox") || cmd.contains("error"), "got: {cmd}");
+        let cmd = (folders.command.as_ref().unwrap())(
+            &json!({"accounts":["other@co.com"]}),
+            &serde_json::Map::new(),
+        );
+        assert!(
+            cmd.contains("another mailbox") || cmd.contains("error"),
+            "got: {cmd}"
+        );
     }
 
     #[tokio::test]
     async fn verbatim_passthrough_via_mock_runner() {
         let _g = client::runner_lock();
         client::set_spark_runner(None);
-        let cfg = SparkCfg { bin: "/usr/local/bin/spark".to_string(), account: String::new(), folder: String::new(), team: String::new(), max_page_size: 25, timeout_ms: 5000 };
+        let cfg = SparkCfg {
+            bin: "/usr/local/bin/spark".to_string(),
+            account: String::new(),
+            folder: String::new(),
+            team: String::new(),
+            max_page_size: 25,
+            timeout_ms: 5000,
+        };
         let runner: client::SparkRunner = std::sync::Arc::new(|_, args, _| {
             let out = format!("MOCK OUTPUT for {}", args.join(" "));
-            Box::pin(async move { Ok(client::SparkRunResult { code: 0, stdout: out, stderr: String::new() }) })
+            Box::pin(async move {
+                Ok(client::SparkRunResult {
+                    code: 0,
+                    stdout: out,
+                    stderr: String::new(),
+                })
+            })
         });
         client::set_spark_runner(Some(runner));
         let tools = spark_tools(cfg.clone());
         let accounts = tools.iter().find(|t| t.name == "accounts").unwrap();
-        let out = (accounts.run)(json!({}), serde_json::Map::new()).await.unwrap();
+        let out = (accounts.run)(json!({}), serde_json::Map::new())
+            .await
+            .unwrap();
         match out {
-            crate::action::ActionOutput::Value(v) | crate::action::ActionOutput::WithCommand { value: v, .. } => {
+            crate::action::ActionOutput::Value(v)
+            | crate::action::ActionOutput::WithCommand { value: v, .. } => {
                 assert_eq!(v, json!("MOCK OUTPUT for accounts"));
             }
         }

@@ -98,7 +98,8 @@ impl HubState {
     fn ensure_feed(&mut self, store: &Store, core: &Core) {
         if self.subscription.is_none() {
             let sink = core.clone();
-            self.subscription = Some(store.subscribe_log_activity(Arc::new(move |row| sink.broadcast(row))));
+            self.subscription =
+                Some(store.subscribe_log_activity(Arc::new(move |row| sink.broadcast(row))));
         }
     }
 
@@ -106,7 +107,10 @@ impl HubState {
         if self.ticker.is_none() {
             let generation = self.next_generation();
             let sink = core.clone();
-            self.ticker = Some((generation, tokio::spawn(async move { sink.keepalive_loop(generation).await })));
+            self.ticker = Some((
+                generation,
+                tokio::spawn(async move { sink.keepalive_loop(generation).await }),
+            ));
         }
     }
 
@@ -118,7 +122,10 @@ impl HubState {
     /// Push one frame to every healthy subscriber; drop the dead and the slow.
     fn fan_out(&mut self, payload: Arc<Frame>) {
         self.subscribers.retain(|_, tx| {
-            matches!(tx.try_send(payload.clone()), Ok(()) | Err(mpsc::error::TrySendError::Closed(_)))
+            matches!(
+                tx.try_send(payload.clone()),
+                Ok(()) | Err(mpsc::error::TrySendError::Closed(_))
+            )
         });
     }
 
@@ -159,7 +166,10 @@ impl Core {
             // Nobody left to serve: tear this ticker and the feed down. A
             // newer generation (a subscriber connected since) owns them then.
             let mut state = self.lock();
-            let latest = state.ticker.as_ref().is_some_and(|(id, _)| *id == generation);
+            let latest = state
+                .ticker
+                .as_ref()
+                .is_some_and(|(id, _)| *id == generation);
             if latest && state.subscribers.is_empty() {
                 state.ticker = None;
                 state.stop_feed(&self.store);
@@ -256,6 +266,10 @@ mod tests {
         assert_eq!(parse_after(Some("1.5")), None);
         assert_eq!(parse_after(Some("12abc")), None);
         assert_eq!(parse_after(Some("+2")), None);
-        assert_eq!(parse_after(Some("99999999999999999999")), None, "must stay in i64");
+        assert_eq!(
+            parse_after(Some("99999999999999999999")),
+            None,
+            "must stay in i64"
+        );
     }
 }

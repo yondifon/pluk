@@ -8,15 +8,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
 
 use pluk_adapters::{
-    object_schema, ok, run_gated, Adapter, AdapterError, AdapterRegistry, ApiRequest, ApiResponse,
-    CallTarget, ConfigField, FieldType, GateMeta, PolicyKind, PromptMessage, PromptResult,
-    PromptRole, ResourceContents, ToolRegistration, ToolSpec,
+    Adapter, AdapterError, AdapterRegistry, ApiRequest, ApiResponse, CallTarget, ConfigField,
+    FieldType, GateMeta, PolicyKind, PromptMessage, PromptResult, PromptRole, ResourceContents,
+    ToolRegistration, ToolSpec, object_schema, ok, run_gated,
 };
-use pluk_server::{router, AppState, EventHub, HealthMap, OwnerPool};
+use pluk_server::{AppState, EventHub, HealthMap, OwnerPool, router};
 use pluk_store::{Integration, Store};
 
 /// An adapter whose whole surface exists to be observed by tests.
@@ -28,7 +28,10 @@ pub struct StubAdapter {
 
 impl StubAdapter {
     pub fn new(store: Arc<Store>) -> Arc<Self> {
-        Arc::new(Self { store, healthy: AtomicBool::new(true) })
+        Arc::new(Self {
+            store,
+            healthy: AtomicBool::new(true),
+        })
     }
 
     pub fn set_healthy(&self, healthy: bool) {
@@ -89,8 +92,14 @@ impl Adapter for StubAdapter {
         (error.message == "special").then(|| "translated failure".to_string())
     }
 
-    async fn handle_api(&self, conn: &Integration, _request: ApiRequest, subpath: &str) -> Option<ApiResponse> {
-        (subpath == "/ping").then(|| ApiResponse::json(200, &json!({ "ok": true, "from": conn.id })))
+    async fn handle_api(
+        &self,
+        conn: &Integration,
+        _request: ApiRequest,
+        subpath: &str,
+    ) -> Option<ApiResponse> {
+        (subpath == "/ping")
+            .then(|| ApiResponse::json(200, &json!({ "ok": true, "from": conn.id })))
     }
 
     async fn handle_global_api(&self, _request: ApiRequest, path: &str) -> Option<ApiResponse> {
@@ -101,13 +110,24 @@ impl Adapter for StubAdapter {
         format!(
             "Stub integration \"{}\".\nEcho things.\nEndpoint: {}",
             conn.name,
-            conn.config.get("endpoint").and_then(Value::as_str).unwrap_or("(unset)")
+            conn.config
+                .get("endpoint")
+                .and_then(Value::as_str)
+                .unwrap_or("(unset)")
         )
     }
 
-    fn register(&self, host: &mut dyn pluk_adapters::ToolHost, conn: &Integration, _owner_id: &str) -> Result<(), AdapterError> {
+    fn register(
+        &self,
+        host: &mut dyn pluk_adapters::ToolHost,
+        conn: &Integration,
+        _owner_id: &str,
+    ) -> Result<(), AdapterError> {
         let mut properties = Map::new();
-        properties.insert("value".into(), json!({ "type": "string", "description": "What to echo" }));
+        properties.insert(
+            "value".into(),
+            json!({ "type": "string", "description": "What to echo" }),
+        );
 
         let store = self.store.clone();
         let target = CallTarget {
@@ -126,7 +146,11 @@ impl Adapter for StubAdapter {
                 let store = store.clone();
                 let target = target.clone();
                 Box::pin(async move {
-                    let value = args.get("value").and_then(Value::as_str).unwrap_or_default().to_string();
+                    let value = args
+                        .get("value")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
                     run_gated(
                         &store,
                         &target,
@@ -143,27 +167,31 @@ impl Adapter for StubAdapter {
                 serde_json::from_value::<Map<String, Value>>(json!({ "readOnlyHint": true }))
                     .expect("annotations"),
             ),
-            Arc::new(|_args: Value| -> pluk_adapters::BoxFuture<pluk_adapters::ToolResult> {
-                Box::pin(async move { ok("pong") })
-            }),
+            Arc::new(
+                |_args: Value| -> pluk_adapters::BoxFuture<pluk_adapters::ToolResult> {
+                    Box::pin(async move { ok("pong") })
+                },
+            ),
         );
         host.register_prompt(
             "greet",
             "Greet someone",
             None,
-            Arc::new(|args: Map<String, Value>| -> pluk_adapters::BoxFuture<PromptResult> {
-                Box::pin(async move {
-                    PromptResult {
-                        messages: vec![PromptMessage {
-                            role: PromptRole::User,
-                            text: format!(
-                                "hello {}",
-                                args.get("who").and_then(Value::as_str).unwrap_or("world")
-                            ),
-                        }],
-                    }
-                })
-            }),
+            Arc::new(
+                |args: Map<String, Value>| -> pluk_adapters::BoxFuture<PromptResult> {
+                    Box::pin(async move {
+                        PromptResult {
+                            messages: vec![PromptMessage {
+                                role: PromptRole::User,
+                                text: format!(
+                                    "hello {}",
+                                    args.get("who").and_then(Value::as_str).unwrap_or("world")
+                                ),
+                            }],
+                        }
+                    })
+                },
+            ),
         );
         host.register_resource(
             "schema",
@@ -225,7 +253,9 @@ pub async fn spawn_app_with_events(keepalive: Duration, capacity: usize) -> Test
     let health = Arc::new(HealthMap::default());
     let closed = Arc::new(Mutex::new(Vec::<String>::new()));
     let sink = closed.clone();
-    owners.on_owner_close(Arc::new(move |owner| sink.lock().unwrap().push(owner.to_string())));
+    owners.on_owner_close(Arc::new(move |owner| {
+        sink.lock().unwrap().push(owner.to_string())
+    }));
 
     let events = Arc::new(EventHub::with_options(store.clone(), keepalive, capacity));
     let state = AppState::with_event_hub(
@@ -235,11 +265,16 @@ pub async fn spawn_app_with_events(keepalive: Duration, capacity: usize) -> Test
         health.clone(),
         events.clone(),
     );
-    finish_spawn(state, dir, db_path, store, adapter, owners, health, closed, events).await
+    finish_spawn(
+        state, dir, db_path, store, adapter, owners, health, closed, events,
+    )
+    .await
 }
 
 /// Spawn with a caller-built state (full control over every shared handle).
-pub async fn spawn_app_with(build: impl Fn(Arc<Store>, Arc<AdapterRegistry>, Arc<OwnerPool>, Arc<HealthMap>) -> AppState) -> TestApp {
+pub async fn spawn_app_with(
+    build: impl Fn(Arc<Store>, Arc<AdapterRegistry>, Arc<OwnerPool>, Arc<HealthMap>) -> AppState,
+) -> TestApp {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("pluk.db");
     let store = Arc::new(Store::open(&db_path).expect("open store"));
@@ -252,13 +287,26 @@ pub async fn spawn_app_with(build: impl Fn(Arc<Store>, Arc<AdapterRegistry>, Arc
     let health = Arc::new(HealthMap::default());
     let closed = Arc::new(Mutex::new(Vec::<String>::new()));
     let sink = closed.clone();
-    owners.on_owner_close(Arc::new(move |owner| sink.lock().unwrap().push(owner.to_string())));
+    owners.on_owner_close(Arc::new(move |owner| {
+        sink.lock().unwrap().push(owner.to_string())
+    }));
 
-    let events = Arc::new(EventHub::with_options(store.clone(), Duration::from_millis(60), 64));
-    let state = build(store.clone(), Arc::new(registry), owners.clone(), health.clone());
-    finish_spawn(state, dir, db_path, store, adapter, owners, health, closed, events).await
+    let events = Arc::new(EventHub::with_options(
+        store.clone(),
+        Duration::from_millis(60),
+        64,
+    ));
+    let state = build(
+        store.clone(),
+        Arc::new(registry),
+        owners.clone(),
+        health.clone(),
+    );
+    finish_spawn(
+        state, dir, db_path, store, adapter, owners, health, closed, events,
+    )
+    .await
 }
-
 
 #[allow(clippy::too_many_arguments)]
 async fn finish_spawn(
@@ -274,7 +322,9 @@ async fn finish_spawn(
 ) -> TestApp {
     let app = router(state);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
     let port = listener.local_addr().unwrap().port();
     let shutdown = tokio_util::sync::CancellationToken::new();
     {
@@ -307,7 +357,11 @@ impl TestApp {
         (0..count)
             .map(|i| {
                 self.store
-                    .create_log_entry(pluk_store::LogDraft::new(connection_id, connection_id, format!("select {i}")))
+                    .create_log_entry(pluk_store::LogDraft::new(
+                        connection_id,
+                        connection_id,
+                        format!("select {i}"),
+                    ))
                     .expect("insert")
             })
             .collect()
@@ -338,7 +392,10 @@ impl TestApp {
     /// POST a notification (no id ⇒ no response body).
     pub async fn mcp_notify(&self, token: &str, method: &str) -> u16 {
         let response = self
-            .mcp_request(token, json!({ "jsonrpc": "2.0", "method": method }).to_string())
+            .mcp_request(
+                token,
+                json!({ "jsonrpc": "2.0", "method": method }).to_string(),
+            )
             .await;
         response.status().as_u16()
     }
@@ -355,13 +412,22 @@ impl TestApp {
     }
 
     pub async fn get_status(&self, path: &str) -> u16 {
-        reqwest::get(format!("{}{path}", self.base_url)).await.expect("get").status().as_u16()
+        reqwest::get(format!("{}{path}", self.base_url))
+            .await
+            .expect("get")
+            .status()
+            .as_u16()
     }
 
     pub async fn get_json(&self, path: &str) -> (u16, Value) {
-        let response = reqwest::get(format!("{}{path}", self.base_url)).await.expect("get");
+        let response = reqwest::get(format!("{}{path}", self.base_url))
+            .await
+            .expect("get");
         let status = response.status().as_u16();
-        (status, response.json::<Value>().await.unwrap_or(Value::Null))
+        (
+            status,
+            response.json::<Value>().await.unwrap_or(Value::Null),
+        )
     }
 
     /// Open an SSE stream and read frames until `ready` arrived plus any
@@ -373,12 +439,20 @@ impl TestApp {
             .await
             .expect("sse connect");
         assert_eq!(response.status(), 200, "/api/events must open");
-        SseReader { response, buffer: String::new() }
+        SseReader {
+            response,
+            buffer: String::new(),
+        }
     }
 }
 
 fn header(response: &reqwest::Response, name: &str) -> String {
-    response.headers().get(name).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string()
+    response
+        .headers()
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// A frame-by-frame SSE reader over a live response.
@@ -407,7 +481,10 @@ impl SseReader {
                         data.push_str(payload.trim());
                     }
                 }
-                return Frame { event, data: serde_json::from_str(&data).unwrap_or(Value::Null) };
+                return Frame {
+                    event,
+                    data: serde_json::from_str(&data).unwrap_or(Value::Null),
+                };
             }
             let chunk = self
                 .response

@@ -1,8 +1,8 @@
-use super::{register_sql_server, SqlCancelRegistry, sql_tool_specs};
+use super::{SqlCancelRegistry, register_sql_server, sql_tool_specs};
 use crate::adapter::Adapter;
-use crate::tool_host::{ToolHost, ToolRegistration, PromptHandler, ResourceHandler, ToolHandler};
-use pluk_store::{Store, Integration, LogScope, LogRange};
-use serde_json::{json, Value, Map};
+use crate::tool_host::{PromptHandler, ResourceHandler, ToolHandler, ToolHost, ToolRegistration};
+use pluk_store::{Integration, LogRange, LogScope, Store};
+use serde_json::{Map, Value, json};
 use std::sync::Arc;
 
 fn temp_store() -> (tempfile::TempDir, Arc<Store>) {
@@ -11,7 +11,12 @@ fn temp_store() -> (tempfile::TempDir, Arc<Store>) {
     (dir, store)
 }
 
-fn make_integration(id: &str, type_name: &str, config: Value, query_policy: Option<&str>) -> Integration {
+fn make_integration(
+    id: &str,
+    type_name: &str,
+    config: Value,
+    query_policy: Option<&str>,
+) -> Integration {
     Integration {
         id: id.to_string(),
         name: format!("test-{}", id),
@@ -33,18 +38,40 @@ struct CaptureHost {
     resources: std::collections::HashMap<String, (String, String)>,
 }
 impl CaptureHost {
-    fn new() -> Self { Self { tools: std::collections::HashMap::new(), tools_meta: std::collections::HashMap::new(), prompts: std::collections::HashMap::new(), resources: std::collections::HashMap::new() } }
+    fn new() -> Self {
+        Self {
+            tools: std::collections::HashMap::new(),
+            tools_meta: std::collections::HashMap::new(),
+            prompts: std::collections::HashMap::new(),
+            resources: std::collections::HashMap::new(),
+        }
+    }
 }
 impl ToolHost for CaptureHost {
     fn register_tool(&mut self, reg: ToolRegistration, handler: ToolHandler) {
         self.tools_meta.insert(reg.name.clone(), reg.clone());
         self.tools.insert(reg.name, handler);
     }
-    fn register_prompt(&mut self, name: &str, desc: &str, args: Option<Map<String, Value>>, _h: PromptHandler) {
-        self.prompts.insert(name.to_string(), (desc.to_string(), args));
+    fn register_prompt(
+        &mut self,
+        name: &str,
+        desc: &str,
+        args: Option<Map<String, Value>>,
+        _h: PromptHandler,
+    ) {
+        self.prompts
+            .insert(name.to_string(), (desc.to_string(), args));
     }
-    fn register_resource(&mut self, name: &str, uri: &str, mime: &str, _desc: Option<&str>, _h: ResourceHandler) {
-        self.resources.insert(uri.to_string(), (name.to_string(), mime.to_string()));
+    fn register_resource(
+        &mut self,
+        name: &str,
+        uri: &str,
+        mime: &str,
+        _desc: Option<&str>,
+        _h: ResourceHandler,
+    ) {
+        self.resources
+            .insert(uri.to_string(), (name.to_string(), mime.to_string()));
     }
 }
 
@@ -63,7 +90,10 @@ async fn query_happy_path_returns_rows() {
     let handler = host.tools.get("query").expect("query tool");
     let res = handler(json!({"sql":"SELECT 1"})).await;
     if res.is_error && res.text().contains("connection failed") {
-        eprintln!("skip: no postgres reachable for query_happy_path: {}", res.text());
+        eprintln!(
+            "skip: no postgres reachable for query_happy_path: {}",
+            res.text()
+        );
         return;
     }
     assert!(!res.is_error, "query should succeed: {}", res.text());
@@ -76,7 +106,13 @@ async fn each_tool_happy_path() {
     let (_dir, store) = temp_store();
     // needs a saved query for run_saved_query
     let conn = make_integration("pg1", "postgres", json!({"host":"localhost"}), None);
-    store.create_saved_query(&pluk_store::SavedQueryInput { connection_id: "pg1".into(), name: "myq".into(), sql: "SELECT 1".into() }).unwrap();
+    store
+        .create_saved_query(&pluk_store::SavedQueryInput {
+            connection_id: "pg1".into(),
+            name: "myq".into(),
+            sql: "SELECT 1".into(),
+        })
+        .unwrap();
     let host = capture_for(&conn, store.clone());
     let cases: Vec<(&str, Value)> = vec![
         ("query", json!({"sql":"SELECT 1"})),
@@ -86,10 +122,16 @@ async fn each_tool_happy_path() {
         ("search_schema", json!({"term":"user"})),
     ];
     for (name, args) in cases {
-        let h = host.tools.get(name).unwrap_or_else(|| panic!("missing {}", name));
+        let h = host
+            .tools
+            .get(name)
+            .unwrap_or_else(|| panic!("missing {}", name));
         let r = h(args).await;
         if r.is_error && r.text().contains("connection failed") {
-            eprintln!("skip each_tool_happy_path: no postgres reachable for {name}: {}", r.text());
+            eprintln!(
+                "skip each_tool_happy_path: no postgres reachable for {name}: {}",
+                r.text()
+            );
             return;
         }
         assert!(!r.is_error, "{} failed: {}", name, r.text());
@@ -102,7 +144,13 @@ async fn each_tool_happy_path() {
     // enable them via policy
     let policy = r#"{"tools":{"explain_query":{"enabled":true},"list_relationships":{"enabled":true},"table_stats":{"enabled":true},"list_schemas":{"enabled":true},"list_databases":{"enabled":true},"export_query":{"enabled":true},"run_saved_query":{"enabled":true},"list_saved_queries":{"enabled":true}}}"#;
     let conn2 = make_integration("pg2", "postgres", json!({"host":"localhost"}), Some(policy));
-    store.create_saved_query(&pluk_store::SavedQueryInput { connection_id: "pg2".into(), name: "myq".into(), sql: "SELECT 1".into() }).unwrap();
+    store
+        .create_saved_query(&pluk_store::SavedQueryInput {
+            connection_id: "pg2".into(),
+            name: "myq".into(),
+            sql: "SELECT 1".into(),
+        })
+        .unwrap();
     let host2 = capture_for(&conn2, store.clone());
     let extra: Vec<(&str, Value)> = vec![
         ("explain_query", json!({"sql":"SELECT 1"})),
@@ -115,10 +163,16 @@ async fn each_tool_happy_path() {
         ("list_saved_queries", json!({})),
     ];
     for (name, args) in extra {
-        let h = host2.tools.get(name).unwrap_or_else(|| panic!("missing opt-in {}", name));
+        let h = host2
+            .tools
+            .get(name)
+            .unwrap_or_else(|| panic!("missing opt-in {}", name));
         let r = h(args).await;
         if r.is_error && r.text().contains("connection failed") {
-            eprintln!("skip each_tool_happy_path extra: no postgres reachable for {name}: {}", r.text());
+            eprintln!(
+                "skip each_tool_happy_path extra: no postgres reachable for {name}: {}",
+                r.text()
+            );
             return;
         }
         assert!(!r.is_error, "{} failed: {}", name, r.text());
@@ -132,19 +186,35 @@ async fn successful_query_logs_result_json_without_response_text() {
     let db_path = db_dir.path().join("regress.sqlite");
     {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute("CREATE TABLE t (id INTEGER, name TEXT)", []).unwrap();
-        conn.execute("INSERT INTO t VALUES (1, 'a'), (2, 'b')", []).unwrap();
+        conn.execute("CREATE TABLE t (id INTEGER, name TEXT)", [])
+            .unwrap();
+        conn.execute("INSERT INTO t VALUES (1, 'a'), (2, 'b')", [])
+            .unwrap();
     }
-    let conn = make_integration("sq1", "sqlite", json!({"filename": db_path.to_str().unwrap()}), None);
+    let conn = make_integration(
+        "sq1",
+        "sqlite",
+        json!({"filename": db_path.to_str().unwrap()}),
+        None,
+    );
     let host = capture_for(&conn, store.clone());
     let h = host.tools.get("query").unwrap();
     let r = h(json!({"sql": "SELECT * FROM t"})).await;
     assert!(!r.is_error, "query should succeed: {}", r.text());
 
-    let page = store.read_log_page(&LogScope::Connection("sq1".into()), LogRange::All, None).unwrap();
-    let entry = page.entries.iter().find(|e| e.source.as_deref() == Some("query")).expect("query log entry");
+    let page = store
+        .read_log_page(&LogScope::Connection("sq1".into()), LogRange::All, None)
+        .unwrap();
+    let entry = page
+        .entries
+        .iter()
+        .find(|e| e.source.as_deref() == Some("query"))
+        .expect("query log entry");
     assert_eq!(entry.verdict, "allowed");
-    assert!(entry.result_json.is_some(), "result_json must be set so the activity log can render a table");
+    assert!(
+        entry.result_json.is_some(),
+        "result_json must be set so the activity log can render a table"
+    );
     assert!(
         entry.response_text.is_none(),
         "response_text must stay unset on a successful query — setting it makes the UI fall back to the raw-JSON preview instead of the table"
@@ -156,23 +226,47 @@ async fn successful_query_logs_result_json_without_response_text() {
 #[tokio::test]
 async fn pinned_database_hides_arg_from_schema() {
     let (_dir, store) = temp_store();
-    let conn_pinned = make_integration("pg1", "postgres", json!({"host":"localhost","database":"app"}), None);
+    let conn_pinned = make_integration(
+        "pg1",
+        "postgres",
+        json!({"host":"localhost","database":"app"}),
+        None,
+    );
     let host = capture_for(&conn_pinned, store.clone());
     let reg = host.tools_meta.get("query").unwrap();
-    let props = reg.input_schema.get("properties").and_then(|v| v.as_object()).unwrap();
-    assert!(!props.contains_key("database"), "pinned connection should hide database arg, got {:?}", props.keys());
+    let props = reg
+        .input_schema
+        .get("properties")
+        .and_then(|v| v.as_object())
+        .unwrap();
+    assert!(
+        !props.contains_key("database"),
+        "pinned connection should hide database arg, got {:?}",
+        props.keys()
+    );
 
     let conn_unpinned = make_integration("pg2", "postgres", json!({"host":"localhost"}), None);
     let host2 = capture_for(&conn_unpinned, store);
     let reg2 = host2.tools_meta.get("query").unwrap();
-    let props2 = reg2.input_schema.get("properties").and_then(|v| v.as_object()).unwrap();
-    assert!(props2.contains_key("database"), "unpinned should expose database");
+    let props2 = reg2
+        .input_schema
+        .get("properties")
+        .and_then(|v| v.as_object())
+        .unwrap();
+    assert!(
+        props2.contains_key("database"),
+        "unpinned should expose database"
+    );
     // sqlite never shows database
     let (_dir3, store3) = temp_store();
     let conn_sqlite = make_integration("sq1", "sqlite", json!({"filename":"/tmp/x.db"}), None);
     let host3 = capture_for(&conn_sqlite, store3);
     let reg3 = host3.tools_meta.get("query").unwrap();
-    let props3 = reg3.input_schema.get("properties").and_then(|v| v.as_object()).unwrap();
+    let props3 = reg3
+        .input_schema
+        .get("properties")
+        .and_then(|v| v.as_object())
+        .unwrap();
     assert!(!props3.contains_key("database"));
 }
 
@@ -186,7 +280,12 @@ async fn use_is_blocked() {
     assert!(r.is_error);
     assert!(r.text().contains("USE is blocked"));
     // pinned variant
-    let conn_pinned = make_integration("pg2", "postgres", json!({"host":"localhost","database":"app"}), None);
+    let conn_pinned = make_integration(
+        "pg2",
+        "postgres",
+        json!({"host":"localhost","database":"app"}),
+        None,
+    );
     let host2 = capture_for(&conn_pinned, store);
     let h2 = host2.tools.get("query").unwrap();
     let r2 = h2(json!({"sql":"USE otherdb"})).await;
@@ -196,22 +295,38 @@ async fn use_is_blocked() {
 #[test]
 fn row_cap_truncation_notice_and_order() {
     // cap then mask order, truncation notice
-    let rows = vec![json!({"id":1,"secret":"a"}), json!({"id":2,"secret":"b"}), json!({"id":3,"secret":"c"})];
+    let rows = vec![
+        json!({"id":1,"secret":"a"}),
+        json!({"id":2,"secret":"b"}),
+        json!({"id":3,"secret":"c"}),
+    ];
     // simulate cap 2
     let cap = Some(2);
     let (mut capped, truncated, limit) = {
         let _total = rows.len();
-        if rows.len() > cap.unwrap() { (rows.into_iter().take(2).collect::<Vec<_>>(), true, cap) } else { (rows.clone(), false, cap) }
+        if rows.len() > cap.unwrap() {
+            (rows.into_iter().take(2).collect::<Vec<_>>(), true, cap)
+        } else {
+            (rows.clone(), false, cap)
+        }
     };
     // mask after cap
     for row in &mut capped {
-        if let Value::Object(m) = row && m.contains_key("secret") { m.insert("secret".into(), Value::String("***".into())); }
+        if let Value::Object(m) = row
+            && m.contains_key("secret")
+        {
+            m.insert("secret".into(), Value::String("***".into()));
+        }
     }
-    assert_eq!(capped.len(),2);
+    assert_eq!(capped.len(), 2);
     assert!(truncated);
     assert_eq!(capped[0]["secret"], "***");
     // truncation notice would be appended after projected json
-    let notice = format!("[Row limit: showing first {} of {} rows.", limit.unwrap(), 3);
+    let notice = format!(
+        "[Row limit: showing first {} of {} rows.",
+        limit.unwrap(),
+        3
+    );
     assert!(notice.contains("first 2 of 3"));
     // log snapshot must not contain original secret
     let serialized = serde_json::to_string(&capped).unwrap();
@@ -237,7 +352,9 @@ async fn masking_applied_before_response_and_log() {
     }
     assert!(!r.is_error);
     // check log: should have one entry with allowed
-    let page = store.read_log_page(&LogScope::Connection("pg1".into()), LogRange::All, None).unwrap();
+    let page = store
+        .read_log_page(&LogScope::Connection("pg1".into()), LogRange::All, None)
+        .unwrap();
     assert!(!page.entries.is_empty());
     let entry = &page.entries[0];
     assert_eq!(entry.verdict, "allowed");
@@ -246,7 +363,11 @@ async fn masking_applied_before_response_and_log() {
     let mut rows = vec![json!({"secret":"hunter2","name":"alice"})];
     let masked = ["secret".to_string()];
     for row in &mut rows {
-        if let Value::Object(m) = row && masked.contains(&"secret".to_string()) { m.insert("secret".into(), Value::String("***".into())); }
+        if let Value::Object(m) = row
+            && masked.contains(&"secret".to_string())
+        {
+            m.insert("secret".into(), Value::String("***".into()));
+        }
     }
     assert_eq!(rows[0]["secret"], "***");
     let serialized = serde_json::to_string(&rows).unwrap();
@@ -264,11 +385,15 @@ async fn blocked_statement_produces_no_pending_row() {
     let r = h(json!({"sql":"INSERT INTO t VALUES (1)"})).await;
     assert!(r.is_error);
     assert!(r.text().contains("Blocked"));
-    let page = store.read_log_page(&LogScope::Connection("pg1".into()), LogRange::All, None).unwrap();
-    assert_eq!(page.entries.len(),1);
+    let page = store
+        .read_log_page(&LogScope::Connection("pg1".into()), LogRange::All, None)
+        .unwrap();
+    assert_eq!(page.entries.len(), 1);
     assert_eq!(page.entries[0].verdict, "blocked");
     // ensure no pending
-    for e in page.entries { assert_ne!(e.verdict, "pending"); }
+    for e in page.entries {
+        assert_ne!(e.verdict, "pending");
+    }
 }
 
 #[tokio::test]
@@ -276,33 +401,62 @@ async fn cancelled_query_recorded_as_cancelled() {
     let (_dir, store) = temp_store();
     let _conn = make_integration("pg1", "postgres", json!({"host":"localhost"}), None);
     // Use gate directly to simulate cancellation via driver error
-    use crate::gate::{run_gated, CallTarget, GateMeta, GateOpts, cancelled_when_message_contains};
     use crate::error::AdapterError;
-    
-    let target = CallTarget::new("pg1","test-pg1");
-    let meta = GateMeta::new("read","query","SELECT pg_sleep(10)");
-    let res = run_gated(&store, &target, meta, |_| async { Err(AdapterError::new("Query cancelled")) }, GateOpts::default().classify_error(cancelled_when_message_contains("cancelled"))).await;
+    use crate::gate::{CallTarget, GateMeta, GateOpts, cancelled_when_message_contains, run_gated};
+
+    let target = CallTarget::new("pg1", "test-pg1");
+    let meta = GateMeta::new("read", "query", "SELECT pg_sleep(10)");
+    let res = run_gated(
+        &store,
+        &target,
+        meta,
+        |_| async { Err(AdapterError::new("Query cancelled")) },
+        GateOpts::default().classify_error(cancelled_when_message_contains("cancelled")),
+    )
+    .await;
     assert!(res.is_error);
     assert!(res.text().contains("Cancelled"));
-    let page = store.read_log_page(&LogScope::Connection("pg1".into()), LogRange::All, None).unwrap();
+    let page = store
+        .read_log_page(&LogScope::Connection("pg1".into()), LogRange::All, None)
+        .unwrap();
     assert_eq!(page.entries[0].verdict, "cancelled");
 }
 
 #[tokio::test]
 async fn param_rejection_on_remote_sqlite() {
     let (_dir, store) = temp_store();
-    let conn = make_integration("sq1", "sqlite", json!({"filename":"/tmp/x.db","use_ssh":"true","ssh_host":"bastion"}), None);
+    let conn = make_integration(
+        "sq1",
+        "sqlite",
+        json!({"filename":"/tmp/x.db","use_ssh":"true","ssh_host":"bastion"}),
+        None,
+    );
     let host = capture_for(&conn, store);
     let h = host.tools.get("query").unwrap();
     let r = h(json!({"sql":"SELECT 1","params":[1]})).await;
     assert!(r.is_error);
-    assert!(r.text().contains("Bind parameters are not supported"), "got {}", r.text());
+    assert!(
+        r.text().contains("Bind parameters are not supported"),
+        "got {}",
+        r.text()
+    );
 }
 
 #[test]
 fn tool_specs_default_off_mapping() {
     let specs = sql_tool_specs();
-    let off: std::collections::HashSet<&str> = ["explain_query","list_relationships","table_stats","list_schemas","list_databases","export_query","run_saved_query","list_saved_queries"].into_iter().collect();
+    let off: std::collections::HashSet<&str> = [
+        "explain_query",
+        "list_relationships",
+        "table_stats",
+        "list_schemas",
+        "list_databases",
+        "export_query",
+        "run_saved_query",
+        "list_saved_queries",
+    ]
+    .into_iter()
+    .collect();
     for s in specs {
         if off.contains(s.name.as_str()) {
             assert!(!s.default_enabled, "{} should be off", s.name);
@@ -319,7 +473,13 @@ fn only_projection_maps_match_spec() {
     let (_dir, store) = temp_store();
     let host = capture_for(&conn, store);
     let reg = host.tools_meta.get("query").unwrap();
-    let only_desc = reg.input_schema.get("properties").and_then(|p| p.get("only")).and_then(|v| v.get("description")).and_then(|v| v.as_str()).unwrap();
+    let only_desc = reg
+        .input_schema
+        .get("properties")
+        .and_then(|p| p.get("only"))
+        .and_then(|v| v.get("description"))
+        .and_then(|v| v.as_str())
+        .unwrap();
     assert!(only_desc.contains("connection"));
 }
 
@@ -336,15 +496,21 @@ fn prompts_and_resource_exist() {
 
 #[test]
 fn error_humanising_cancel_vs_failure() {
-    use crate::sql::error::{classify_sql_error, humanize_sql_error};
     use crate::error::AdapterError;
+    use crate::sql::error::{classify_sql_error, humanize_sql_error};
     let cancelled = AdapterError::new("Query cancelled");
     let _info = classify_sql_error(&cancelled);
     // not pending, not auth, should be query_failed with message "Query cancelled"
-    assert!(humanize_sql_error(&cancelled).contains("Query cancelled") || humanize_sql_error(&cancelled).contains("cancelled"));
+    assert!(
+        humanize_sql_error(&cancelled).contains("Query cancelled")
+            || humanize_sql_error(&cancelled).contains("cancelled")
+    );
     let auth = AdapterError::new("SASL authentication failed").with_code("28P01");
     let info2 = classify_sql_error(&auth);
-    assert_eq!(info2.category, crate::sql::error::SqlErrorCategory::AuthFailed);
+    assert_eq!(
+        info2.category,
+        crate::sql::error::SqlErrorCategory::AuthFailed
+    );
 }
 
 #[test]
@@ -353,13 +519,34 @@ fn only_arg_presence_matches_spec() {
     let policy = r#"{"tools":{"explain_query":{"enabled":true},"list_relationships":{"enabled":true},"table_stats":{"enabled":true},"list_schemas":{"enabled":true},"list_databases":{"enabled":true},"export_query":{"enabled":true},"run_saved_query":{"enabled":true},"list_saved_queries":{"enabled":true}}}"#;
     let conn = make_integration("pg1", "postgres", json!({"host":"localhost"}), Some(policy));
     let host = capture_for(&conn, store);
-    let has_only = |name: &str| host.tools_meta.get(name).and_then(|r| r.input_schema.get("properties")).and_then(|p| p.get("only")).is_some();
+    let has_only = |name: &str| {
+        host.tools_meta
+            .get(name)
+            .and_then(|r| r.input_schema.get("properties"))
+            .and_then(|p| p.get("only"))
+            .is_some()
+    };
     // should have only
-    for with in ["query","sample_table","explain_query","list_relationships","table_stats","run_saved_query","list_saved_queries"] {
+    for with in [
+        "query",
+        "sample_table",
+        "explain_query",
+        "list_relationships",
+        "table_stats",
+        "run_saved_query",
+        "list_saved_queries",
+    ] {
         assert!(has_only(with), "{} should have only", with);
     }
     // should NOT have only
-    for without in ["list_tables","describe_table","search_schema","list_schemas","list_databases","export_query"] {
+    for without in [
+        "list_tables",
+        "describe_table",
+        "search_schema",
+        "list_schemas",
+        "list_databases",
+        "export_query",
+    ] {
         assert!(!has_only(without), "{} should NOT have only", without);
     }
 }
@@ -374,7 +561,11 @@ async fn bind_params_postgres_and_mysql() {
     if r.is_error && r.text().to_lowercase().contains("connection") {
         eprintln!("skip bind_params postgres: no pg reachable: {}", r.text());
     } else {
-        assert!(!r.is_error, "postgres $1 params should succeed: {}", r.text());
+        assert!(
+            !r.is_error,
+            "postgres $1 params should succeed: {}",
+            r.text()
+        );
     }
 
     let conn_my = make_integration("my1", "mysql", json!({"host":"localhost"}), None);
@@ -395,21 +586,53 @@ async fn api_saved_query_and_masked_column_crud() {
     let cancels = Arc::new(SqlCancelRegistry::default());
     let adapter = crate::sql::SqlAdapter::postgres(store.clone(), cancels);
     // saved query CRUD via handle_api
-    let req_create = crate::adapter::ApiRequest { method: "POST".into(), url: "/api/integrations/pg1/saved_queries".into(), body: Some(r#"{"name":"q1","sql":"SELECT 1"}"#.into()) };
-    let resp = adapter.as_ref().handle_api(&conn, req_create, "/saved_queries").await.unwrap();
+    let req_create = crate::adapter::ApiRequest {
+        method: "POST".into(),
+        url: "/api/integrations/pg1/saved_queries".into(),
+        body: Some(r#"{"name":"q1","sql":"SELECT 1"}"#.into()),
+    };
+    let resp = adapter
+        .as_ref()
+        .handle_api(&conn, req_create, "/saved_queries")
+        .await
+        .unwrap();
     assert_eq!(resp.status, 200);
     let body: Value = serde_json::from_slice(&resp.body).unwrap();
     assert_eq!(body["ok"], true);
-    let req_list = crate::adapter::ApiRequest { method: "GET".into(), url: "/api/integrations/pg1/saved_queries".into(), body: None };
-    let resp2 = adapter.as_ref().handle_api(&conn, req_list, "/saved_queries").await.unwrap();
+    let req_list = crate::adapter::ApiRequest {
+        method: "GET".into(),
+        url: "/api/integrations/pg1/saved_queries".into(),
+        body: None,
+    };
+    let resp2 = adapter
+        .as_ref()
+        .handle_api(&conn, req_list, "/saved_queries")
+        .await
+        .unwrap();
     let body2: Value = serde_json::from_slice(&resp2.body).unwrap();
     assert_eq!(body2["queries"].as_array().unwrap().len(), 1);
     // masked column CRUD
-    let req_add = crate::adapter::ApiRequest { method: "POST".into(), url: "/api/integrations/pg1/masked_columns".into(), body: Some(r#"{"column_name":"secret"}"#.into()) };
-    let resp3 = adapter.as_ref().handle_api(&conn, req_add, "/masked_columns").await.unwrap();
+    let req_add = crate::adapter::ApiRequest {
+        method: "POST".into(),
+        url: "/api/integrations/pg1/masked_columns".into(),
+        body: Some(r#"{"column_name":"secret"}"#.into()),
+    };
+    let resp3 = adapter
+        .as_ref()
+        .handle_api(&conn, req_add, "/masked_columns")
+        .await
+        .unwrap();
     assert_eq!(resp3.status, 200);
-    let req_get = crate::adapter::ApiRequest { method: "GET".into(), url: "/api/integrations/pg1/masked_columns".into(), body: None };
-    let resp4 = adapter.as_ref().handle_api(&conn, req_get, "/masked_columns").await.unwrap();
+    let req_get = crate::adapter::ApiRequest {
+        method: "GET".into(),
+        url: "/api/integrations/pg1/masked_columns".into(),
+        body: None,
+    };
+    let resp4 = adapter
+        .as_ref()
+        .handle_api(&conn, req_get, "/masked_columns")
+        .await
+        .unwrap();
     let body4: Value = serde_json::from_slice(&resp4.body).unwrap();
     assert!(!body4["columns"].as_array().unwrap().is_empty());
 }
@@ -422,9 +645,14 @@ async fn connection_testing_opens_and_closes() {
     let adapter = crate::sql::SqlAdapter::postgres(store, cancels);
     let res = adapter.as_ref().test_connection(&conn).await;
     if let Err(e) = &res
-        && e.to_string().contains("connection failed") {
-            eprintln!("skip connection_testing: no postgres reachable: {e}");
-            return;
-        }
-    assert!(res.is_ok(), "test_connection should succeed: {:?}", res.err());
+        && e.to_string().contains("connection failed")
+    {
+        eprintln!("skip connection_testing: no postgres reachable: {e}");
+        return;
+    }
+    assert!(
+        res.is_ok(),
+        "test_connection should succeed: {:?}",
+        res.err()
+    );
 }

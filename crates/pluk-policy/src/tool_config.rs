@@ -95,7 +95,9 @@ impl ToolGate {
 
 /// Build a gate straight from the stored blob.
 pub fn tool_gate(raw: Option<&str>) -> ToolGate {
-    ToolGate { config: parse_tool_config(raw) }
+    ToolGate {
+        config: parse_tool_config(raw),
+    }
 }
 
 /// Default-on state for a tool of the given coarse category: read tools are
@@ -136,7 +138,11 @@ pub fn setting_bool(settings: &Map<String, Value>, key: &str, fallback: bool) ->
 }
 
 /// A numeric setting where a missing (or non-positive) value means "no limit".
-pub fn setting_number_or_null(settings: &Map<String, Value>, key: &str, fallback: Option<f64>) -> Option<f64> {
+pub fn setting_number_or_null(
+    settings: &Map<String, Value>,
+    key: &str,
+    fallback: Option<f64>,
+) -> Option<f64> {
     match read_number(settings, key) {
         Some(n) if n.is_finite() => {
             if n > 0.0 {
@@ -199,10 +205,23 @@ mod tests {
 
     #[test]
     fn malformed_blobs_fail_safe_to_defaults() {
-        for raw in [None, Some(""), Some("not-json"), Some("1"), Some(r#"{"tools":"x"}"#), Some("[1]")] {
+        for raw in [
+            None,
+            Some(""),
+            Some("not-json"),
+            Some("1"),
+            Some(r#"{"tools":"x"}"#),
+            Some("[1]"),
+        ] {
             let gate = tool_gate(raw);
-            assert!(!gate.enabled("run_command", false), "{raw:?} must not enable");
-            assert!(gate.enabled("list_tables", true), "{raw:?} must keep defaults");
+            assert!(
+                !gate.enabled("run_command", false),
+                "{raw:?} must not enable"
+            );
+            assert!(
+                gate.enabled("list_tables", true),
+                "{raw:?} must keep defaults"
+            );
             assert!(gate.settings("query").is_empty());
         }
     }
@@ -222,7 +241,9 @@ mod tests {
     #[test]
     fn truthiness_coercion_matches_js() {
         // "false" is a truthy string → enabled, mirroring !!state.enabled.
-        let gate = tool_gate(Some(r#"{"tools":{"a":{"enabled":"false"},"b":{"enabled":0},"c":{"enabled":true}}}"#));
+        let gate = tool_gate(Some(
+            r#"{"tools":{"a":{"enabled":"false"},"b":{"enabled":0},"c":{"enabled":true}}}"#,
+        ));
         assert!(gate.enabled("a", false));
         assert!(!gate.enabled("b", true));
         assert!(gate.enabled("c", false));

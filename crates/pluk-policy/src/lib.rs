@@ -22,19 +22,19 @@ pub mod policy;
 pub mod tool_config;
 
 pub use action::{
-    action_allowed, action_policy_description, parse_action_policy, ActionCategory, ActionPolicy,
+    ActionCategory, ActionPolicy, action_allowed, action_policy_description, parse_action_policy,
 };
-pub use category::{CategoryGroup, StatementCategory, ALL_CATEGORIES, CATEGORY_GROUPS};
-pub use classify::{classify, ClassifyResult};
-pub use dangerous::{scan_dangerous, DangerousConstruct};
+pub use category::{ALL_CATEGORIES, CATEGORY_GROUPS, CategoryGroup, StatementCategory};
+pub use classify::{ClassifyResult, classify};
+pub use dangerous::{DangerousConstruct, scan_dangerous};
 pub use db_name::{is_valid_database_name, resolve_override_database};
-pub use dialect::{dialect_for, Dialect};
+pub use dialect::{Dialect, dialect_for};
 pub use error::PolicyError;
 pub use policy::{
-    cap_rows, default_policy_for, evaluate, parse_policy, parse_postgres_cost,
-    sql_policy_from_settings, CapResult, CostEstimate, EvalResult, PresetName, QueryPolicy,
+    CapResult, CostEstimate, EvalResult, PresetName, QueryPolicy, cap_rows, default_policy_for,
+    evaluate, parse_policy, parse_postgres_cost, sql_policy_from_settings,
 };
 pub use tool_config::{
-    default_enabled_for_category, parse_tool_config, setting_bool, setting_number_or_null,
-    setting_string, tool_gate, StoredToolState, ToolConfig, ToolGate,
+    StoredToolState, ToolConfig, ToolGate, default_enabled_for_category, parse_tool_config,
+    setting_bool, setting_number_or_null, setting_string, tool_gate,
 };

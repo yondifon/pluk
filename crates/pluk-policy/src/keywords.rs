@@ -6,9 +6,12 @@ use regex::Regex;
 
 use crate::category::StatementCategory;
 
-static BLOCK_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)/\*.*?\*/").expect("valid regex"));
-static LINE_DASH_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"--[^\n]*").expect("valid regex"));
-static LINE_HASH_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#[^\n]*").expect("valid regex"));
+static BLOCK_COMMENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)/\*.*?\*/").expect("valid regex"));
+static LINE_DASH_COMMENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"--[^\n]*").expect("valid regex"));
+static LINE_HASH_COMMENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"#[^\n]*").expect("valid regex"));
 
 /// Strip comments so a comment prefix can't disguise the leading keyword.
 ///
@@ -94,11 +97,26 @@ mod tests {
 
     #[test]
     fn leading_keywords_classify() {
-        assert_eq!(keyword_classify("SELECT 1"), Some(StatementCategory::Select));
-        assert_eq!(keyword_classify("  delete from t"), Some(StatementCategory::Delete));
-        assert_eq!(keyword_classify("EXECUTE p"), Some(StatementCategory::Procedure));
-        assert_eq!(keyword_classify("EXEC p"), Some(StatementCategory::Procedure));
-        assert_eq!(keyword_classify("RELEASE SAVEPOINT s"), Some(StatementCategory::Transaction));
+        assert_eq!(
+            keyword_classify("SELECT 1"),
+            Some(StatementCategory::Select)
+        );
+        assert_eq!(
+            keyword_classify("  delete from t"),
+            Some(StatementCategory::Delete)
+        );
+        assert_eq!(
+            keyword_classify("EXECUTE p"),
+            Some(StatementCategory::Procedure)
+        );
+        assert_eq!(
+            keyword_classify("EXEC p"),
+            Some(StatementCategory::Procedure)
+        );
+        assert_eq!(
+            keyword_classify("RELEASE SAVEPOINT s"),
+            Some(StatementCategory::Transaction)
+        );
         assert_eq!(keyword_classify("XYZZY"), None);
     }
 
@@ -108,14 +126,23 @@ mod tests {
             keyword_classify("/*c*/DELETE FROM t"),
             Some(StatementCategory::Delete)
         );
-        assert_eq!(keyword_classify("-- c\nDROP TABLE t"), Some(StatementCategory::Drop));
+        assert_eq!(
+            keyword_classify("-- c\nDROP TABLE t"),
+            Some(StatementCategory::Drop)
+        );
         // MySQL's # line comment is stripped here too.
-        assert_eq!(keyword_classify("# c\nDELETE FROM t"), Some(StatementCategory::Delete));
+        assert_eq!(
+            keyword_classify("# c\nDELETE FROM t"),
+            Some(StatementCategory::Delete)
+        );
     }
 
     #[test]
     fn order_matters_describe_before_desc() {
-        assert_eq!(keyword_classify("DESCRIBE t"), Some(StatementCategory::Inspect));
+        assert_eq!(
+            keyword_classify("DESCRIBE t"),
+            Some(StatementCategory::Inspect)
+        );
         assert_eq!(keyword_classify("DESC t"), Some(StatementCategory::Inspect));
     }
 }

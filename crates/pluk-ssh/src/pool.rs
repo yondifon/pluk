@@ -14,8 +14,8 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::pending::{
-    clear_connect_episode, connect_wait_error, is_ssh_auth_error, is_ssh_stalled,
-    record_connect_failure_msg, start_connect_attempt, SSH_CONNECT_WAIT_MS,
+    SSH_CONNECT_WAIT_MS, clear_connect_episode, connect_wait_error, is_ssh_auth_error,
+    is_ssh_stalled, record_connect_failure_msg, start_connect_attempt,
 };
 
 // ── Budgets ──────────────────────────────────────────────────────────────────
@@ -33,7 +33,12 @@ pub const MAX_RECONNECT_ATTEMPTS: usize = 12;
 // ── Pool key ─────────────────────────────────────────────────────────────────
 
 pub fn driver_key(owner_id: &str, integration_id: &str, database: Option<&str>) -> String {
-    format!("{}::{}::{}", owner_id, integration_id, database.unwrap_or(""))
+    format!(
+        "{}::{}::{}",
+        owner_id,
+        integration_id,
+        database.unwrap_or("")
+    )
 }
 
 fn key_integration_id(key: &str) -> Option<&str> {
@@ -158,9 +163,7 @@ impl DriverPool {
 
     pub fn open_owner(&self, owner_id: &str) -> CancellationToken {
         let mut map = self.owner_tokens.lock().unwrap();
-        map.entry(owner_id.to_string())
-            .or_default()
-            .clone()
+        map.entry(owner_id.to_string()).or_default().clone()
     }
 
     pub fn owner_token(&self, owner_id: &str) -> Option<CancellationToken> {
@@ -179,7 +182,10 @@ impl DriverPool {
                 t.cancel();
             });
         }
-        self.query_aborts.lock().unwrap().insert(log_id, token.clone());
+        self.query_aborts
+            .lock()
+            .unwrap()
+            .insert(log_id, token.clone());
         token
     }
 
@@ -274,11 +280,15 @@ impl DriverPool {
                 }
             }
 
-            return self.validate_or_rebuild(&key, owner_id, integration_id, database, entry_arc).await;
+            return self
+                .validate_or_rebuild(&key, owner_id, integration_id, database, entry_arc)
+                .await;
         }
 
         // No existing entry — create fresh
-        let entry_arc = self.create_entry(&key, owner_id, integration_id, database, use_ssh).await;
+        let entry_arc = self
+            .create_entry(&key, owner_id, integration_id, database, use_ssh)
+            .await;
         self.await_connect(&key, &entry_arc).await
     }
 
@@ -325,7 +335,10 @@ impl DriverPool {
         }));
 
         {
-            self.entries.lock().unwrap().insert(key_owned.clone(), entry.clone());
+            self.entries
+                .lock()
+                .unwrap()
+                .insert(key_owned.clone(), entry.clone());
         }
 
         // Spawn driver creation
@@ -365,19 +378,13 @@ impl DriverPool {
                 on_fatal,
             );
 
-            let result = tokio::time::timeout(
-                Duration::from_millis(connect_timeout),
-                create_fut,
-            )
-            .await;
+            let result =
+                tokio::time::timeout(Duration::from_millis(connect_timeout), create_fut).await;
 
             let driver_result: Result<Arc<dyn PoolDriver>, PoolError> = match result {
                 Ok(Ok(d)) => Ok(d),
                 Ok(Err(e)) => Err(e),
-                Err(_) => Err(PoolError::Timeout(
-                    connect_timeout,
-                    "connect".into(),
-                )),
+                Err(_) => Err(PoolError::Timeout(connect_timeout, "connect".into())),
             };
 
             // Update state
@@ -427,9 +434,10 @@ impl DriverPool {
                     let entry_opt = pool.entries.lock().unwrap().remove(&key_for_task);
                     if let Some(entry_arc) = entry_opt
                         && let Ok(entry) = entry_arc.try_lock()
-                            && let Some(h) = &entry.idle_handle {
-                                h.abort();
-                            }
+                        && let Some(h) = &entry.idle_handle
+                    {
+                        h.abort();
+                    }
                 }
             }
         });
@@ -542,15 +550,17 @@ impl DriverPool {
 
             // Healthcheck failed — evict and rebuild
             self.evict_driver_by_key(key).await;
-            let fresh = self.create_entry(key, owner_id, integration_id, database, {
-                // Determine use_ssh from evicted entry? For now, assume same as before.
-                // We need to know use_ssh — fetch from integration config would be ideal,
-                // but we reuse the previous entry's flag by checking key presence.
-                // Simplify: look at whether key had SSH — we track use_ssh in entry before eviction.
-                // Since we already evicted, default to true if previous was SSH.
-                // For test purposes, pass true; real caller knows.
-                true
-            }).await;
+            let fresh = self
+                .create_entry(key, owner_id, integration_id, database, {
+                    // Determine use_ssh from evicted entry? For now, assume same as before.
+                    // We need to know use_ssh — fetch from integration config would be ideal,
+                    // but we reuse the previous entry's flag by checking key presence.
+                    // Simplify: look at whether key had SSH — we track use_ssh in entry before eviction.
+                    // Since we already evicted, default to true if previous was SSH.
+                    // For test purposes, pass true; real caller knows.
+                    true
+                })
+                .await;
 
             // Schedule reconnect on failure of fresh (attempt 1)
             let pool_clone = self.clone();
@@ -564,9 +574,8 @@ impl DriverPool {
                 let notify = { fresh_clone.lock().await.notify.clone() };
                 let driver_state = { fresh_clone.lock().await.driver.clone() };
                 // Wait up to connect timeout for settlement
-                let _ = tokio::time::timeout(
-                    Duration::from_millis(CONNECT_TIMEOUT_SSH_MS),
-                    async {
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(CONNECT_TIMEOUT_SSH_MS), async {
                         loop {
                             {
                                 let s = driver_state.lock().await;
@@ -576,15 +585,20 @@ impl DriverPool {
                             }
                             notify.notified().await;
                         }
-                    },
-                )
-                .await;
+                    })
+                    .await;
                 let failed = {
                     let s = driver_state.lock().await;
                     matches!(*s, DriverState::Failed(_))
                 };
                 if failed {
-                    pool_clone.schedule_reconnect(key_owned.clone(), owner_owned.clone(), integration_owned.clone(), db_owned.clone(), 1);
+                    pool_clone.schedule_reconnect(
+                        key_owned.clone(),
+                        owner_owned.clone(),
+                        integration_owned.clone(),
+                        db_owned.clone(),
+                        1,
+                    );
                 }
             });
 
@@ -593,7 +607,9 @@ impl DriverPool {
 
         // No driver to validate — rebuild
         self.evict_driver_by_key(key).await;
-        let fresh = self.create_entry(key, owner_id, integration_id, database, true).await;
+        let fresh = self
+            .create_entry(key, owner_id, integration_id, database, true)
+            .await;
         self.await_connect(key, &fresh).await
     }
 
@@ -763,9 +779,10 @@ impl DriverPool {
             // Remove from map synchronously; driver close will be best-effort
             if let Some(entry) = self.entries.lock().unwrap().remove(&k)
                 && let Ok(e) = entry.try_lock()
-                    && let Some(h) = &e.idle_handle {
-                        h.abort();
-                    }
+                && let Some(h) = &e.idle_handle
+            {
+                h.abort();
+            }
         }
     }
 
@@ -792,7 +809,11 @@ impl DriverPool {
         let pool_for_spawn = self.clone();
         let handle = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-            pool_for_spawn.reconnect_handles.lock().unwrap().remove(&key);
+            pool_for_spawn
+                .reconnect_handles
+                .lock()
+                .unwrap()
+                .remove(&key);
             if pool_for_spawn.entries.lock().unwrap().contains_key(&key) {
                 return;
             }
@@ -801,18 +822,19 @@ impl DriverPool {
                 .await;
             let driver_state = { entry.lock().await.driver.clone() };
             let notify = { entry.lock().await.notify.clone() };
-            let settled = tokio::time::timeout(Duration::from_millis(CONNECT_TIMEOUT_SSH_MS), async {
-                loop {
-                    {
-                        let s = driver_state.lock().await;
-                        if !matches!(*s, DriverState::Pending) {
-                            break s.same_state_clone();
+            let settled =
+                tokio::time::timeout(Duration::from_millis(CONNECT_TIMEOUT_SSH_MS), async {
+                    loop {
+                        {
+                            let s = driver_state.lock().await;
+                            if !matches!(*s, DriverState::Pending) {
+                                break s.same_state_clone();
+                            }
                         }
+                        notify.notified().await;
                     }
-                    notify.notified().await;
-                }
-            })
-            .await;
+                })
+                .await;
 
             match settled {
                 Ok(DriverState::Failed(msg)) => {
@@ -829,7 +851,13 @@ impl DriverPool {
                     let pool2 = pool_for_spawn.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(Duration::from_millis(next_delay)).await;
-                        pool2.schedule_reconnect(key, owner_id, integration_id, database, attempt + 1);
+                        pool2.schedule_reconnect(
+                            key,
+                            owner_id,
+                            integration_id,
+                            database,
+                            attempt + 1,
+                        );
                     });
                 }
                 Ok(DriverState::Ready(_)) => {
@@ -839,7 +867,13 @@ impl DriverPool {
                     pool_for_spawn.evict_driver_by_key(&key).await;
                     let pool2 = pool_for_spawn.clone();
                     tokio::spawn(async move {
-                        pool2.schedule_reconnect(key, owner_id, integration_id, database, attempt + 1);
+                        pool2.schedule_reconnect(
+                            key,
+                            owner_id,
+                            integration_id,
+                            database,
+                            attempt + 1,
+                        );
                     });
                 }
             }
@@ -971,8 +1005,14 @@ mod tests {
 
     #[test]
     fn pool_key_includes_database() {
-        assert_eq!(driver_key("owner1", "int1", Some("db_a")), "owner1::int1::db_a");
-        assert_eq!(driver_key("owner1", "int1", Some("db_b")), "owner1::int1::db_b");
+        assert_eq!(
+            driver_key("owner1", "int1", Some("db_a")),
+            "owner1::int1::db_a"
+        );
+        assert_eq!(
+            driver_key("owner1", "int1", Some("db_b")),
+            "owner1::int1::db_b"
+        );
         assert_ne!(
             driver_key("owner1", "int1", Some("db_a")),
             driver_key("owner1", "int1", Some("db_b"))
@@ -1029,7 +1069,11 @@ mod tests {
         // Simulate idle eviction check
         pool.evict_if_idle(&key).await;
         // Pending SSH connection must not be evicted
-        assert_eq!(pool.pool_size(), 1, "pending-approval connection was evicted");
+        assert_eq!(
+            pool.pool_size(),
+            1,
+            "pending-approval connection was evicted"
+        );
         // Clean up
         crate::pending::clear_connect_episode(&key);
     }
@@ -1050,10 +1094,19 @@ mod tests {
         let pool = Arc::new(DriverPool::new(factory));
         let key = driver_key("owner1", "int1", None);
         // Insert a driver that was last used long ago (stale)
-        pool.insert_ready_for_test(&key, healthy_driver, false, Instant::now() - Duration::from_millis(STALE_AFTER_MS + 1000));
+        pool.insert_ready_for_test(
+            &key,
+            healthy_driver,
+            false,
+            Instant::now() - Duration::from_millis(STALE_AFTER_MS + 1000),
+        );
         // get_driver should trigger healthcheck and succeed without eviction
         let result = pool.get_driver("owner1", "int1", None, false).await;
-        assert!(result.is_ok(), "healthcheck should pass: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "healthcheck should pass: {:?}",
+            result.err()
+        );
         assert_eq!(pool.pool_size(), 1);
     }
 
@@ -1072,7 +1125,11 @@ mod tests {
         // The factory will be called once, fail with auth, and Pending episode should
         // surface auth immediately on next connect_wait_error
         crate::pending::start_connect_attempt(&key);
-        crate::pending::record_connect_failure_msg(&key, "permission denied (publickey)".into(), None);
+        crate::pending::record_connect_failure_msg(
+            &key,
+            "permission denied (publickey)".into(),
+            None,
+        );
         let err = crate::pending::connect_wait_error(&key);
         assert!(err.message.contains("permission denied"));
         assert_ne!(err.code, crate::pending::SSH_PENDING_CODE);
@@ -1113,7 +1170,9 @@ mod tests {
         });
         pool.insert_ready_for_test(&key, driver, false, Instant::now());
         // Within stale window, should reuse without healthcheck
-        let result = pool.get_driver("owner-fresh", "int-fresh", None, false).await;
+        let result = pool
+            .get_driver("owner-fresh", "int-fresh", None, false)
+            .await;
         assert!(result.is_ok());
     }
 
@@ -1130,9 +1189,16 @@ mod tests {
             healthy: false,
             close_count: Arc::new(AtomicUsize::new(0)),
         });
-        pool.insert_ready_for_test(&key, unhealthy, false, Instant::now() - Duration::from_millis(STALE_AFTER_MS + 1000));
+        pool.insert_ready_for_test(
+            &key,
+            unhealthy,
+            false,
+            Instant::now() - Duration::from_millis(STALE_AFTER_MS + 1000),
+        );
         // Healthcheck should fail and trigger rebuild; factory will be called
-        let result = pool.get_driver("owner-stale-fail", "int-stale", None, false).await;
+        let result = pool
+            .get_driver("owner-stale-fail", "int-stale", None, false)
+            .await;
         // After rebuild, should have a new driver (factory count >0)
         // The new driver's healthcheck is not yet done, but pool should return it via await_connect
         // For this test, we just verify pool still has an entry

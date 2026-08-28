@@ -62,7 +62,11 @@ pub struct ApiResponse {
 
 impl ApiResponse {
     pub fn text(status: u16, body: impl Into<String>) -> Self {
-        ApiResponse { status, content_type: Some("text/plain; charset=utf-8".into()), body: body.into().into_bytes() }
+        ApiResponse {
+            status,
+            content_type: Some("text/plain; charset=utf-8".into()),
+            body: body.into().into_bytes(),
+        }
     }
 
     pub fn json(status: u16, value: &serde_json::Value) -> Self {
@@ -114,7 +118,12 @@ pub trait Adapter: Send + Sync {
 
     /// Per-integration REST API, routed under `/api/integrations/<id>/…`.
     /// Return `None` to decline the request.
-    async fn handle_api(&self, _conn: &Integration, _request: ApiRequest, _subpath: &str) -> Option<ApiResponse> {
+    async fn handle_api(
+        &self,
+        _conn: &Integration,
+        _request: ApiRequest,
+        _subpath: &str,
+    ) -> Option<ApiResponse> {
         None
     }
 
@@ -136,5 +145,10 @@ pub trait Adapter: Send + Sync {
     /// it. This is how an integration shrinks its surface (and locks out
     /// write/delete): enable/disable takes effect by rebuilding registration,
     /// never by checking a flag inside the call.
-    fn register(&self, host: &mut dyn ToolHost, conn: &Integration, owner_id: &str) -> Result<(), AdapterError>;
+    fn register(
+        &self,
+        host: &mut dyn ToolHost,
+        conn: &Integration,
+        owner_id: &str,
+    ) -> Result<(), AdapterError>;
 }

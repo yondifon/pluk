@@ -93,8 +93,8 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
             <option value="0">Forever</option>
           </select>
         </label>
-         <button class="ui-button ui-button-sm" data-role="refresh" aria-label="Refresh">Refresh</button>
-         <button class="ui-button ui-button-sm ui-button-danger" data-role="clear" aria-label="Clear all">Clear</button>
+         <button class="ui-button" data-role="refresh" aria-label="Refresh">Refresh</button>
+         <button class="ui-button ui-button-danger" data-role="clear" aria-label="Clear all">Clear</button>
       </div>
     </div>
     <div class="al-stats" data-role="stats"></div>

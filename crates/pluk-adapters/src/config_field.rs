@@ -70,11 +70,17 @@ pub struct ShowIf {
 impl ShowIf {
     /// Build from any JSON scalar; the comparison value is normalised once.
     pub fn new(key: impl Into<String>, equals: &Value) -> Self {
-        ShowIf { key: key.into(), equals: normalize_scalar(equals) }
+        ShowIf {
+            key: key.into(),
+            equals: normalize_scalar(equals),
+        }
     }
 
     pub fn eq_str(key: impl Into<String>, equals: &str) -> Self {
-        ShowIf { key: key.into(), equals: equals.to_string() }
+        ShowIf {
+            key: key.into(),
+            equals: equals.to_string(),
+        }
     }
 
     /// Whether a stored config value satisfies the condition.
@@ -173,7 +179,10 @@ impl ConfigField {
     pub fn options(mut self, options: &[(&str, &str)]) -> Self {
         self.options = options
             .iter()
-            .map(|(value, label)| SelectOption { value: (*value).into(), label: (*label).into() })
+            .map(|(value, label)| SelectOption {
+                value: (*value).into(),
+                label: (*label).into(),
+            })
             .collect();
         self
     }
@@ -211,10 +220,30 @@ mod tests {
 
     #[test]
     fn default_normalises_scalars_to_strings() {
-        assert_eq!(ConfigField::new("a", "A", FieldType::Text).default_value(&json!("agent")).default, Some("agent".into()));
-        assert_eq!(ConfigField::new("p", "P", FieldType::Number).default_value(&json!(5432)).default, Some("5432".into()));
-        assert_eq!(ConfigField::new("t", "T", FieldType::Toggle).default_value(&json!(true)).default, Some("true".into()));
-        assert_eq!(ConfigField::new("f", "F", FieldType::Toggle).default_value(&json!(false)).default, Some("false".into()));
+        assert_eq!(
+            ConfigField::new("a", "A", FieldType::Text)
+                .default_value(&json!("agent"))
+                .default,
+            Some("agent".into())
+        );
+        assert_eq!(
+            ConfigField::new("p", "P", FieldType::Number)
+                .default_value(&json!(5432))
+                .default,
+            Some("5432".into())
+        );
+        assert_eq!(
+            ConfigField::new("t", "T", FieldType::Toggle)
+                .default_value(&json!(true))
+                .default,
+            Some("true".into())
+        );
+        assert_eq!(
+            ConfigField::new("f", "F", FieldType::Toggle)
+                .default_value(&json!(false))
+                .default,
+            Some("false".into())
+        );
     }
 
     #[test]
@@ -252,7 +281,8 @@ mod tests {
 
     #[test]
     fn select_options_round_trip() {
-        let field = ConfigField::new("auth_type", "Auth", FieldType::Select).options(&[("agent", "Agent"), ("key", "Private Key")]);
+        let field = ConfigField::new("auth_type", "Auth", FieldType::Select)
+            .options(&[("agent", "Agent"), ("key", "Private Key")]);
         let value = serde_json::to_value(&field).unwrap();
         assert_eq!(
             value["options"],

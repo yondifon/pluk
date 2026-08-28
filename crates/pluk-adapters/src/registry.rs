@@ -42,7 +42,10 @@ impl AdapterRegistry {
     /// Every adapter in registration order — drives the catalog the frontend
     /// reads.
     pub fn list(&self) -> Vec<Arc<dyn Adapter>> {
-        self.order.iter().filter_map(|id| self.adapters.get(id).cloned()).collect()
+        self.order
+            .iter()
+            .filter_map(|id| self.adapters.get(id).cloned())
+            .collect()
     }
 
     pub fn len(&self) -> usize {
@@ -68,7 +71,9 @@ pub fn default_registry(
     registry.register(crate::slack::SlackAdapter::new(store.clone()))?;
     registry.register(crate::linear::LinearAdapter::new(store.clone()))?;
     registry.register(crate::sentry::SentryAdapter::new(store.clone()))?;
-    registry.register(Arc::new(crate::github_cli::build_github_cli_adapter(store.clone())))?;
+    registry.register(Arc::new(crate::github_cli::build_github_cli_adapter(
+        store.clone(),
+    )))?;
     registry.register(Arc::new(crate::action::action_adapter(
         crate::spark::spark_adapter_spec(),
         store,
@@ -125,7 +130,12 @@ mod tests {
             Ok(())
         }
 
-        async fn handle_api(&self, _conn: &Integration, _request: ApiRequest, _subpath: &str) -> Option<ApiResponse> {
+        async fn handle_api(
+            &self,
+            _conn: &Integration,
+            _request: ApiRequest,
+            _subpath: &str,
+        ) -> Option<ApiResponse> {
             None
         }
 
@@ -133,7 +143,12 @@ mod tests {
             format!("stub for {}", conn.name)
         }
 
-        fn register(&self, _host: &mut dyn ToolHost, _conn: &Integration, _owner_id: &str) -> Result<(), AdapterFailure> {
+        fn register(
+            &self,
+            _host: &mut dyn ToolHost,
+            _conn: &Integration,
+            _owner_id: &str,
+        ) -> Result<(), AdapterFailure> {
             Ok(())
         }
     }
@@ -145,8 +160,12 @@ mod tests {
     #[test]
     fn duplicate_ids_are_a_hard_error() {
         let mut registry = AdapterRegistry::new();
-        registry.register(stub("postgres")).expect("first registration");
-        let error = registry.register(stub("postgres")).expect_err("duplicate must fail");
+        registry
+            .register(stub("postgres"))
+            .expect("first registration");
+        let error = registry
+            .register(stub("postgres"))
+            .expect_err("duplicate must fail");
         assert_eq!(error.message, "Duplicate adapter id: postgres");
         assert_eq!(registry.len(), 1);
     }
@@ -159,7 +178,11 @@ mod tests {
         }
         assert!(registry.get("postgres").is_some());
         assert!(registry.get("redis").is_none());
-        let listed: Vec<String> = registry.list().into_iter().map(|a| a.id().to_string()).collect();
+        let listed: Vec<String> = registry
+            .list()
+            .into_iter()
+            .map(|a| a.id().to_string())
+            .collect();
         assert_eq!(listed, ["postgres", "linear", "ssh"]);
     }
 }

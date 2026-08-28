@@ -21,13 +21,17 @@ pub struct ZoomState {
 
 impl Default for ZoomState {
     fn default() -> Self {
-        Self { index: DEFAULT_INDEX }
+        Self {
+            index: DEFAULT_INDEX,
+        }
     }
 }
 
 impl ZoomState {
     pub fn new(index: usize) -> Self {
-        Self { index: index.clamp(0, STEPS.len() - 1) }
+        Self {
+            index: index.clamp(0, STEPS.len() - 1),
+        }
     }
 
     /// Current scale factor the frontend should apply.
@@ -95,7 +99,10 @@ pub struct PersistedZoom {
 
 impl PersistedZoom {
     pub fn from_index(index: usize, file_path: Option<PathBuf>) -> Self {
-        Self { state: ZoomState::new(index), file_path }
+        Self {
+            state: ZoomState::new(index),
+            file_path,
+        }
     }
 
     pub fn state(&self) -> &ZoomState {
@@ -110,21 +117,33 @@ impl PersistedZoom {
     /// Callers that prefer Store should use `load_from_store`.
     pub fn load(file_path: Option<PathBuf>) -> Self {
         if let Some(ref path) = file_path
-            && let Ok(data) = std::fs::read_to_string(path) {
-                if let Ok(v) = data.trim().parse::<usize>()
-                    && v < STEPS.len() {
-                        return Self { state: ZoomState::new(v), file_path };
-                    }
-                // Also try JSON { "index": n }
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
-                    && let Some(n) = json.get("index").and_then(|v| v.as_u64()) {
-                        let idx = n as usize;
-                        if idx < STEPS.len() {
-                            return Self { state: ZoomState::new(idx), file_path };
-                        }
-                    }
+            && let Ok(data) = std::fs::read_to_string(path)
+        {
+            if let Ok(v) = data.trim().parse::<usize>()
+                && v < STEPS.len()
+            {
+                return Self {
+                    state: ZoomState::new(v),
+                    file_path,
+                };
             }
-        Self { state: ZoomState::default(), file_path }
+            // Also try JSON { "index": n }
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
+                && let Some(n) = json.get("index").and_then(|v| v.as_u64())
+            {
+                let idx = n as usize;
+                if idx < STEPS.len() {
+                    return Self {
+                        state: ZoomState::new(idx),
+                        file_path,
+                    };
+                }
+            }
+        }
+        Self {
+            state: ZoomState::default(),
+            file_path,
+        }
     }
 
     pub fn load_from_store(store: &pluk_store::Store) -> Self {
@@ -135,7 +154,10 @@ impl PersistedZoom {
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|&i| i < STEPS.len())
             .unwrap_or(DEFAULT_INDEX);
-        Self { state: ZoomState::new(index), file_path: None }
+        Self {
+            state: ZoomState::new(index),
+            file_path: None,
+        }
     }
 
     pub fn save(&self, store: Option<&pluk_store::Store>) -> std::io::Result<()> {

@@ -18,7 +18,10 @@ fn write(level: &str, msg: &str, meta: Option<serde_json::Value>) {
         }
         _ => String::new(),
     };
-    let line = format!("{} [{level}] {msg}{meta_str}", pluk_store::timestamp::now_utc_string());
+    let line = format!(
+        "{} [{level}] {msg}{meta_str}",
+        pluk_store::timestamp::now_utc_string()
+    );
     let _ = append_line(&line);
     eprintln!("{line}");
 }
@@ -28,7 +31,10 @@ fn append_line(line: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
     file.write_all(line.as_bytes())?;
     file.write_all(b"\n")
 }

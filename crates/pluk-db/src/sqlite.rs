@@ -48,11 +48,9 @@ fn value_ref_to_json(v: ValueRef<'_>) -> serde_json::Value {
     match v {
         ValueRef::Null => serde_json::Value::Null,
         ValueRef::Integer(i) => serde_json::json!(i),
-        ValueRef::Real(f) => {
-            serde_json::Number::from_f64(f)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
+        ValueRef::Real(f) => serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
         ValueRef::Text(t) => serde_json::Value::String(String::from_utf8_lossy(t).into_owned()),
         ValueRef::Blob(b) => {
             // Blobs have no canonical JSON form; mirror sqlite3 -json which
@@ -81,7 +79,9 @@ fn run_query_blocking(
     let conn = conn.clone();
     // We are already inside spawn_blocking caller; do synchronous work here.
     // This helper is called from spawn_blocking context.
-    let guard = conn.lock().map_err(|e| DriverError::Other(format!("mutex poisoned: {e}")))?;
+    let guard = conn
+        .lock()
+        .map_err(|e| DriverError::Other(format!("mutex poisoned: {e}")))?;
 
     if readonly {
         guard
@@ -93,7 +93,11 @@ fn run_query_blocking(
         let mut stmt = guard
             .prepare(&sql_owned)
             .map_err(|e| DriverError::Query(e.to_string()))?;
-        let col_names: Vec<String> = stmt.column_names().into_iter().map(|s| s.to_string()).collect();
+        let col_names: Vec<String> = stmt
+            .column_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
         let vals: Vec<rusqlite::types::Value> = params_owned.iter().map(json_to_rusqlite).collect();
 
         let mut rows: Vec<serde_json::Value> = Vec::new();
@@ -112,7 +116,11 @@ fn run_query_blocking(
             rows.push(r.map_err(|e| DriverError::Query(e.to_string()))?);
         }
 
-        let fields = if col_names.is_empty() { None } else { Some(col_names) };
+        let fields = if col_names.is_empty() {
+            None
+        } else {
+            Some(col_names)
+        };
         // For statements that produce no columns (e.g. INSERT), fields is None.
         // Keep consistency: if rows empty, still expose column names when available.
         Ok(QueryResult { rows, fields })
@@ -142,8 +150,8 @@ pub struct SqliteDriver {
 
 impl SqliteDriver {
     pub fn open(path: &str) -> Result<Self, DriverError> {
-        let conn = rusqlite::Connection::open(path)
-            .map_err(|e| DriverError::Connection(e.to_string()))?;
+        let conn =
+            rusqlite::Connection::open(path).map_err(|e| DriverError::Connection(e.to_string()))?;
         // Mirror pluk-store busy timeout to avoid SQLITE_BUSY cross-process
         conn.busy_timeout(std::time::Duration::from_millis(5_000))
             .map_err(|e| DriverError::Connection(e.to_string()))?;
@@ -166,7 +174,12 @@ impl SqliteDriver {
 
 #[async_trait]
 impl Driver for SqliteDriver {
-    async fn query(&self, sql: &str, params: &[serde_json::Value], opts: Option<QueryOpts>) -> Result<QueryResult, DriverError> {
+    async fn query(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+        opts: Option<QueryOpts>,
+    ) -> Result<QueryResult, DriverError> {
         let sql = sql.to_string();
         let params = params.to_vec();
         let conn = self.conn.clone();
@@ -181,7 +194,12 @@ impl Driver for SqliteDriver {
         crate::driver::with_opts(opts, fut).await
     }
 
-    async fn query_read_only(&self, sql: &str, params: &[serde_json::Value], opts: Option<QueryOpts>) -> Result<QueryResult, DriverError> {
+    async fn query_read_only(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+        opts: Option<QueryOpts>,
+    ) -> Result<QueryResult, DriverError> {
         let sql = sql.to_string();
         let params = params.to_vec();
         let conn = self.conn.clone();
@@ -196,42 +214,75 @@ impl Driver for SqliteDriver {
         crate::driver::with_opts(opts, fut).await
     }
 
-    async fn explain(&self, sql: &str, params: &[serde_json::Value]) -> Result<QueryResult, DriverError> {
+    async fn explain(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<QueryResult, DriverError> {
         let full = format!("EXPLAIN QUERY PLAN {sql}");
         self.query(&full, params, None).await
     }
 
     async fn list_tables(&self, _schema: Option<&str>) -> Result<Vec<String>, DriverError> {
         let qr = self
-            .query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", &[], None)
+            .query(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+                &[],
+                None,
+            )
             .await?;
         Ok(qr
             .rows
             .into_iter()
-            .filter_map(|v| v.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()))
+            .filter_map(|v| {
+                v.get("name")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+            })
             .collect())
     }
 
-    async fn describe_table(&self, table: &str, _schema: Option<&str>) -> Result<Vec<ColumnInfo>, DriverError> {
+    async fn describe_table(
+        &self,
+        table: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<ColumnInfo>, DriverError> {
         let sql = format!("PRAGMA table_info({})", quote_ident(table));
         let qr = self.query(&sql, &[], None).await?;
         Ok(qr
             .rows
             .into_iter()
             .map(|r| ColumnInfo {
-                column: r.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                r#type: r.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                column: r
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                r#type: r
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 nullable: r.get("notnull").and_then(|v| v.as_i64()).unwrap_or(0) == 0,
             })
             .collect())
     }
 
-    async fn sample_table(&self, table: &str, limit: i64, _schema: Option<&str>) -> Result<QueryResult, DriverError> {
+    async fn sample_table(
+        &self,
+        table: &str,
+        limit: i64,
+        _schema: Option<&str>,
+    ) -> Result<QueryResult, DriverError> {
         let sql = format!("SELECT * FROM {} LIMIT ?", quote_ident(table));
         self.query(&sql, &[serde_json::json!(limit)], None).await
     }
 
-    async fn search_schema(&self, term: &str, _schema: Option<&str>) -> Result<Vec<SchemaSearchResult>, DriverError> {
+    async fn search_schema(
+        &self,
+        term: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<SchemaSearchResult>, DriverError> {
         // Escape LIKE wildcards in pattern, mirroring TS
         let pattern = format!("%{}%", term.replace('%', "\\%").replace('_', "\\_"));
         let escaped_like = pattern.clone();
@@ -247,7 +298,11 @@ impl Driver for SqliteDriver {
         let mut results: Vec<SchemaSearchResult> = qr
             .rows
             .into_iter()
-            .filter_map(|v| v.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()))
+            .filter_map(|v| {
+                v.get("name")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+            })
             .map(|t| SchemaSearchResult {
                 kind: "table".into(),
                 table: t,
@@ -259,12 +314,20 @@ impl Driver for SqliteDriver {
         // Columns matching via per-table pragma (avoid LIKE on PRAGMA output; do Rust contains + LIKE check mirror)
         // Fetch all tables then inspect columns — mirrors TS behaviour.
         let tables_qr = self
-            .query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", &[], None)
+            .query(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+                &[],
+                None,
+            )
             .await?;
         let all_tables: Vec<String> = tables_qr
             .rows
             .into_iter()
-            .filter_map(|v| v.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()))
+            .filter_map(|v| {
+                v.get("name")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+            })
             .collect();
 
         for t in &all_tables {
@@ -277,7 +340,10 @@ impl Driver for SqliteDriver {
                 let like_qr = self
                     .query(
                         "SELECT ? LIKE ? ESCAPE '\\' AS matches",
-                        &[serde_json::json!(c.column), serde_json::json!(pattern.clone())],
+                        &[
+                            serde_json::json!(c.column),
+                            serde_json::json!(pattern.clone()),
+                        ],
                         None,
                     )
                     .await?;
@@ -308,7 +374,11 @@ impl Driver for SqliteDriver {
         Ok(results)
     }
 
-    async fn list_relationships(&self, table: Option<&str>, _schema: Option<&str>) -> Result<Vec<RelationshipInfo>, DriverError> {
+    async fn list_relationships(
+        &self,
+        table: Option<&str>,
+        _schema: Option<&str>,
+    ) -> Result<Vec<RelationshipInfo>, DriverError> {
         let tables: Vec<String> = if let Some(t) = table {
             vec![t.to_string()]
         } else {
@@ -321,9 +391,21 @@ impl Driver for SqliteDriver {
             for r in qr.rows {
                 out.push(RelationshipInfo {
                     from_table: t.clone(),
-                    from_column: r.get("from").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    to_table: r.get("table").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    to_column: r.get("to").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    from_column: r
+                        .get("from")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    to_table: r
+                        .get("table")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    to_column: r
+                        .get("to")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     constraint_name: Some(format!(
                         "fk_{}_{}",
                         t,
@@ -335,22 +417,42 @@ impl Driver for SqliteDriver {
         Ok(out)
     }
 
-    async fn table_stats(&self, table: &str, _schema: Option<&str>) -> Result<TableStats, DriverError> {
+    async fn table_stats(
+        &self,
+        table: &str,
+        _schema: Option<&str>,
+    ) -> Result<TableStats, DriverError> {
         let sql = format!("PRAGMA index_list({})", quote_ident(table));
         let qr = self.query(&sql, &[], None).await?;
         let mut indexes = Vec::new();
         for r in qr.rows {
-            let name = r.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let name = r
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let unique = r.get("unique").and_then(|v| v.as_i64()).unwrap_or(0) == 1;
             let cols_qr = self
-                .query(&format!("PRAGMA index_info({})", quote_ident(&name)), &[], None)
+                .query(
+                    &format!("PRAGMA index_info({})", quote_ident(&name)),
+                    &[],
+                    None,
+                )
                 .await?;
             let cols: Vec<String> = cols_qr
                 .rows
                 .into_iter()
-                .filter_map(|v| v.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()))
+                .filter_map(|v| {
+                    v.get("name")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect();
-            indexes.push(IndexInfo { name, columns: cols, unique });
+            indexes.push(IndexInfo {
+                name,
+                columns: cols,
+                unique,
+            });
         }
         Ok(TableStats {
             table: table.to_string(),
@@ -369,7 +471,11 @@ impl Driver for SqliteDriver {
         Ok(qr
             .rows
             .into_iter()
-            .filter_map(|v| v.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()))
+            .filter_map(|v| {
+                v.get("name")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+            })
             .collect())
     }
 
@@ -380,19 +486,31 @@ impl Driver for SqliteDriver {
             let cols = self.describe_table(&t, None).await?;
             // Need PK info for full schema: fetch pragma directly to get pk flag
             let pk_qr = self
-                .query(&format!("PRAGMA table_info({})", quote_ident(&t)), &[], None)
+                .query(
+                    &format!("PRAGMA table_info({})", quote_ident(&t)),
+                    &[],
+                    None,
+                )
                 .await?;
             let fks = self.list_relationships(Some(&t), None).await?;
             lines.push(format!("TABLE {t} ("));
             for (i, c) in cols.iter().enumerate() {
-                let pk_val = pk_qr.rows.get(i).and_then(|r| r.get("pk")).and_then(|v| v.as_i64()).unwrap_or(0);
+                let pk_val = pk_qr
+                    .rows
+                    .get(i)
+                    .and_then(|r| r.get("pk"))
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
                 let pk = if pk_val != 0 { " PRIMARY KEY" } else { "" };
                 let nullability = if c.nullable { "NULL" } else { "NOT NULL" };
                 lines.push(format!("  {} {} {}{}", c.column, c.r#type, nullability, pk));
             }
             lines.push(")".into());
             for fk in fks {
-                lines.push(format!("FK {}.{} -> {}.{}", t, fk.from_column, fk.to_table, fk.to_column));
+                lines.push(format!(
+                    "FK {}.{} -> {}.{}",
+                    t, fk.from_column, fk.to_table, fk.to_column
+                ));
             }
             lines.push(String::new());
         }
@@ -450,12 +568,18 @@ mod tests {
         d.query("INSERT INTO t (v) VALUES ('after')", &[], None)
             .await
             .expect("pragma should have been cleared");
-        let qr = d.query("SELECT COUNT(*) as c FROM t", &[], None).await.unwrap();
+        let qr = d
+            .query("SELECT COUNT(*) as c FROM t", &[], None)
+            .await
+            .unwrap();
         let c = qr.rows[0].get("c").and_then(|v| v.as_i64()).unwrap();
         assert_eq!(c, 2, "both inserts should be present");
 
         // Read-only read must still work
-        let ro = d.query_read_only("SELECT * FROM t ORDER BY id", &[], None).await.unwrap();
+        let ro = d
+            .query_read_only("SELECT * FROM t ORDER BY id", &[], None)
+            .await
+            .unwrap();
         assert_eq!(ro.rows.len(), 2);
     }
 
@@ -463,9 +587,13 @@ mod tests {
     async fn introspection_output_shape() {
         let (_tmp, path) = temp_path();
         let d = SqliteDriver::open(&path).unwrap();
-        d.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)", &[], None)
-            .await
-            .unwrap();
+        d.query(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
         d.query(
             "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id), amount REAL)",
             &[],
@@ -514,11 +642,17 @@ mod tests {
     async fn row_capping_via_helper() {
         let (_tmp, path) = temp_path();
         let d = SqliteDriver::open(&path).unwrap();
-        d.query("CREATE TABLE t (x INTEGER)", &[], None).await.unwrap();
+        d.query("CREATE TABLE t (x INTEGER)", &[], None)
+            .await
+            .unwrap();
         for i in 0..10 {
-            d.query("INSERT INTO t (x) VALUES (?)", &[serde_json::json!(i)], None)
-                .await
-                .unwrap();
+            d.query(
+                "INSERT INTO t (x) VALUES (?)",
+                &[serde_json::json!(i)],
+                None,
+            )
+            .await
+            .unwrap();
         }
         let qr = d.sample_table("t", 100, None).await.unwrap();
         assert_eq!(qr.rows.len(), 10);
@@ -530,7 +664,10 @@ mod tests {
         assert_eq!(total, 10);
 
         // Full driver query without cap returns all
-        let all = d.query("SELECT * FROM t ORDER BY x", &[], None).await.unwrap();
+        let all = d
+            .query("SELECT * FROM t ORDER BY x", &[], None)
+            .await
+            .unwrap();
         assert_eq!(all.rows.len(), 10);
     }
 
@@ -538,7 +675,9 @@ mod tests {
     async fn explain_returns_rows() {
         let (_tmp, path) = temp_path();
         let d = SqliteDriver::open(&path).unwrap();
-        d.query("CREATE TABLE t (x INTEGER)", &[], None).await.unwrap();
+        d.query("CREATE TABLE t (x INTEGER)", &[], None)
+            .await
+            .unwrap();
         let qr = d.explain("SELECT * FROM t WHERE x = 1", &[]).await.unwrap();
         // EXPLAIN QUERY PLAN returns rows with fields like selectid, order, from, detail
         assert!(!qr.rows.is_empty());
@@ -548,9 +687,13 @@ mod tests {
     async fn sample_and_search_schema() {
         let (_tmp, path) = temp_path();
         let d = SqliteDriver::open(&path).unwrap();
-        d.query("CREATE TABLE my_table (my_col TEXT, other INTEGER)", &[], None)
-            .await
-            .unwrap();
+        d.query(
+            "CREATE TABLE my_table (my_col TEXT, other INTEGER)",
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
         d.query("INSERT INTO my_table VALUES ('a', 1)", &[], None)
             .await
             .unwrap();
@@ -559,7 +702,15 @@ mod tests {
         assert_eq!(sample.rows.len(), 1);
 
         let results = d.search_schema("my_", None).await.unwrap();
-        assert!(results.iter().any(|r| r.kind == "table" && r.table == "my_table"));
-        assert!(results.iter().any(|r| r.kind == "column" && r.column.as_deref() == Some("my_col")));
+        assert!(
+            results
+                .iter()
+                .any(|r| r.kind == "table" && r.table == "my_table")
+        );
+        assert!(
+            results
+                .iter()
+                .any(|r| r.kind == "column" && r.column.as_deref() == Some("my_col"))
+        );
     }
 }

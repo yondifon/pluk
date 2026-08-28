@@ -16,6 +16,7 @@ type ModalOptions = {
 type Modal = {
   close: () => void;
   content: HTMLElement;
+  setTitle: (text: string) => void;
 };
 
 let activeModal: Modal | null = null;
@@ -125,7 +126,7 @@ export function openModal(options: ModalOptions): Modal {
     if (dismissible && event.target === overlay) close();
   });
   document.addEventListener("keydown", onKeydown);
-  activeModal = { close, content: body };
+  activeModal = { close, content: body, setTitle: (text) => (title.textContent = text) };
   queueMicrotask(() => (dialog.querySelector<HTMLElement>(focusableSelector) ?? dialog).focus());
   return activeModal;
 }

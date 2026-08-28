@@ -4,14 +4,17 @@ mod common;
 
 use serde_json::Value;
 
-use common::{spawn_app, TestApp};
+use common::{TestApp, spawn_app};
 
 use pluk_store::LOG_PAGE_SIZE;
 
 fn integration(app: &TestApp, name: &str) -> (String, String) {
     let created = app
         .store
-        .create_integration(&pluk_store::IntegrationInput::new(name.to_string(), "stub".to_string()))
+        .create_integration(&pluk_store::IntegrationInput::new(
+            name.to_string(),
+            "stub".to_string(),
+        ))
         .expect("create integration");
     (created.id.clone(), created.token.clone())
 }
@@ -34,7 +37,10 @@ async fn the_adapter_catalog_serves_definitions_never_secret_values() {
     assert_eq!(fields.len(), 4);
     // Definitions only: a field describes its input, it never carries a value.
     for field in fields {
-        assert!(field.get("value").is_none(), "catalog leaked a value: {field}");
+        assert!(
+            field.get("value").is_none(),
+            "catalog leaked a value: {field}"
+        );
     }
     assert_eq!(fields[2]["type"], "password");
     assert_eq!(fields[2]["secret"], true);
@@ -53,7 +59,10 @@ async fn health_reports_not_checked_ok_and_error_as_three_states() {
     // Nothing tested yet: absent is its own state.
     let (status, body) = app.get_json("/api/health").await;
     assert_eq!(status, 200);
-    assert!(body["health"].get(&ok_id).is_none(), "untested connections stay absent");
+    assert!(
+        body["health"].get(&ok_id).is_none(),
+        "untested connections stay absent"
+    );
     assert!(body["health"].get(&bad_id).is_none());
 
     // A passing test turns green…
@@ -112,7 +121,10 @@ async fn humanized_errors_replace_the_raw_message() {
     // This failure's message is one the stub knows how to translate.
     app.adapter.set_healthy(false);
     let payload: Value = reqwest::Client::new()
-        .post(format!("{}/api/integrations/{}/test", app.base_url, created.id))
+        .post(format!(
+            "{}/api/integrations/{}/test",
+            app.base_url, created.id
+        ))
         .send()
         .await
         .unwrap()
@@ -146,7 +158,10 @@ async fn logs_page_across_a_keyset_boundary_without_gaps_or_duplicates() {
     let cursor = first["nextCursor"].as_object().expect("cursor object");
     assert!(cursor.contains_key("createdAt") && cursor.contains_key("id"));
 
-    let next_cursor_time = first["nextCursor"]["createdAt"].as_str().unwrap().to_string();
+    let next_cursor_time = first["nextCursor"]["createdAt"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let next_cursor_id = first["nextCursor"]["id"].as_i64().unwrap();
     let second = reqwest::get(format!(
         "{base}/api/logs?connectionId={conn_id}&range=all&cursorTime={t}&cursorId={i}",
@@ -187,10 +202,12 @@ async fn group_scoped_reads_return_group_rows_in_camel_case() {
     let (member, _) = integration(&app, "Member");
     app.store
         .create_log_entry(
-            pluk_store::LogDraft::new(member.clone(), "Member", "select 1").with_group(pluk_store::LogGroup {
-                id: "group-a".into(),
-                name: "Group A".into(),
-            }),
+            pluk_store::LogDraft::new(member.clone(), "Member", "select 1").with_group(
+                pluk_store::LogGroup {
+                    id: "group-a".into(),
+                    name: "Group A".into(),
+                },
+            ),
         )
         .unwrap();
 
@@ -213,13 +230,19 @@ async fn group_scoped_reads_return_group_rows_in_camel_case() {
 async fn log_read_validation_rejects_bad_scopes_ranges_and_cursors() {
     let app = spawn_app().await;
     let cases = [
-        ("/api/logs", 400),                                     // no scope
-        ("/api/logs?connectionId=&range=all", 400),             // empty scope
-        ("/api/logs?connectionId=a&groupId=b", 400),            // two scopes
-        ("/api/logs?connectionId=a&range=tomorrow", 400),       // bad range
+        ("/api/logs", 400),                                           // no scope
+        ("/api/logs?connectionId=&range=all", 400),                   // empty scope
+        ("/api/logs?connectionId=a&groupId=b", 400),                  // two scopes
+        ("/api/logs?connectionId=a&range=tomorrow", 400),             // bad range
         ("/api/logs?connectionId=a&cursorTime=nope&cursorId=1", 400), // bad time
-        ("/api/logs?connectionId=a&cursorTime=2026-01-01%2000%3A00%3A00", 400), // half cursor
-        ("/api/logs?connectionId=a&cursorTime=2026-01-01 00:00:00&cursorId=0", 400), // zero id
+        (
+            "/api/logs?connectionId=a&cursorTime=2026-01-01%2000%3A00%3A00",
+            400,
+        ), // half cursor
+        (
+            "/api/logs?connectionId=a&cursorTime=2026-01-01 00:00:00&cursorId=0",
+            400,
+        ), // zero id
     ];
     for (path, expected) in cases {
         let status = app.get_status(path).await;
@@ -245,7 +268,10 @@ async fn adapter_rest_apis_dispatch_by_path_and_global_first() {
 
     // Unclaimed subpaths fall through to Not found.
     let status = reqwest::Client::new()
-        .post(format!("{}/api/integrations/{conn_id}/unknown", app.base_url))
+        .post(format!(
+            "{}/api/integrations/{conn_id}/unknown",
+            app.base_url
+        ))
         .send()
         .await
         .unwrap()
@@ -266,8 +292,18 @@ async fn adapter_rest_apis_dispatch_by_path_and_global_first() {
 #[tokio::test]
 async fn plain_health_and_fallbacks_behave_like_the_typescript_server() {
     let app = spawn_app().await;
-    assert_eq!(reqwest::get(format!("{}/health", app.base_url)).await.unwrap().text().await.unwrap(), "ok");
-    let response = reqwest::get(format!("{}/nothing/here", app.base_url)).await.unwrap();
+    assert_eq!(
+        reqwest::get(format!("{}/health", app.base_url))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "ok"
+    );
+    let response = reqwest::get(format!("{}/nothing/here", app.base_url))
+        .await
+        .unwrap();
     assert_eq!(response.status(), 404);
     assert_eq!(response.text().await.unwrap(), "Not found");
 }

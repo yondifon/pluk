@@ -59,14 +59,24 @@ pub fn gh_config(conn: &Integration) -> GhConfig {
         .and_then(|v| v.as_str())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf()).to_string_lossy().to_string());
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap_or_else(|_| Path::new(".").to_path_buf())
+                .to_string_lossy()
+                .to_string()
+        });
     let timeout_ms = c
         .get("timeout_seconds")
         .and_then(|v| {
-            if let Some(n) = v.as_u64() { Some(n) }
-            else if let Some(s) = v.as_str().and_then(|s| s.parse::<i64>().ok()) { if s > 0 { Some(s as u64) } else { None } }
-            else if let Some(n) = v.as_i64() { if n > 0 { Some(n as u64) } else { None } }
-            else { None }
+            if let Some(n) = v.as_u64() {
+                Some(n)
+            } else if let Some(s) = v.as_str().and_then(|s| s.parse::<i64>().ok()) {
+                if s > 0 { Some(s as u64) } else { None }
+            } else if let Some(n) = v.as_i64() {
+                if n > 0 { Some(n as u64) } else { None }
+            } else {
+                None
+            }
         })
         .map(|s| s * 1000)
         .filter(|ms| *ms > 0)
@@ -74,19 +84,34 @@ pub fn gh_config(conn: &Integration) -> GhConfig {
     // also handle f64 via serde_json Number
     let timeout_ms = if timeout_ms == DEFAULT_TIMEOUT_MS {
         if let Some(v) = c.get("timeout_seconds")
-            && let Some(f) = v.as_f64() {
-                let ms = (f * 1000.0).floor() as i64;
-                if ms > 0 {
-                    return GhConfig { bin, default_repo, default_cwd, timeout_ms: ms as u64 };
-                }
+            && let Some(f) = v.as_f64()
+        {
+            let ms = (f * 1000.0).floor() as i64;
+            if ms > 0 {
+                return GhConfig {
+                    bin,
+                    default_repo,
+                    default_cwd,
+                    timeout_ms: ms as u64,
+                };
             }
+        }
         timeout_ms
     } else {
         timeout_ms
     };
     // reject nonsense
-    let timeout_ms = if timeout_ms == 0 { DEFAULT_TIMEOUT_MS } else { timeout_ms };
-    GhConfig { bin, default_repo, default_cwd, timeout_ms }
+    let timeout_ms = if timeout_ms == 0 {
+        DEFAULT_TIMEOUT_MS
+    } else {
+        timeout_ms
+    };
+    GhConfig {
+        bin,
+        default_repo,
+        default_cwd,
+        timeout_ms,
+    }
 }
 
 pub fn gh_cwd(cfg: &GhConfig, arg: Option<&str>) -> String {
@@ -131,7 +156,9 @@ pub fn positional(value: &str, what: &str) -> Result<String, AdapterError> {
         return Err(AdapterError::new(format!("{what} is required.")));
     }
     if v.starts_with('-') {
-        return Err(AdapterError::new(format!("Invalid {what} \"{value}\" — it must not start with \"-\".")));
+        return Err(AdapterError::new(format!(
+            "Invalid {what} \"{value}\" — it must not start with \"-\"."
+        )));
     }
     Ok(v)
 }
@@ -143,13 +170,17 @@ pub fn resolve_repo(cfg: &GhConfig, arg: Option<&str>) -> Result<(String, String
         .or_else(|| cfg.default_repo.clone())
         .unwrap_or_default();
     if spec.is_empty() {
-        return Err(AdapterError::new("No repo given. Pass repo as owner/repo or set a default repo in the integration config."));
+        return Err(AdapterError::new(
+            "No repo given. Pass repo as owner/repo or set a default repo in the integration config.",
+        ));
     }
     let mut parts = spec.splitn(2, '/');
     let owner = parts.next().unwrap_or("").to_string();
     let repo = parts.next().unwrap_or("").to_string();
     if owner.is_empty() || repo.is_empty() {
-        return Err(AdapterError::new(format!("Invalid repo \"{spec}\". Use the form owner/repo.")));
+        return Err(AdapterError::new(format!(
+            "Invalid repo \"{spec}\". Use the form owner/repo."
+        )));
     }
     Ok((owner, repo))
 }
@@ -161,7 +192,17 @@ pub struct GhRunResult {
     pub stderr: String,
 }
 
-pub type GhRunner = Arc<dyn Fn(String, Vec<String>, String, Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<GhRunResult, AdapterError>> + Send>> + Send + Sync>;
+pub type GhRunner = Arc<
+    dyn Fn(
+            String,
+            Vec<String>,
+            String,
+            Duration,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<GhRunResult, AdapterError>> + Send>,
+        > + Send
+        + Sync,
+>;
 
 thread_local! {
     static TL_RUNNER: RefCell<Option<GhRunner>> = RefCell::new(None);
@@ -177,9 +218,16 @@ pub fn set_gh_runner(runner: Option<GhRunner>) {
     *global_runner_slot().lock().unwrap() = runner;
 }
 
-async fn spawn_gh(bin: &str, args: &[String], cwd: &str, timeout: Duration) -> Result<GhRunResult, AdapterError> {
+async fn spawn_gh(
+    bin: &str,
+    args: &[String],
+    cwd: &str,
+    timeout: Duration,
+) -> Result<GhRunResult, AdapterError> {
     if bin.contains('/') && !Path::new(bin).exists() {
-        return Err(AdapterError::new(format!("gh executable not found: {bin}. Install GitHub CLI or set gh_bin on this integration.")));
+        return Err(AdapterError::new(format!(
+            "gh executable not found: {bin}. Install GitHub CLI or set gh_bin on this integration."
+        )));
     }
     let mut cmd = tokio::process::Command::new(bin);
     cmd.args(args);
@@ -201,16 +249,26 @@ async fn spawn_gh(bin: &str, args: &[String], cwd: &str, timeout: Duration) -> R
             let code = output.status.code().unwrap_or(0);
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            Ok(GhRunResult { code, stdout, stderr })
+            Ok(GhRunResult {
+                code,
+                stdout,
+                stderr,
+            })
         }
         Ok(Err(e)) => Err(AdapterError::new(e.to_string())),
-        Err(_) => {
-            Err(AdapterError::new(format!("gh {} timed out after {}s.", args.join(" "), timeout.as_secs())))
-        }
+        Err(_) => Err(AdapterError::new(format!(
+            "gh {} timed out after {}s.",
+            args.join(" "),
+            timeout.as_secs()
+        ))),
     }
 }
 
-pub async fn run_gh(cfg: &GhConfig, args: Vec<String>, cwd_arg: Option<&str>) -> Result<GhRunResult, AdapterError> {
+pub async fn run_gh(
+    cfg: &GhConfig,
+    args: Vec<String>,
+    cwd_arg: Option<&str>,
+) -> Result<GhRunResult, AdapterError> {
     let cwd = gh_cwd(cfg, cwd_arg);
     let timeout = Duration::from_millis(cfg.timeout_ms);
     let tl_runner = TL_RUNNER.with(|c| c.borrow().clone());
@@ -225,11 +283,21 @@ pub async fn run_gh(cfg: &GhConfig, args: Vec<String>, cwd_arg: Option<&str>) ->
 }
 
 fn gh_error(op: &str, res: &GhRunResult) -> AdapterError {
-    let msg = if !res.stderr.trim().is_empty() { res.stderr.trim() } else if !res.stdout.trim().is_empty() { res.stdout.trim() } else { "no output" };
+    let msg = if !res.stderr.trim().is_empty() {
+        res.stderr.trim()
+    } else if !res.stdout.trim().is_empty() {
+        res.stdout.trim()
+    } else {
+        "no output"
+    };
     AdapterError::new(format!("gh {op} failed (exit {}): {msg}", res.code))
 }
 
-pub async fn gh_json(cfg: &GhConfig, args: Vec<String>, cwd_arg: Option<&str>) -> Result<serde_json::Value, AdapterError> {
+pub async fn gh_json(
+    cfg: &GhConfig,
+    args: Vec<String>,
+    cwd_arg: Option<&str>,
+) -> Result<serde_json::Value, AdapterError> {
     let op = args.join(" ");
     let res = run_gh(cfg, args, cwd_arg).await?;
     if res.code != 0 {
@@ -245,7 +313,11 @@ pub async fn gh_json(cfg: &GhConfig, args: Vec<String>, cwd_arg: Option<&str>) -
     }
 }
 
-pub async fn gh_text(cfg: &GhConfig, args: Vec<String>, cwd_arg: Option<&str>) -> Result<String, AdapterError> {
+pub async fn gh_text(
+    cfg: &GhConfig,
+    args: Vec<String>,
+    cwd_arg: Option<&str>,
+) -> Result<String, AdapterError> {
     let op = args.join(" ");
     let res = run_gh(cfg, args, cwd_arg).await?;
     if res.code != 0 {
@@ -257,10 +329,17 @@ pub async fn gh_text(cfg: &GhConfig, args: Vec<String>, cwd_arg: Option<&str>) -
 pub fn humanize_gh_error(error: &AdapterError) -> String {
     let msg = &error.message;
     if msg.contains("executable not found") {
-        return format!("{msg}\n\nInstall GitHub CLI (https://cli.github.com) and sign in with `gh auth login`.");
+        return format!(
+            "{msg}\n\nInstall GitHub CLI (https://cli.github.com) and sign in with `gh auth login`."
+        );
     }
     let lower = msg.to_lowercase();
-    if lower.contains("not authenticated") || lower.contains("auth login") || lower.contains("not logged") || lower.contains("please log in") || lower.contains("auth:") {
+    if lower.contains("not authenticated")
+        || lower.contains("auth login")
+        || lower.contains("not logged")
+        || lower.contains("please log in")
+        || lower.contains("auth:")
+    {
         return format!("{msg}\n\nRun `gh auth login` in a terminal, then test again.");
     }
     msg.clone()
@@ -270,10 +349,21 @@ pub async fn test_gh(conn: &Integration) -> Result<(), AdapterError> {
     let cfg = gh_config(conn);
     let res = run_gh(&cfg, vec!["auth".to_string(), "status".to_string()], None).await?;
     if res.code != 0 {
-        let msg = if !res.stderr.trim().is_empty() { res.stderr.trim() } else if !res.stdout.trim().is_empty() { res.stdout.trim() } else { &format!("exit {}", res.code) };
+        let msg = if !res.stderr.trim().is_empty() {
+            res.stderr.trim()
+        } else if !res.stdout.trim().is_empty() {
+            res.stdout.trim()
+        } else {
+            &format!("exit {}", res.code)
+        };
         let lower = msg.to_lowercase();
-        if lower.contains("not logged") || lower.contains("auth:") || lower.contains("please log in") {
-            return Err(AdapterError::new(format!("gh is not authenticated: {msg}. Run `gh auth login`.")));
+        if lower.contains("not logged")
+            || lower.contains("auth:")
+            || lower.contains("please log in")
+        {
+            return Err(AdapterError::new(format!(
+                "gh is not authenticated: {msg}. Run `gh auth login`."
+            )));
         }
         return Err(AdapterError::new(format!("gh auth status failed: {msg}")));
     }

@@ -27,8 +27,9 @@ async fn main() -> std::io::Result<()> {
             let ctrl_c = tokio::signal::ctrl_c();
             #[cfg(unix)]
             {
-                let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("install SIGTERM handler");
+                let mut sigterm =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("install SIGTERM handler");
                 tokio::select! {
                     _ = ctrl_c => {},
                     _ = sigterm.recv() => {},

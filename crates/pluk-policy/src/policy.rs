@@ -57,15 +57,17 @@ impl QueryPolicy {
     /// The built-in presets. `custom` has none.
     pub fn preset(name: PresetName) -> Option<QueryPolicy> {
         use StatementCategory as C;
-        let policy = |allowed: Vec<C>, block_stacked, require_where, allow_filesystem, max_rows| QueryPolicy {
-            preset: name,
-            allowed,
-            block_stacked,
-            require_where,
-            allow_filesystem,
-            max_rows,
-            max_estimated_rows: None,
-            max_estimated_cost: None,
+        let policy = |allowed: Vec<C>, block_stacked, require_where, allow_filesystem, max_rows| {
+            QueryPolicy {
+                preset: name,
+                allowed,
+                block_stacked,
+                require_where,
+                allow_filesystem,
+                max_rows,
+                max_estimated_rows: None,
+                max_estimated_cost: None,
+            }
         };
         match name {
             PresetName::Custom => None,
@@ -77,7 +79,16 @@ impl QueryPolicy {
                 Some(1000.0),
             )),
             PresetName::ReadWrite => Some(policy(
-                vec![C::Select, C::Inspect, C::Insert, C::Update, C::Delete, C::Merge, C::Transaction, C::Session],
+                vec![
+                    C::Select,
+                    C::Inspect,
+                    C::Insert,
+                    C::Update,
+                    C::Delete,
+                    C::Merge,
+                    C::Transaction,
+                    C::Session,
+                ],
                 true,
                 true,
                 false,
@@ -85,9 +96,21 @@ impl QueryPolicy {
             )),
             PresetName::Migrations => Some(policy(
                 vec![
-                    C::Select, C::Inspect, C::Insert, C::Update, C::Delete, C::Merge, C::Create,
-                    C::Alter, C::Drop, C::Truncate, C::Rename, C::Transaction, C::Session,
-                    C::Procedure, C::Maintenance,
+                    C::Select,
+                    C::Inspect,
+                    C::Insert,
+                    C::Update,
+                    C::Delete,
+                    C::Merge,
+                    C::Create,
+                    C::Alter,
+                    C::Drop,
+                    C::Truncate,
+                    C::Rename,
+                    C::Transaction,
+                    C::Session,
+                    C::Procedure,
+                    C::Maintenance,
                 ],
                 false,
                 true,
@@ -118,7 +141,14 @@ pub fn sql_policy_from_settings(settings: &Map<String, Value>) -> QueryPolicy {
     let mode = setting_string(settings, "mode", "read-only");
     let allowed: Vec<C> = match mode.as_str() {
         "mutations" => vec![
-            C::Select, C::Inspect, C::Insert, C::Update, C::Delete, C::Merge, C::Transaction, C::Session,
+            C::Select,
+            C::Inspect,
+            C::Insert,
+            C::Update,
+            C::Delete,
+            C::Merge,
+            C::Transaction,
+            C::Session,
         ],
         "destructive" => crate::category::ALL_CATEGORIES.to_vec(),
         _ => vec![C::Select, C::Inspect],
@@ -264,7 +294,12 @@ pub fn evaluate(sql: &str, policy: &QueryPolicy, dialect: Dialect) -> EvalResult
             );
         };
         if !policy.allowed.contains(cat) {
-            let allowed_list = policy.allowed.iter().map(StatementCategory::as_str).collect::<Vec<_>>().join(", ");
+            let allowed_list = policy
+                .allowed
+                .iter()
+                .map(StatementCategory::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
             return denied(
                 format!(
                     "Statement type '{}' is not allowed on this connection. Allowed: {}.",
@@ -278,16 +313,25 @@ pub fn evaluate(sql: &str, policy: &QueryPolicy, dialect: Dialect) -> EvalResult
 
     if policy.require_where && result.has_update_or_delete_without_where {
         return denied(
-            "UPDATE or DELETE without a WHERE clause is blocked on this connection (requireWhere).".to_string(),
+            "UPDATE or DELETE without a WHERE clause is blocked on this connection (requireWhere)."
+                .to_string(),
             cats,
         );
     }
 
-    EvalResult { ok: true, reason: None, categories: cats }
+    EvalResult {
+        ok: true,
+        reason: None,
+        categories: cats,
+    }
 }
 
 fn denied(reason: String, categories: String) -> EvalResult {
-    EvalResult { ok: false, reason: Some(reason), categories }
+    EvalResult {
+        ok: false,
+        reason: Some(reason),
+        categories,
+    }
 }
 
 /// Rows returned by a capped query.
@@ -301,14 +345,26 @@ pub struct CapResult {
 /// Apply the row cap after a query has run. Never part of the gate itself.
 pub fn cap_rows(rows: Vec<Value>, max_rows: Option<f64>) -> CapResult {
     let Some(max_rows) = max_rows else {
-        return CapResult { rows, truncated: false, limit: None };
+        return CapResult {
+            rows,
+            truncated: false,
+            limit: None,
+        };
     };
     let limit = max_rows.trunc().max(0.0);
     if rows.len() as f64 <= limit {
-        return CapResult { rows, truncated: false, limit: Some(max_rows) };
+        return CapResult {
+            rows,
+            truncated: false,
+            limit: Some(max_rows),
+        };
     }
     let rows = rows.into_iter().take(limit as usize).collect();
-    CapResult { rows, truncated: true, limit: Some(max_rows) }
+    CapResult {
+        rows,
+        truncated: true,
+        limit: Some(max_rows),
+    }
 }
 
 /// Human-readable summary embedded in MCP tool descriptions.
@@ -366,7 +422,10 @@ pub fn parse_postgres_cost(plan_json: &Value) -> CostEstimate {
             };
         }
     }
-    CostEstimate { rows: None, cost: None }
+    CostEstimate {
+        rows: None,
+        cost: None,
+    }
 }
 
 // ── Typed readers live in `tool_config` (they mirror toolConfig.ts) ──────────
@@ -378,8 +437,8 @@ mod tests {
     use super::*;
     use crate::category::ALL_CATEGORIES;
     use crate::dialect::dialect_for;
-    use serde_json::json;
     use StatementCategory as C;
+    use serde_json::json;
 
     fn eval(sql: &str, policy: &QueryPolicy, db_type: &str) -> EvalResult {
         evaluate(sql, policy, dialect_for(db_type))
@@ -408,7 +467,11 @@ mod tests {
         policy.block_stacked = true;
         let r = eval("SELECT 1; DROP TABLE t", &policy, "postgres");
         assert!(!r.ok);
-        assert!(r.reason.as_deref().is_some_and(|r| r.to_lowercase().contains("stacked")));
+        assert!(
+            r.reason
+                .as_deref()
+                .is_some_and(|r| r.to_lowercase().contains("stacked"))
+        );
 
         let mut migrations = QueryPolicy::preset(PresetName::Migrations).expect("exists");
         migrations.block_stacked = false;
@@ -437,7 +500,11 @@ mod tests {
         locked.allow_filesystem = false;
         let r = eval("COPY t FROM PROGRAM 'ls'", &locked, "postgres");
         assert!(!r.ok);
-        assert!(r.reason.as_deref().is_some_and(|r| r.to_lowercase().contains("filesystem")));
+        assert!(
+            r.reason
+                .as_deref()
+                .is_some_and(|r| r.to_lowercase().contains("filesystem"))
+        );
 
         let r = eval("SELECT * FROM t INTO OUTFILE '/tmp/x'", &locked, "mysql");
         assert!(!r.ok);
@@ -448,7 +515,11 @@ mod tests {
         let policy = QueryPolicy::preset(PresetName::Unrestricted).expect("exists");
         let r = eval("XYZZY FROBNICATOR 42", &policy, "postgres");
         assert!(!r.ok);
-        assert!(r.reason.as_deref().is_some_and(|r| r.contains("could not be identified")));
+        assert!(
+            r.reason
+                .as_deref()
+                .is_some_and(|r| r.contains("could not be identified"))
+        );
     }
 
     #[test]
@@ -457,11 +528,19 @@ mod tests {
         policy.block_stacked = true;
         policy.require_where = true;
         // Stacked beats category: first statement's category is reported.
-        let r = eval("INSERT INTO t VALUES (1); DROP TABLE t", &policy, "postgres");
+        let r = eval(
+            "INSERT INTO t VALUES (1); DROP TABLE t",
+            &policy,
+            "postgres",
+        );
         assert!(r.reason.as_deref().is_some_and(|r| r.contains("Stacked")));
         // Category denial beats require_where.
         let r = eval("UPDATE t SET x=1", &policy, "postgres");
-        assert!(r.reason.as_deref().is_some_and(|r| r.contains("not allowed")));
+        assert!(
+            r.reason
+                .as_deref()
+                .is_some_and(|r| r.contains("not allowed"))
+        );
     }
 
     // ── presets ──────────────────────────────────────────────────────────────
@@ -479,12 +558,24 @@ mod tests {
         let read_write = QueryPolicy::preset(ReadWrite).expect("exists");
         assert_eq!(
             read_write.allowed,
-            vec![C::Select, C::Inspect, C::Insert, C::Update, C::Delete, C::Merge, C::Transaction, C::Session]
+            vec![
+                C::Select,
+                C::Inspect,
+                C::Insert,
+                C::Update,
+                C::Delete,
+                C::Merge,
+                C::Transaction,
+                C::Session
+            ]
         );
         assert!(read_write.require_where);
 
         let migrations = QueryPolicy::preset(Migrations).expect("exists");
-        assert!(!migrations.allowed.contains(&C::Grant), "grant stays out of migrations");
+        assert!(
+            !migrations.allowed.contains(&C::Grant),
+            "grant stays out of migrations"
+        );
         assert!(migrations.allowed.contains(&C::Drop));
         assert!(!migrations.block_stacked);
         assert_eq!(migrations.max_rows, None);
@@ -498,10 +589,18 @@ mod tests {
     #[test]
     fn default_policy_per_environment() {
         for env in ["production", "staging"] {
-            assert_eq!(default_policy_for(env).preset, PresetName::ReadOnly, "{env}");
+            assert_eq!(
+                default_policy_for(env).preset,
+                PresetName::ReadOnly,
+                "{env}"
+            );
         }
         for env in ["development", "local", ""] {
-            assert_eq!(default_policy_for(env).preset, PresetName::ReadWrite, "{env}");
+            assert_eq!(
+                default_policy_for(env).preset,
+                PresetName::ReadWrite,
+                "{env}"
+            );
         }
     }
 
@@ -562,14 +661,29 @@ mod tests {
     #[test]
     fn max_rows_follows_the_ts_mapping() {
         // Numbers pass through; positive only.
-        assert_eq!(sql_policy_from_settings(&settings_from(json!({"max_rows": 500}))).max_rows, Some(500.0));
+        assert_eq!(
+            sql_policy_from_settings(&settings_from(json!({"max_rows": 500}))).max_rows,
+            Some(500.0)
+        );
         // Numeric strings count.
-        assert_eq!(sql_policy_from_settings(&settings_from(json!({"max_rows": "250"}))).max_rows, Some(250.0));
+        assert_eq!(
+            sql_policy_from_settings(&settings_from(json!({"max_rows": "250"}))).max_rows,
+            Some(250.0)
+        );
         // Zero/negative mean no cap.
-        assert_eq!(sql_policy_from_settings(&settings_from(json!({"max_rows": 0}))).max_rows, None);
-        assert_eq!(sql_policy_from_settings(&settings_from(json!({"max_rows": -5}))).max_rows, None);
+        assert_eq!(
+            sql_policy_from_settings(&settings_from(json!({"max_rows": 0}))).max_rows,
+            None
+        );
+        assert_eq!(
+            sql_policy_from_settings(&settings_from(json!({"max_rows": -5}))).max_rows,
+            None
+        );
         // Garbage falls back to 1000, never to uncapped.
-        assert_eq!(sql_policy_from_settings(&settings_from(json!({"max_rows": "abc"}))).max_rows, Some(1000.0));
+        assert_eq!(
+            sql_policy_from_settings(&settings_from(json!({"max_rows": "abc"}))).max_rows,
+            Some(1000.0)
+        );
         assert_eq!(sql_policy_from_settings(&Map::new()).max_rows, Some(1000.0));
     }
 
@@ -583,7 +697,10 @@ mod tests {
         assert!(!p.allowed.contains(&C::Insert));
 
         assert_eq!(parse_policy(None, false).preset, PresetName::Unrestricted);
-        assert_eq!(parse_policy(Some(""), false).preset, PresetName::Unrestricted);
+        assert_eq!(
+            parse_policy(Some(""), false).preset,
+            PresetName::Unrestricted
+        );
     }
 
     #[test]
@@ -599,7 +716,10 @@ mod tests {
 
     #[test]
     fn invalid_json_falls_back_to_legacy_flag() {
-        assert_eq!(parse_policy(Some("not-json"), true).preset, PresetName::ReadOnly);
+        assert_eq!(
+            parse_policy(Some("not-json"), true).preset,
+            PresetName::ReadOnly
+        );
     }
 
     #[test]
@@ -662,8 +782,20 @@ mod tests {
     #[test]
     fn missing_plan_yields_nulls() {
         let estimate = parse_postgres_cost(&json!([{}]));
-        assert_eq!(estimate, CostEstimate { rows: None, cost: None });
-        assert_eq!(parse_postgres_cost(&Value::Null), CostEstimate { rows: None, cost: None });
+        assert_eq!(
+            estimate,
+            CostEstimate {
+                rows: None,
+                cost: None
+            }
+        );
+        assert_eq!(
+            parse_postgres_cost(&Value::Null),
+            CostEstimate {
+                rows: None,
+                cost: None
+            }
+        );
     }
 
     // ── policy_description ───────────────────────────────────────────────────

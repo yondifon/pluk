@@ -46,18 +46,33 @@ pub struct ToolResult {
 
 /// A successful response carrying `text`.
 pub fn ok(text: impl Into<String>) -> ToolResult {
-    ToolResult { content: vec![TextContent { content_type: "text", text: text.into() }], is_error: false }
+    ToolResult {
+        content: vec![TextContent {
+            content_type: "text",
+            text: text.into(),
+        }],
+        is_error: false,
+    }
 }
 
 /// An error-flagged response carrying `text`.
 pub fn err(text: impl Into<String>) -> ToolResult {
-    ToolResult { content: vec![TextContent { content_type: "text", text: text.into() }], is_error: true }
+    ToolResult {
+        content: vec![TextContent {
+            content_type: "text",
+            text: text.into(),
+        }],
+        is_error: true,
+    }
 }
 
 impl ToolResult {
     /// The first text block's contents.
     pub fn text(&self) -> &str {
-        self.content.first().map(|c| c.text.as_str()).unwrap_or_default()
+        self.content
+            .first()
+            .map(|c| c.text.as_str())
+            .unwrap_or_default()
     }
 }
 
@@ -80,8 +95,18 @@ pub struct GateMeta {
 }
 
 impl GateMeta {
-    pub fn new(category: impl Into<String>, action: impl Into<String>, detail: impl Into<String>) -> Self {
-        GateMeta { category: category.into(), action: action.into(), detail: detail.into(), database: None, command: None }
+    pub fn new(
+        category: impl Into<String>,
+        action: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        GateMeta {
+            category: category.into(),
+            action: action.into(),
+            detail: detail.into(),
+            database: None,
+            command: None,
+        }
     }
 
     pub fn with_database(mut self, database: impl Into<String>) -> Self {
@@ -106,13 +131,21 @@ pub struct CallTarget {
 
 impl CallTarget {
     pub fn new(connection_id: impl Into<String>, connection_name: impl Into<String>) -> Self {
-        CallTarget { connection_id: connection_id.into(), connection_name: connection_name.into(), group: None }
+        CallTarget {
+            connection_id: connection_id.into(),
+            connection_name: connection_name.into(),
+            group: None,
+        }
     }
 }
 
 impl From<&pluk_store::Integration> for CallTarget {
     fn from(conn: &pluk_store::Integration) -> Self {
-        CallTarget { connection_id: conn.id.clone(), connection_name: conn.name.clone(), group: None }
+        CallTarget {
+            connection_id: conn.id.clone(),
+            connection_name: conn.name.clone(),
+            group: None,
+        }
     }
 }
 
@@ -146,7 +179,10 @@ pub struct RunOutcome {
 
 impl Outcome {
     pub fn ran(text: impl Into<String>) -> Self {
-        Outcome::Ran(RunOutcome { text: text.into(), ..Default::default() })
+        Outcome::Ran(RunOutcome {
+            text: text.into(),
+            ..Default::default()
+        })
     }
 
     /// A ran-but-failed outcome: logged as an error, still returns its text.
@@ -198,7 +234,10 @@ impl GateOpts {
         self
     }
 
-    pub fn classify_error(mut self, classify: impl Fn(&AdapterError) -> Verdict + Send + 'static) -> Self {
+    pub fn classify_error(
+        mut self,
+        classify: impl Fn(&AdapterError) -> Verdict + Send + 'static,
+    ) -> Self {
         self.classify_error = Some(Box::new(classify));
         self
     }
@@ -208,17 +247,26 @@ impl GateOpts {
         self
     }
 
-    pub fn format_error(mut self, format: impl Fn(&AdapterError, Verdict) -> String + Send + 'static) -> Self {
+    pub fn format_error(
+        mut self,
+        format: impl Fn(&AdapterError, Verdict) -> String + Send + 'static,
+    ) -> Self {
         self.format_error = Some(Box::new(format));
         self
     }
 }
 
-pub fn cancelled_when_message_contains(needle: &'static str) -> impl Fn(&AdapterError) -> Verdict + Send {
+pub fn cancelled_when_message_contains(
+    needle: &'static str,
+) -> impl Fn(&AdapterError) -> Verdict + Send {
     let needle = needle.to_ascii_lowercase();
     move |error: &AdapterError| {
         let lower = error.message.to_ascii_lowercase();
-        if lower.contains(&needle) || lower.contains("cancel") || lower.contains("interrupted") || lower.contains("killed") {
+        if lower.contains(&needle)
+            || lower.contains("cancel")
+            || lower.contains("interrupted")
+            || lower.contains("killed")
+        {
             Verdict::Cancelled
         } else {
             Verdict::Error
@@ -229,8 +277,18 @@ pub fn cancelled_when_message_contains(needle: &'static str) -> impl Fn(&Adapter
 // ── The lifecycle ────────────────────────────────────────────────────────────
 
 /// Assemble a draft carrying everything one call records up front.
-fn draft_for(target: &CallTarget, recorded_sql: &str, meta: &GateMeta, verdict: Verdict, reason: Option<String>) -> LogDraft {
-    let mut draft = LogDraft::new(target.connection_id.as_str(), target.connection_name.as_str(), recorded_sql);
+fn draft_for(
+    target: &CallTarget,
+    recorded_sql: &str,
+    meta: &GateMeta,
+    verdict: Verdict,
+    reason: Option<String>,
+) -> LogDraft {
+    let mut draft = LogDraft::new(
+        target.connection_id.as_str(),
+        target.connection_name.as_str(),
+        recorded_sql,
+    );
     draft.verdict = verdict;
     draft.reason = reason;
     draft.categories = Some(meta.category.clone());
@@ -247,7 +305,13 @@ fn draft_for(target: &CallTarget, recorded_sql: &str, meta: &GateMeta, verdict: 
 /// created, which must not fail the call). Log-write failures are swallowed
 /// exactly like the TypeScript server's try/catch: auditing degrades, the
 /// call does not.
-pub async fn run_gated<F, Fut>(store: &Store, target: &CallTarget, meta: GateMeta, run: F, opts: GateOpts) -> ToolResult
+pub async fn run_gated<F, Fut>(
+    store: &Store,
+    target: &CallTarget,
+    meta: GateMeta,
+    run: F,
+    opts: GateOpts,
+) -> ToolResult
 where
     F: FnOnce(Option<i64>) -> Fut,
     Fut: Future<Output = Result<Outcome, AdapterError>>,
@@ -256,12 +320,26 @@ where
 
     // A precheck block never writes a pending row.
     if let Some(block) = opts.precheck.and_then(|precheck| precheck()) {
-        let draft = draft_for(target, &recorded_sql, &meta, Verdict::Blocked, Some(block.clone()));
+        let draft = draft_for(
+            target,
+            &recorded_sql,
+            &meta,
+            Verdict::Blocked,
+            Some(block.clone()),
+        );
         let _ = store.create_log_entry(draft);
         return err(format!("Blocked: {block}"));
     }
 
-    let log_id = store.create_log_entry(draft_for(target, &recorded_sql, &meta, Verdict::Pending, None)).ok();
+    let log_id = store
+        .create_log_entry(draft_for(
+            target,
+            &recorded_sql,
+            &meta,
+            Verdict::Pending,
+            None,
+        ))
+        .ok();
 
     let finalized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     struct PendingGuard {
@@ -275,17 +353,20 @@ where
         fn drop(&mut self) {
             if !self.finalized.load(std::sync::atomic::Ordering::SeqCst)
                 && let Some(id) = self.id
-                    && let Some(s) = unsafe { self.store.as_ref() } {
-                        let _ = s.update_log_entry(
-                            id,
-                            LogUpdate {
-                                verdict: Verdict::Error,
-                                reason: Some("Query was interrupted (dropped or panicked)".into()),
-                                response_text: Some("Error: Query was interrupted (dropped or panicked)".into()),
-                                ..Default::default()
-                            },
-                        );
-                    }
+                && let Some(s) = unsafe { self.store.as_ref() }
+            {
+                let _ = s.update_log_entry(
+                    id,
+                    LogUpdate {
+                        verdict: Verdict::Error,
+                        reason: Some("Query was interrupted (dropped or panicked)".into()),
+                        response_text: Some(
+                            "Error: Query was interrupted (dropped or panicked)".into(),
+                        ),
+                        ..Default::default()
+                    },
+                );
+            }
         }
     }
     let _guard = PendingGuard {
@@ -307,13 +388,21 @@ where
     match run_result {
         Ok(Outcome::Blocked(block)) => {
             if let Some(id) = log_id {
-                let update = LogUpdate { verdict: Verdict::Blocked, reason: Some(block.clone()), ..Default::default() };
+                let update = LogUpdate {
+                    verdict: Verdict::Blocked,
+                    reason: Some(block.clone()),
+                    ..Default::default()
+                };
                 let _ = store.update_log_entry(id, update);
             }
             err(format!("Blocked: {block}"))
         }
         Ok(Outcome::Ran(ran)) => {
-            let status = if ran.is_error { Verdict::Error } else { Verdict::Allowed };
+            let status = if ran.is_error {
+                Verdict::Error
+            } else {
+                Verdict::Allowed
+            };
             if let Some(id) = log_id {
                 let update = LogUpdate {
                     sql: ran.command.clone(),
@@ -324,10 +413,18 @@ where
                 };
                 let _ = store.update_log_entry(id, update);
             }
-            if ran.is_error { err(ran.text) } else { ok(ran.text) }
+            if ran.is_error {
+                err(ran.text)
+            } else {
+                ok(ran.text)
+            }
         }
         Err(error) => {
-            let status = match opts.classify_error.as_ref().map(|classify| classify(&error)) {
+            let status = match opts
+                .classify_error
+                .as_ref()
+                .map(|classify| classify(&error))
+            {
                 Some(Verdict::Cancelled) => Verdict::Cancelled,
                 _ => Verdict::Error,
             };
@@ -335,7 +432,17 @@ where
                 .format_error
                 .as_ref()
                 .map(|format| format(&error, status))
-                .unwrap_or_else(|| format!("{}: {}", if status == Verdict::Cancelled { "Cancelled" } else { "Error" }, error.message));
+                .unwrap_or_else(|| {
+                    format!(
+                        "{}: {}",
+                        if status == Verdict::Cancelled {
+                            "Cancelled"
+                        } else {
+                            "Error"
+                        },
+                        error.message
+                    )
+                });
             if let Some(id) = log_id {
                 let update = LogUpdate {
                     sql: meta.command.clone(),
@@ -348,9 +455,13 @@ where
             }
             // Cancellations and SSH pending approvals keep their resources:
             // neither is the driver's fault.
-            if status == Verdict::Error && !error.is_ssh_pending() && let Some(on_error) = opts.on_error.as_ref() {
+            if status == Verdict::Error
+                && !error.is_ssh_pending()
+                && let Some(on_error) = opts.on_error.as_ref()
+            {
                 on_error(&error);
-            }            err(text)
+            }
+            err(text)
         }
     }
 }
@@ -397,7 +508,10 @@ mod tests {
             |_| async {
                 Ok(Outcome::Ran(RunOutcome {
                     text: "[]".into(),
-                    result: Some(QueryResult { fields: vec!["id".into()], rows: vec![json!(1)] }),
+                    result: Some(QueryResult {
+                        fields: vec!["id".into()],
+                        rows: vec![json!(1)],
+                    }),
                     response_text: Some("[]".into()),
                     ..Default::default()
                 }))
@@ -415,7 +529,8 @@ mod tests {
         assert_eq!(row.sql, "SELECT 1");
         assert_eq!(row.response_text.as_deref(), Some("[]"));
         assert_eq!(row.row_count, Some(1));
-        let snapshot: serde_json::Value = serde_json::from_str(row.result_json.as_deref().expect("result json")).unwrap();
+        let snapshot: serde_json::Value =
+            serde_json::from_str(row.result_json.as_deref().expect("result json")).unwrap();
         assert_eq!(snapshot["fields"], json!(["id"]));
         assert_eq!(snapshot["rows"], json!([1]));
     }
@@ -475,11 +590,20 @@ mod tests {
         .await;
 
         assert!(result.is_error);
-        assert_eq!(result.text(), "Cancelled: query cancelled: terminating connection");
+        assert_eq!(
+            result.text(),
+            "Cancelled: query cancelled: terminating connection"
+        );
         let row = single_entry(&store).await;
         assert_eq!(row.verdict, "cancelled");
-        assert_eq!(row.reason.as_deref(), Some("query cancelled: terminating connection"));
-        assert!(!*evicted.lock().unwrap(), "a cancelled query must not evict its pooled connection");
+        assert_eq!(
+            row.reason.as_deref(),
+            Some("query cancelled: terminating connection")
+        );
+        assert!(
+            !*evicted.lock().unwrap(),
+            "a cancelled query must not evict its pooled connection"
+        );
     }
 
     #[tokio::test]
@@ -492,7 +616,8 @@ mod tests {
             &target(),
             GateMeta::new("read", "get", "GET key"),
             |_| async { Err(AdapterError::new("connection refused")) },
-            GateOpts::default().on_error(move |e| *capture.lock().unwrap() = Some(e.message.clone())),
+            GateOpts::default()
+                .on_error(move |e| *capture.lock().unwrap() = Some(e.message.clone())),
         )
         .await;
 
@@ -500,7 +625,10 @@ mod tests {
         assert_eq!(seen.lock().unwrap().as_deref(), Some("connection refused"));
         let row = single_entry(&store).await;
         assert_eq!(row.verdict, "error");
-        assert_eq!(row.response_text.as_deref(), Some("Error: connection refused"));
+        assert_eq!(
+            row.response_text.as_deref(),
+            Some("Error: connection refused")
+        );
     }
 
     #[tokio::test]
@@ -512,13 +640,24 @@ mod tests {
             &store,
             &target(),
             GateMeta::new("read", "list_tables", "introspect"),
-            |_| async { Err(AdapterError::new("SSH connection is waiting on an approval.").with_code(SSH_CONNECT_PENDING_CODE)) },
+            |_| async {
+                Err(
+                    AdapterError::new("SSH connection is waiting on an approval.")
+                        .with_code(SSH_CONNECT_PENDING_CODE),
+                )
+            },
             GateOpts::default().on_error(move |_| *flag.lock().unwrap() = true),
         )
         .await;
 
-        assert_eq!(result.text(), "Error: SSH connection is waiting on an approval.");
-        assert!(!*called.lock().unwrap(), "pending approvals must not trigger eviction");
+        assert_eq!(
+            result.text(),
+            "Error: SSH connection is waiting on an approval."
+        );
+        assert!(
+            !*called.lock().unwrap(),
+            "pending approvals must not trigger eviction"
+        );
         assert_eq!(single_entry(&store).await.verdict, "error");
     }
 
@@ -534,7 +673,10 @@ mod tests {
         )
         .await;
 
-        assert_eq!(result.text(), "That table isn't there (relation \"nope\" does not exist).");
+        assert_eq!(
+            result.text(),
+            "That table isn't there (relation \"nope\" does not exist)."
+        );
     }
 
     #[tokio::test]

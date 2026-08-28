@@ -17,15 +17,15 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use pluk_policy::{default_enabled_for_category, tool_gate, ActionCategory};
+use pluk_policy::{ActionCategory, default_enabled_for_category, tool_gate};
 use pluk_store::{Integration, QueryResult, Store};
 
 use crate::adapter::{Adapter, PolicyKind};
 use crate::config_field::ConfigField;
 use crate::error::AdapterError;
-use crate::gate::{run_gated, CallTarget, GateMeta, GateOpts, Outcome, RunOutcome};
-use crate::instructions::{build_instructions, InstructionParts};
-use crate::tool_host::{object_schema, BoxFuture, ToolHandler, ToolHost, ToolRegistration};
+use crate::gate::{CallTarget, GateMeta, GateOpts, Outcome, RunOutcome, run_gated};
+use crate::instructions::{InstructionParts, build_instructions};
+use crate::tool_host::{BoxFuture, ToolHandler, ToolHost, ToolRegistration, object_schema};
 use crate::tool_spec::ToolSpec;
 
 // ── Tool outputs ─────────────────────────────────────────────────────────────
@@ -55,7 +55,10 @@ impl ActionOutput {
 
     /// Structured/text output plus the equivalent shell command.
     pub fn with_command(value: Value, command: impl Into<String>) -> Self {
-        ActionOutput::WithCommand { value, command: command.into() }
+        ActionOutput::WithCommand {
+            value,
+            command: command.into(),
+        }
     }
 
     fn into_parts(self) -> (Value, Option<String>) {
@@ -83,7 +86,10 @@ fn shape_output(output: ActionOutput) -> RunOutcome {
         text: text.clone(),
         is_error: false,
         reason: None,
-        result: Some(QueryResult { fields: Vec::new(), rows }),
+        result: Some(QueryResult {
+            fields: Vec::new(),
+            rows,
+        }),
         response_text: Some(text),
         command,
     }
@@ -93,7 +99,11 @@ fn shape_output(output: ActionOutput) -> RunOutcome {
 
 type DetailFn = Arc<dyn Fn(&Value) -> String + Send + Sync>;
 type CommandFn = Arc<dyn Fn(&Value, &Map<String, Value>) -> String + Send + Sync>;
-type RunFn = Arc<dyn Fn(Value, Map<String, Value>) -> BoxFuture<Result<ActionOutput, AdapterError>> + Send + Sync>;
+type RunFn = Arc<
+    dyn Fn(Value, Map<String, Value>) -> BoxFuture<Result<ActionOutput, AdapterError>>
+        + Send
+        + Sync,
+>;
 
 /// One tool on a REST/action service: its data fetch plus coarse category;
 /// the platform handles enable-gating, logging, and response shaping.
@@ -122,7 +132,11 @@ pub struct ActionTool {
 }
 
 impl ActionTool {
-    pub fn new(name: impl Into<String>, description: impl Into<String>, category: ActionCategory) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        category: ActionCategory,
+    ) -> Self {
         ActionTool {
             name: name.into(),
             description: description.into(),
@@ -200,7 +214,8 @@ impl ToolSpec {
 // ── The spec ─────────────────────────────────────────────────────────────────
 
 pub type ClientFn<C> = Box<dyn Fn(&Integration, &str) -> Result<C, AdapterError> + Send + Sync>;
-pub type TestConnectionFn = Arc<dyn Fn(&Integration) -> BoxFuture<Result<(), AdapterError>> + Send + Sync>;
+pub type TestConnectionFn =
+    Arc<dyn Fn(&Integration) -> BoxFuture<Result<(), AdapterError>> + Send + Sync>;
 pub type ToolsFn<C> = Box<dyn Fn(&Integration, &C) -> Vec<ActionTool> + Send + Sync>;
 pub type HumanizeFn = Arc<dyn Fn(&AdapterError) -> String + Send + Sync>;
 /// Receives the failing tool's name and the error; installed once per spec so
@@ -233,7 +248,11 @@ pub struct ActionAdapterSpec<C> {
 }
 
 impl<C> ActionAdapterSpec<C> {
-    pub fn new(id: impl Into<String>, label: impl Into<String>, category: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        category: impl Into<String>,
+    ) -> Self {
         ActionAdapterSpec {
             id: id.into(),
             label: label.into(),
@@ -243,7 +262,9 @@ impl<C> ActionAdapterSpec<C> {
             start: None,
             config_fields: Vec::new(),
             client: Box::new(|_, _| Err(AdapterError::new("no client configured"))),
-            test_connection: Arc::new(|_| Box::pin(async { Err(AdapterError::new("no test configured")) })),
+            test_connection: Arc::new(|_| {
+                Box::pin(async { Err(AdapterError::new("no test configured")) })
+            }),
             tools: Box::new(|_, _| Vec::new()),
             humanize_error: None,
             on_tool_error: None,
@@ -295,12 +316,18 @@ impl<C> ActionAdapterSpec<C> {
         self
     }
 
-    pub fn humanize_error(mut self, f: impl Fn(&AdapterError) -> String + Send + Sync + 'static) -> Self {
+    pub fn humanize_error(
+        mut self,
+        f: impl Fn(&AdapterError) -> String + Send + Sync + 'static,
+    ) -> Self {
         self.humanize_error = Some(Arc::new(f));
         self
     }
 
-    pub fn on_tool_error(mut self, f: impl Fn(&str, &AdapterError) + Send + Sync + 'static) -> Self {
+    pub fn on_tool_error(
+        mut self,
+        f: impl Fn(&str, &AdapterError) + Send + Sync + 'static,
+    ) -> Self {
         self.on_tool_error = Some(Arc::new(f));
         self
     }
@@ -320,9 +347,16 @@ pub struct ActionAdapter<C> {
 /// Build a complete action `Adapter` from a declarative spec.
 pub fn action_adapter<C>(spec: ActionAdapterSpec<C>, store: Arc<Store>) -> ActionAdapter<C> {
     let tool_specs = enumerate_specs(&spec);
-    let default_enabled_by_name =
-        tool_specs.iter().map(|t| (t.name.clone(), t.default_enabled)).collect();
-    ActionAdapter { spec, store, tool_specs, default_enabled_by_name }
+    let default_enabled_by_name = tool_specs
+        .iter()
+        .map(|t| (t.name.clone(), t.default_enabled))
+        .collect();
+    ActionAdapter {
+        spec,
+        store,
+        tool_specs,
+        default_enabled_by_name,
+    }
 }
 
 fn dummy_integration(adapter_id: &str) -> Integration {
@@ -336,7 +370,7 @@ fn dummy_integration(adapter_id: &str) -> Integration {
         query_policy: None,
         token: String::new(),
         created_at: String::new(),
-         via_group: None,
+        via_group: None,
     }
 }
 
@@ -388,7 +422,10 @@ impl<C> Adapter for ActionAdapter<C> {
     }
 
     fn humanize_error(&self, error: &AdapterError) -> Option<String> {
-        self.spec.humanize_error.as_ref().map(|humanize| humanize(error))
+        self.spec
+            .humanize_error
+            .as_ref()
+            .map(|humanize| humanize(error))
     }
 
     fn instructions(&self, conn: &Integration) -> String {
@@ -417,7 +454,12 @@ impl<C> Adapter for ActionAdapter<C> {
         )
     }
 
-    fn register(&self, host: &mut dyn ToolHost, conn: &Integration, owner_id: &str) -> Result<(), AdapterError> {
+    fn register(
+        &self,
+        host: &mut dyn ToolHost,
+        conn: &Integration,
+        owner_id: &str,
+    ) -> Result<(), AdapterError> {
         let client = (self.spec.client)(conn, owner_id)?;
         let gate = tool_gate(conn.query_policy.as_deref());
 
@@ -487,7 +529,10 @@ fn make_handler(
         let on_tool_error = on_tool_error.clone();
 
         Box::pin(async move {
-            let detail = detail_fn.as_ref().map(|f| f(&args)).unwrap_or_else(|| fallback_detail);
+            let detail = detail_fn
+                .as_ref()
+                .map(|f| f(&args))
+                .unwrap_or_else(|| fallback_detail);
             let mut meta = GateMeta::new(category, &name, detail);
             if let Some(command_fn) = command_fn.as_ref() {
                 meta = meta.with_command(command_fn(&args, &settings));
@@ -501,7 +546,11 @@ fn make_handler(
                     let run_fn = run_fn.clone();
                     let args = args.clone();
                     let settings = settings.clone();
-                    async move { Ok::<Outcome, AdapterError>(Outcome::Ran(shape_output(run_fn(args, settings).await?))) }
+                    async move {
+                        Ok::<Outcome, AdapterError>(Outcome::Ran(shape_output(
+                            run_fn(args, settings).await?,
+                        )))
+                    }
                 },
                 {
                     let name = name.clone();
@@ -542,11 +591,24 @@ mod tests {
             self.tools.push(registration.name);
         }
 
-        fn register_prompt(&mut self, name: &str, _description: &str, _schema: Option<Map<String, Value>>, _handler: crate::tool_host::PromptHandler) {
+        fn register_prompt(
+            &mut self,
+            name: &str,
+            _description: &str,
+            _schema: Option<Map<String, Value>>,
+            _handler: crate::tool_host::PromptHandler,
+        ) {
             self.prompts.push(name.to_string());
         }
 
-        fn register_resource(&mut self, name: &str, uri: &str, _mime_type: &str, _description: Option<&str>, _handler: Arc<dyn Fn() -> BoxFuture<ResourceContents> + Send + Sync>) {
+        fn register_resource(
+            &mut self,
+            name: &str,
+            uri: &str,
+            _mime_type: &str,
+            _description: Option<&str>,
+            _handler: Arc<dyn Fn() -> BoxFuture<ResourceContents> + Send + Sync>,
+        ) {
             self.resources.push(format!("{name}:{uri}"));
         }
     }
@@ -574,7 +636,10 @@ mod tests {
     }
 
     fn tool_config(names: &[&str]) -> String {
-        let entries: Vec<String> = names.iter().map(|n| format!("\"{n}\": {{\"enabled\": true}}")).collect();
+        let entries: Vec<String> = names
+            .iter()
+            .map(|n| format!("\"{n}\": {{\"enabled\": true}}"))
+            .collect();
         format!("{{\"tools\":{{{}}}}}", entries.join(","))
     }
 
@@ -621,7 +686,10 @@ mod tests {
         // `get` stays on through its read default; only `expire`-style tools
         // that are neither enabled nor default-on stay hidden.
         let names = registered_names(&adapter, &integration(Some(&tool_config(&["list", "del"]))));
-        assert_eq!(names, vec!["del".to_string(), "get".to_string(), "list".to_string()]);
+        assert_eq!(
+            names,
+            vec!["del".to_string(), "get".to_string(), "list".to_string()]
+        );
     }
 
     #[test]
@@ -637,14 +705,23 @@ mod tests {
     fn the_catalog_derives_defaults_from_categories_with_overrides() {
         let (_dir, store) = temp_store();
         let adapter = action_adapter(spec(), store);
-        let find = |name: &str| adapter.tool_specs().iter().find(|t| t.name == name).unwrap();
+        let find = |name: &str| {
+            adapter
+                .tool_specs()
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap()
+        };
         assert!(find("get").default_enabled, "plain read ships on");
         assert!(!find("list").default_enabled, "explicit override wins");
         assert!(!find("create").default_enabled, "write always ships off");
         assert!(!find("del").default_enabled, "delete always ships off");
         for tool in adapter.tool_specs() {
             if tool.category != "read" && tool.category != "inspect" {
-                assert!(!tool.default_enabled, "no state-changing tool may default on");
+                assert!(
+                    !tool.default_enabled,
+                    "no state-changing tool may default on"
+                );
             }
         }
     }
@@ -678,12 +755,20 @@ mod tests {
 
         // Unconfigured: only the plain read tool is on.
         let none = adapter.instructions(&integration(None));
-        assert!(none.contains("Current policy: Enabled tools: get."), "{none}");
+        assert!(
+            none.contains("Current policy: Enabled tools: get."),
+            "{none}"
+        );
 
         let some = adapter.instructions(&integration(Some(&tool_config(&["list"]))));
-        assert!(some.contains("Current policy: Enabled tools: list, get."), "{some}");
         assert!(
-            some.starts_with("Test API integration \"Test API\" — development environment.\nRead-mostly."),
+            some.contains("Current policy: Enabled tools: list, get."),
+            "{some}"
+        );
+        assert!(
+            some.starts_with(
+                "Test API integration \"Test API\" — development environment.\nRead-mostly."
+            ),
             "{some}"
         );
     }
@@ -694,28 +779,45 @@ mod tests {
         let spec = ActionAdapterSpec::<()>::new(ADAPTER_ID, "Test API", "misc")
             .client(|_, _| Ok(()))
             .tools(|_, _| {
-                vec![ActionTool::new("queryish", "Q", ActionCategory::Read)
-                    .settings(vec![crate::config_field::ConfigField::new("mode", "Mode", crate::config_field::FieldType::Select)])
-                    .detail_fn(|args| format!("queryish {args}"))
-                    .run(|_args, settings| async move {
-                        Ok(ActionOutput::json(json!({ "mode": settings.get("mode") })))
-                    })]
+                vec![
+                    ActionTool::new("queryish", "Q", ActionCategory::Read)
+                        .settings(vec![crate::config_field::ConfigField::new(
+                            "mode",
+                            "Mode",
+                            crate::config_field::FieldType::Select,
+                        )])
+                        .detail_fn(|args| format!("queryish {args}"))
+                        .run(|_args, settings| async move {
+                            Ok(ActionOutput::json(json!({ "mode": settings.get("mode") })))
+                        }),
+                ]
             });
         let adapter = action_adapter(spec, store.clone());
-        let policy = "{\"tools\":{\"queryish\":{\"enabled\":true,\"settings\":{\"mode\":\"read-only\"}}}}";
+        let policy =
+            "{\"tools\":{\"queryish\":{\"enabled\":true,\"settings\":{\"mode\":\"read-only\"}}}}";
         let conn = integration(Some(policy));
 
         let mut capturing = CapturingHost::default();
-        adapter.register(&mut capturing, &conn, "").expect("register");
+        adapter
+            .register(&mut capturing, &conn, "")
+            .expect("register");
         assert_eq!(capturing.handlers.len(), 1);
         assert_eq!(capturing.handlers[0].0, "queryish");
         let handler = capturing.handlers.remove(0).1;
         let result = handler(json!({ "q": 1 })).await;
 
         assert!(!result.is_error);
-        assert!(result.text().contains("\"mode\": \"read-only\""), "{}", result.text());
+        assert!(
+            result.text().contains("\"mode\": \"read-only\""),
+            "{}",
+            result.text()
+        );
         let page = store
-            .read_log_page(&pluk_store::LogScope::Connection("r1".into()), pluk_store::LogRange::All, None)
+            .read_log_page(
+                &pluk_store::LogScope::Connection("r1".into()),
+                pluk_store::LogRange::All,
+                None,
+            )
             .expect("page");
         assert_eq!(page.entries.len(), 1);
         assert_eq!(page.entries[0].verdict, "allowed");
@@ -731,47 +833,70 @@ mod tests {
         let spec = ActionAdapterSpec::<()>::new(ADAPTER_ID, "CLI", "misc")
             .client(|_, _| Ok(()))
             .tools(|_, _| {
-                vec![ActionTool::new("gh", "GitHub via gh", ActionCategory::Admin)
-                    .command_fn(|_args, _settings| "gh pr list --limit 30".to_string())
-                    .run(|_, _| async {
-                        Ok(ActionOutput::with_command(Value::String("PR #1\nPR #2".into()), "gh pr list --limit 30 --state open"))
-                    })]
+                vec![
+                    ActionTool::new("gh", "GitHub via gh", ActionCategory::Admin)
+                        .command_fn(|_args, _settings| "gh pr list --limit 30".to_string())
+                        .run(|_, _| async {
+                            Ok(ActionOutput::with_command(
+                                Value::String("PR #1\nPR #2".into()),
+                                "gh pr list --limit 30 --state open",
+                            ))
+                        }),
+                ]
             });
         let adapter = action_adapter(spec, store.clone());
         let conn = integration(Some(&tool_config(&["gh"])));
 
         let mut capturing = CapturingHost::default();
-        adapter.register(&mut capturing, &conn, "").expect("register");
+        adapter
+            .register(&mut capturing, &conn, "")
+            .expect("register");
         let handler = capturing.handlers.remove(0).1;
         let result = handler(json!({})).await;
 
         // Verbatim: no JSON quoting around the text.
         assert_eq!(result.text(), "PR #1\nPR #2");
         let page = store
-            .read_log_page(&pluk_store::LogScope::Connection("r1".into()), pluk_store::LogRange::All, None)
+            .read_log_page(
+                &pluk_store::LogScope::Connection("r1".into()),
+                pluk_store::LogRange::All,
+                None,
+            )
             .expect("page");
         assert_eq!(page.entries[0].sql, "gh pr list --limit 30 --state open");
-        assert_eq!(page.entries[0].response_text.as_deref(), Some("PR #1\nPR #2"));
+        assert_eq!(
+            page.entries[0].response_text.as_deref(),
+            Some("PR #1\nPR #2")
+        );
         assert_eq!(page.entries[0].row_count, Some(1));
     }
 
     #[tokio::test]
     async fn structured_output_renders_as_pretty_json() {
         let (_dir, store) = temp_store();
-        let spec = ActionAdapterSpec::<()>::new(ADAPTER_ID, "API", "misc")
-            .client(|_, _| Ok(()))
-            .tools(|_, _| {
-                vec![ActionTool::new("get_issue", "G", ActionCategory::Read)
-                    .run(|_, _| async { Ok(ActionOutput::json(json!({ "id": 7, "title": "Bug" })))})]            });
+        let spec =
+            ActionAdapterSpec::<()>::new(ADAPTER_ID, "API", "misc")
+                .client(|_, _| Ok(()))
+                .tools(|_, _| {
+                    vec![ActionTool::new("get_issue", "G", ActionCategory::Read).run(
+                        |_, _| async { Ok(ActionOutput::json(json!({ "id": 7, "title": "Bug" }))) },
+                    )]
+                });
         let adapter = action_adapter(spec, store.clone());
         let conn = integration(Some(&tool_config(&["get_issue"])));
 
         let mut capturing = CapturingHost::default();
-        adapter.register(&mut capturing, &conn, "").expect("register");
+        adapter
+            .register(&mut capturing, &conn, "")
+            .expect("register");
         let handler = capturing.handlers.remove(0).1;
         let result = handler(json!({})).await;
 
-        assert!(result.text().contains("\n  \""), "expected indented JSON: {}", result.text());
+        assert!(
+            result.text().contains("\n  \""),
+            "expected indented JSON: {}",
+            result.text()
+        );
         assert_eq!(result.text(), "{\n  \"id\": 7,\n  \"title\": \"Bug\"\n}");
     }
 
@@ -782,23 +907,41 @@ mod tests {
         let capture = seen.clone();
         let spec = ActionAdapterSpec::<()>::new(ADAPTER_ID, "API", "misc")
             .client(|_, _| Ok(()))
-            .on_tool_error(move |tool, error| capture.lock().unwrap().push(format!("{tool}: {}", error.message)))
+            .on_tool_error(move |tool, error| {
+                capture
+                    .lock()
+                    .unwrap()
+                    .push(format!("{tool}: {}", error.message))
+            })
             .tools(|_, _| {
                 vec![
                     ActionTool::new("flaky", "F", ActionCategory::Read)
                         .run(|_, _| async { Err(AdapterError::new("boom")) }),
-                    ActionTool::new("pending", "P", ActionCategory::Read)
-                        .run(|_, _| async { Err(AdapterError::new("waiting").with_code(SSH_CONNECT_PENDING_CODE)) }),
+                    ActionTool::new("pending", "P", ActionCategory::Read).run(|_, _| async {
+                        Err(AdapterError::new("waiting").with_code(SSH_CONNECT_PENDING_CODE))
+                    }),
                 ]
             });
         let adapter = action_adapter(spec, store.clone());
         let conn = integration(Some(&tool_config(&["flaky", "pending"])));
 
         let mut capturing = CapturingHost::default();
-        adapter.register(&mut capturing, &conn, "").expect("register");
+        adapter
+            .register(&mut capturing, &conn, "")
+            .expect("register");
         let handlers = capturing.handlers;
-        let flaky = handlers.iter().find(|(n, _)| n == "flaky").unwrap().1.clone();
-        let pending = handlers.iter().find(|(n, _)| n == "pending").unwrap().1.clone();
+        let flaky = handlers
+            .iter()
+            .find(|(n, _)| n == "flaky")
+            .unwrap()
+            .1
+            .clone();
+        let pending = handlers
+            .iter()
+            .find(|(n, _)| n == "pending")
+            .unwrap()
+            .1
+            .clone();
 
         let failed = flaky(json!({})).await;
         assert!(failed.is_error);
@@ -831,7 +974,10 @@ mod tests {
 
         let json_body = ApiResponse::json(200, &json!({ "ok": true }));
         assert_eq!(json_body.content_type.as_deref(), Some("application/json"));
-        assert_eq!(std::str::from_utf8(&json_body.body).unwrap(), "{\"ok\":true}");
+        assert_eq!(
+            std::str::from_utf8(&json_body.body).unwrap(),
+            "{\"ok\":true}"
+        );
     }
 
     /// A host that keeps handlers reachable for direct invocation.
@@ -845,8 +991,23 @@ mod tests {
             self.handlers.push((registration.name, handler));
         }
 
-        fn register_prompt(&mut self, _name: &str, _description: &str, _schema: Option<Map<String, Value>>, _handler: crate::tool_host::PromptHandler) {}
+        fn register_prompt(
+            &mut self,
+            _name: &str,
+            _description: &str,
+            _schema: Option<Map<String, Value>>,
+            _handler: crate::tool_host::PromptHandler,
+        ) {
+        }
 
-        fn register_resource(&mut self, _name: &str, _uri: &str, _mime_type: &str, _description: Option<&str>, _handler: Arc<dyn Fn() -> BoxFuture<ResourceContents> + Send + Sync>) {}
+        fn register_resource(
+            &mut self,
+            _name: &str,
+            _uri: &str,
+            _mime_type: &str,
+            _description: Option<&str>,
+            _handler: Arc<dyn Fn() -> BoxFuture<ResourceContents> + Send + Sync>,
+        ) {
+        }
     }
 }

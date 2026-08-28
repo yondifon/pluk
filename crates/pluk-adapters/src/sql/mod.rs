@@ -26,18 +26,27 @@ fn db_config_from(conn: &Integration) -> DbSqlConfig {
     let mut cfg = DbSqlConfig::default();
     cfg.r#type = conn.r#type.clone();
     cfg.host = conn.config.get("host").and_then(|v| v.as_str()).map(|s| s.to_string());
-    cfg.port = conn.config.get("port").and_then(|v| v.as_u64()).map(|n| n as u16);
+    cfg.port = conn.config.get("port").and_then(|v| v.as_u64()).map(|n| n as u16)
+        .or_else(|| conn.config.get("port").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()));
     cfg.user = conn.config.get("user").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.password = conn.config.get("password").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.database = conn.config.get("database").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.filename = conn.config.get("filename").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.socket_path = conn.config.get("socket_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.use_ssl = conn.config.get("use_ssl").and_then(|v| v.as_bool()).unwrap_or(false)
+        || conn.config.get("use_ssl").and_then(|v| v.as_str()) == Some("true");
+    cfg.ssl_mode = conn.config.get("ssl_mode").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.ssl_ca_path = conn.config.get("ssl_ca_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.ssl_cert_path = conn.config.get("ssl_cert_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.ssl_key_path = conn.config.get("ssl_key_path").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.use_ssh = conn.config.get("use_ssh").map(|v| match v {
         serde_json::Value::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
         serde_json::Value::String(s) => s.clone(),
         _ => "".to_string(),
     });
     cfg.ssh_host = conn.config.get("ssh_host").and_then(|v| v.as_str()).map(|s| s.to_string());
-    cfg.ssh_port = conn.config.get("ssh_port").and_then(|v| v.as_u64()).map(|n| n as u16);
+    cfg.ssh_port = conn.config.get("ssh_port").and_then(|v| v.as_u64()).map(|n| n as u16)
+        .or_else(|| conn.config.get("ssh_port").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()));
     cfg.ssh_user = conn.config.get("ssh_user").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.ssh_auth_type = conn.config.get("ssh_auth_type").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.ssh_key_path = conn.config.get("ssh_key_path").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -146,4 +155,33 @@ pub fn sql_adapters(store: Arc<Store>, cancels: Arc<SqlCancelRegistry>) -> Vec<A
         SqlAdapter::mysql(store.clone(), cancels.clone()),
         SqlAdapter::sqlite(store.clone(), cancels.clone()),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connection_test_preserves_network_and_tls_config() {
+        let conn = Integration {
+            id: "pg".into(), name: "Postgres".into(), r#type: "postgres".into(),
+            config: serde_json::from_value(serde_json::json!({
+                "host": "db.internal", "port": 5432, "ssh_host": "bastion", "ssh_port": 2222,
+                "use_ssh": true, "use_ssl": true, "ssl_mode": "require",
+                "ssl_ca_path": "/tmp/ca.pem", "ssl_cert_path": "/tmp/client.pem", "ssl_key_path": "/tmp/client.key"
+            })).unwrap(),
+            environment: None, read_only: 0, query_policy: None, token: "token".into(),
+            created_at: String::new(), via_group: None,
+        };
+        let cfg = db_config_from(&conn);
+        assert_eq!(cfg.host.as_deref(), Some("db.internal"));
+        assert_eq!(cfg.port, Some(5432));
+        assert_eq!(cfg.ssh_port, Some(2222));
+        assert!(cfg.is_use_ssh());
+        assert!(cfg.use_ssl);
+        assert_eq!(cfg.ssl_mode.as_deref(), Some("require"));
+        assert_eq!(cfg.ssl_ca_path.as_deref(), Some("/tmp/ca.pem"));
+        assert_eq!(cfg.ssl_cert_path.as_deref(), Some("/tmp/client.pem"));
+        assert_eq!(cfg.ssl_key_path.as_deref(), Some("/tmp/client.key"));
+    }
 }

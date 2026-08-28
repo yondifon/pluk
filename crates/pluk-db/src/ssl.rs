@@ -46,7 +46,10 @@ pub struct SslConfig {
 
 impl SslConfig {
     pub fn disabled() -> Self {
-        Self { mode: Some(SslMode::Disable), ..Default::default() }
+        Self {
+            mode: Some(SslMode::Disable),
+            ..Default::default()
+        }
     }
     pub fn is_disabled(&self) -> bool {
         matches!(self.mode, Some(SslMode::Disable)) || self.mode.is_none()
@@ -70,18 +73,30 @@ pub fn build_ssl_config(
 
     let ca = if let Some(p) = ca_path.filter(|p| !p.is_empty()) {
         Some(std::fs::read(p).map_err(|e| DriverError::Ssl(format!("ca read error: {e}")))?)
-    } else { None };
+    } else {
+        None
+    };
     let cert = if let Some(p) = cert_path.filter(|p| !p.is_empty()) {
         Some(std::fs::read(p).map_err(|e| DriverError::Ssl(format!("cert read error: {e}")))?)
-    } else { None };
+    } else {
+        None
+    };
     let key = if let Some(p) = key_path.filter(|p| !p.is_empty()) {
         Some(std::fs::read(p).map_err(|e| DriverError::Ssl(format!("key read error: {e}")))?)
-    } else { None };
+    } else {
+        None
+    };
 
     // Verify-ca / verify-full must have CA to actually verify — mirroring pg's
     // rejectUnauthorized semantics. We enforce file presence already; TLS connector
     // will enforce verification at connect time.
-    Ok(Some(SslConfig { mode: Some(mode), ca, cert, key, reject_unauthorized }))
+    Ok(Some(SslConfig {
+        mode: Some(mode),
+        ca,
+        cert,
+        key,
+        reject_unauthorized,
+    }))
 }
 
 #[cfg(test)]
@@ -100,18 +115,30 @@ mod tests {
     }
     #[test]
     fn build_disabled_when_no_ssl() {
-        assert!(build_ssl_config(false, Some("verify-ca"), None, None, None).unwrap().is_none());
-        assert!(build_ssl_config(true, Some("disable"), None, None, None).unwrap().is_none());
+        assert!(
+            build_ssl_config(false, Some("verify-ca"), None, None, None)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            build_ssl_config(true, Some("disable"), None, None, None)
+                .unwrap()
+                .is_none()
+        );
     }
     #[test]
     fn build_require_has_no_verification() {
-        let c = build_ssl_config(true, Some("require"), None, None, None).unwrap().unwrap();
+        let c = build_ssl_config(true, Some("require"), None, None, None)
+            .unwrap()
+            .unwrap();
         assert_eq!(c.mode, Some(SslMode::Require));
         assert!(!c.reject_unauthorized);
     }
     #[test]
     fn build_verify_ca_enforces_verification() {
-        let c = build_ssl_config(true, Some("verify-ca"), None, None, None).unwrap().unwrap();
+        let c = build_ssl_config(true, Some("verify-ca"), None, None, None)
+            .unwrap()
+            .unwrap();
         assert!(c.reject_unauthorized);
     }
 }

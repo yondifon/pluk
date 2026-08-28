@@ -24,7 +24,11 @@ pub struct InstructionParts {
 
 /// Assemble the guidance block exactly as the TypeScript server does:
 /// header line, access line, then optional policy / start / hint lines.
-pub fn build_instructions(name: &str, environment: Option<Environment>, parts: InstructionParts) -> String {
+pub fn build_instructions(
+    name: &str,
+    environment: Option<Environment>,
+    parts: InstructionParts,
+) -> String {
     let mut header = format!("{} integration \"{name}\"", parts.kind);
     if let Some(environment) = environment {
         header.push_str(&format!(" — {environment} environment"));
@@ -60,7 +64,10 @@ mod tests {
     #[test]
     fn minimal_block_is_header_and_access() {
         let text = build_instructions("Main DB", Some(Environment::Production), parts());
-        assert_eq!(text, "PostgreSQL integration \"Main DB\" — production environment.\nRead-only by default.");
+        assert_eq!(
+            text,
+            "PostgreSQL integration \"Main DB\" — production environment.\nRead-only by default."
+        );
     }
 
     #[test]
@@ -71,7 +78,12 @@ mod tests {
 
     #[test]
     fn optional_lines_append_in_fixed_order() {
-        let p = InstructionParts { policy: Some("Enabled tools: query.".into()), start: Some("Start with list_tables.".into()), hint: Some("Prefer sample_table.".into()), ..parts() };
+        let p = InstructionParts {
+            policy: Some("Enabled tools: query.".into()),
+            start: Some("Start with list_tables.".into()),
+            hint: Some("Prefer sample_table.".into()),
+            ..parts()
+        };
         let text = build_instructions("DB", None, p);
         assert_eq!(
             text,

@@ -50,7 +50,11 @@ pub fn classify(sql: &str, dialect: Dialect) -> ClassifyResult {
             // Parse failed (or produced nothing): split on semicolons and
             // classify each part by keyword, mirroring the TS fallback. The
             // WHERE check runs on the raw part, as it does in TS.
-            let parts: Vec<&str> = sql.split(';').map(str::trim).filter(|p| !p.is_empty()).collect();
+            let parts: Vec<&str> = sql
+                .split(';')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .collect();
             if parts.is_empty() {
                 categories.push(None);
             } else {
@@ -114,38 +118,80 @@ mod tests {
 
     #[test]
     fn postgres_statements_classify_like_the_ts_suite() {
-        assert_eq!(cats("SELECT * FROM t", Dialect::PostgreSQL), vec![Some(Select)]);
+        assert_eq!(
+            cats("SELECT * FROM t", Dialect::PostgreSQL),
+            vec![Some(Select)]
+        );
         assert_eq!(
             cats("WITH x AS (SELECT 1) SELECT * FROM x", Dialect::PostgreSQL),
             vec![Some(Select)]
         );
-        assert_eq!(cats("INSERT INTO t VALUES (1)", Dialect::PostgreSQL), vec![Some(Insert)]);
+        assert_eq!(
+            cats("INSERT INTO t VALUES (1)", Dialect::PostgreSQL),
+            vec![Some(Insert)]
+        );
         assert_eq!(cats("DROP TABLE t", Dialect::PostgreSQL), vec![Some(Drop)]);
         assert_eq!(
             cats("ALTER TABLE t ADD COLUMN x INT", Dialect::PostgreSQL),
             vec![Some(Alter)]
         );
-        assert_eq!(cats("TRUNCATE TABLE t", Dialect::PostgreSQL), vec![Some(Truncate)]);
+        assert_eq!(
+            cats("TRUNCATE TABLE t", Dialect::PostgreSQL),
+            vec![Some(Truncate)]
+        );
         assert_eq!(cats("BEGIN", Dialect::PostgreSQL), vec![Some(Transaction)]);
-        assert_eq!(cats("GRANT SELECT ON t TO u", Dialect::PostgreSQL), vec![Some(Grant)]);
-        assert_eq!(cats("REVOKE SELECT ON t FROM u", Dialect::PostgreSQL), vec![Some(Grant)]);
-        assert_eq!(cats("SET search_path = public", Dialect::PostgreSQL), vec![Some(Session)]);
-        assert_eq!(cats("RESET search_path", Dialect::PostgreSQL), vec![Some(Session)]);
-        assert_eq!(cats("CALL my_proc()", Dialect::PostgreSQL), vec![Some(Procedure)]);
-        assert_eq!(cats("SHOW search_path", Dialect::PostgreSQL), vec![Some(Inspect)]);
+        assert_eq!(
+            cats("GRANT SELECT ON t TO u", Dialect::PostgreSQL),
+            vec![Some(Grant)]
+        );
+        assert_eq!(
+            cats("REVOKE SELECT ON t FROM u", Dialect::PostgreSQL),
+            vec![Some(Grant)]
+        );
+        assert_eq!(
+            cats("SET search_path = public", Dialect::PostgreSQL),
+            vec![Some(Session)]
+        );
+        assert_eq!(
+            cats("RESET search_path", Dialect::PostgreSQL),
+            vec![Some(Session)]
+        );
+        assert_eq!(
+            cats("CALL my_proc()", Dialect::PostgreSQL),
+            vec![Some(Procedure)]
+        );
+        assert_eq!(
+            cats("SHOW search_path", Dialect::PostgreSQL),
+            vec![Some(Inspect)]
+        );
     }
 
     #[test]
     fn statements_the_ts_parser_cannot_read_still_land_in_the_right_category() {
         // node-sql-parser fails all of these; the Rust parser reads them via AST.
-        assert_eq!(cats("EXPLAIN SELECT 1", Dialect::PostgreSQL), vec![Some(Inspect)]);
+        assert_eq!(
+            cats("EXPLAIN SELECT 1", Dialect::PostgreSQL),
+            vec![Some(Inspect)]
+        );
         assert_eq!(cats("VACUUM", Dialect::PostgreSQL), vec![Some(Maintenance)]);
-        assert_eq!(cats("ANALYZE", Dialect::PostgreSQL), vec![Some(Maintenance)]);
-        assert_eq!(cats("SAVEPOINT s", Dialect::PostgreSQL), vec![Some(Transaction)]);
-        assert_eq!(cats("RELEASE SAVEPOINT s", Dialect::PostgreSQL), vec![Some(Transaction)]);
+        assert_eq!(
+            cats("ANALYZE", Dialect::PostgreSQL),
+            vec![Some(Maintenance)]
+        );
+        assert_eq!(
+            cats("SAVEPOINT s", Dialect::PostgreSQL),
+            vec![Some(Transaction)]
+        );
+        assert_eq!(
+            cats("RELEASE SAVEPOINT s", Dialect::PostgreSQL),
+            vec![Some(Transaction)]
+        );
         assert_eq!(cats("VALUES (1)", Dialect::PostgreSQL), vec![Some(Select)]);
         assert_eq!(cats("TABLE users", Dialect::PostgreSQL), vec![Some(Select)]);
-        assert_eq!(cats("PRAGMA table_info(t)", Dialect::SQLite), vec![Some(Inspect)]);
+        assert_eq!(
+            cats("PRAGMA table_info(t)", Dialect::SQLite),
+            vec![Some(Inspect)]
+        );
         assert_eq!(
             cats(
                 "MERGE INTO t USING s ON t.id=s.id WHEN MATCHED THEN UPDATE SET x=1",
@@ -157,12 +203,18 @@ mod tests {
 
     #[test]
     fn mysql_and_sqlite_classify() {
-        assert_eq!(cats("REPLACE INTO t VALUES (1)", Dialect::MySQL), vec![Some(Merge)]);
+        assert_eq!(
+            cats("REPLACE INTO t VALUES (1)", Dialect::MySQL),
+            vec![Some(Merge)]
+        );
         assert_eq!(cats("SHOW TABLES", Dialect::MySQL), vec![Some(Inspect)]);
         assert_eq!(cats("DESCRIBE t", Dialect::MySQL), vec![Some(Inspect)]);
         assert_eq!(cats("USE mydb", Dialect::MySQL), vec![Some(Session)]);
         assert_eq!(cats("SELECT 1", Dialect::SQLite), vec![Some(Select)]);
-        assert_eq!(cats("PRAGMA table_info(t)", Dialect::SQLite), vec![Some(Inspect)]);
+        assert_eq!(
+            cats("PRAGMA table_info(t)", Dialect::SQLite),
+            vec![Some(Inspect)]
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import "./sidebar.css";
 import type { Group, Integration, AdapterManifest, Environment, Health } from "./types";
 import { envLabel } from "./types";
-import { adapterColor, glyphElement } from "./glyph";
+import { adapterColor, glyphElement, hexToRgba } from "./glyph";
 import { createIcon } from "./icon";
 import { confirmModal } from "./modal";
 import { createButton, openMenu, renderErrorState } from "./primitives";
@@ -282,13 +282,13 @@ export function createSidebar(
            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); cbs.onSelect(g.id); }
            if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
              e.preventDefault();
-             openMenu(row, [{ label: "Delete", danger: true, onSelect: () => showConfirm("group", g.id, g.name) }], { x: row.getBoundingClientRect().left, y: row.getBoundingClientRect().bottom });
+             openMenu(row, [{ label: "Delete", icon: "trash", danger: true, onSelect: () => showConfirm("group", g.id, g.name) }], { x: row.getBoundingClientRect().left, y: row.getBoundingClientRect().bottom });
            }
         };
         // context menu
         row.addEventListener("contextmenu", (e) => {
           e.preventDefault();
-          openMenu(row, [{ label: "Delete", danger: true, onSelect: () => showConfirm("group", g.id, g.name) }], { x: e.clientX, y: e.clientY });
+          openMenu(row, [{ label: "Delete", icon: "trash", danger: true, onSelect: () => showConfirm("group", g.id, g.name) }], { x: e.clientX, y: e.clientY });
         });
         const icon = document.createElement("span");
         icon.className = "sidebar-group-icon";
@@ -323,16 +323,18 @@ export function createSidebar(
            if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
              e.preventDefault();
              openMenu(row, [
-               { label: "Duplicate", onSelect: () => cbs.onDuplicate(c.id) },
-               { label: "Delete", danger: true, onSelect: () => showConfirm("integration", c.id, c.name) },
+               { label: "Duplicate", icon: "copy", onSelect: () => cbs.onDuplicate(c.id) },
+               { separator: true },
+               { label: "Delete", icon: "trash", danger: true, onSelect: () => showConfirm("integration", c.id, c.name) },
              ], { x: row.getBoundingClientRect().left, y: row.getBoundingClientRect().bottom });
            }
         };
         row.addEventListener("contextmenu", (e) => {
           e.preventDefault();
           openMenu(row, [
-            { label: "Duplicate", onSelect: () => cbs.onDuplicate(c.id) },
-            { label: "Delete", danger: true, onSelect: () => showConfirm("integration", c.id, c.name) },
+            { label: "Duplicate", icon: "copy", onSelect: () => cbs.onDuplicate(c.id) },
+            { separator: true },
+            { label: "Delete", icon: "trash", danger: true, onSelect: () => showConfirm("integration", c.id, c.name) },
           ], { x: e.clientX, y: e.clientY });
         });
 
@@ -415,10 +417,3 @@ export function createSidebar(
   return root;
 }
 
-function hexToRgba(hex: string, alpha: number): string {
-  const h = hex.replace("#", "");
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}

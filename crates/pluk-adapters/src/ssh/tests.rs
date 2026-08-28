@@ -1,11 +1,14 @@
-use super::client::{ExecResult, StubExecutor, set_test_executor, clear_test_executor, reset_forwards_for_test, open_forward, list_forwards, close_forward};
-use super::policy::{evaluate_command, CommandCategory};
+use super::client::{
+    ExecResult, StubExecutor, clear_test_executor, close_forward, list_forwards, open_forward,
+    reset_forwards_for_test, set_test_executor,
+};
 use super::error::humanize_ssh_error;
-use super::server::{ssh_tool_specs, register_ssh_server};
+use super::policy::{CommandCategory, evaluate_command};
+use super::server::{register_ssh_server, ssh_tool_specs};
 use crate::error::AdapterError;
 use crate::tool_host::{ToolHost, ToolRegistration};
-use pluk_store::{Store, Integration};
-use serde_json::{json, Value, Map};
+use pluk_store::{Integration, Store};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -20,7 +23,9 @@ fn make_integration(id: &str, config: Value) -> Integration {
 }
 fn make_integration_with_policy(id: &str, config: Value, policy: Option<&str>) -> Integration {
     let mut cfg = Map::new();
-    if let Value::Object(m) = config { cfg = m; }
+    if let Value::Object(m) = config {
+        cfg = m;
+    }
     Integration {
         id: id.to_string(),
         name: "Test SSH".to_string(),
@@ -46,8 +51,23 @@ impl ToolHost for CaptureHost {
     fn register_tool(&mut self, reg: ToolRegistration, handler: crate::tool_host::ToolHandler) {
         self.tools.insert(reg.name.clone(), (reg, handler));
     }
-    fn register_prompt(&mut self, _name: &str, _desc: &str, _schema: Option<Map<String, Value>>, _handler: crate::tool_host::PromptHandler) {}
-    fn register_resource(&mut self, _name: &str, _uri: &str, _mime: &str, _desc: Option<&str>, _handler: crate::tool_host::ResourceHandler) {}
+    fn register_prompt(
+        &mut self,
+        _name: &str,
+        _desc: &str,
+        _schema: Option<Map<String, Value>>,
+        _handler: crate::tool_host::PromptHandler,
+    ) {
+    }
+    fn register_resource(
+        &mut self,
+        _name: &str,
+        _uri: &str,
+        _mime: &str,
+        _desc: Option<&str>,
+        _handler: crate::tool_host::ResourceHandler,
+    ) {
+    }
 }
 
 #[test]
@@ -73,7 +93,11 @@ fn policy_each_blocked_path_pattern() {
     ];
     for (cmd, should_block) in cases {
         let v = evaluate_command(cmd);
-        assert_eq!(!v.ok, should_block, "cmd {} should block={} but got {:?}", cmd, should_block, v);
+        assert_eq!(
+            !v.ok, should_block,
+            "cmd {} should block={} but got {:?}",
+            cmd, should_block, v
+        );
     }
 }
 
@@ -87,7 +111,16 @@ fn policy_brace_expansion_smuggling() {
 
 #[test]
 fn policy_deliberately_excluded_commands() {
-    for cmd in ["env", "printenv", "curl https://example.com", "wget http://example.com", "bash -c ls", "sh -c 'ls'", "python -c 'print(1)'", "perl -e '1'"] {
+    for cmd in [
+        "env",
+        "printenv",
+        "curl https://example.com",
+        "wget http://example.com",
+        "bash -c ls",
+        "sh -c 'ls'",
+        "python -c 'print(1)'",
+        "perl -e '1'",
+    ] {
         assert!(!evaluate_command(cmd).ok, "{} should be blocked", cmd);
     }
 }
@@ -106,17 +139,34 @@ fn policy_metacharacters_blocked_and_pipes_allowed() {
 
 #[test]
 fn policy_write_detection() {
-    assert_eq!(evaluate_command("docker-compose up").category, CommandCategory::Write);
-    assert_eq!(evaluate_command("docker-compose ps").category, CommandCategory::Read);
+    assert_eq!(
+        evaluate_command("docker-compose up").category,
+        CommandCategory::Write
+    );
+    assert_eq!(
+        evaluate_command("docker-compose ps").category,
+        CommandCategory::Read
+    );
     assert_eq!(evaluate_command("ls").category, CommandCategory::Read);
 }
 
 #[test]
 fn tool_specs_defaults() {
     let specs = ssh_tool_specs();
-    let map: HashMap<_,_> = specs.into_iter().map(|s| (s.name, s.default_enabled)).collect();
+    let map: HashMap<_, _> = specs
+        .into_iter()
+        .map(|s| (s.name, s.default_enabled))
+        .collect();
     assert!(map["run_command"]);
-    for k in ["run_batch","debug_snapshot","run_saved_command","list_saved_commands","open_forward","list_forwards","close_forward"] {
+    for k in [
+        "run_batch",
+        "debug_snapshot",
+        "run_saved_command",
+        "list_saved_commands",
+        "open_forward",
+        "list_forwards",
+        "close_forward",
+    ] {
         assert!(!map[k], "{} should be default off", k);
     }
 }
@@ -124,16 +174,27 @@ fn tool_specs_defaults() {
 #[tokio::test]
 async fn timeout_enforcement_and_humanize() {
     let (_dir, store) = temp_store();
-    let conn = make_integration("ssh1", json!({"host":"example.com","port":22,"user":"alice","auth_type":"agent"}));
+    let conn = make_integration(
+        "ssh1",
+        json!({"host":"example.com","port":22,"user":"alice","auth_type":"agent"}),
+    );
     // stub executor that simulates timeout error
     let exec = Arc::new(StubExecutor {
         handler: Arc::new(|cmd, timeout_ms| {
             if cmd.contains("sleep") && timeout_ms < 2000 {
-                Err(AdapterError::new(format!("Command timed out after {}s", timeout_ms/1000)))
+                Err(AdapterError::new(format!(
+                    "Command timed out after {}s",
+                    timeout_ms / 1000
+                )))
             } else {
-                Ok(ExecResult { stdout: "ok".into(), stderr: "".into(), code: Some(0), truncated: false })
+                Ok(ExecResult {
+                    stdout: "ok".into(),
+                    stderr: "".into(),
+                    code: Some(0),
+                    truncated: false,
+                })
             }
-        })
+        }),
     });
     set_test_executor(exec);
     // Direct client call with timeout 1s
@@ -141,9 +202,15 @@ async fn timeout_enforcement_and_humanize() {
     assert!(res.is_err());
     let err = res.unwrap_err();
     let human = humanize_ssh_error(&err);
-    assert!(human.contains("retry with a higher"), "humanize should hint retry: {}", human);
+    assert!(
+        human.contains("retry with a higher"),
+        "humanize should hint retry: {}",
+        human
+    );
     // max timeout check via tool validation: register and call with 700
-    let mut host = CaptureHost { tools: HashMap::new() };
+    let mut host = CaptureHost {
+        tools: HashMap::new(),
+    };
     register_ssh_server(&mut host, &conn, "owner1", store.clone()).unwrap();
     let handler = host.tools.get("run_command").unwrap().1.clone();
     let args = json!({"command":"ls","timeout": 700});
@@ -160,15 +227,23 @@ async fn forward_idempotency_per_target() {
     let (_dir, _store) = temp_store();
     let conn = make_integration("ssh1", json!({"host":"h","port":22}));
     let owner = "owner1";
-    let f1 = open_forward(owner, &conn, "localhost", 5432, None).await.unwrap();
-    let f2 = open_forward(owner, &conn, "localhost", 5432, None).await.unwrap();
+    let f1 = open_forward(owner, &conn, "localhost", 5432, None)
+        .await
+        .unwrap();
+    let f2 = open_forward(owner, &conn, "localhost", 5432, None)
+        .await
+        .unwrap();
     assert_eq!(f1.local_port, f2.local_port);
     assert_eq!(f1.id, f2.id);
     // different target -> different port
-    let f3 = open_forward(owner, &conn, "localhost", 6379, None).await.unwrap();
+    let f3 = open_forward(owner, &conn, "localhost", 6379, None)
+        .await
+        .unwrap();
     assert_ne!(f1.local_port, f3.local_port);
     // different remote_host same port -> different id
-    let f4 = open_forward(owner, &conn, "db.internal", 5432, None).await.unwrap();
+    let f4 = open_forward(owner, &conn, "db.internal", 5432, None)
+        .await
+        .unwrap();
     assert_ne!(f1.id, f4.id);
     reset_forwards_for_test();
 }
@@ -177,9 +252,12 @@ async fn forward_idempotency_per_target() {
 async fn close_unknown_id() {
     reset_forwards_for_test();
     let (_dir, store) = temp_store();
-    let conn = make_integration_with_policy("ssh1", json!({"host":"h"}), Some(ssh_all_enabled_policy()));
+    let conn =
+        make_integration_with_policy("ssh1", json!({"host":"h"}), Some(ssh_all_enabled_policy()));
     // via tool
-    let mut host = CaptureHost { tools: HashMap::new() };
+    let mut host = CaptureHost {
+        tools: HashMap::new(),
+    };
     register_ssh_server(&mut host, &conn, "owner1", store.clone()).unwrap();
     let handler = host.tools.get("close_forward").unwrap().1.clone();
     let res = handler(json!({"id":"localhost:9999"})).await;
@@ -197,10 +275,12 @@ async fn pending_approval_surfaced_as_pending() {
     let exec = Arc::new(StubExecutor {
         handler: Arc::new(|_cmd, _timeout| {
             Err(AdapterError::new("SSH connect is still running — authenticating, or waiting on an SSH agent or proxy approval. It continues in the background; retry in a moment. If it keeps repeating, check for a pending agent (e.g. 1Password) prompt.").with_code(crate::error::SSH_CONNECT_PENDING_CODE))
-        })
+        }),
     });
     set_test_executor(exec);
-    let mut host = CaptureHost { tools: HashMap::new() };
+    let mut host = CaptureHost {
+        tools: HashMap::new(),
+    };
     register_ssh_server(&mut host, &conn, "owner1", store.clone()).unwrap();
     let handler = host.tools.get("run_command").unwrap().1.clone();
     let res = handler(json!({"command":"ls"})).await;
@@ -215,14 +295,19 @@ async fn pending_approval_surfaced_as_pending() {
 async fn list_forwards_and_close_flow() {
     reset_forwards_for_test();
     let (_dir, store) = temp_store();
-    let conn = make_integration_with_policy("ssh1", json!({"host":"h"}), Some(ssh_all_enabled_policy()));
+    let conn =
+        make_integration_with_policy("ssh1", json!({"host":"h"}), Some(ssh_all_enabled_policy()));
     let owner = "owner1";
-    let f = open_forward(owner, &conn, "localhost", 5432, Some(45500)).await.unwrap();
+    let f = open_forward(owner, &conn, "localhost", 5432, Some(45500))
+        .await
+        .unwrap();
     assert_eq!(f.local_port, 45500);
     let list = list_forwards(owner, &conn);
     assert_eq!(list.len(), 1);
     // via tools list_forwards
-    let mut host = CaptureHost { tools: HashMap::new() };
+    let mut host = CaptureHost {
+        tools: HashMap::new(),
+    };
     register_ssh_server(&mut host, &conn, owner, store.clone()).unwrap();
     let list_handler = host.tools.get("list_forwards").unwrap().1.clone();
     let res = list_handler(json!({})).await;
@@ -242,8 +327,12 @@ async fn local_port_already_in_use() {
     let conn = make_integration("ssh1", json!({"host":"h"}));
     let owner = "owner1";
     // occupy port by opening forward
-    let _f1 = open_forward(owner, &conn, "localhost", 5432, Some(45600)).await.unwrap();
-    let err = open_forward(owner, &conn, "localhost", 6379, Some(45600)).await.unwrap_err();
+    let _f1 = open_forward(owner, &conn, "localhost", 5432, Some(45600))
+        .await
+        .unwrap();
+    let err = open_forward(owner, &conn, "localhost", 6379, Some(45600))
+        .await
+        .unwrap_err();
     assert!(err.message.contains("already in use"));
     reset_forwards_for_test();
 }
@@ -251,11 +340,28 @@ async fn local_port_already_in_use() {
 #[tokio::test]
 async fn saved_commands_only_projection_and_run() {
     let (_dir, store) = temp_store();
-    let conn = make_integration_with_policy("ssh1", json!({"host":"h"}), Some(ssh_all_enabled_policy()));
-    store.create_saved_command(&pluk_store::SavedCommandInput { connection_id: conn.id.clone(), name: "logs".into(), command: "docker logs app".into(), working_dir: Some("/srv/app".into()) }).unwrap();
-    store.create_saved_command(&pluk_store::SavedCommandInput { connection_id: conn.id.clone(), name: "ps".into(), command: "ps aux".into(), working_dir: None }).unwrap();
+    let conn =
+        make_integration_with_policy("ssh1", json!({"host":"h"}), Some(ssh_all_enabled_policy()));
+    store
+        .create_saved_command(&pluk_store::SavedCommandInput {
+            connection_id: conn.id.clone(),
+            name: "logs".into(),
+            command: "docker logs app".into(),
+            working_dir: Some("/srv/app".into()),
+        })
+        .unwrap();
+    store
+        .create_saved_command(&pluk_store::SavedCommandInput {
+            connection_id: conn.id.clone(),
+            name: "ps".into(),
+            command: "ps aux".into(),
+            working_dir: None,
+        })
+        .unwrap();
 
-    let mut host = CaptureHost { tools: HashMap::new() };
+    let mut host = CaptureHost {
+        tools: HashMap::new(),
+    };
     register_ssh_server(&mut host, &conn, "owner1", store.clone()).unwrap();
 
     // list without only -> default fields name,command
@@ -264,8 +370,13 @@ async fn saved_commands_only_projection_and_run() {
     assert!(!res.is_error);
     let val: Value = serde_json::from_str(res.text()).unwrap();
     if let Value::Array(arr) = val {
-        for obj in arr { assert!(obj.get("name").is_some()); assert!(obj.get("command").is_some()); }
-    } else { panic!("expected array"); }
+        for obj in arr {
+            assert!(obj.get("name").is_some());
+            assert!(obj.get("command").is_some());
+        }
+    } else {
+        panic!("expected array");
+    }
 
     // list with only location -> working_dir
     let res2 = list_handler(json!({"only":["location"]})).await;
@@ -276,7 +387,14 @@ async fn saved_commands_only_projection_and_run() {
 
     // run_saved_command via stub
     let exec = Arc::new(StubExecutor {
-        handler: Arc::new(|cmd, _| Ok(ExecResult { stdout: format!("ran {}", cmd), stderr: "".into(), code: Some(0), truncated: false }))
+        handler: Arc::new(|cmd, _| {
+            Ok(ExecResult {
+                stdout: format!("ran {}", cmd),
+                stderr: "".into(),
+                code: Some(0),
+                truncated: false,
+            })
+        }),
     });
     set_test_executor(exec);
     let run_handler = host.tools.get("run_saved_command").unwrap().1.clone();

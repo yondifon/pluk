@@ -155,13 +155,15 @@ pub fn connect_wait_error(key: &str) -> CodedError {
     };
     let from_this_attempt = ep.last_error_seq >= ep.attempt_seq;
     if let Some(ref msg) = ep.last_error.clone()
-        && from_this_attempt && is_ssh_auth_error(msg) {
-            let err_msg = msg.clone();
-            drop(map);
-            // Need to remove episode before returning
-            episodes().lock().unwrap().remove(key);
-            return coded("SSH_AUTH_ERROR", err_msg);
-        }
+        && from_this_attempt
+        && is_ssh_auth_error(msg)
+    {
+        let err_msg = msg.clone();
+        drop(map);
+        // Need to remove episode before returning
+        episodes().lock().unwrap().remove(key);
+        return coded("SSH_AUTH_ERROR", err_msg);
+    }
     ep.pending_reports += 1;
     if ep.pending_reports <= SSH_PENDING_MAX_REPORTS {
         let msg = ssh_pending_error().message.clone();
@@ -233,7 +235,9 @@ mod tests {
     #[test]
     fn is_ssh_auth_error_detection() {
         assert!(is_ssh_auth_error("Permission denied (publickey)"));
-        assert!(is_ssh_auth_error("No supported authentication methods available"));
+        assert!(is_ssh_auth_error(
+            "No supported authentication methods available"
+        ));
         assert!(is_ssh_auth_error("SSH_AGENT_UNREACHABLE"));
         assert!(!is_ssh_auth_error("connection timed out"));
         assert!(!is_ssh_auth_error("tunnel did not become ready"));

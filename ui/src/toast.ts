@@ -164,10 +164,6 @@ export function renderToasts(
       msg.textContent = toast.message;
       body.append(title, msg);
 
-      if (toast.kind === "error") {
-        const retry = createButton("Retry", { size: "sm", ariaLabel: `Retry connection for ${toast.title}`, onClick: () => onRetry(toast.integrationId) });
-        body.appendChild(retry);
-      }
 
       const dismiss = document.createElement("button");
       dismiss.className = "toast-dismiss icon-button";
@@ -175,7 +171,13 @@ export function renderToasts(
       dismiss.setAttribute("aria-label", "Dismiss notification");
       dismiss.addEventListener("click", () => center.dismiss(toast.id));
 
-      card.append(icon, body, dismiss);
+      card.append(icon, body);
+      if (toast.kind === "error") {
+        const retry = createButton("Retry", { size: "sm", ariaLabel: `Retry connection for ${toast.title}`, onClick: () => onRetry(toast.integrationId) });
+        retry.classList.add("toast-action");
+        card.appendChild(retry);
+      }
+      card.appendChild(dismiss);
 
       if (!reduce) {
         card.style.animation = "toast-in 180ms ease-out";

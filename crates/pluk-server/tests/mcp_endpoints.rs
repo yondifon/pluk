@@ -3,14 +3,17 @@
 
 mod common;
 
-use common::{spawn_app, TestApp};
-use serde_json::{json, Value};
+use common::{TestApp, spawn_app};
+use serde_json::{Value, json};
 
 /// Create one integration and return (id, token).
 fn integration(app: &TestApp, name: &str) -> (String, String) {
     let created = app
         .store
-        .create_integration(&pluk_store::IntegrationInput::new(name.to_string(), "stub".to_string()))
+        .create_integration(&pluk_store::IntegrationInput::new(
+            name.to_string(),
+            "stub".to_string(),
+        ))
         .expect("create integration");
     (created.id.clone(), created.token.clone())
 }
@@ -18,11 +21,18 @@ fn integration(app: &TestApp, name: &str) -> (String, String) {
 fn group(app: &TestApp, name: &str, member_ids: &[String]) -> String {
     let members = member_ids
         .iter()
-        .map(|id| pluk_store::GroupMember { id: id.clone(), overrides: Default::default() })
+        .map(|id| pluk_store::GroupMember {
+            id: id.clone(),
+            overrides: Default::default(),
+        })
         .collect();
     let created = app
         .store
-        .create_group(&pluk_store::GroupInput { name: name.to_string(), environment: None, members })
+        .create_group(&pluk_store::GroupInput {
+            name: name.to_string(),
+            environment: None,
+            members,
+        })
         .expect("create group");
     created.token
 }
@@ -40,7 +50,10 @@ async fn a_token_serves_its_integration_statelessly() {
         )
         .await;
     assert_eq!(status, 200);
-    assert!(content_type.starts_with("application/json"), "stateless JSON replies");
+    assert!(
+        content_type.starts_with("application/json"),
+        "stateless JSON replies"
+    );
     let names = body["result"]["tools"]
         .as_array()
         .expect("tools array")
@@ -83,7 +96,10 @@ async fn a_token_serves_its_integration_statelessly() {
 
     // Prompts and resources ride along.
     let (_, _, prompts) = app
-        .mcp_post(&token, json!({ "jsonrpc": "2.0", "id": 9, "method": "prompts/list" }))
+        .mcp_post(
+            &token,
+            json!({ "jsonrpc": "2.0", "id": 9, "method": "prompts/list" }),
+        )
         .await;
     assert_eq!(prompts["result"]["prompts"][0]["name"], "greet");
 
@@ -106,7 +122,10 @@ async fn a_token_serves_its_integration_statelessly() {
         .await;
     assert_eq!(unknown["error"]["code"], -32602);
     assert!(
-        unknown["error"]["message"].as_str().unwrap_or_default().contains("Unknown tool"),
+        unknown["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Unknown tool"),
         "{}",
         unknown["error"]["message"]
     );
@@ -141,10 +160,18 @@ async fn protocol_negotiation_serves_modern_and_legacy_clients() {
 
     // Discovery carries server identity and instructions.
     assert_eq!(modern["result"]["serverInfo"]["name"], "Negotiator");
-    assert!(modern["result"]["instructions"].as_str().unwrap_or_default().contains("Stub integration"));
+    assert!(
+        modern["result"]["instructions"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Stub integration")
+    );
 
     // Notifications are accepted with no body.
-    assert_eq!(app.mcp_notify(&token, "notifications/initialized").await, 202);
+    assert_eq!(
+        app.mcp_notify(&token, "notifications/initialized").await,
+        202
+    );
 }
 
 #[tokio::test]
@@ -162,10 +189,16 @@ async fn an_integration_whose_adapter_is_missing_is_a_bad_request() {
     let app = spawn_app().await;
     let created = app
         .store
-        .create_integration(&pluk_store::IntegrationInput::new("Ghost".to_string(), "no-such-adapter".to_string()))
+        .create_integration(&pluk_store::IntegrationInput::new(
+            "Ghost".to_string(),
+            "no-such-adapter".to_string(),
+        ))
         .unwrap();
     let (status, _, _) = app
-        .mcp_post(&created.token, json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }))
+        .mcp_post(
+            &created.token,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }),
+        )
         .await;
     assert_eq!(status, 400);
 }
@@ -179,7 +212,10 @@ async fn group_members_get_collision_free_namespaces_and_their_tools_work() {
     let token = group(&app, "Warehouse", &[first_id.clone(), second_id.clone()]);
 
     let (_, _, listed) = app
-        .mcp_post(&token, json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }))
+        .mcp_post(
+            &token,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }),
+        )
         .await;
     let mut names: Vec<String> = listed["result"]["tools"]
         .as_array()
@@ -199,7 +235,10 @@ async fn group_members_get_collision_free_namespaces_and_their_tools_work() {
 
     // Resources are namespaced by URI, not just name.
     let (_, _, resources) = app
-        .mcp_post(&token, json!({ "jsonrpc": "2.0", "id": 2, "method": "resources/list" }))
+        .mcp_post(
+            &token,
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "resources/list" }),
+        )
         .await;
     let uris: Vec<&str> = resources["result"]["resources"]
         .as_array()
@@ -222,7 +261,10 @@ async fn group_members_get_collision_free_namespaces_and_their_tools_work() {
         )
         .await;
     let instructions = init["result"]["instructions"].as_str().unwrap();
-    assert!(instructions.contains("Group \"Warehouse\" fronts 2 integrations."), "{instructions}");
+    assert!(
+        instructions.contains("Group \"Warehouse\" fronts 2 integrations."),
+        "{instructions}"
+    );
     assert!(instructions.contains("metrics_db__<tool>"));
     assert!(instructions.contains("Member tools prefixed \"metrics_db_2__\":"));
 }
@@ -242,7 +284,11 @@ async fn a_call_through_a_group_is_attributed_to_it_in_the_log() {
     .await;
     let page = app
         .store
-        .read_log_page(&pluk_store::LogScope::Group(group_row.id.clone()), pluk_store::LogRange::All, None)
+        .read_log_page(
+            &pluk_store::LogScope::Group(group_row.id.clone()),
+            pluk_store::LogRange::All,
+            None,
+        )
         .unwrap();
     assert_eq!(page.entries.len(), 1, "the call lands in the group's view");
     assert_eq!(page.entries[0].group_name.as_deref(), Some("Front Group"));
@@ -252,7 +298,11 @@ async fn a_call_through_a_group_is_attributed_to_it_in_the_log() {
     // The standalone view sees it too (same row, attributed to the member).
     let standalone = app
         .store
-        .read_log_page(&pluk_store::LogScope::Connection(member_id.clone()), pluk_store::LogRange::All, None)
+        .read_log_page(
+            &pluk_store::LogScope::Connection(member_id.clone()),
+            pluk_store::LogRange::All,
+            None,
+        )
         .unwrap();
     assert_eq!(standalone.entries.len(), 1);
 }
@@ -271,7 +321,11 @@ async fn per_member_overrides_are_coerced_before_registration() {
             .unwrap(),
         }];
         app.store
-            .create_group(&pluk_store::GroupInput { name: "Scoped".into(), environment: None, members })
+            .create_group(&pluk_store::GroupInput {
+                name: "Scoped".into(),
+                environment: None,
+                members,
+            })
             .unwrap()
             .token
     };
@@ -291,7 +345,10 @@ async fn per_member_overrides_are_coerced_before_registration() {
         instructions.contains("Endpoint: overridden-host"),
         "override must reach registration: {instructions}"
     );
-    assert!(!instructions.contains("retries"), "blank override must not surface");
+    assert!(
+        !instructions.contains("retries"),
+        "blank override must not surface"
+    );
 }
 
 #[tokio::test]
@@ -301,8 +358,16 @@ async fn reload_closes_an_owners_resources_and_reports_the_count() {
     let (owner_b, token_b) = integration(&app, "Untouched");
 
     // Opening both owners through real requests registers their scopes.
-    app.mcp_post(&token_a, json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" })).await;
-    app.mcp_post(&token_b, json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" })).await;
+    app.mcp_post(
+        &token_a,
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }),
+    )
+    .await;
+    app.mcp_post(
+        &token_b,
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }),
+    )
+    .await;
     assert!(app.owners.owner_token(&owner_a).is_some());
     assert!(app.owners.owner_token(&owner_b).is_some());
 
@@ -316,8 +381,14 @@ async fn reload_closes_an_owners_resources_and_reports_the_count() {
     let payload: Value = response.json().await.unwrap();
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["count"], 1);
-    assert!(app.owners.owner_token(&owner_a).is_none(), "closed scope must be gone");
-    assert!(app.owners.owner_token(&owner_b).is_some(), "other owners stay open");
+    assert!(
+        app.owners.owner_token(&owner_a).is_none(),
+        "closed scope must be gone"
+    );
+    assert!(
+        app.owners.owner_token(&owner_b).is_some(),
+        "other owners stay open"
+    );
 
     let closed = app.closed_owners.lock().unwrap().clone();
     assert!(closed.contains(&owner_a), "close hooks observe the owner");

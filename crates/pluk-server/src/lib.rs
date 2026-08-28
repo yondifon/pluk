@@ -35,11 +35,11 @@ use std::sync::Arc;
 use pluk_adapters::AdapterRegistry;
 use pluk_store::Store;
 use rmcp::transport::streamable_http_server::{
-    session::local::LocalSessionManager, StreamableHttpServerConfig,
+    StreamableHttpServerConfig, session::local::LocalSessionManager,
 };
 
 pub use cancel::CancelRegistry;
-pub use events::{parse_after, EventHub};
+pub use events::{EventHub, parse_after};
 pub use health::{ConnHealth, HealthMap, HealthStatus};
 pub use http::router;
 pub use mcp::owner::OwnerPool;
@@ -123,11 +123,21 @@ impl ServerConfig {
 
     /// `PORT` when parseable, else 4242.
     pub fn default_port() -> u16 {
-        std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(4242)
+        std::env::var("PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(4242)
     }
 
     fn into_state(self) -> AppState {
-        let ServerConfig { store, registry, owners, health, cancels, .. } = self;
+        let ServerConfig {
+            store,
+            registry,
+            owners,
+            health,
+            cancels,
+            ..
+        } = self;
         let mut state = AppState::new(store, registry, owners, health);
         state.cancels = cancels;
         state
@@ -148,7 +158,10 @@ impl ServerConfig {
 /// Cancelling the token stops accepting connections, ends held-open event
 /// streams (so they cannot stall the drain), and waits for in-flight requests
 /// before returning.
-pub async fn serve(config: ServerConfig, shutdown: tokio_util::sync::CancellationToken) -> std::io::Result<()> {
+pub async fn serve(
+    config: ServerConfig,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> std::io::Result<()> {
     let addr = config.bind_addr();
     let state = config.into_state();
     let app = http::router(state.clone());

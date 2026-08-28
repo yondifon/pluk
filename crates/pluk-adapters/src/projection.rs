@@ -94,7 +94,10 @@ fn build_tree(paths: &[String]) -> PathNode {
     for path in paths {
         let mut node = &mut root;
         for segment in path.split('.') {
-            node = node.0.entry(segment.to_string()).or_insert_with(|| PathNode(BTreeMap::new()));
+            node = node
+                .0
+                .entry(segment.to_string())
+                .or_insert_with(|| PathNode(BTreeMap::new()));
         }
     }
     root
@@ -102,14 +105,19 @@ fn build_tree(paths: &[String]) -> PathNode {
 
 fn project_tree(value: &Value, tree: &PathNode) -> Value {
     match value {
-        Value::Array(items) => Value::Array(items.iter().map(|item| project_tree(item, tree)).collect()),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|item| project_tree(item, tree)).collect())
+        }
         Value::Object(object) => {
             let mut out = Map::new();
             for (key, subtree) in &tree.0 {
                 // A missing key is omitted, like `undefined` after stringify.
                 if let Some(raw) = object.get(key) {
-                    let projected =
-                        if subtree.0.is_empty() { raw.clone() } else { project_tree(raw, subtree) };
+                    let projected = if subtree.0.is_empty() {
+                        raw.clone()
+                    } else {
+                        project_tree(raw, subtree)
+                    };
                     out.insert(key.clone(), projected);
                 }
             }
@@ -128,7 +136,10 @@ pub fn pick_paths(value: &Value, paths: &[String]) -> Value {
 // ── Selection application ────────────────────────────────────────────────────
 
 fn unknown_field_error(entry: &str, map: &FieldMap) -> OnlyError {
-    let mut message = format!("Unknown \"only\" field \"{entry}\". Valid fields: {}.", map.fields.join(", "));
+    let mut message = format!(
+        "Unknown \"only\" field \"{entry}\". Valid fields: {}.",
+        map.fields.join(", ")
+    );
     if !map.presets.is_empty() {
         let names: Vec<&str> = map.presets.keys().map(String::as_str).collect();
         message.push_str(&format!(" Presets: {}.", names.join(", ")));
@@ -153,7 +164,11 @@ fn project_one(item: &Value, entries: &[String], map: &FieldMap) -> Result<Value
         }
     }
 
-    let base = if paths.is_empty() { Value::Object(Map::new()) } else { pick_paths(item, &paths) };
+    let base = if paths.is_empty() {
+        Value::Object(Map::new())
+    } else {
+        pick_paths(item, &paths)
+    };
     if reducers.is_empty() {
         return Ok(base);
     }
@@ -174,8 +189,15 @@ fn project_one(item: &Value, entries: &[String], map: &FieldMap) -> Result<Value
 /// `only`: `["*"]` bypasses filtering entirely; an omitted or empty `only`
 /// falls back to `map.default`; otherwise each entry is a preset name or a
 /// dot path, validated against `map.fields`.
-pub fn apply_only(data: &Value, only: Option<&Vec<String>>, map: &FieldMap) -> Result<Value, OnlyError> {
-    if only.iter().any(|entries| entries.iter().any(|entry| entry == "*")) {
+pub fn apply_only(
+    data: &Value,
+    only: Option<&Vec<String>>,
+    map: &FieldMap,
+) -> Result<Value, OnlyError> {
+    if only
+        .iter()
+        .any(|entries| entries.iter().any(|entry| entry == "*"))
+    {
         return Ok(data.clone());
     }
     let entries: &[String] = match only.filter(|o| !o.is_empty()) {
@@ -222,9 +244,13 @@ pub fn only_param_schema(preset_names: &[&str]) -> Value {
 /// as "use the default set".
 pub fn only_value(args: &Map<String, Value>) -> Option<Vec<String>> {
     match args.get("only") {
-        Some(Value::Array(entries)) if entries.iter().all(|e| e.is_string()) => {
-            Some(entries.iter().filter_map(Value::as_str).map(Into::into).collect())
-        }
+        Some(Value::Array(entries)) if entries.iter().all(|e| e.is_string()) => Some(
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .map(Into::into)
+                .collect(),
+        ),
         _ => None,
     }
 }
@@ -244,7 +270,10 @@ mod tests {
         .with_preset(
             "flags",
             Preset::reduce(|item| {
-                let has_labels = item.get("labels").and_then(Value::as_array).is_some_and(|l| !l.is_empty());
+                let has_labels = item
+                    .get("labels")
+                    .and_then(Value::as_array)
+                    .is_some_and(|l| !l.is_empty());
                 let mut out = Map::new();
                 out.insert("hasLabels".to_string(), Value::Bool(has_labels));
                 out
@@ -280,7 +309,10 @@ mod tests {
             json!({ "comments": [ { "user": { "name": "Ada" } }, { "user": { "name": "Bob" } } ] })
         );
         let issue_map = FieldMap::new(&["issue", "comments"], &["issue", "comments.user.name"]);
-        assert_eq!(apply_only(&data, None, &issue_map).unwrap(), json!({ "issue": "ENG-1", "comments": [ { "user": { "name": "Ada" } }, { "user": { "name": "Bob" } } ] }));
+        assert_eq!(
+            apply_only(&data, None, &issue_map).unwrap(),
+            json!({ "issue": "ENG-1", "comments": [ { "user": { "name": "Ada" } }, { "user": { "name": "Bob" } } ] })
+        );
     }
 
     #[test]
@@ -293,19 +325,28 @@ mod tests {
     #[test]
     fn preset_expands_to_its_dot_paths() {
         let item = json!({ "id": "1", "title": "T", "priority": 2 });
-        assert_eq!(apply(item, Some(&["priority"])).unwrap(), json!({ "priority": 2 }));
+        assert_eq!(
+            apply(item, Some(&["priority"])).unwrap(),
+            json!({ "priority": 2 })
+        );
     }
 
     #[test]
     fn preset_and_literal_path_compose_in_one_selection() {
         let item = json!({ "id": "1", "title": "T", "priority": 2 });
-        assert_eq!(apply(item, Some(&["title", "priority"])).unwrap(), json!({ "title": "T", "priority": 2 }));
+        assert_eq!(
+            apply(item, Some(&["title", "priority"])).unwrap(),
+            json!({ "title": "T", "priority": 2 })
+        );
     }
 
     #[test]
     fn function_preset_computes_its_own_slice() {
         let item = json!({ "id": "1", "title": "T", "labels": ["bug"] });
-        assert_eq!(apply(item, Some(&["flags"])).unwrap(), json!({ "hasLabels": true }));
+        assert_eq!(
+            apply(item, Some(&["flags"])).unwrap(),
+            json!({ "hasLabels": true })
+        );
     }
 
     #[test]
@@ -320,7 +361,10 @@ mod tests {
     #[test]
     fn omitted_only_returns_the_default_set() {
         let item = json!({ "id": "1", "title": "T", "state": { "name": "Open", "type": "unstarted" }, "priority": 3 });
-        assert_eq!(apply(item, None).unwrap(), json!({ "id": "1", "title": "T", "state": { "name": "Open" } }));
+        assert_eq!(
+            apply(item, None).unwrap(),
+            json!({ "id": "1", "title": "T", "state": { "name": "Open" } })
+        );
     }
 
     #[test]
@@ -335,13 +379,19 @@ mod tests {
             { "id": "1", "title": "A", "priority": 1 },
             { "id": "2", "title": "B", "priority": 2 },
         ]);
-        assert_eq!(apply(list, Some(&["priority"])).unwrap(), json!([ { "priority": 1 }, { "priority": 2 } ]));
+        assert_eq!(
+            apply(list, Some(&["priority"])).unwrap(),
+            json!([ { "priority": 1 }, { "priority": 2 } ])
+        );
     }
 
     #[test]
     fn empty_only_array_falls_back_to_the_default_set() {
         let item = json!({ "id": "1", "title": "T", "state": { "name": "Open" } });
-        assert_eq!(apply(item, Some(&[])).unwrap(), json!({ "id": "1", "title": "T", "state": { "name": "Open" } }));
+        assert_eq!(
+            apply(item, Some(&[])).unwrap(),
+            json!({ "id": "1", "title": "T", "state": { "name": "Open" } })
+        );
     }
 
     #[test]
@@ -355,16 +405,22 @@ mod tests {
 
     #[test]
     fn only_extractor_reads_string_arrays_and_rejects_the_rest() {
-        let args = serde_json::from_value::<Map<String, Value>>(json!({ "only": ["a", "b.c"] })).unwrap();
-        assert_eq!(only_value(&args), Some(vec!["a".to_string(), "b.c".to_string()]));
+        let args =
+            serde_json::from_value::<Map<String, Value>>(json!({ "only": ["a", "b.c"] })).unwrap();
+        assert_eq!(
+            only_value(&args),
+            Some(vec!["a".to_string(), "b.c".to_string()])
+        );
 
         let missing = serde_json::from_value::<Map<String, Value>>(json!({})).unwrap();
         assert_eq!(only_value(&missing), None);
 
-        let junk = serde_json::from_value::<Map<String, Value>>(json!({ "only": ["a", 3] })).unwrap();
+        let junk =
+            serde_json::from_value::<Map<String, Value>>(json!({ "only": ["a", 3] })).unwrap();
         assert_eq!(only_value(&junk), None);
 
-        let not_array = serde_json::from_value::<Map<String, Value>>(json!({ "only": "*" })).unwrap();
+        let not_array =
+            serde_json::from_value::<Map<String, Value>>(json!({ "only": "*" })).unwrap();
         assert_eq!(only_value(&not_array), None);
     }
 
@@ -375,7 +431,10 @@ mod tests {
             "Trim the response to just these fields — omit for a lighter default, pass [\"*\"] for the full payload. \
              Entries are dot paths (e.g. \"project.slug\") or presets."
         );
-        assert!(only_param_description(&["connection", "limits"]).ends_with(" Presets: connection, limits."));
+        assert!(
+            only_param_description(&["connection", "limits"])
+                .ends_with(" Presets: connection, limits.")
+        );
         let schema = only_param_schema(&[]);
         assert_eq!(schema["type"], "array");
         assert_eq!(schema["items"]["type"], "string");

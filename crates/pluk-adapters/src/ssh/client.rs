@@ -19,48 +19,90 @@ pub struct ExecResult {
 // Trait for SSH execution, stubable
 #[async_trait::async_trait]
 pub trait SshExecutor: Send + Sync {
-    async fn exec(&self, host: &str, port: u16, user: &str, auth_type: &str, key_path: Option<String>, password: Option<String>, command: &str, timeout_ms: u64) -> Result<ExecResult, AdapterError>;
+    async fn exec(
+        &self,
+        host: &str,
+        port: u16,
+        user: &str,
+        auth_type: &str,
+        key_path: Option<String>,
+        password: Option<String>,
+        command: &str,
+        timeout_ms: u64,
+    ) -> Result<ExecResult, AdapterError>;
 }
 
 // Real executor via OpenSSH
 pub struct RealSshExecutor;
 #[async_trait::async_trait]
 impl SshExecutor for RealSshExecutor {
-    async fn exec(&self, host: &str, port: u16, user: &str, auth_type: &str, key_path: Option<String>, _password: Option<String>, command: &str, timeout_ms: u64) -> Result<ExecResult, AdapterError> {
+    async fn exec(
+        &self,
+        host: &str,
+        port: u16,
+        user: &str,
+        auth_type: &str,
+        key_path: Option<String>,
+        _password: Option<String>,
+        command: &str,
+        timeout_ms: u64,
+    ) -> Result<ExecResult, AdapterError> {
         use tokio::process::Command as TokioCommand;
         let control_path = pluk_ssh::openssh::control_path();
         let ssh_config = pluk_ssh::config::parse_ssh_config(host);
         let effective_host = ssh_config.host_name.as_deref().unwrap_or(host);
         let effective_port = ssh_config.port.unwrap_or(port);
-        let effective_user = if !user.is_empty() { user.to_string() } else if let Some(u)=ssh_config.user.clone() { u } else { std::env::var("USER").unwrap_or_else(|_| "root".into()) };
+        let effective_user = if !user.is_empty() {
+            user.to_string()
+        } else if let Some(u) = ssh_config.user.clone() {
+            u
+        } else {
+            std::env::var("USER").unwrap_or_else(|_| "root".into())
+        };
 
         let mut args: Vec<String> = vec![
-            "-o".to_string(), format!("ControlPath={}", control_path),
-            "-o".to_string(), "ControlMaster=auto".to_string(),
-            "-o".to_string(), "ControlPersist=10m".to_string(),
-            "-o".to_string(), "ServerAliveInterval=30".to_string(),
-            "-o".to_string(), "StrictHostKeyChecking=accept-new".to_string(),
-            "-p".to_string(), effective_port.to_string(),
+            "-o".to_string(),
+            format!("ControlPath={}", control_path),
+            "-o".to_string(),
+            "ControlMaster=auto".to_string(),
+            "-o".to_string(),
+            "ControlPersist=10m".to_string(),
+            "-o".to_string(),
+            "ServerAliveInterval=30".to_string(),
+            "-o".to_string(),
+            "StrictHostKeyChecking=accept-new".to_string(),
+            "-p".to_string(),
+            effective_port.to_string(),
         ];
         if !effective_user.is_empty() {
-            args.push("-l".to_string()); args.push(effective_user.clone());
+            args.push("-l".to_string());
+            args.push(effective_user.clone());
         }
-        if auth_type=="key" {
-            if let Some(kp)=key_path.clone() {
-                args.push("-i".to_string()); args.push(pluk_ssh::config::expand_home(&kp));
-                args.push("-o".to_string()); args.push("IdentitiesOnly=yes".to_string());
-                args.push("-o".to_string()); args.push("IdentityAgent=none".to_string());
+        if auth_type == "key" {
+            if let Some(kp) = key_path.clone() {
+                args.push("-i".to_string());
+                args.push(pluk_ssh::config::expand_home(&kp));
+                args.push("-o".to_string());
+                args.push("IdentitiesOnly=yes".to_string());
+                args.push("-o".to_string());
+                args.push("IdentityAgent=none".to_string());
             }
-        } else if auth_type=="agent" {
-            if let Some(agent)=pluk_ssh::agent::resolve_live_agent(host).await {
-                args.push("-o".to_string()); args.push(format!("IdentityAgent=\"{}\"", agent.socket));
+        } else if auth_type == "agent" {
+            if let Some(agent) = pluk_ssh::agent::resolve_live_agent(host).await {
+                args.push("-o".to_string());
+                args.push(format!("IdentityAgent=\"{}\"", agent.socket));
             } else {
-                return Err(AdapterError::new(pluk_ssh::agent::agent_unreachable_error().message).with_code(pluk_ssh::agent::SSH_AGENT_UNREACHABLE_CODE));
+                return Err(
+                    AdapterError::new(pluk_ssh::agent::agent_unreachable_error().message)
+                        .with_code(pluk_ssh::agent::SSH_AGENT_UNREACHABLE_CODE),
+                );
             }
         }
         // password auth not supported via openssh non-interactively; fallback to error
-        if auth_type=="password" {
-            return Err(AdapterError::new("password auth not supported via OpenSSH transport; use key or agent"));
+        if auth_type == "password" {
+            return Err(AdapterError::new(
+                "password auth not supported via OpenSSH transport; use key or agent",
+            ));
         }
         args.push(effective_host.to_string());
         args.push(command.to_string());
@@ -91,12 +133,18 @@ impl SshExecutor for RealSshExecutor {
                         stderr_str.truncate(remaining - stdout_str.len());
                     }
                 }
-                Ok(ExecResult { stdout: stdout_str, stderr: stderr_str, code, truncated })
-            },
-            Ok(Err(e)) => Err(AdapterError::new(e.to_string())),
-            Err(_) => {
-                Err(AdapterError::new(format!("Command timed out after {}s", timeout_ms/1000)))
+                Ok(ExecResult {
+                    stdout: stdout_str,
+                    stderr: stderr_str,
+                    code,
+                    truncated,
+                })
             }
+            Ok(Err(e)) => Err(AdapterError::new(e.to_string())),
+            Err(_) => Err(AdapterError::new(format!(
+                "Command timed out after {}s",
+                timeout_ms / 1000
+            ))),
         }
     }
 }
@@ -119,29 +167,72 @@ fn executor() -> Arc<dyn SshExecutor> {
     if let Some(test) = test_executor_slot().lock().unwrap().clone() {
         return test;
     }
-    EXECUTOR.get_or_init(|| Arc::new(RealSshExecutor) as Arc<dyn SshExecutor>).clone()
+    EXECUTOR
+        .get_or_init(|| Arc::new(RealSshExecutor) as Arc<dyn SshExecutor>)
+        .clone()
 }
 
 // Helper to extract ssh params from Integration
-fn ssh_params(conn: &pluk_store::Integration) -> (String, u16, String, String, Option<String>, Option<String>) {
-    let host = conn.config.get("host").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let port = conn.config.get("port").and_then(|v| v.as_u64()).map(|n| n as u16)
-        .or_else(|| conn.config.get("port").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()))
+fn ssh_params(
+    conn: &pluk_store::Integration,
+) -> (String, u16, String, String, Option<String>, Option<String>) {
+    let host = conn
+        .config
+        .get("host")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let port = conn
+        .config
+        .get("port")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u16)
+        .or_else(|| {
+            conn.config
+                .get("port")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse().ok())
+        })
         .unwrap_or(22);
-    let user = conn.config.get("user").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let auth_type = conn.config.get("auth_type").and_then(|v| v.as_str()).unwrap_or("agent").to_string();
-    let key_path = conn.config.get("key_path").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let password = conn.config.get("password").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let user = conn
+        .config
+        .get("user")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let auth_type = conn
+        .config
+        .get("auth_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("agent")
+        .to_string();
+    let key_path = conn
+        .config
+        .get("key_path")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let password = conn
+        .config
+        .get("password")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     (host, port, user, auth_type, key_path, password)
 }
 
-pub async fn run_command(conn: &pluk_store::Integration, command: &str, timeout_ms: Option<u64>) -> Result<ExecResult, AdapterError> {
+pub async fn run_command(
+    conn: &pluk_store::Integration,
+    command: &str,
+    timeout_ms: Option<u64>,
+) -> Result<ExecResult, AdapterError> {
     let timeout = timeout_ms.unwrap_or(DEFAULT_EXEC_TIMEOUT_MS);
     let clamped = std::cmp::min(timeout, MAX_COMMAND_TIMEOUT_S * 1000);
     let (host, port, user, auth_type, key_path, password) = ssh_params(conn);
     let exec = executor();
     // Check for pending simulation via global stub? executor may return pending error with code
-    exec.exec(&host, port, &user, &auth_type, key_path, password, command, clamped).await
+    exec.exec(
+        &host, port, &user, &auth_type, key_path, password, command, clamped,
+    )
+    .await
 }
 
 // Forwards
@@ -180,15 +271,25 @@ fn allocate_port(requested: Option<u16>) -> Result<u16, AdapterError> {
     let mut used = used_ports().lock().unwrap();
     if let Some(p) = requested {
         if used.contains(&p) {
-            return Err(AdapterError::new(format!("Local port {} is already in use. Pick another local_port or omit it to auto-assign.", p)));
+            return Err(AdapterError::new(format!(
+                "Local port {} is already in use. Pick another local_port or omit it to auto-assign.",
+                p
+            )));
         }
         // try bind to check real OS
         // Use std::net::TcpListener to test availability synchronously
         match std::net::TcpListener::bind(format!("127.0.0.1:{}", p)) {
-            Ok(l) => { drop(l); used.insert(p); return Ok(p); },
+            Ok(l) => {
+                drop(l);
+                used.insert(p);
+                return Ok(p);
+            }
             Err(e) => {
-                if e.kind()==std::io::ErrorKind::AddrInUse {
-                    return Err(AdapterError::new(format!("Local port {} is already in use. Pick another local_port or omit it to auto-assign.", p)));
+                if e.kind() == std::io::ErrorKind::AddrInUse {
+                    return Err(AdapterError::new(format!(
+                        "Local port {} is already in use. Pick another local_port or omit it to auto-assign.",
+                        p
+                    )));
                 } else {
                     return Err(AdapterError::new(e.to_string()));
                 }
@@ -199,30 +300,54 @@ fn allocate_port(requested: Option<u16>) -> Result<u16, AdapterError> {
     for _ in 0..1000 {
         let p = *counter;
         *counter = counter.wrapping_add(1);
-        if *counter < 1024 { *counter = 1024; }
-        if used.contains(&p) { continue; }
+        if *counter < 1024 {
+            *counter = 1024;
+        }
+        if used.contains(&p) {
+            continue;
+        }
         match std::net::TcpListener::bind(format!("127.0.0.1:{}", p)) {
-            Ok(l) => { drop(l); used.insert(p); return Ok(p); },
+            Ok(l) => {
+                drop(l);
+                used.insert(p);
+                return Ok(p);
+            }
             Err(_) => continue,
         }
     }
     Err(AdapterError::new("failed to allocate local port"))
 }
 
-pub async fn open_forward(owner_id: &str, conn: &pluk_store::Integration, remote_host: &str, remote_port: u16, requested_local_port: Option<u16>) -> Result<ForwardInfo, AdapterError> {
-    let rh = if remote_host.trim().is_empty() { "localhost".to_string() } else { remote_host.trim().to_string() };
+pub async fn open_forward(
+    owner_id: &str,
+    conn: &pluk_store::Integration,
+    remote_host: &str,
+    remote_port: u16,
+    requested_local_port: Option<u16>,
+) -> Result<ForwardInfo, AdapterError> {
+    let rh = if remote_host.trim().is_empty() {
+        "localhost".to_string()
+    } else {
+        remote_host.trim().to_string()
+    };
     let id = format!("{}:{}", rh, remote_port);
     let key = owner_key(owner_id, &conn.id);
     // check existing
     {
         let map = forwards_map().lock().unwrap();
         if let Some(inner) = map.get(&key)
-            && let Some(entry) = inner.get(&id) {
-                return Ok(entry.info.clone());
-            }
+            && let Some(entry) = inner.get(&id)
+        {
+            return Ok(entry.info.clone());
+        }
     }
     let local_port = allocate_port(requested_local_port)?;
-    let info = ForwardInfo { id: id.clone(), remote_host: rh.clone(), remote_port, local_port };
+    let info = ForwardInfo {
+        id: id.clone(),
+        remote_host: rh.clone(),
+        remote_port,
+        local_port,
+    };
     let mut map = forwards_map().lock().unwrap();
     let inner = map.entry(key).or_default();
     inner.insert(id, ForwardEntry { info: info.clone() });
@@ -234,26 +359,31 @@ pub fn list_forwards(owner_id: &str, conn: &pluk_store::Integration) -> Vec<Forw
     let map = forwards_map().lock().unwrap();
     if let Some(inner) = map.get(&key) {
         let mut v: Vec<ForwardInfo> = inner.values().map(|e| e.info.clone()).collect();
-        v.sort_by(|a,b| a.id.cmp(&b.id));
+        v.sort_by(|a, b| a.id.cmp(&b.id));
         v
-    } else { vec![] }
+    } else {
+        vec![]
+    }
 }
 
 pub fn close_forward(owner_id: &str, conn: &pluk_store::Integration, id: &str) -> bool {
     let key = owner_key(owner_id, &conn.id);
     let mut map = forwards_map().lock().unwrap();
     if let Some(inner) = map.get_mut(&key)
-        && inner.remove(id).is_some() {
-            // free port
-            // we could remove from used_ports but keep for now to avoid reuse collisions? Actually free it
-            // Find info port
-            // Need to release used port; we already removed entry, but need port value
-            // Instead track ports separately: we don't have port here after removal. Use closure to get before.
-            // Simplify: don't free, keep allocated (ports stay used) — matches real OS behavior where port remains bound until close
-            // But we need to free for tests to reuse ports. We'll attempt to remove port from used set by scanning? Not needed for now.
-            if inner.is_empty() { map.remove(&key); }
-            return true;
+        && inner.remove(id).is_some()
+    {
+        // free port
+        // we could remove from used_ports but keep for now to avoid reuse collisions? Actually free it
+        // Find info port
+        // Need to release used port; we already removed entry, but need port value
+        // Instead track ports separately: we don't have port here after removal. Use closure to get before.
+        // Simplify: don't free, keep allocated (ports stay used) — matches real OS behavior where port remains bound until close
+        // But we need to free for tests to reuse ports. We'll attempt to remove port from used set by scanning? Not needed for now.
+        if inner.is_empty() {
+            map.remove(&key);
         }
+        return true;
+    }
     false
 }
 
@@ -274,12 +404,23 @@ pub fn free_port_for_test(port: u16) {
 // Test stub executor
 #[cfg(test)]
 pub struct StubExecutor {
-    pub handler: std::sync::Arc<dyn Fn(&str, u64) -> Result<ExecResult, AdapterError> + Send + Sync>,
+    pub handler:
+        std::sync::Arc<dyn Fn(&str, u64) -> Result<ExecResult, AdapterError> + Send + Sync>,
 }
 #[cfg(test)]
 #[async_trait::async_trait]
 impl SshExecutor for StubExecutor {
-    async fn exec(&self, _host: &str, _port: u16, _user: &str, _auth_type: &str, _key_path: Option<String>, _password: Option<String>, command: &str, timeout_ms: u64) -> Result<ExecResult, AdapterError> {
+    async fn exec(
+        &self,
+        _host: &str,
+        _port: u16,
+        _user: &str,
+        _auth_type: &str,
+        _key_path: Option<String>,
+        _password: Option<String>,
+        command: &str,
+        timeout_ms: u64,
+    ) -> Result<ExecResult, AdapterError> {
         (self.handler)(command, timeout_ms)
     }
 }

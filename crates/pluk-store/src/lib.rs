@@ -44,7 +44,7 @@ pub use models::{
     SavedCommand, SavedQuery, Verdict,
 };
 pub use query_log::{
-    LOG_PAGE_SIZE, LOG_RESPONSE_LIMIT, LOG_RESULT_ROWS, ActivityHandler, LogActivity, LogCursor,
+    ActivityHandler, LOG_PAGE_SIZE, LOG_RESPONSE_LIMIT, LOG_RESULT_ROWS, LogActivity, LogCursor,
     LogDraft, LogGroup, LogPage, LogRange, LogScope, LogUpdate, QueryResult,
 };
 pub use saved_commands::SavedCommandInput;

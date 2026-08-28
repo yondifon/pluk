@@ -20,13 +20,14 @@
   /* Control */
   --control-height: 22px;
   --control-target: 28px;
+  --icon-size-md: 16px;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23737373' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4.75 6.5 3.25-3.25 3.25 3.25'/%3E%3Cpath d='m4.75 9.5 3.25 3.25 3.25-3.25'/%3E%3C/svg%3E");
   --focus-width: 2px;
-  --focus-offset: 2px;
+  --focus-offset: 0px;
   --disabled-opacity: 0.55;
   --tracking-label: 0.05em;
   --z-menu: 60;
   --resizer-hit-area: 28px;
-  --resizer-line: 4px;
   --badge-size: 34px;
   --label-column: 88px;
   --select-max-width: 240px;
@@ -40,7 +41,7 @@
   --modal-large-height: 760px;
   --modal-header-height: 52px;
   --modal-sidebar-min: 180px;
-  --toast-width: 320px;
+  --toast-width: 356px;
   --z-modal: 1000;
   --z-toast: 50;
   --border-accent-width: 2px;
@@ -54,7 +55,8 @@
   --macos-titlebar-inset: 78px;
   --popover-width: 224px;
   --popover-height: 360px;
-  --menu-min-width: 140px;
+  --menu-min-width: 200px;
+  --menu-item-height: 32px;
   --state-min-height: 120px;
   --badge-fill: #e0e7ff;
   --badge-label: #4338ca;
@@ -73,9 +75,9 @@
   --surface-panel: #ffffff;             /* neutral 1.0 */
   --surface-sunken: rgba(0, 0, 0, 0.05);
   --surface-selection: rgba(0, 0, 0, 0.06);
-  --surface-card: rgba(0, 0, 0, 0.035);
   --surface-control: rgba(0, 0, 0, 0.05);
   --surface-sidebar-label: #383838;     /* neutral 0.22 */
+  --surface-secondary-label: rgba(0, 0, 0, 0.62);
   --surface-tertiary-label: rgba(0, 0, 0, 0.45);
   --surface-sidebar-tertiary: rgba(0, 0, 0, 0.38);
   --surface-label: #1a1a1a;
@@ -112,9 +114,10 @@
     --surface-panel: #2e2e2e;           /* neutral 0.18 */
     --surface-sunken: rgba(255, 255, 255, 0.06);
     --surface-selection: rgba(255, 255, 255, 0.10);
-    --surface-card: rgba(255, 255, 255, 0.04);
     --surface-control: rgba(255, 255, 255, 0.06);
     --surface-sidebar-label: rgba(255, 255, 255, 0.86);
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23a3a3a3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4.75 6.5 3.25-3.25 3.25 3.25'/%3E%3Cpath d='m4.75 9.5 3.25 3.25 3.25-3.25'/%3E%3C/svg%3E");
+    --surface-secondary-label: rgba(255, 255, 255, 0.68);
     --surface-tertiary-label: rgba(255, 255, 255, 0.45);
     --surface-sidebar-tertiary: rgba(255, 255, 255, 0.5);
     --surface-label: rgba(255, 255, 255, 0.92);

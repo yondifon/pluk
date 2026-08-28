@@ -36,8 +36,15 @@ pub struct HealthMap {
 
 impl HealthMap {
     pub fn record(&self, id: &str, status: HealthStatus, error: Option<String>) {
-        let entry = ConnHealth { status, error, at: now_millis() };
-        self.entries.lock().expect("health lock").insert(id.to_string(), entry);
+        let entry = ConnHealth {
+            status,
+            error,
+            at: now_millis(),
+        };
+        self.entries
+            .lock()
+            .expect("health lock")
+            .insert(id.to_string(), entry);
     }
 
     /// Every recorded observation keyed by integration id.
@@ -63,7 +70,10 @@ mod tests {
     #[test]
     fn absent_is_distinguishable_from_ok_and_error() {
         let health = HealthMap::default();
-        assert!(health.all().get("i1").is_none(), "unobserved ids stay absent");
+        assert!(
+            health.all().get("i1").is_none(),
+            "unobserved ids stay absent"
+        );
 
         health.record("i1", HealthStatus::Ok, None);
         health.record("i2", HealthStatus::Error, Some("connection refused".into()));
@@ -75,7 +85,10 @@ mod tests {
         assert_eq!(all["i2"].error.as_deref(), Some("connection refused"));
         // The wire shape keeps `status`, optional `error`, and `at`.
         let value = serde_json::to_value(all).unwrap();
-        assert_eq!(value["i1"], serde_json::json!({ "status": "ok", "at": value["i1"]["at"] }));
+        assert_eq!(
+            value["i1"],
+            serde_json::json!({ "status": "ok", "at": value["i1"]["at"] })
+        );
         assert_eq!(value["i2"]["status"], "error");
     }
 

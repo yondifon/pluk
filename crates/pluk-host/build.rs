@@ -22,7 +22,11 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
 
     // Short commit for display
-    let commit_short = if commit.len() > 7 { commit[..7].to_string() } else { commit.clone() };
+    let commit_short = if commit.len() > 7 {
+        commit[..7].to_string()
+    } else {
+        commit.clone()
+    };
 
     println!("cargo:rustc-env=PLUK_VERSION={version}");
     println!("cargo:rustc-env=PLUK_COMMIT={commit}");

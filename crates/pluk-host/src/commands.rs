@@ -140,7 +140,10 @@ pub fn list_integrations(state: State<'_, HostState>) -> CmdResult<Vec<Integrati
 }
 
 #[tauri::command]
-pub fn get_integration(state: State<'_, HostState>, id: String) -> CmdResult<Option<IntegrationJson>> {
+pub fn get_integration(
+    state: State<'_, HostState>,
+    id: String,
+) -> CmdResult<Option<IntegrationJson>> {
     state
         .store
         .integration_by_id(&id)
@@ -160,10 +163,16 @@ pub struct CreateIntegrationPayload {
 }
 
 #[tauri::command]
-pub fn create_integration(state: State<'_, HostState>, payload: CreateIntegrationPayload) -> CmdResult<IntegrationJson> {
+pub fn create_integration(
+    state: State<'_, HostState>,
+    payload: CreateIntegrationPayload,
+) -> CmdResult<IntegrationJson> {
     let mut input = pluk_store::IntegrationInput::new(payload.name, payload.r#type);
     input.config = payload.config;
-    input.environment = payload.environment.as_deref().and_then(pluk_store::Environment::parse);
+    input.environment = payload
+        .environment
+        .as_deref()
+        .and_then(pluk_store::Environment::parse);
     state
         .store
         .create_integration(&input)
@@ -193,7 +202,10 @@ pub fn update_integration(
     // the other writers store there.
     let query_policy = match payload.tool_config {
         Some(tools) => {
-            let stored = state.store.integration_by_id(&id).map_err(|e| e.to_string())?;
+            let stored = state
+                .store
+                .integration_by_id(&id)
+                .map_err(|e| e.to_string())?;
             let mut policy = stored
                 .and_then(|i| pluk_store::parse_query_policy(i.query_policy.as_deref()))
                 .unwrap_or_default();
@@ -206,7 +218,10 @@ pub fn update_integration(
         name: payload.name,
         r#type: payload.r#type,
         config: payload.config,
-        environment: payload.environment.as_deref().and_then(pluk_store::Environment::parse),
+        environment: payload
+            .environment
+            .as_deref()
+            .and_then(pluk_store::Environment::parse),
         read_only: None,
         query_policy,
     };
@@ -219,7 +234,10 @@ pub fn update_integration(
 
 #[tauri::command]
 pub fn delete_integration(state: State<'_, HostState>, id: String) -> CmdResult<bool> {
-    let did = state.store.delete_integration(&id).map_err(|e| e.to_string())?;
+    let did = state
+        .store
+        .delete_integration(&id)
+        .map_err(|e| e.to_string())?;
     if did {
         // Drop owner's pooled resources so stale creds/tunnels are gone.
         let owners = state.shared.owners.clone();
@@ -256,12 +274,20 @@ impl From<pluk_store::Group> for GroupJson {
 
 #[tauri::command]
 pub fn list_groups(state: State<'_, HostState>) -> CmdResult<Vec<GroupJson>> {
-    state.store.list_groups().map(|v| v.into_iter().map(GroupJson::from).collect()).map_err(|e| e.to_string())
+    state
+        .store
+        .list_groups()
+        .map(|v| v.into_iter().map(GroupJson::from).collect())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_group(state: State<'_, HostState>, id: String) -> CmdResult<Option<GroupJson>> {
-    state.store.group_by_id(&id).map(|o| o.map(GroupJson::from)).map_err(|e| e.to_string())
+    state
+        .store
+        .group_by_id(&id)
+        .map(|o| o.map(GroupJson::from))
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -272,13 +298,23 @@ pub struct CreateGroupPayload {
 }
 
 #[tauri::command]
-pub fn create_group(state: State<'_, HostState>, payload: CreateGroupPayload) -> CmdResult<GroupJson> {
+pub fn create_group(
+    state: State<'_, HostState>,
+    payload: CreateGroupPayload,
+) -> CmdResult<GroupJson> {
     let input = pluk_store::GroupInput {
         name: payload.name,
-        environment: payload.environment.as_deref().and_then(pluk_store::Environment::parse),
+        environment: payload
+            .environment
+            .as_deref()
+            .and_then(pluk_store::Environment::parse),
         members: payload.members,
     };
-    state.store.create_group(&input).map(GroupJson::from).map_err(|e| e.to_string())
+    state
+        .store
+        .create_group(&input)
+        .map(GroupJson::from)
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -289,12 +325,24 @@ pub struct UpdateGroupPayload {
 }
 
 #[tauri::command]
-pub fn update_group(state: State<'_, HostState>, id: String, payload: UpdateGroupPayload) -> CmdResult<Option<GroupJson>> {
+pub fn update_group(
+    state: State<'_, HostState>,
+    id: String,
+    payload: UpdateGroupPayload,
+) -> CmdResult<Option<GroupJson>> {
     let env = payload
         .environment
         .map(|inner| inner.as_deref().and_then(pluk_store::Environment::parse));
-    let update = pluk_store::GroupUpdate { name: payload.name, environment: env, members: payload.members };
-    let result = state.store.update_group(&id, &update).map(|o| o.map(GroupJson::from)).map_err(|e| e.to_string())?;
+    let update = pluk_store::GroupUpdate {
+        name: payload.name,
+        environment: env,
+        members: payload.members,
+    };
+    let result = state
+        .store
+        .update_group(&id, &update)
+        .map(|o| o.map(GroupJson::from))
+        .map_err(|e| e.to_string())?;
     if result.is_some() {
         let owners = state.shared.owners.clone();
         owners.reset_owners(Some(&id));
@@ -336,8 +384,8 @@ pub fn list_adapters(state: State<'_, HostState>) -> Vec<AdapterInfo> {
         .map(|a| AdapterInfo {
             id: a.id().to_string(),
             label: a.label().to_string(),
-            category: format!("{:?}", a.category()),
-            policy_kind: format!("{:?}", a.policy_kind()),
+            category: a.category().to_string(),
+            policy_kind: a.policy_kind().as_str().to_string(),
             agent_hint: a.agent_hint().to_string(),
             tools: a.tool_specs().to_vec(),
             config_fields: a.config_fields().to_vec(),
@@ -364,19 +412,34 @@ pub fn get_health(state: State<'_, HostState>) -> std::collections::BTreeMap<Str
                 pluk_server::HealthStatus::Error => "error",
             }
             .to_string();
-            (k, HealthEntry { status, error: v.error, at: v.at })
+            (
+                k,
+                HealthEntry {
+                    status,
+                    error: v.error,
+                    at: v.at,
+                },
+            )
         })
         .collect()
 }
 
 #[tauri::command]
-pub async fn test_connection(state: State<'_, HostState>, id: String) -> CmdResult<serde_json::Value> {
+pub async fn test_connection(
+    state: State<'_, HostState>,
+    id: String,
+) -> CmdResult<serde_json::Value> {
     let store = state.store.clone();
     let registry = state.shared.registry.clone();
     let health = state.shared.health.clone();
 
-    let integration = store.integration_by_id(&id).map_err(|e| e.to_string())?.ok_or_else(|| "Not found".to_string())?;
-    let adapter = registry.get(&integration.r#type).ok_or_else(|| format!("No adapter for type: {}", integration.r#type))?;
+    let integration = store
+        .integration_by_id(&id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Not found".to_string())?;
+    let adapter = registry
+        .get(&integration.r#type)
+        .ok_or_else(|| format!("No adapter for type: {}", integration.r#type))?;
 
     match adapter.test_connection(&integration).await {
         Ok(()) => {
@@ -384,8 +447,14 @@ pub async fn test_connection(state: State<'_, HostState>, id: String) -> CmdResu
             Ok(serde_json::json!({ "ok": true }))
         }
         Err(e) => {
-            let msg = adapter.humanize_error(&e).unwrap_or_else(|| e.message.clone());
-            health.record(&integration.id, pluk_server::HealthStatus::Error, Some(msg.clone()));
+            let msg = adapter
+                .humanize_error(&e)
+                .unwrap_or_else(|| e.message.clone());
+            health.record(
+                &integration.id,
+                pluk_server::HealthStatus::Error,
+                Some(msg.clone()),
+            );
             Ok(serde_json::json!({ "ok": false, "error": msg }))
         }
     }
@@ -457,17 +526,27 @@ pub fn get_retention(state: State<'_, HostState>) -> CmdResult<i64> {
 
 #[tauri::command]
 pub fn set_retention(state: State<'_, HostState>, days: i64) -> CmdResult<()> {
-    state.store.set_retention_days(days).map_err(|e| e.to_string())
+    state
+        .store
+        .set_retention_days(days)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn clear_logs(state: State<'_, HostState>, scope: String, scope_id: String) -> CmdResult<usize> {
+pub fn clear_logs(
+    state: State<'_, HostState>,
+    scope: String,
+    scope_id: String,
+) -> CmdResult<usize> {
     let log_scope = if scope == "group" {
         pluk_store::LogScope::Group(scope_id)
     } else {
         pluk_store::LogScope::Connection(scope_id)
     };
-    state.store.clear_logs(&log_scope).map_err(|e| e.to_string())
+    state
+        .store
+        .clear_logs(&log_scope)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -501,7 +580,10 @@ pub fn get_logs(
         .map_err(|e| e.to_string())?;
     Ok(LogPageJson {
         entries: page.entries.into_iter().map(LogEntryJson::from).collect(),
-        next_cursor: page.next_cursor.map(|c| CursorJson { created_at: c.created_at, id: c.id }),
+        next_cursor: page.next_cursor.map(|c| CursorJson {
+            created_at: c.created_at,
+            id: c.id,
+        }),
         has_more: page.has_more,
     })
 }
@@ -523,7 +605,9 @@ fn parse_mcp_client(raw: &str) -> Option<pluk_core::platform::McpClient> {
     match raw {
         "opencode" => Some(pluk_core::platform::McpClient::Opencode),
         "codex" => Some(pluk_core::platform::McpClient::Codex),
-        "claudeCode" | "claude-code" | "claude_code" => Some(pluk_core::platform::McpClient::ClaudeCode),
+        "claudeCode" | "claude-code" | "claude_code" => {
+            Some(pluk_core::platform::McpClient::ClaudeCode)
+        }
         "cursor" => Some(pluk_core::platform::McpClient::Cursor),
         "windsurf" => Some(pluk_core::platform::McpClient::Windsurf),
         "antigravity" => Some(pluk_core::platform::McpClient::Antigravity),
@@ -539,7 +623,9 @@ pub fn inject_mcp_config(
     key: String,
     url: String,
 ) -> CmdResult<InjectResultJson> {
-    let mcp_client = parse_mcp_client(&client).ok_or_else(|| format!("Unknown client “{client}”. Choose a supported client and try again."))?;
+    let mcp_client = parse_mcp_client(&client).ok_or_else(|| {
+        format!("Unknown client “{client}”. Choose a supported client and try again.")
+    })?;
     let config_scope = match scope.as_str() {
         "project" => {
             let dir = project_dir
@@ -567,7 +653,9 @@ pub fn inject_mcp_config(
             status: "skipped".to_string(),
             path: path.display().to_string(),
         }),
-        Err(e) => Err(format!("{e} Check the file and try again, or copy the snippet manually.")),
+        Err(e) => Err(format!(
+            "{e} Check the file and try again, or copy the snippet manually."
+        )),
     }
 }
 

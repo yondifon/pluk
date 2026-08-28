@@ -41,7 +41,9 @@ export function createBadge(text: string, variant = "default"): HTMLSpanElement 
   return badge;
 }
 
-export type MenuItem = { label: string; danger?: boolean; onSelect: () => void };
+export type MenuItem =
+  | { separator: true }
+  | { label: string; icon?: IconName; danger?: boolean; onSelect: () => void };
 
 let activeMenuClose: (() => void) | null = null;
 
@@ -56,9 +58,20 @@ export function openMenu(
   menu.setAttribute("role", "menu");
   menu.tabIndex = -1;
   for (const item of items) {
-    const button = createButton(item.label, { variant: item.danger ? "danger" : "default" });
+    if ("separator" in item) {
+      const rule = document.createElement("div");
+      rule.className = "ui-menu-separator";
+      rule.setAttribute("role", "separator");
+      menu.appendChild(rule);
+      continue;
+    }
+    const button = createButton("", { variant: item.danger ? "danger" : "default", icon: item.icon });
     button.classList.add("ui-menu-item");
     button.setAttribute("role", "menuitem");
+    const label = document.createElement("span");
+    label.className = "ui-menu-label";
+    label.textContent = item.label;
+    button.appendChild(label);
     button.addEventListener("click", () => {
       close();
       item.onSelect();
@@ -66,9 +79,15 @@ export function openMenu(
     menu.appendChild(button);
   }
   document.body.appendChild(menu);
-  const rect = anchor.getBoundingClientRect();
-  menu.style.left = `${position?.x ?? rect.left}px`;
-  menu.style.top = `${position?.y ?? rect.bottom}px`;
+  const anchorRect = anchor.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const margin = 8;
+  const left = position?.x ?? anchorRect.right - menuRect.width;
+  const top = position?.y ?? anchorRect.bottom + margin;
+  const maxLeft = window.innerWidth - menuRect.width - margin;
+  const maxTop = window.innerHeight - menuRect.height - margin;
+  menu.style.left = `${Math.max(margin, Math.min(left, maxLeft))}px`;
+  menu.style.top = `${Math.max(margin, Math.min(top, maxTop))}px`;
 
   let closed = false;
   const close = () => {

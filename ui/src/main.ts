@@ -20,6 +20,7 @@ import type { AdapterManifest as CatalogManifest, ToolState } from "./forms/cata
 import { ToastCenter, renderToasts } from "./toast.ts";
 import { humanizeHealthError } from "./health.ts";
 import { renderLoadingState } from "./primitives.ts";
+import { openModal } from "./modal.ts";
 import { invoke, hasHost } from "./host.ts";
 import { isMac } from "./platform.ts";
 import type { Integration, Group, Environment, Health } from "./types.ts";
@@ -57,11 +58,14 @@ type HostGroup = {
 type Selection =
   | { kind: "none" }
   | { kind: "integration"; id: string }
-  | { kind: "group"; id: string }
+  | { kind: "group"; id: string };
+
+/** Which form the modal is showing, if any. */
+type FormState =
   | { kind: "choose-integration-type" }
   | { kind: "new-integration" }
-  | { kind: "new-group" }
   | { kind: "edit-integration"; id: string }
+  | { kind: "new-group" }
   | { kind: "edit-group"; id: string };
 
 let state: SidebarState = {
@@ -76,7 +80,9 @@ let manifests: CatalogManifest[] = [];
 let hostIntegrations: HostIntegration[] = [];
 let hostGroups: HostGroup[] = [];
 let selection: Selection = { kind: "none" };
-let previousSelection: Selection = { kind: "none" };
+let form: FormState | null = null;
+let formModal: { close: () => void; setTitle: (text: string) => void; content: HTMLElement } | null = null;
+let formHost: HTMLElement | null = null;
 let draft: ConnectionDraft | null = null;
 let groupDraft: GroupDraft | null = null;
 let detailHandle: { destroy: () => void; updateHealth: (next: DetailHealth | null) => void } | null = null;
@@ -187,76 +193,117 @@ function renderDetail(mount: HTMLElement): void {
       });
       return;
     }
-    case "choose-integration-type": {
-      const chooser = renderTypeChooser(
-        manifests,
-        (m) => chooseIntegrationType(m),
-        {
-          onCancel: () => {
-            draft = null;
-            select(previousSelection);
-          },
-          adaptersLoadFailed: state.adaptersLoadFailed,
-          onRetry: () => void loadAdapters().then(refresh),
-        },
-      );
-      wrap.appendChild(chooser);
-      return;
-    }
+  }
+}
+
+// ── Form modal ───────────────────────────────────────────────────────────────
+
+const FORM_TITLES: Record<FormState["kind"], string> = {
+  "choose-integration-type": "New Integration",
+  "new-integration": "New Integration",
+  "edit-integration": "Edit Integration",
+  "new-group": "New Group",
+  "edit-group": "Edit Group",
+};
+
+const FORM_FOCUSABLE = "input, select, textarea, button";
+
+function openForm(next: FormState): void {
+  form = next;
+  if (!formModal) {
+    formHost = document.createElement("div");
+    formModal = openModal({
+      title: FORM_TITLES[next.kind],
+      size: "large",
+      content: formHost,
+      onClose: () => {
+        form = null;
+        formModal = null;
+        formHost = null;
+        draft = null;
+        groupDraft = null;
+      },
+    });
+    formModal.content.classList.add("modal-body-form");
+  }
+  formModal.setTitle(FORM_TITLES[next.kind]);
+  renderForm();
+}
+
+function closeForm(): void {
+  formModal?.close();
+  form = null;
+  formModal = null;
+  formHost = null;
+  draft = null;
+  groupDraft = null;
+}
+
+/** Re-renders the open form, keeping the caret where the person left it. */
+function renderForm(): void {
+  const host = formHost;
+  if (!host || !form) return;
+  const active = document.activeElement as HTMLElement | null;
+  const index = active ? Array.from(host.querySelectorAll<HTMLElement>(FORM_FOCUSABLE)).indexOf(active) : -1;
+  const caret = active instanceof HTMLInputElement ? active.selectionStart : null;
+
+  host.innerHTML = "";
+  host.appendChild(buildForm(form));
+
+  if (index < 0) return;
+  const restored = host.querySelectorAll<HTMLElement>(FORM_FOCUSABLE)[index];
+  restored?.focus();
+  if (restored instanceof HTMLInputElement && caret != null) restored.setSelectionRange(caret, caret);
+}
+
+function buildForm(current: FormState): HTMLElement {
+  switch (current.kind) {
+    case "choose-integration-type":
+      return renderTypeChooser(manifests, chooseIntegrationType, {
+        onCancel: closeForm,
+        adaptersLoadFailed: state.adaptersLoadFailed,
+        onRetry: () => void loadAdapters().then(renderForm),
+      });
     case "new-integration":
     case "edit-integration": {
-      if (!draft) return;
-      const current = draft;
-      const isNew = selection.kind === "new-integration";
-      wrap.appendChild(
-        renderIntegrationForm(
-          current,
-          manifestFor(current.type),
-          (next) => {
-            draft = next;
-            renderDetail(mount);
-          },
-          (saved) => void saveIntegration(saved),
-          () => {
-            draft = null;
-            select({ kind: "none" });
-          },
-          isNew
-            ? () => {
-                previousSelection = selection;
-                select({ kind: "choose-integration-type" });
-              }
-            : undefined,
-        ),
+      if (!draft) return document.createElement("div");
+      const pending = draft;
+      return renderIntegrationForm(
+        pending,
+        manifestFor(pending.type),
+        (next) => {
+          draft = next;
+          renderForm();
+        },
+        (saved) => void saveIntegration(saved),
+        closeForm,
+        current.kind === "new-integration"
+          ? () => openForm({ kind: "choose-integration-type" })
+          : undefined,
       );
-      return;
     }
     case "new-group":
     case "edit-group": {
-      if (!groupDraft) return;
-      const current = groupDraft;
-      wrap.appendChild(
-        renderGroupForm(
-          current,
-          hostIntegrations.map((c) => ({
-            id: c.id,
-            name: c.name,
-            type: c.type,
-            environment: c.environment ?? undefined,
-            config: Object.fromEntries(
-              Object.entries(c.config).map(([k, v]) => [k, v == null ? "" : String(v)]),
-            ),
-          })),
-          manifests,
-          (next) => {
-            groupDraft = next;
-            renderDetail(mount);
-          },
-          (saved) => void saveGroup(saved),
-          () => select({ kind: "none" }),
-        ),
+      if (!groupDraft) return document.createElement("div");
+      return renderGroupForm(
+        groupDraft,
+        hostIntegrations.map((c) => ({
+          id: c.id,
+          name: c.name,
+          type: c.type,
+          environment: c.environment ?? undefined,
+          config: Object.fromEntries(
+            Object.entries(c.config).map(([k, v]) => [k, v == null ? "" : String(v)]),
+          ),
+        })),
+        manifests,
+        (next) => {
+          groupDraft = next;
+          renderForm();
+        },
+        (saved) => void saveGroup(saved),
+        closeForm,
       );
-      return;
     }
   }
 }
@@ -264,15 +311,14 @@ function renderDetail(mount: HTMLElement): void {
 // ── Actions ──────────────────────────────────────────────────────────────────
 
 function startNewIntegration(): void {
-  previousSelection = selection;
   draft = null;
-  select({ kind: "choose-integration-type" });
+  openForm({ kind: "choose-integration-type" });
 }
 
 function chooseIntegrationType(manifest: CatalogManifest): void {
   const base = draft ?? applyEnvironmentDefaults(emptyDraft());
   draft = adopt(base, manifest, true);
-  select({ kind: "new-integration" });
+  openForm({ kind: "new-integration" });
 }
 
 function startEditIntegration(id: string): void {
@@ -286,12 +332,12 @@ function startEditIntegration(id: string): void {
   });
   const manifest = manifestFor(row.type);
   draft = manifest ? { ...adopt(base, manifest, false), toolConfig: row.toolConfig } : base;
-  select({ kind: "edit-integration", id });
+  openForm({ kind: "edit-integration", id });
 }
 
 function startNewGroup(): void {
   groupDraft = groupDraftFrom({ name: "", environment: null, members: [] });
-  select({ kind: "new-group" });
+  openForm({ kind: "new-group" });
 }
 
 function startEditGroup(id: string): void {
@@ -302,7 +348,7 @@ function startEditGroup(id: string): void {
     environment: row.environment,
     members: row.members.map((m) => ({ id: m.id, overrides: m.overrides ?? {} })),
   });
-  select({ kind: "edit-group", id });
+  openForm({ kind: "edit-group", id });
 }
 
 async function saveIntegration(saved: ConnectionDraft): Promise<void> {
@@ -313,16 +359,17 @@ async function saveIntegration(saved: ConnectionDraft): Promise<void> {
     environment: saved.environment,
     toolConfig: saved.toolConfig,
   };
+  const editing = form?.kind === "edit-integration" ? form.id : null;
   try {
-    if (selection.kind === "edit-integration") {
-      await invoke("update_integration", { id: selection.id, payload });
+    if (editing) {
+      await invoke("update_integration", { id: editing, payload });
     } else {
       await invoke("create_integration", { payload });
     }
+    closeForm();
     await loadData();
-    select({ kind: "none" });
   } catch (error) {
-    report(error, selection.kind === "edit-integration" ? selection.id : "", "Integration not saved");
+    report(error, editing ?? "", "Integration not saved");
   }
 }
 
@@ -333,13 +380,13 @@ async function saveGroup(saved: GroupDraft): Promise<void> {
     members: serializeGroup(saved, hostIntegrations),
   };
   try {
-    if (selection.kind === "edit-group") {
-      await invoke("update_group", { id: selection.id, payload });
+    if (form?.kind === "edit-group") {
+      await invoke("update_group", { id: form.id, payload });
     } else {
       await invoke("create_group", { payload });
     }
+    closeForm();
     await loadData();
-    select({ kind: "none" });
   } catch (error) {
     report(error, "", "Group not saved");
   }

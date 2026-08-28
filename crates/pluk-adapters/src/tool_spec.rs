@@ -30,10 +30,20 @@ pub struct ToolSpec {
 impl ToolSpec {
     /// Build a spec whose default-on state derives from the category: read
     /// and inspect tools ship on; write/delete/admin ship off until opted in.
-    pub fn new(name: impl Into<String>, description: impl Into<String>, category: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        category: impl Into<String>,
+    ) -> Self {
         let category = category.into();
         let default_enabled = default_enabled_for_category(&category);
-        ToolSpec { name: name.into(), description: description.into(), category, default_enabled, settings: None }
+        ToolSpec {
+            name: name.into(),
+            description: description.into(),
+            category,
+            default_enabled,
+            settings: None,
+        }
     }
 
     /// Override the derived default-on state — set `false` on a niche or heavy
@@ -56,16 +66,26 @@ mod tests {
     #[test]
     fn default_enabled_derives_from_category() {
         for on in ["read", "inspect"] {
-            assert!(ToolSpec::new("t", "T", on).default_enabled, "{on} must default on");
+            assert!(
+                ToolSpec::new("t", "T", on).default_enabled,
+                "{on} must default on"
+            );
         }
         for off in ["write", "delete", "admin", "other"] {
-            assert!(!ToolSpec::new("t", "T", off).default_enabled, "{off} must default off");
+            assert!(
+                !ToolSpec::new("t", "T", off).default_enabled,
+                "{off} must default off"
+            );
         }
     }
 
     #[test]
     fn explicit_override_wins_over_the_derived_default() {
-        assert!(!ToolSpec::new("keys", "K", "read").with_default_enabled(false).default_enabled);
+        assert!(
+            !ToolSpec::new("keys", "K", "read")
+                .with_default_enabled(false)
+                .default_enabled
+        );
     }
 
     #[test]

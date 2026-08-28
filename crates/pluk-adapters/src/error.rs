@@ -19,7 +19,10 @@ pub struct AdapterError {
 
 impl AdapterError {
     pub fn new(message: impl Into<String>) -> Self {
-        AdapterError { message: message.into(), code: None }
+        AdapterError {
+            message: message.into(),
+            code: None,
+        }
     }
 
     pub fn with_code(mut self, code: impl Into<String>) -> Self {

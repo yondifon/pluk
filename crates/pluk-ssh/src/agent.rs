@@ -1,4 +1,3 @@
-
 pub const SSH_AGENT_UNREACHABLE_CODE: &str = "SSH_AGENT_UNREACHABLE";
 
 const PROBE_TIMEOUT_MS: u64 = 2_000;
@@ -50,7 +49,7 @@ async fn probe_inner(path: &str) -> AgentProbe {
         Err(e) => {
             return AgentProbe::Dead {
                 error: e.to_string(),
-            }
+            };
         }
     };
 
@@ -65,17 +64,19 @@ async fn probe_inner(path: &str) -> AgentProbe {
     // Wait for response with a short read timeout
     let mut buf = vec![0u8; 8192];
     let read_fut = stream.read(&mut buf);
-    let n = match tokio::time::timeout(std::time::Duration::from_millis(PROBE_TIMEOUT_MS), read_fut).await {
+    let n = match tokio::time::timeout(std::time::Duration::from_millis(PROBE_TIMEOUT_MS), read_fut)
+        .await
+    {
         Ok(Ok(0)) => {
             return AgentProbe::Dead {
                 error: "agent closed the connection".into(),
-            }
+            };
         }
         Ok(Ok(n)) => n,
         Ok(Err(e)) => {
             return AgentProbe::Dead {
                 error: e.to_string(),
-            }
+            };
         }
         Err(_) => return AgentProbe::Mute,
     };
@@ -123,9 +124,10 @@ pub fn agent_socket_candidates(host: &str) -> Vec<String> {
     }
     all.extend(well_known_agent_sockets());
     if let Ok(sock) = std::env::var("SSH_AUTH_SOCK")
-        && !sock.is_empty() {
-            all.push(sock);
-        }
+        && !sock.is_empty()
+    {
+        all.push(sock);
+    }
     // Deduplicate preserving order
     let mut seen = std::collections::HashSet::new();
     all.into_iter().filter(|s| seen.insert(s.clone())).collect()

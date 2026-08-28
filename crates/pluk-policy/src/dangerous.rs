@@ -32,8 +32,14 @@ impl DangerousConstruct {
 /// Ordered so the reason names the first matching construct, like the TS scan.
 static PATTERNS: LazyLock<Vec<(Regex, DangerousConstruct)>> = LazyLock::new(|| {
     let rules: &[(&str, DangerousConstruct)] = &[
-        (r"(?is)\bCOPY\b.*?\bFROM\s+PROGRAM\b", DangerousConstruct::CopyProgram),
-        (r"(?is)\bCOPY\b.*?\bTO\s+PROGRAM\b", DangerousConstruct::CopyProgram),
+        (
+            r"(?is)\bCOPY\b.*?\bFROM\s+PROGRAM\b",
+            DangerousConstruct::CopyProgram,
+        ),
+        (
+            r"(?is)\bCOPY\b.*?\bTO\s+PROGRAM\b",
+            DangerousConstruct::CopyProgram,
+        ),
         (r"(?i)\bINTO\s+OUTFILE\b", DangerousConstruct::IntoOutfile),
         (r"(?i)\bLOAD\s+DATA\b", DangerousConstruct::LoadData),
         (
@@ -45,7 +51,12 @@ static PATTERNS: LazyLock<Vec<(Regex, DangerousConstruct)>> = LazyLock::new(|| {
     ];
     rules
         .iter()
-        .map(|(pattern, construct)| (Regex::new(pattern).expect("valid dangerous regex"), *construct))
+        .map(|(pattern, construct)| {
+            (
+                Regex::new(pattern).expect("valid dangerous regex"),
+                *construct,
+            )
+        })
         .collect()
 });
 
@@ -77,11 +88,23 @@ mod tests {
     fn detects_every_construct() {
         assert_eq!(scan("COPY t FROM PROGRAM 'ls'"), Some("copy-program"));
         assert_eq!(scan("COPY t TO PROGRAM 'ls'"), Some("copy-program"));
-        assert_eq!(scan("SELECT * FROM t INTO OUTFILE '/tmp/x'"), Some("into-outfile"));
-        assert_eq!(scan("LOAD DATA INFILE '/tmp/x' INTO TABLE t"), Some("load-data"));
-        assert_eq!(scan("ATTACH DATABASE '/tmp/x' AS aux"), Some("attach-database"));
+        assert_eq!(
+            scan("SELECT * FROM t INTO OUTFILE '/tmp/x'"),
+            Some("into-outfile")
+        );
+        assert_eq!(
+            scan("LOAD DATA INFILE '/tmp/x' INTO TABLE t"),
+            Some("load-data")
+        );
+        assert_eq!(
+            scan("ATTACH DATABASE '/tmp/x' AS aux"),
+            Some("attach-database")
+        );
         assert_eq!(scan("ATTACH '/tmp/x' AS aux"), Some("attach-database"));
-        assert_eq!(scan("SELECT pg_read_file('/etc/passwd')"), Some("pg-read-file"));
+        assert_eq!(
+            scan("SELECT pg_read_file('/etc/passwd')"),
+            Some("pg-read-file")
+        );
         assert_eq!(scan("SELECT lo_import('/etc/passwd')"), Some("lo-import"));
     }
 
@@ -94,7 +117,10 @@ mod tests {
 
     #[test]
     fn comments_cannot_hide_a_construct_across_lines() {
-        assert_eq!(scan("COPY t FROM --note\n PROGRAM 'ls'"), Some("copy-program"));
+        assert_eq!(
+            scan("COPY t FROM --note\n PROGRAM 'ls'"),
+            Some("copy-program")
+        );
         assert_eq!(scan("COPY t /*x*/ FROM PROGRAM 'ls'"), Some("copy-program"));
     }
 }

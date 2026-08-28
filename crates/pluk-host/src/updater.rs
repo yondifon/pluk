@@ -51,7 +51,10 @@ pub struct UpdaterConfig {
 
 impl UpdaterConfig {
     pub fn placeholder() -> Self {
-        Self { pubkey: String::new(), endpoints: vec![PLACEHOLDER_ENDPOINT.to_string()] }
+        Self {
+            pubkey: String::new(),
+            endpoints: vec![PLACEHOLDER_ENDPOINT.to_string()],
+        }
     }
 
     /// Whether Tauri's updater has something to do. Mirrors Swift's
@@ -65,14 +68,15 @@ impl UpdaterConfig {
             return false;
         }
         // Any non-placeholder endpoint counts as configured.
-        self.endpoints.iter().any(|e| !e.contains("example.com") && !e.trim().is_empty())
+        self.endpoints
+            .iter()
+            .any(|e| !e.contains("example.com") && !e.trim().is_empty())
     }
 
     /// Whether the config still holds the placeholder (failing-loudly signal
     /// for R23/packaging: the binary was shipped without manifest wiring).
     pub fn is_placeholder(&self) -> bool {
-        self.pubkey.trim().is_empty()
-            || self.endpoints.iter().any(|e| e.contains("example.com"))
+        self.pubkey.trim().is_empty() || self.endpoints.iter().any(|e| e.contains("example.com"))
     }
 }
 
@@ -99,13 +103,22 @@ pub enum FailureKind {
 pub enum UpdateState {
     /// Updater not configured (dev run, placeholder endpoint/pubkey).
     /// No banner, no toast, no crash — matches Swift dev-run disabled path.
-    Disabled { reason: String },
+    Disabled {
+        reason: String,
+    },
     Idle,
     Checking,
     UpToDate,
-    Available { version: String, notes: Option<String> },
-    Downloading { progress: u8 },
-    Ready { version: String },
+    Available {
+        version: String,
+        notes: Option<String>,
+    },
+    Downloading {
+        progress: u8,
+    },
+    Ready {
+        version: String,
+    },
     Failed {
         #[serde(rename = "kind")]
         kind: FailureKind,
@@ -168,9 +181,14 @@ impl Updater {
         let initial = if config.is_configured() {
             UpdateState::Idle
         } else {
-            UpdateState::Disabled { reason: "updater not configured".to_string() }
+            UpdateState::Disabled {
+                reason: "updater not configured".to_string(),
+            }
         };
-        Self { config, state: Arc::new(Mutex::new(initial)) }
+        Self {
+            config,
+            state: Arc::new(Mutex::new(initial)),
+        }
     }
 
     pub fn config(&self) -> &UpdaterConfig {
@@ -215,7 +233,10 @@ impl Updater {
         }
         *s = match info {
             None => UpdateState::UpToDate,
-            Some(i) => UpdateState::Available { version: i.version, notes: i.notes },
+            Some(i) => UpdateState::Available {
+                version: i.version,
+                notes: i.notes,
+            },
         };
     }
 
@@ -233,7 +254,10 @@ impl Updater {
             *s = UpdateState::Idle;
             return;
         }
-        *s = UpdateState::Failed { kind, message: message.into() };
+        *s = UpdateState::Failed {
+            kind,
+            message: message.into(),
+        };
     }
 
     /// Like `fail` but surfaces `Unreachable` as a `Failed` state (for tests
@@ -243,7 +267,10 @@ impl Updater {
         if s.is_disabled() {
             return;
         }
-        *s = UpdateState::Failed { kind, message: message.into() };
+        *s = UpdateState::Failed {
+            kind,
+            message: message.into(),
+        };
     }
 
     pub fn begin_download(&self) -> bool {
@@ -263,7 +290,9 @@ impl Updater {
     pub fn update_progress(&self, progress: u8) {
         let mut s = self.state.lock().expect("updater state");
         if let UpdateState::Downloading { .. } = &*s {
-            *s = UpdateState::Downloading { progress: progress.min(100) };
+            *s = UpdateState::Downloading {
+                progress: progress.min(100),
+            };
         }
     }
 
@@ -300,7 +329,9 @@ pub fn get_update_state(updater: tauri::State<'_, Updater>) -> serde_json::Value
 }
 
 #[tauri::command]
-pub async fn check_for_updates(updater: tauri::State<'_, Updater>) -> Result<serde_json::Value, String> {
+pub async fn check_for_updates(
+    updater: tauri::State<'_, Updater>,
+) -> Result<serde_json::Value, String> {
     if !updater.is_configured() {
         return Ok(serde_json::to_value(updater.state()).unwrap_or(serde_json::Value::Null));
     }
@@ -363,7 +394,10 @@ mod tests {
         }));
         assert_eq!(
             u.state(),
-            UpdateState::Available { version: "0.2.0".to_string(), notes: Some("Fixes".to_string()) }
+            UpdateState::Available {
+                version: "0.2.0".to_string(),
+                notes: Some("Fixes".to_string())
+            }
         );
         assert!(u.state().should_show_banner());
         // Download flow
@@ -372,7 +406,12 @@ mod tests {
         u.update_progress(42);
         assert_eq!(u.state(), UpdateState::Downloading { progress: 42 });
         u.mark_ready("0.2.0".to_string());
-        assert_eq!(u.state(), UpdateState::Ready { version: "0.2.0".to_string() });
+        assert_eq!(
+            u.state(),
+            UpdateState::Ready {
+                version: "0.2.0".to_string()
+            }
+        );
         assert!(u.state().should_show_banner());
     }
 
@@ -389,7 +428,10 @@ mod tests {
         u.fail_loud(FailureKind::Download, "network reset");
         assert_eq!(
             u.state(),
-            UpdateState::Failed { kind: FailureKind::Download, message: "network reset".to_string() }
+            UpdateState::Failed {
+                kind: FailureKind::Download,
+                message: "network reset".to_string()
+            }
         );
         assert!(u.state().should_show_toast());
         u.reset_after_failure();
@@ -421,14 +463,24 @@ mod tests {
     #[test]
     fn unconfigured_degrades_quietly_no_banner_no_toast() {
         let u = Updater::new(placeholder());
-        assert_eq!(u.state(), UpdateState::Disabled { reason: "updater not configured".to_string() });
+        assert_eq!(
+            u.state(),
+            UpdateState::Disabled {
+                reason: "updater not configured".to_string()
+            }
+        );
         assert!(!u.is_configured());
         assert!(u.config().is_placeholder());
         assert!(!u.state().should_show_banner());
         assert!(!u.state().should_show_toast());
         // begin_check is a no-op
         assert!(!u.begin_check());
-        assert_eq!(u.state(), UpdateState::Disabled { reason: "updater not configured".to_string() });
+        assert_eq!(
+            u.state(),
+            UpdateState::Disabled {
+                reason: "updater not configured".to_string()
+            }
+        );
         // fail is a no-op while disabled
         u.fail(FailureKind::Download, "should be ignored");
         assert!(matches!(u.state(), UpdateState::Disabled { .. }));
@@ -450,9 +502,15 @@ mod tests {
 
     #[test]
     fn placeholder_endpoint_is_not_configured() {
-        let cfg = UpdaterConfig { pubkey: "somekey".to_string(), endpoints: vec![PLACEHOLDER_ENDPOINT.to_string()] };
+        let cfg = UpdaterConfig {
+            pubkey: "somekey".to_string(),
+            endpoints: vec![PLACEHOLDER_ENDPOINT.to_string()],
+        };
         assert!(!cfg.is_configured());
-        let cfg2 = UpdaterConfig { pubkey: "".to_string(), endpoints: vec!["https://real.example/latest.json".to_string()] };
+        let cfg2 = UpdaterConfig {
+            pubkey: "".to_string(),
+            endpoints: vec!["https://real.example/latest.json".to_string()],
+        };
         assert!(!cfg2.is_configured());
         let cfg3 = configured();
         assert!(cfg3.is_configured());

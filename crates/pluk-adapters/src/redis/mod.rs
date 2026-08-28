@@ -3,23 +3,21 @@ pub mod client;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use pluk_store::Integration;
 
 use crate::adapter::{Adapter, PolicyKind};
 use crate::config_field::{ConfigField, FieldType};
 use crate::error::AdapterError;
-use crate::gate::{run_gated, CallTarget, GateMeta, GateOpts, Outcome, RunOutcome};
-use crate::instructions::{build_instructions, InstructionParts};
-use crate::tool_host::{object_schema, ToolHost, ToolRegistration, ToolHandler};
+use crate::gate::{CallTarget, GateMeta, GateOpts, Outcome, RunOutcome, run_gated};
+use crate::instructions::{InstructionParts, build_instructions};
+use crate::tool_host::{ToolHandler, ToolHost, ToolRegistration, object_schema};
 use crate::tool_spec::ToolSpec;
 
-use client::{redis_config_from, RedisAccessor};
+use client::{RedisAccessor, redis_config_from};
 
-pub use client::{
-    build_url, set_redis_factory, set_redis_runner, RedisConfig, SshParams,
-};
+pub use client::{RedisConfig, SshParams, build_url, set_redis_factory, set_redis_runner};
 
 const AGENT_HINT: &str = "Use this to inspect and edit a Redis datastore — list keys, read values, types and TTLs, check server INFO, and set, expire or delete keys. Use scan (not keys) to list keys safely; get/type/ttl inspect a single key.";
 
@@ -56,7 +54,11 @@ pub fn redis_fields() -> Vec<ConfigField> {
             .group("SSH Tunnel")
             .show_if(crate::config_field::ShowIf::eq_str("use_ssh", "true")),
     ];
-    fields.extend(crate::ssh_fields::ssh_auth_fields("ssh_", "SSH Tunnel", Some(crate::config_field::ShowIf::eq_str("use_ssh", "true"))));
+    fields.extend(crate::ssh_fields::ssh_auth_fields(
+        "ssh_",
+        "SSH Tunnel",
+        Some(crate::config_field::ShowIf::eq_str("use_ssh", "true")),
+    ));
     fields
 }
 
@@ -114,7 +116,10 @@ impl Adapter for RedisAdapter {
         let enabled: Vec<&str> = self
             .tool_specs()
             .iter()
-            .filter(|t| pluk_policy::tool_gate(conn.query_policy.as_deref()).enabled(&t.name, t.default_enabled))
+            .filter(|t| {
+                pluk_policy::tool_gate(conn.query_policy.as_deref())
+                    .enabled(&t.name, t.default_enabled)
+            })
             .map(|t| t.name.as_str())
             .collect();
         let policy = if enabled.is_empty() {
@@ -134,26 +139,34 @@ impl Adapter for RedisAdapter {
             },
         )
     }
-    fn register(&self, host: &mut dyn ToolHost, conn: &Integration, _owner_id: &str) -> Result<(), AdapterError> {
+    fn register(
+        &self,
+        host: &mut dyn ToolHost,
+        conn: &Integration,
+        _owner_id: &str,
+    ) -> Result<(), AdapterError> {
         let store = self.store.clone();
         let cfg = redis_config_from(conn)?;
         let accessor = Arc::new(RedisAccessor::new(cfg));
 
         macro_rules! reg {
-            ($name:expr, $desc:expr, $cat:expr, $schema:expr, $detail:expr, $body:expr) => {
-                {
+            ($name:expr, $desc:expr, $cat:expr, $schema:expr, $detail:expr, $body:expr) => {{
+                let store = store.clone();
+                let conn = conn.clone();
+                let acc = accessor.clone();
+                let handler: ToolHandler = Arc::new(move |args: Value| {
                     let store = store.clone();
                     let conn = conn.clone();
-                    let acc = accessor.clone();
-                    let handler: ToolHandler = Arc::new(move |args: Value| {
-                        let store = store.clone();
-                        let conn = conn.clone();
-                        let acc = acc.clone();
-                        let detail = $detail(&args);
-                        let meta = GateMeta::new($cat, $name, detail);
-                        let target = CallTarget::from(&conn);
-                        Box::pin(async move {
-                            run_gated(&store, &target, meta, |_| async {
+                    let acc = acc.clone();
+                    let detail = $detail(&args);
+                    let meta = GateMeta::new($cat, $name, detail);
+                    let target = CallTarget::from(&conn);
+                    Box::pin(async move {
+                        run_gated(
+                            &store,
+                            &target,
+                            meta,
+                            |_| async {
                                 let out = $body(args, acc).await?;
                                 let text = match &out {
                                     Value::String(s) => s.clone(),
@@ -166,26 +179,34 @@ impl Adapter for RedisAdapter {
                                 Ok(Outcome::Ran(RunOutcome {
                                     text: text.clone(),
                                     response_text: Some(text),
-                                    result: Some(pluk_store::QueryResult { fields: vec![], rows }),
+                                    result: Some(pluk_store::QueryResult {
+                                        fields: vec![],
+                                        rows,
+                                    }),
                                     ..Default::default()
                                 }))
-                            }, GateOpts::default())
-                            .await
-                        })
-                    });
-                    let props = $schema;
-                    let schema = if props.is_empty() { Map::new() } else { object_schema(props, &[]) };
-                    host.register_tool(
-                        ToolRegistration {
-                            name: $name.into(),
-                            description: $desc.into(),
-                            input_schema: schema,
-                            annotations: Map::new(),
-                        },
-                        handler,
-                    );
-                }
-            };
+                            },
+                            GateOpts::default(),
+                        )
+                        .await
+                    })
+                });
+                let props = $schema;
+                let schema = if props.is_empty() {
+                    Map::new()
+                } else {
+                    object_schema(props, &[])
+                };
+                host.register_tool(
+                    ToolRegistration {
+                        name: $name.into(),
+                        description: $desc.into(),
+                        input_schema: schema,
+                        annotations: Map::new(),
+                    },
+                    handler,
+                );
+            }};
         }
 
         // scan
@@ -196,7 +217,10 @@ impl Adapter for RedisAdapter {
             {
                 let mut m = Map::new();
                 m.insert("cursor".into(), json!({"type":"string","default":"0","description":"Cursor from a previous scan; start at 0"}));
-                m.insert("match".into(), json!({"type":"string","description":"Glob pattern, e.g. user:*"}));
+                m.insert(
+                    "match".into(),
+                    json!({"type":"string","description":"Glob pattern, e.g. user:*"}),
+                );
                 m.insert("count".into(), json!({"type":"integer","minimum":1,"maximum":10000,"default":100,"description":"Approximate keys to scan per call"}));
                 m
             },
@@ -207,8 +231,15 @@ impl Adapter for RedisAdapter {
             },
             |args: Value, acc: Arc<RedisAccessor>| {
                 Box::pin(async move {
-                    let cursor = args.get("cursor").and_then(|v| v.as_str()).unwrap_or("0").to_string();
-                    let pattern = args.get("match").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let cursor = args
+                        .get("cursor")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0")
+                        .to_string();
+                    let pattern = args
+                        .get("match")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     let count = args.get("count").and_then(|v| v.as_i64()).unwrap_or(100);
                     let mut cmd_args = vec![cursor.clone()];
                     if let Some(p) = pattern {
@@ -221,15 +252,17 @@ impl Adapter for RedisAdapter {
                     // runner returns JSON; if real redis, res is Value from redis crate (which decodes to Value)
                     // For SCAN, expect [cursor, [keys]] or object {cursor,keys}
                     if let Some(obj) = res.as_object()
-                        && obj.contains_key("cursor") {
-                            return Ok::<Value, AdapterError>(res);
-                        }
+                        && obj.contains_key("cursor")
+                    {
+                        return Ok::<Value, AdapterError>(res);
+                    }
                     if let Some(arr) = res.as_array()
-                        && arr.len() == 2 {
-                            let cursor = arr[0].clone();
-                            let keys = arr[1].clone();
-                            return Ok::<Value, AdapterError>(json!({"cursor": cursor, "keys": keys}));
-                        }
+                        && arr.len() == 2
+                    {
+                        let cursor = arr[0].clone();
+                        let keys = arr[1].clone();
+                        return Ok::<Value, AdapterError>(json!({"cursor": cursor, "keys": keys}));
+                    }
                     Ok::<Value, AdapterError>(res)
                 })
             }
@@ -245,10 +278,17 @@ impl Adapter for RedisAdapter {
                 m.insert("pattern".into(), json!({"type":"string","default":"*","description":"Glob pattern, e.g. user:*"}));
                 m
             },
-            |args: &Value| format!("keys {}", args.get("pattern").and_then(|v| v.as_str()).unwrap_or("*")),
+            |args: &Value| format!(
+                "keys {}",
+                args.get("pattern").and_then(|v| v.as_str()).unwrap_or("*")
+            ),
             |args: Value, acc: Arc<RedisAccessor>| {
                 Box::pin(async move {
-                    let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("*").to_string();
+                    let pattern = args
+                        .get("pattern")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("*")
+                        .to_string();
                     acc.raw("KEYS", vec![pattern]).await
                 })
             }
@@ -261,13 +301,23 @@ impl Adapter for RedisAdapter {
             "read",
             {
                 let mut m = Map::new();
-                m.insert("key".into(), json!({"type":"string","description":"Key name"}));
+                m.insert(
+                    "key".into(),
+                    json!({"type":"string","description":"Key name"}),
+                );
                 m
             },
-            |args: &Value| format!("get {}", args.get("key").and_then(|v| v.as_str()).unwrap_or("")),
+            |args: &Value| format!(
+                "get {}",
+                args.get("key").and_then(|v| v.as_str()).unwrap_or("")
+            ),
             |args: Value, acc: Arc<RedisAccessor>| {
                 Box::pin(async move {
-                    let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = args
+                        .get("key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     acc.get(&key).await
                 })
             }
@@ -280,13 +330,23 @@ impl Adapter for RedisAdapter {
             "read",
             {
                 let mut m = Map::new();
-                m.insert("key".into(), json!({"type":"string","description":"Key name"}));
+                m.insert(
+                    "key".into(),
+                    json!({"type":"string","description":"Key name"}),
+                );
                 m
             },
-            |args: &Value| format!("type {}", args.get("key").and_then(|v| v.as_str()).unwrap_or("")),
+            |args: &Value| format!(
+                "type {}",
+                args.get("key").and_then(|v| v.as_str()).unwrap_or("")
+            ),
             |args: Value, acc: Arc<RedisAccessor>| {
                 Box::pin(async move {
-                    let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = args
+                        .get("key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     acc.raw("TYPE", vec![key]).await
                 })
             }
@@ -299,13 +359,23 @@ impl Adapter for RedisAdapter {
             "read",
             {
                 let mut m = Map::new();
-                m.insert("key".into(), json!({"type":"string","description":"Key name"}));
+                m.insert(
+                    "key".into(),
+                    json!({"type":"string","description":"Key name"}),
+                );
                 m
             },
-            |args: &Value| format!("ttl {}", args.get("key").and_then(|v| v.as_str()).unwrap_or("")),
+            |args: &Value| format!(
+                "ttl {}",
+                args.get("key").and_then(|v| v.as_str()).unwrap_or("")
+            ),
             |args: Value, acc: Arc<RedisAccessor>| {
                 Box::pin(async move {
-                    let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = args
+                        .get("key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     acc.ttl(&key).await
                 })
             }
@@ -318,14 +388,29 @@ impl Adapter for RedisAdapter {
             "read",
             {
                 let mut m = Map::new();
-                m.insert("section".into(), json!({"type":"string","description":"INFO section, e.g. memory"}));
+                m.insert(
+                    "section".into(),
+                    json!({"type":"string","description":"INFO section, e.g. memory"}),
+                );
                 m
             },
-            |args: &Value| format!("info {}", args.get("section").and_then(|v| v.as_str()).unwrap_or("all")),
+            |args: &Value| format!(
+                "info {}",
+                args.get("section")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("all")
+            ),
             |args: Value, acc: Arc<RedisAccessor>| {
                 Box::pin(async move {
-                    let section = args.get("section").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let a = if let Some(s) = section { vec![s] } else { vec![] };
+                    let section = args
+                        .get("section")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let a = if let Some(s) = section {
+                        vec![s]
+                    } else {
+                        vec![]
+                    };
                     acc.raw("INFO", a).await
                 })
             }
@@ -338,8 +423,14 @@ impl Adapter for RedisAdapter {
             "write",
             {
                 let mut m = Map::new();
-                m.insert("key".into(), json!({"type":"string","description":"Key name"}));
-                m.insert("value".into(), json!({"type":"string","description":"String value"}));
+                m.insert(
+                    "key".into(),
+                    json!({"type":"string","description":"Key name"}),
+                );
+                m.insert(
+                    "value".into(),
+                    json!({"type":"string","description":"String value"}),
+                );
                 m.insert("ex".into(), json!({"type":"integer","minimum":1,"description":"Expiry in seconds (optional)"}));
                 m
             },
@@ -353,8 +444,16 @@ impl Adapter for RedisAdapter {
             },
             |args: Value, acc: Arc<RedisAccessor>| {
                 Box::pin(async move {
-                    let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = args
+                        .get("key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let value = args
+                        .get("value")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let ex = args.get("ex").and_then(|v| v.as_i64());
                     let res: Value = acc.set(&key, &value).await?;
                     if let Some(seconds) = ex {
@@ -372,14 +471,28 @@ impl Adapter for RedisAdapter {
             "write",
             {
                 let mut m = Map::new();
-                m.insert("key".into(), json!({"type":"string","description":"Key name"}));
-                m.insert("seconds".into(), json!({"type":"integer","minimum":1,"description":"TTL in seconds"}));
+                m.insert(
+                    "key".into(),
+                    json!({"type":"string","description":"Key name"}),
+                );
+                m.insert(
+                    "seconds".into(),
+                    json!({"type":"integer","minimum":1,"description":"TTL in seconds"}),
+                );
                 m
             },
-            |args: &Value| format!("expire {} {}", args.get("key").and_then(|v| v.as_str()).unwrap_or(""), args.get("seconds").and_then(|v| v.as_i64()).unwrap_or(0)),
+            |args: &Value| format!(
+                "expire {} {}",
+                args.get("key").and_then(|v| v.as_str()).unwrap_or(""),
+                args.get("seconds").and_then(|v| v.as_i64()).unwrap_or(0)
+            ),
             |args: Value, acc: Arc<RedisAccessor>| {
                 Box::pin(async move {
-                    let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = args
+                        .get("key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let seconds = args.get("seconds").and_then(|v| v.as_i64()).unwrap_or(0);
                     acc.expire(&key, seconds).await
                 })
@@ -393,13 +506,23 @@ impl Adapter for RedisAdapter {
             "delete",
             {
                 let mut m = Map::new();
-                m.insert("key".into(), json!({"type":"string","description":"Key name"}));
+                m.insert(
+                    "key".into(),
+                    json!({"type":"string","description":"Key name"}),
+                );
                 m
             },
-            |args: &Value| format!("del {}", args.get("key").and_then(|v| v.as_str()).unwrap_or("")),
+            |args: &Value| format!(
+                "del {}",
+                args.get("key").and_then(|v| v.as_str()).unwrap_or("")
+            ),
             |args: Value, acc: Arc<RedisAccessor>| {
                 Box::pin(async move {
-                    let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let key = args
+                        .get("key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     acc.del(&key).await
                 })
             }
@@ -442,8 +565,14 @@ mod tests {
 
     #[test]
     fn build_url_encodes_and_picks_scheme() {
-        assert_eq!(build_url("redis", "localhost", 6379, 0, ""), "redis://localhost:6379/0");
-        assert_eq!(build_url("rediss", "h", 6380, 2, "p@ss"), "rediss://:p%40ss@h:6380/2");
+        assert_eq!(
+            build_url("redis", "localhost", 6379, 0, ""),
+            "redis://localhost:6379/0"
+        );
+        assert_eq!(
+            build_url("rediss", "h", 6380, 2, "p@ss"),
+            "rediss://:p%40ss@h:6380/2"
+        );
     }
 
     #[test]
@@ -548,7 +677,10 @@ mod tests {
             let c = calls2.clone();
             Box::pin(async move {
                 c.fetch_add(1, Ordering::SeqCst);
-                Ok(Arc::new(client::RedisResource { url: "redis://127.0.0.1:6379/0".into(), tunnel: None }))
+                Ok(Arc::new(client::RedisResource {
+                    url: "redis://127.0.0.1:6379/0".into(),
+                    tunnel: None,
+                }))
             }) as _
         });
         set_redis_factory(Some(factory));
@@ -602,11 +734,28 @@ mod tests {
         })));
         // need factory to avoid ssh
         set_redis_factory(Some(Arc::new(|_cfg| {
-            Box::pin(async move { Ok(Arc::new(client::RedisResource { url: "redis://127.0.0.1:6379/0".into(), tunnel: None })) }) as _
+            Box::pin(async move {
+                Ok(Arc::new(client::RedisResource {
+                    url: "redis://127.0.0.1:6379/0".into(),
+                    tunnel: None,
+                }))
+            }) as _
         })));
 
         // scan with match and count
-        let res = acc.raw("SCAN", vec!["0".into(), "MATCH".into(), "user:*".into(), "COUNT".into(), "100".into()]).await.unwrap();
+        let res = acc
+            .raw(
+                "SCAN",
+                vec![
+                    "0".into(),
+                    "MATCH".into(),
+                    "user:*".into(),
+                    "COUNT".into(),
+                    "100".into(),
+                ],
+            )
+            .await
+            .unwrap();
         assert!(res.is_array());
         // get
         let v = acc.get("mykey").await.unwrap();
@@ -629,7 +778,10 @@ mod tests {
 
         let log = captured.lock().unwrap().clone();
         // check some commands present
-        assert!(log.iter().any(|(c, a)| c == "SCAN" && a.contains(&"MATCH".to_string())));
+        assert!(
+            log.iter()
+                .any(|(c, a)| c == "SCAN" && a.contains(&"MATCH".to_string()))
+        );
         assert!(log.iter().any(|(c, _)| c == "GET"));
         assert!(log.iter().any(|(c, _)| c == "TYPE"));
         assert!(log.iter().any(|(c, _)| c == "TTL"));
@@ -651,10 +803,16 @@ mod tests {
         let cfg = redis_config_from(&conn(m)).unwrap();
         let acc = RedisAccessor::new(cfg);
         set_redis_factory(Some(Arc::new(|_cfg| {
-            Box::pin(async move { Ok(Arc::new(client::RedisResource { url: "redis://127.0.0.1:6379/0".into(), tunnel: None })) }) as _
+            Box::pin(async move {
+                Ok(Arc::new(client::RedisResource {
+                    url: "redis://127.0.0.1:6379/0".into(),
+                    tunnel: None,
+                }))
+            }) as _
         })));
         set_redis_runner(Some(Arc::new(|_cmd: String, _args: Vec<String>| {
-            Box::pin(async move { Err(AdapterError::new("Redis GET failed: connection refused")) }) as _
+            Box::pin(async move { Err(AdapterError::new("Redis GET failed: connection refused")) })
+                as _
         })));
         let err = acc.get("k").await.unwrap_err();
         assert!(err.message.contains("connection refused"));

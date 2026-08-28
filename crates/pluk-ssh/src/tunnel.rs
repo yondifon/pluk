@@ -21,8 +21,8 @@ pub async fn open_ssh_tunnel(
     config: SshTunnelConfig,
     on_fatal: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> Result<Tunnel, SshError> {
-    let use_openssh = config.auth_type == "agent"
-        || (config.auth_type == "key" && config.passphrase.is_none());
+    let use_openssh =
+        config.auth_type == "agent" || (config.auth_type == "key" && config.passphrase.is_none());
 
     if use_openssh {
         crate::openssh::open_ssh_tunnel_via_openssh(config, on_fatal).await
