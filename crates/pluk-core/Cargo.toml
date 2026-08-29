@@ -1,0 +1,18 @@
+[package]
+name = "pluk-core"
+description = "Shared types and the platform abstraction layer"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "process", "time"] }
+# killpg has no std equivalent, and killing only the direct child leaves its
+# descendants running past a timeout.
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt"] }

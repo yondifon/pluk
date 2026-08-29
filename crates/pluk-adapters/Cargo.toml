@@ -1,0 +1,35 @@
+[package]
+name = "pluk-adapters"
+description = "Adapter framework and service adapters for Pluk"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+pluk-store = { path = "../pluk-store" }
+pluk-policy = { path = "../pluk-policy" }
+pluk-db = { path = "../pluk-db" }
+pluk-ssh = { path = "../pluk-ssh" }
+pluk-core = { path = "../pluk-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt", "macros", "time", "sync", "fs"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio-util = { version = "0.7", features = ["full"] }
+futures = "0.3"
+regex = "1"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+hex = "0.4"
+chrono = "0.4"
+urlencoding = "2"
+# tokio-rustls-comp pulls in tls-rustls: without it `rediss://` cannot connect,
+# which locks out every managed provider. Reuses the rustls stack reqwest and
+# sqlx already build.
+redis = { version = "0.32", features = ["tokio-comp", "tokio-rustls-comp"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "macros"] }
+rusqlite = { version = "0.40", features = ["bundled"] }

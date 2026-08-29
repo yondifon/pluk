@@ -1,0 +1,28 @@
+.shell { display: flex; min-width: 0; min-height: 0; height: 100vh; overflow: hidden; background: var(--surface-content); font-family: var(--font-sans); color: var(--surface-label); }
+.shell-sidebar { display: flex; flex-direction: column; width: var(--sidebar-width); min-width: var(--sidebar-min-width); max-width: var(--sidebar-max-width); flex-shrink: 0; background: var(--surface-sidebar); }
+.shell-resizer { position: relative; width: 0; flex-shrink: 0; cursor: col-resize; background: transparent; }
+.shell-resizer::before { position: absolute; top: 0; bottom: 0; left: calc(var(--space-sm) * -1); width: var(--resizer-hit-area); content: ""; }
+.shell-resizer::after { position: absolute; top: 0; bottom: 0; left: calc(var(--border-width) * -1); width: var(--border-width); content: ""; background: var(--border-subtle); }
+.shell-resizer:hover::after, .shell-resizer:focus-visible::after { background: var(--border-control); }
+.shell-main { display: flex; flex: 1; flex-direction: column; min-width: 0; overflow: hidden; background: var(--surface-content); }
+/* The band across the top of the main pane: it is where the window is dragged,
+   and once the sidebar is hidden it also holds the toggle and the room the
+   traffic lights need. */
+.shell-topbar { display: flex; align-items: center; gap: var(--space-sm); min-height: var(--control-target); padding: var(--space-sm) var(--space-md); }
+.shell-topbar button { color: var(--surface-tertiary-label); }
+.shell-topbar button:hover:not(:disabled) { background: var(--surface-hover); color: var(--surface-label); }
+.shell-topbar .sidebar-toggle { display: none; }
+.sidebar-collapsed .shell-topbar .sidebar-toggle { display: inline-grid; }
+.platform-macos .sidebar-collapsed .shell-topbar { padding-left: var(--macos-titlebar-inset); }
+.sidebar-collapsed .shell-sidebar, .sidebar-collapsed .shell-resizer { display: none; }
+/* Toasts anchor to the stage, so they never sit over the banners below it. */
+.shell-stage { position: relative; display: flex; flex: 1; min-height: 0; }
+.shell-detail { flex: 1; overflow: auto; padding: 0 var(--space-xl); }
+.shell-bottom { display: flex; flex-direction: column; }
+.banner { display: flex; align-items: center; gap: var(--space-sm); padding: var(--space-sm) var(--space-lg); border-top: var(--border-width) solid var(--border-subtle); background: var(--surface-panel); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
+.empty-state { box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-md); min-height: 100%; padding: var(--space-xxl); text-align: center; }
+.empty-state > * { max-width: var(--empty-max-width); }
+.empty-title { margin: 0; font-size: calc(var(--type-title) * var(--zoom-scale)); font-weight: 600; }
+.empty-body { margin: 0; color: var(--surface-tertiary-label); font-size: calc(var(--type-body) * var(--zoom-scale)); line-height: 1.5; }
+.member-row:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: calc(var(--focus-offset) * -1); }
+@media (max-width: 680px) { .shell-sidebar { width: var(--sidebar-small-width); min-width: var(--sidebar-small-min-width); } }

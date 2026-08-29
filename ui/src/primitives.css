@@ -1,0 +1,65 @@
+.ui-button {
+  min-height: var(--control-target);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-md);
+  border: var(--border-width) solid var(--border-control);
+  border-radius: var(--radius-sm);
+  background: var(--surface-panel);
+  color: var(--surface-label);
+  font: inherit;
+  font-size: calc(var(--type-callout) * var(--zoom-scale));
+  transition: transform var(--duration-press) var(--ease-out);
+}
+.ui-button:hover:not(:disabled) { background: var(--surface-hover); }
+.ui-button:active:not(:disabled) { transform: scale(0.97); }
+.ui-button.icon-button { min-width: var(--control-target); min-height: var(--control-target); padding: var(--space-xs); border: 0; background: transparent; color: var(--surface-secondary-label); }
+.ui-button.icon-button:hover:not(:disabled) { background: var(--surface-hover); color: var(--surface-label); }
+.ui-button-sm { min-height: var(--control-target); padding: var(--space-xs) var(--space-sm); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
+.ui-button-primary { background: var(--action-fill); border-color: var(--action-fill); color: var(--action-label); }
+.ui-button-primary:hover:not(:disabled) { background: var(--action-fill-hover); }
+.ui-button-secondary { background: var(--surface-control); }
+.ui-button-danger { color: var(--danger-label); }
+.ui-button:disabled { opacity: var(--disabled-opacity); filter: grayscale(1); }
+
+.ui-select, .al-select { box-sizing: border-box; appearance: none; min-height: var(--control-target); padding: var(--space-xs) calc(var(--space-lg) + var(--space-xs)) var(--space-xs) var(--space-sm); border: var(--border-width) solid var(--border-control); border-radius: var(--radius-sm); background: var(--surface-panel) var(--select-chevron) no-repeat right var(--space-xs) center; background-size: var(--space-lg) var(--space-lg); color: var(--surface-label); font: inherit; font-size: calc(var(--type-callout) * var(--zoom-scale)); }
+
+/* One outlined square for every checkbox; the native input stays the control. */
+input[type="checkbox"] { appearance: none; flex: 0 0 auto; width: calc(var(--checkbox-size) * var(--zoom-scale)); height: calc(var(--checkbox-size) * var(--zoom-scale)); margin: 0; border: var(--checkbox-border-width) solid var(--surface-tertiary-label); border-radius: var(--radius-xs); background: transparent no-repeat center / 100% 100%; vertical-align: middle; transition: background-color var(--duration-press) var(--ease-out), border-color var(--duration-press) var(--ease-out), transform var(--duration-press) var(--ease-out); }
+input[type="checkbox"]:hover:not(:disabled) { border-color: var(--surface-secondary-label); background-color: var(--surface-hover); }
+input[type="checkbox"]:active:not(:disabled) { transform: scale(0.94); }
+input[type="checkbox"]:checked, input[type="checkbox"]:indeterminate { border-color: var(--control-accent); background-color: var(--control-accent); }
+input[type="checkbox"]:checked { background-image: var(--checkbox-check); }
+input[type="checkbox"]:indeterminate { background-image: var(--checkbox-dash); }
+input[type="checkbox"]:checked:hover:not(:disabled), input[type="checkbox"]:indeterminate:hover:not(:disabled) { border-color: var(--control-accent-hover); background-color: var(--control-accent-hover); }
+input[type="checkbox"]:disabled { opacity: var(--disabled-opacity); }
+
+@media (prefers-reduced-motion: reduce) {
+  input[type="checkbox"] { transition: none; }
+  input[type="checkbox"]:active:not(:disabled) { transform: none; }
+}
+
+.ui-card { padding: var(--space-lg); background: var(--surface-panel); border: var(--border-width) solid var(--border-subtle); border-radius: var(--radius-md); }
+.ui-card-title { margin: 0 0 var(--space-md); color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); font-weight: 600; letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.ui-badge { display: inline-flex; align-items: center; min-height: var(--control-height); padding: 0 var(--space-sm); border-radius: var(--radius-pill); background: var(--surface-control); color: var(--surface-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
+.ui-badge-readonly { background: var(--surface-control); }
+
+.ui-menu { position: fixed; z-index: var(--z-menu); min-width: var(--menu-min-width); max-height: calc(100vh - var(--space-lg)); padding: var(--space-xs); overflow: auto; background: var(--surface-panel); border: var(--border-width) solid var(--border-subtle); border-radius: var(--radius-md); box-shadow: var(--shadow-menu); }
+.ui-menu-item { width: 100%; min-height: var(--menu-item-height); gap: var(--space-sm); padding: 0 var(--space-sm); justify-content: flex-start; border: 0; border-radius: var(--radius-sm); background: transparent; font-size: calc(var(--type-body) * var(--zoom-scale)); text-align: left; }
+.ui-menu-item:hover:not(:disabled) { background: var(--surface-hover); }
+.ui-menu-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-menu-separator { height: var(--border-width); margin: var(--space-xs) var(--space-sm); background: var(--border-subtle); }
+
+.ui-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-md); min-height: var(--state-min-height); padding: var(--space-xl); color: var(--surface-tertiary-label); text-align: center; }
+.ui-state p { margin: 0; }
+.ui-error { color: var(--danger-label); }
+
+*:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
+/* A focused popup keeps its own fill; WebKit otherwise paints a system one. */
+.ui-select:focus, .field-select:focus, .al-select:focus { background-color: var(--surface-panel); color: var(--surface-label); }
+.icon { display: block; width: var(--icon-size, calc(var(--icon-size-md) * var(--zoom-scale))); height: var(--icon-size, calc(var(--icon-size-md) * var(--zoom-scale))); flex: 0 0 auto; vertical-align: middle; }
+.icon-more { stroke-width: 3; }
+
+button, input, select, textarea { box-sizing: border-box; font-family: inherit; }

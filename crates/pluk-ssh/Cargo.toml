@@ -1,0 +1,24 @@
+[package]
+name = "pluk-ssh"
+description = "SSH transport and connection pooling for Pluk"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+pluk-core = { path = "../pluk-core" }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net", "io-util", "process", "fs"] }
+thiserror = "2"
+async-trait = "0.1"
+russh = { version = "0.52", optional = true }
+russh-keys = { version = "0.49", optional = true }
+tokio-util = "0.7"
+futures = "0.3"
+
+[features]
+default = []
+russh-transport = ["dep:russh", "dep:russh-keys"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+tempfile = "3"
