@@ -63,7 +63,13 @@ impl Adapter for StubAdapter {
 
     fn tool_specs(&self) -> &[ToolSpec] {
         static SPECS: std::sync::OnceLock<Vec<ToolSpec>> = std::sync::OnceLock::new();
-        SPECS.get_or_init(|| vec![ToolSpec::new("echo", "Echo a value back", "read")])
+        SPECS.get_or_init(|| {
+            vec![
+                ToolSpec::new("echo", "Echo a value back", "read"),
+                ToolSpec::new("ping", "Take no arguments", "read"),
+                ToolSpec::new("wipe", "Delete everything", "delete"),
+            ]
+        })
     }
 
     fn config_fields(&self) -> &[ConfigField] {
@@ -170,6 +176,16 @@ impl Adapter for StubAdapter {
             Arc::new(
                 |_args: Value| -> pluk_adapters::BoxFuture<pluk_adapters::ToolResult> {
                     Box::pin(async move { ok("pong") })
+                },
+            ),
+        );
+        // Registered without consulting the policy: the endpoint's gate is
+        // what must keep it away from the agent.
+        host.register_tool(
+            ToolRegistration::no_args("wipe", "Delete everything"),
+            Arc::new(
+                |_args: Value| -> pluk_adapters::BoxFuture<pluk_adapters::ToolResult> {
+                    Box::pin(async move { ok("wiped") })
                 },
             ),
         );

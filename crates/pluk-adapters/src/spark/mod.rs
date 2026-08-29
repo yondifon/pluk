@@ -1430,6 +1430,39 @@ mod tests {
     use crate::adapter::Adapter;
     use serde_json::json;
 
+    /// Keeps registered handlers reachable so a test can call one directly.
+    #[derive(Default)]
+    struct CollectingHost {
+        handlers: std::collections::HashMap<String, crate::tool_host::ToolHandler>,
+    }
+
+    impl crate::tool_host::ToolHost for CollectingHost {
+        fn register_tool(
+            &mut self,
+            registration: crate::tool_host::ToolRegistration,
+            handler: crate::tool_host::ToolHandler,
+        ) {
+            self.handlers.insert(registration.name, handler);
+        }
+        fn register_prompt(
+            &mut self,
+            _name: &str,
+            _description: &str,
+            _args_schema: Option<Map<String, Value>>,
+            _handler: crate::tool_host::PromptHandler,
+        ) {
+        }
+        fn register_resource(
+            &mut self,
+            _name: &str,
+            _uri: &str,
+            _mime_type: &str,
+            _description: Option<&str>,
+            _handler: crate::tool_host::ResourceHandler,
+        ) {
+        }
+    }
+
     fn test_store() -> std::sync::Arc<pluk_store::Store> {
         let dir = tempfile::tempdir().unwrap();
         // leak dir to keep DB alive for test duration; store holds path, not dir
@@ -1558,6 +1591,65 @@ mod tests {
                 assert_eq!(v, json!("MOCK OUTPUT for accounts"));
             }
         }
+        client::set_spark_runner(None);
+    }
+
+    #[tokio::test]
+    async fn an_unpublished_verb_never_reaches_the_cli() {
+        let _g = client::runner_lock();
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<Vec<String>>>> = Default::default();
+        let record = seen.clone();
+        client::set_spark_runner(Some(std::sync::Arc::new(move |_, args: Vec<String>, _| {
+            record.lock().unwrap().push(args);
+            Box::pin(async {
+                Ok(client::SparkRunResult {
+                    code: 0,
+                    stdout: "ok".to_string(),
+                    stderr: String::new(),
+                })
+            })
+        })));
+
+        let store = test_store();
+        let adapter = spark_adapter(store);
+        let conn = pluk_store::Integration {
+            id: "sp1".into(),
+            name: "Spark".into(),
+            r#type: "spark".into(),
+            config: serde_json::Map::new(),
+            environment: None,
+            read_only: 0,
+            // email_action is a write tool; send and delete are separate tools
+            // that stay off. Its verb must stay inside the published set.
+            query_policy: Some(r#"{"tools":{"email_action":{"enabled":true}}}"#.into()),
+            token: "t".into(),
+            created_at: String::new(),
+            via_group: None,
+        };
+
+        let mut host = CollectingHost::default();
+        crate::register_gated(adapter.as_ref(), &mut host, &conn, "").expect("register");
+        let handler = host
+            .handlers
+            .remove("email_action")
+            .expect("email_action registered");
+
+        let refused = handler(json!({ "action": "sendDraft", "message_ids": ["1"] })).await;
+        assert!(refused.is_error, "{}", refused.text());
+        assert!(
+            refused.text().starts_with("Blocked: \"action\" must be one of:"),
+            "{}",
+            refused.text()
+        );
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "the CLI must never see an unpublished verb"
+        );
+
+        let allowed = handler(json!({ "action": "archive", "message_ids": ["1"] })).await;
+        assert!(!allowed.is_error, "{}", allowed.text());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+
         client::set_spark_runner(None);
     }
 

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::namespace::slug;
-use pluk_adapters::{Adapter, AdapterRegistry, ConfigField, FieldType};
+use pluk_adapters::{Adapter, AdapterRegistry, ConfigField, FieldType, register_gated};
 use pluk_store::{Group, Integration, LogGroup, Store};
 
 use super::namespace::NamespacedHost;
@@ -90,9 +90,7 @@ pub fn build_integration_surface(
     let mut builder = SurfaceBuilder::default();
     builder.set_server_name(conn.name.clone());
     builder.set_instructions(Some(adapter.instructions(conn)));
-    adapter
-        .register(&mut builder, conn, owner_id)
-        .map_err(|e| e.to_string())?;
+    register_gated(adapter, &mut builder, conn, owner_id).map_err(|e| e.to_string())?;
     builder.build()
 }
 
@@ -212,14 +210,16 @@ pub fn build_group_surface(
     builder.set_server_name(group.name.clone());
     builder.set_instructions(Some(instructions));
     for member in &resolved {
-        member
-            .adapter
-            .register(
-                &mut NamespacedHost::new(&mut builder, member.ns.clone()),
-                &member.scoped,
-                owner_id,
-            )
-            .map_err(|e| e.to_string())?;
+        // The gate sits inside the namespace so it matches on the adapter's
+        // own tool names, before the member prefix is applied.
+        let mut namespaced = NamespacedHost::new(&mut builder, member.ns.clone());
+        register_gated(
+            member.adapter.as_ref(),
+            &mut namespaced,
+            &member.scoped,
+            owner_id,
+        )
+        .map_err(|e| e.to_string())?;
     }
     builder.build()
 }

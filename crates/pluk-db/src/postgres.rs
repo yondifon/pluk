@@ -543,7 +543,10 @@ pub mod live {
                     let res: Result<QueryResult, DriverError> = tokio::select! {
                         r = async {
                             let tx = client.transaction().await.map_err(map_query_error)?;
-                            tx.execute("BEGIN READ ONLY", &[]).await.map_err(map_query_error)?;
+                            // Postgres ignores a nested BEGIN with only a
+                            // warning, so read-only is set on the open
+                            // transaction, not started with it.
+                            tx.batch_execute("SET TRANSACTION READ ONLY").await.map_err(map_query_error)?;
                             let owned = build_pg_params(&params2);
                             let refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = owned.iter().map(|b| b.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
                             let rows = tx.query(&sql2, &refs).await.map_err(map_query_error)?;
@@ -583,7 +586,9 @@ pub mod live {
                 let mut client = pool.get().await.map_err(|e| conn_error(&host, port, e))?;
                 crate::sql_log::record_executed_sql(&sql_owned, None, None);
                 let tx = client.transaction().await.map_err(map_query_error)?;
-                tx.execute("BEGIN READ ONLY", &[])
+                // Postgres ignores a nested BEGIN with only a warning, so
+                // read-only is set on the open transaction, not started with it.
+                tx.batch_execute("SET TRANSACTION READ ONLY")
                     .await
                     .map_err(map_query_error)?;
                 let owned = build_pg_params(&params_owned);
