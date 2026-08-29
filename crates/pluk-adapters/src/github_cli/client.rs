@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use pluk_core::process::RunError;
 use pluk_store::Integration;
 
 use crate::error::AdapterError;
@@ -232,32 +233,23 @@ async fn spawn_gh(
     let mut cmd = tokio::process::Command::new(bin);
     cmd.args(args);
     cmd.current_dir(cwd);
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-    cmd.stdin(std::process::Stdio::null());
-    let child = cmd.spawn().map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("No such file") || msg.contains("ENOENT") || msg.contains("not found") {
-            AdapterError::new(format!("gh executable not found (\"{bin}\"). Install GitHub CLI and make sure it is on PATH, or set gh_bin on this integration."))
-        } else {
-            AdapterError::new(format!("Could not start gh: {msg}"))
+    match pluk_core::process::run_capture(&mut cmd, timeout).await {
+        Ok(output) => Ok(GhRunResult {
+            code: output.code.unwrap_or(0),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        }),
+        Err(RunError::Spawn(e)) => {
+            let msg = e.to_string();
+            if msg.contains("No such file") || msg.contains("ENOENT") || msg.contains("not found") {
+                Err(AdapterError::new(format!("gh executable not found (\"{bin}\"). Install GitHub CLI and make sure it is on PATH, or set gh_bin on this integration.")))
+            } else {
+                Err(AdapterError::new(format!("Could not start gh: {msg}")))
+            }
         }
-    })?;
-    let res = tokio::time::timeout(timeout, child.wait_with_output()).await;
-    match res {
-        Ok(Ok(output)) => {
-            let code = output.status.code().unwrap_or(0);
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            Ok(GhRunResult {
-                code,
-                stdout,
-                stderr,
-            })
-        }
-        Ok(Err(e)) => Err(AdapterError::new(e.to_string())),
-        Err(_) => Err(AdapterError::new(format!(
-            "gh {} timed out after {}s.",
+        Err(RunError::Io(e)) => Err(AdapterError::new(e.to_string())),
+        Err(RunError::TimedOut) => Err(AdapterError::new(format!(
+            "gh {} timed out after {}s and was stopped.",
             args.join(" "),
             timeout.as_secs()
         ))),

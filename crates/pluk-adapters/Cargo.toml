@@ -24,7 +24,10 @@ sha2 = "0.10"
 hex = "0.4"
 chrono = "0.4"
 urlencoding = "2"
-redis = { version = "0.32", features = ["tokio-comp"] }
+# tokio-rustls-comp pulls in tls-rustls: without it `rediss://` cannot connect,
+# which locks out every managed provider. Reuses the rustls stack reqwest and
+# sqlx already build.
+redis = { version = "0.32", features = ["tokio-comp", "tokio-rustls-comp"] }
 
 [dev-dependencies]
 tempfile = "3"

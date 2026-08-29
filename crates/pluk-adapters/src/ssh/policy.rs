@@ -587,13 +587,18 @@ pub fn evaluate_command(raw: &str) -> CommandVerdict {
     }
 }
 
+/// The single description of what [`evaluate_command`] permits, shown to a
+/// connecting agent as the integration's policy line. Follows the same
+/// `Allowed: … Guards: …` shape the SQL adapters use.
 pub fn policy_summary() -> String {
-    let mut bins: Vec<String> = allow().keys().cloned().collect();
-    bins.sort();
-    [format!("Allowed (allowlist only): {}.", bins.join(", ")),
-        "docker: inspection + `docker compose up/start/restart/ps/logs/config` — never exec/run/rm/down/kill/prune.".to_string(),
-        "No shell chaining/redirection/substitution (; && || & ` $() > <). Pipes are allowed.".to_string(),
-        "Reading sensitive files (.env, private keys, ~/.ssh, ~/.aws, /etc/shadow, …) is blocked.".to_string()].join("\n")
+    "Allowed: read-only commands — files and logs (ls, cat, tail, grep, find), \
+processes and resources (ps, df, free, lsof, ss), and the read subcommands of \
+docker, systemctl, git, journalctl and kubectl; `docker compose up/start/restart` \
+is the one command that changes the host. \
+Guards: pipes only — no chaining, redirection or command substitution; \
+paths that hold credentials cannot be read. \
+Anything else comes back as `Blocked:` with the reason."
+        .to_string()
 }
 
 pub fn sanitize_working_dir(dir: &str) -> Option<String> {

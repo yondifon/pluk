@@ -42,6 +42,7 @@ impl SshTunnelProvider for PlukSshTunnelProvider {
             passphrase,
             remote_host: remote_host.to_string(),
             remote_port,
+            local_port: None,
         };
 
         let tunnel = pluk_ssh::open_ssh_tunnel(tunnel_cfg, None)

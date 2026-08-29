@@ -1,16 +1,23 @@
 use super::client::{
-    ExecResult, StubExecutor, clear_test_executor, close_forward, list_forwards, open_forward,
-    reset_forwards_for_test, set_test_executor,
+    ExecResult, Forward, ForwardOpener, StubExecutor, clear_test_executor, close_forward,
+    list_forwards, open_forward, reset_forwards_for_test, set_test_executor,
+    set_test_forward_opener,
 };
 use super::error::humanize_ssh_error;
-use super::policy::{CommandCategory, evaluate_command};
-use super::server::{register_ssh_server, ssh_tool_specs};
+use super::policy::{CommandCategory, evaluate_command, policy_summary};
+use super::server::{register_ssh_server, ssh_instructions, ssh_tool_specs};
 use crate::error::AdapterError;
 use crate::tool_host::{ToolHost, ToolRegistration};
+use pluk_ssh::SshTunnelConfig;
 use pluk_store::{Integration, Store};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// The executor and transport seams are process-global, so the tests that
+/// install one run in sequence.
+static SSH_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn temp_store() -> (tempfile::TempDir, Arc<Store>) {
     let dir = tempfile::tempdir().unwrap();
@@ -173,6 +180,7 @@ fn tool_specs_defaults() {
 
 #[tokio::test]
 async fn timeout_enforcement_and_humanize() {
+    let _guard = SSH_TEST_LOCK.lock().await;
     let (_dir, store) = temp_store();
     let conn = make_integration(
         "ssh1",
@@ -221,9 +229,152 @@ async fn timeout_enforcement_and_humanize() {
     reset_forwards_for_test();
 }
 
+/// Stands in for the SSH transport: hands back the requested local port, or the
+/// next auto-assigned one, and records what it was asked to open.
+struct StubOpener {
+    next_port: Mutex<u16>,
+    requests: Arc<Mutex<Vec<SshTunnelConfig>>>,
+    closes: Arc<AtomicUsize>,
+}
+
+impl StubOpener {
+    fn new(first_port: u16) -> Self {
+        Self {
+            next_port: Mutex::new(first_port),
+            requests: Arc::new(Mutex::new(Vec::new())),
+            closes: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+struct StubForward {
+    port: u16,
+    closes: Arc<AtomicUsize>,
+}
+
+impl Forward for StubForward {
+    fn local_port(&self) -> u16 {
+        self.port
+    }
+}
+
+impl Drop for StubForward {
+    fn drop(&mut self) {
+        self.closes.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl ForwardOpener for StubOpener {
+    async fn open(&self, config: SshTunnelConfig) -> Result<Arc<dyn Forward>, AdapterError> {
+        let port = config.local_port.unwrap_or_else(|| {
+            let mut next = self.next_port.lock().unwrap();
+            let port = *next;
+            *next += 1;
+            port
+        });
+        self.requests.lock().unwrap().push(config);
+        Ok(Arc::new(StubForward {
+            port,
+            closes: self.closes.clone(),
+        }))
+    }
+}
+
+fn stub_transport() -> Arc<StubOpener> {
+    stub_transport_from(45_000)
+}
+
+fn stub_transport_from(first_port: u16) -> Arc<StubOpener> {
+    let opener = Arc::new(StubOpener::new(first_port));
+    set_test_forward_opener(opener.clone());
+    opener
+}
+
+#[tokio::test]
+async fn forward_serves_the_port_it_advertises() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let _guard = SSH_TEST_LOCK.lock().await;
+    reset_forwards_for_test();
+    // Stands in for the far end of the tunnel: the port open_forward advertises
+    // has to be the one the transport actually opened.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut sock, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4];
+        sock.read_exact(&mut buf).await.unwrap();
+        sock.write_all(&buf).await.unwrap();
+    });
+
+    stub_transport_from(port);
+    let conn = make_integration("ssh1", json!({"host":"bastion","user":"alice"}));
+    let fwd = open_forward("owner1", &conn, "db.internal", 5432, None)
+        .await
+        .unwrap();
+    assert_eq!(fwd.local_port, port);
+
+    let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", fwd.local_port))
+        .await
+        .expect("the advertised port must accept connections");
+    sock.write_all(b"ping").await.unwrap();
+    let mut back = [0u8; 4];
+    sock.read_exact(&mut back).await.unwrap();
+    assert_eq!(&back, b"ping");
+    reset_forwards_for_test();
+}
+
+#[tokio::test]
+async fn forward_asks_the_transport_for_the_remote_target() {
+    let _guard = SSH_TEST_LOCK.lock().await;
+    reset_forwards_for_test();
+    let opener = stub_transport();
+    let conn = make_integration(
+        "ssh1",
+        json!({"host":"bastion","port":2222,"user":"alice","auth_type":"key","key_path":"~/.ssh/id_ed25519"}),
+    );
+    open_forward("owner1", &conn, "db.internal", 5432, None)
+        .await
+        .unwrap();
+    let requests = opener.requests.lock().unwrap();
+    let req = requests.first().expect("the transport must be asked");
+    assert_eq!(req.host, "bastion");
+    assert_eq!(req.port, 2222);
+    assert_eq!(req.user, "alice");
+    assert_eq!(req.auth_type, "key");
+    assert_eq!(req.remote_host, "db.internal");
+    assert_eq!(req.remote_port, 5432);
+    assert_eq!(req.local_port, None);
+    drop(requests);
+    reset_forwards_for_test();
+}
+
+#[tokio::test]
+async fn closing_a_forward_tears_down_the_tunnel_and_frees_the_port() {
+    let _guard = SSH_TEST_LOCK.lock().await;
+    reset_forwards_for_test();
+    let opener = stub_transport();
+    let conn = make_integration("ssh1", json!({"host":"h"}));
+    let fwd = open_forward("owner1", &conn, "localhost", 5432, Some(45_600))
+        .await
+        .unwrap();
+    assert_eq!(opener.closes.load(Ordering::SeqCst), 0);
+
+    assert!(close_forward("owner1", &conn, &fwd.id));
+    assert_eq!(opener.closes.load(Ordering::SeqCst), 1);
+    // The port is free again, so the same one can be asked for.
+    let reopened = open_forward("owner1", &conn, "cache", 6379, Some(45_600))
+        .await
+        .unwrap();
+    assert_eq!(reopened.local_port, 45_600);
+    reset_forwards_for_test();
+}
+
 #[tokio::test]
 async fn forward_idempotency_per_target() {
+    let _guard = SSH_TEST_LOCK.lock().await;
     reset_forwards_for_test();
+    stub_transport();
     let (_dir, _store) = temp_store();
     let conn = make_integration("ssh1", json!({"host":"h","port":22}));
     let owner = "owner1";
@@ -250,6 +401,7 @@ async fn forward_idempotency_per_target() {
 
 #[tokio::test]
 async fn close_unknown_id() {
+    let _guard = SSH_TEST_LOCK.lock().await;
     reset_forwards_for_test();
     let (_dir, store) = temp_store();
     let conn =
@@ -270,6 +422,7 @@ async fn close_unknown_id() {
 
 #[tokio::test]
 async fn pending_approval_surfaced_as_pending() {
+    let _guard = SSH_TEST_LOCK.lock().await;
     let (_dir, store) = temp_store();
     let conn = make_integration("ssh1", json!({"host":"example.com"}));
     let exec = Arc::new(StubExecutor {
@@ -293,7 +446,9 @@ async fn pending_approval_surfaced_as_pending() {
 
 #[tokio::test]
 async fn list_forwards_and_close_flow() {
+    let _guard = SSH_TEST_LOCK.lock().await;
     reset_forwards_for_test();
+    stub_transport();
     let (_dir, store) = temp_store();
     let conn =
         make_integration_with_policy("ssh1", json!({"host":"h"}), Some(ssh_all_enabled_policy()));
@@ -323,7 +478,9 @@ async fn list_forwards_and_close_flow() {
 
 #[tokio::test]
 async fn local_port_already_in_use() {
+    let _guard = SSH_TEST_LOCK.lock().await;
     reset_forwards_for_test();
+    stub_transport();
     let conn = make_integration("ssh1", json!({"host":"h"}));
     let owner = "owner1";
     // occupy port by opening forward
@@ -339,6 +496,7 @@ async fn local_port_already_in_use() {
 
 #[tokio::test]
 async fn saved_commands_only_projection_and_run() {
+    let _guard = SSH_TEST_LOCK.lock().await;
     let (_dir, store) = temp_store();
     let conn =
         make_integration_with_policy("ssh1", json!({"host":"h"}), Some(ssh_all_enabled_policy()));
@@ -410,14 +568,101 @@ async fn saved_commands_only_projection_and_run() {
     reset_forwards_for_test();
 }
 
+/// Saved commands are curated in the app, so they run outside the allowlist that
+/// governs commands an agent writes.
+#[tokio::test]
+async fn saved_commands_run_outside_the_allowlist() {
+    let _guard = SSH_TEST_LOCK.lock().await;
+    let (_dir, store) = temp_store();
+    let conn =
+        make_integration_with_policy("ssh1", json!({"host":"h"}), Some(ssh_all_enabled_policy()));
+    store
+        .create_saved_command(&pluk_store::SavedCommandInput {
+            connection_id: conn.id.clone(),
+            name: "ping-api".into(),
+            command: "curl https://example.com".into(),
+            working_dir: None,
+        })
+        .unwrap();
+    assert!(!evaluate_command("curl https://example.com").ok);
+
+    let ran = record_commands();
+    let mut host = CaptureHost {
+        tools: HashMap::new(),
+    };
+    register_ssh_server(&mut host, &conn, "owner1", store.clone()).unwrap();
+    let handler = host.tools.get("run_saved_command").unwrap().1.clone();
+    let res = handler(json!({"name":"ping-api"})).await;
+    assert!(!res.is_error, "got: {}", res.text());
+    assert_eq!(ran.lock().unwrap().as_slice(), ["curl https://example.com"]);
+    clear_test_executor();
+    reset_forwards_for_test();
+}
+
+/// An executor that records what it was asked to run and reports success.
+fn record_commands() -> Arc<Mutex<Vec<String>>> {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let recorder = seen.clone();
+    set_test_executor(Arc::new(StubExecutor {
+        handler: Arc::new(move |cmd, _| {
+            recorder.lock().unwrap().push(cmd.to_string());
+            Ok(ExecResult {
+                stdout: "ok".into(),
+                stderr: String::new(),
+                code: Some(0),
+                truncated: false,
+            })
+        }),
+    }));
+    seen
+}
+
+#[tokio::test]
+async fn working_dir_prefixes_an_allowed_command() {
+    let _guard = SSH_TEST_LOCK.lock().await;
+    let (_dir, store) = temp_store();
+    let conn = make_integration("ssh1", json!({"host":"h"}));
+    let ran = record_commands();
+    let mut host = CaptureHost {
+        tools: HashMap::new(),
+    };
+    register_ssh_server(&mut host, &conn, "owner1", store.clone()).unwrap();
+    let handler = host.tools.get("run_command").unwrap().1.clone();
+
+    let res = handler(json!({"command":"ls -la","working_dir":"/srv/app"})).await;
+    assert!(!res.is_error, "got: {}", res.text());
+    assert_eq!(ran.lock().unwrap().as_slice(), ["cd '/srv/app' && ls -la"]);
+    clear_test_executor();
+    reset_forwards_for_test();
+}
+
+#[tokio::test]
+async fn working_dir_with_shell_characters_is_refused() {
+    let _guard = SSH_TEST_LOCK.lock().await;
+    let (_dir, store) = temp_store();
+    let conn = make_integration("ssh1", json!({"host":"h"}));
+    let ran = record_commands();
+    let mut host = CaptureHost {
+        tools: HashMap::new(),
+    };
+    register_ssh_server(&mut host, &conn, "owner1", store.clone()).unwrap();
+    let handler = host.tools.get("run_command").unwrap().1.clone();
+
+    let res = handler(json!({"command":"ls","working_dir":"/srv; rm -rf /"})).await;
+    assert!(res.is_error);
+    assert!(res.text().contains("working_dir not allowed"), "got: {}", res.text());
+    assert!(ran.lock().unwrap().is_empty());
+    clear_test_executor();
+    reset_forwards_for_test();
+}
+
 #[test]
-fn saved_commands_have_no_allowlist_same_freedom() {
-    // ensure evaluate is NOT called for saved commands path: we test via server logic that saved commands bypass policy
-    // This is verified by the previous test where saved command "ps aux" is allowed even though policy would allow it; test with blocked command
-    // Create a saved command that would be blocked by policy (e.g., curl) and ensure it would be executed if stubbed (bypass)
-    // Since our server bypasses policy for saved, this test stands as specification
-    let verdict = evaluate_command("curl https://example.com");
-    assert!(!verdict.ok, "curl blocked by policy");
-    // saved commands deliberately have no allowlist — they run with same freedom as any other command, but our implementation bypasses policy for saved
-    // This is documented behavior; no assertion besides ensuring policy would block but saved would not be blocked at server layer
+fn instructions_state_the_policy_that_is_enforced() {
+    let conn = make_integration("ssh1", json!({"host":"h"}));
+    let text = ssh_instructions(&conn);
+    assert!(text.contains(&policy_summary()));
+    assert!(
+        !text.to_lowercase().contains("unrestricted"),
+        "the allowlist refuses most commands: {text}"
+    );
 }

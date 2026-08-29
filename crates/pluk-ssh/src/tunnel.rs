@@ -46,6 +46,7 @@ mod tests {
             passphrase: None,
             remote_host: "db".into(),
             remote_port: 5432,
+            local_port: None,
         };
         assert!(agent_cfg.auth_type == "agent");
 

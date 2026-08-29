@@ -202,7 +202,7 @@ mod tests {
         opts.ssh_provider = Some(Box::new(FakeTunnel));
         let res = crate::factory::create_driver(opts).await.unwrap();
         assert!(res.tunnel.is_some());
-        assert_eq!(res.tunnel.unwrap().local_port, 2222);
+        assert_eq!(res.tunnel.unwrap().local_port(), 2222);
     }
 
     #[tokio::test]
@@ -243,7 +243,7 @@ mod tests {
         let mut opts = crate::factory::CreateDriverOpts::new(cfg.clone());
         opts.ssh_provider = Some(Box::new(CapturingTunnel(captured.clone())));
         let res = crate::factory::create_driver(opts).await.unwrap();
-        assert_eq!(res.tunnel.unwrap().local_port, 3333);
+        assert_eq!(res.tunnel.unwrap().local_port(), 3333);
         let got = captured.lock().unwrap().clone().unwrap();
         assert_eq!(got.ssh_host.as_deref(), Some("bastion.example.com"));
         assert_eq!(got.ssh_port, Some(2222));
@@ -412,5 +412,99 @@ mod tests {
         assert!(cfg.is_use_ssh());
         assert_eq!(cfg.ssh_auth_type.as_deref(), Some("agent"));
         let _ = provider;
+    }
+
+    // ── tunnel teardown ──────────────────────────────────────────────────
+    // A leaked tunnel keeps a forwarded port and an `ssh` child alive, so every
+    // way out of a tunnelled call has to close it.
+
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingTunnel(Arc<AtomicUsize>);
+
+    #[async_trait::async_trait]
+    impl crate::config::SshTunnelProvider for CountingTunnel {
+        async fn open_tunnel(
+            &self,
+            _cfg: &crate::config::SqlConfig,
+            _remote_host: &str,
+            _remote_port: u16,
+        ) -> Result<crate::config::TunnelEndpoint, DriverError> {
+            let closes = self.0.clone();
+            Ok(crate::config::TunnelEndpoint {
+                local_host: "127.0.0.1".into(),
+                local_port: 2222,
+                close_fn: Some(Arc::new(move || {
+                    closes.fetch_add(1, Ordering::SeqCst);
+                })),
+            })
+        }
+    }
+
+    fn tunnelled_opts(engine: &str, closes: Arc<AtomicUsize>) -> crate::factory::CreateDriverOpts {
+        let cfg = crate::config::SqlConfig {
+            r#type: engine.into(),
+            host: Some("db.internal".into()),
+            port: Some(5432),
+            use_ssh: Some("true".into()),
+            ssh_host: Some("bastion".into()),
+            ..Default::default()
+        };
+        crate::factory::CreateDriverOpts::new(cfg)
+            .with_ssh_provider(Box::new(CountingTunnel(closes)))
+    }
+
+    #[tokio::test]
+    async fn closing_the_driver_closes_the_tunnel_exactly_once() {
+        let closes = Arc::new(AtomicUsize::new(0));
+        let dw = crate::factory::create_driver(tunnelled_opts("postgres", closes.clone()))
+            .await
+            .unwrap();
+        dw.close().await.unwrap();
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        drop(dw);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dropping_the_driver_closes_the_tunnel() {
+        let closes = Arc::new(AtomicUsize::new(0));
+        let dw = crate::factory::create_driver(tunnelled_opts("postgres", closes.clone()))
+            .await
+            .unwrap();
+        drop(dw);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_call_closes_the_tunnel() {
+        let closes = Arc::new(AtomicUsize::new(0));
+        {
+            let call = async {
+                let dw = crate::factory::create_driver(tunnelled_opts("postgres", closes.clone()))
+                    .await
+                    .unwrap();
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                dw.close().await.unwrap();
+            };
+            tokio::pin!(call);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(50), &mut call)
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_driver_that_fails_to_build_closes_the_tunnel() {
+        let closes = Arc::new(AtomicUsize::new(0));
+        let err = crate::factory::create_driver(tunnelled_opts("clickhouse", closes.clone()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DriverError::UnsupportedType(_)));
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
     }
 }

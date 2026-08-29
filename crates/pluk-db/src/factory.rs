@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::config::{SqlConfig, SshExecProvider, SshTunnelProvider, TunnelEndpoint, resolve_ssl};
 use crate::driver::Driver;
 use crate::error::DriverError;
@@ -33,18 +35,51 @@ impl CreateDriverOpts {
     }
 }
 
-/// Result of `create_driver`: a boxed driver and an optional tunnel handle that
-/// must be closed together. The `close()` on the driver is expected to also
-/// close the tunnel (see `TunnelDriver`).
+/// A tunnel whose lifetime is the value that holds it: dropping it closes the
+/// forward, so no exit path — an early return, an error, a cancelled request —
+/// can leave a forwarded port and its `ssh` child behind.
+pub struct OwnedTunnel {
+    endpoint: TunnelEndpoint,
+    closed: AtomicBool,
+}
+
+impl OwnedTunnel {
+    pub fn new(endpoint: TunnelEndpoint) -> Self {
+        Self {
+            endpoint,
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    pub fn local_port(&self) -> u16 {
+        self.endpoint.local_port
+    }
+
+    pub fn close(&self) {
+        if !self.closed.swap(true, Ordering::SeqCst) {
+            self.endpoint.close();
+        }
+    }
+}
+
+impl Drop for OwnedTunnel {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+/// Result of `create_driver`: a boxed driver and, when the connection goes
+/// through SSH, the tunnel it runs over. Closing both is [`close`](Self::close);
+/// whoever ends up owning the tunnel closes it by dropping it.
 pub struct DriverWithTunnel {
     pub driver: Box<dyn Driver>,
-    pub tunnel: Option<TunnelEndpoint>,
+    pub tunnel: Option<OwnedTunnel>,
 }
 
 impl std::fmt::Debug for DriverWithTunnel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DriverWithTunnel")
-            .field("tunnel", &self.tunnel.as_ref().map(|t| &t.local_port))
+            .field("tunnel", &self.tunnel.as_ref().map(|t| t.local_port()))
             .finish()
     }
 }
@@ -72,7 +107,7 @@ pub async fn create_driver(mut opts: CreateDriverOpts) -> Result<DriverWithTunne
 
     let mut effective_host = opts.cfg.effective_host();
     let mut effective_port = opts.cfg.effective_port();
-    let mut tunnel: Option<TunnelEndpoint> = None;
+    let mut tunnel: Option<OwnedTunnel> = None;
 
     let use_ssh = opts.cfg.is_use_ssh();
     if opts.cfg.r#type != "sqlite" && use_ssh && opts.cfg.ssh_host.is_some() {
@@ -84,7 +119,7 @@ pub async fn create_driver(mut opts: CreateDriverOpts) -> Result<DriverWithTunne
             .await?;
         effective_host = t.local_host.clone();
         effective_port = t.local_port;
-        tunnel = Some(t);
+        tunnel = Some(OwnedTunnel::new(t));
     }
 
     let driver: Box<dyn Driver> = match opts.cfg.r#type.as_str() {

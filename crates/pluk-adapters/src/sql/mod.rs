@@ -60,7 +60,7 @@ async fn test_sql(conn: &Integration, _store: Option<Arc<Store>>) -> Result<(), 
     // Use factory to test connection (it will create fake driver for postgres/mysql)
     let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(crate::sql::error::driver_error_to_adapter)?;
     let res = dw.driver.test_connection().await;
-    let _ = dw.driver.close().await;
+    let _ = dw.close().await;
     res.map_err(crate::sql::error::driver_error_to_adapter)
 }
 

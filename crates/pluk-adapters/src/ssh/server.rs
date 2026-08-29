@@ -15,7 +15,7 @@ use super::client::{
     MAX_COMMAND_TIMEOUT_S, close_forward, list_forwards, open_forward, run_command,
 };
 use super::error::humanize_ssh_error;
-use super::policy::evaluate_command;
+use super::policy::{evaluate_command, policy_summary, sanitize_working_dir};
 
 pub const SSH_AGENT_HINT: &str = "Use this for SSH access to the remote host — run shell commands to inspect logs, processes, disk and memory, and Docker/systemd services for debugging and ops, and open local port forwards (ssh -L) so a remote service like a database or web UI is reachable at localhost on this machine. Every command runs as the SSH user and must be confirmed before it runs.";
 
@@ -41,8 +41,8 @@ pub fn ssh_instructions(conn: &Integration) -> String {
         conn.environment,
         InstructionParts {
             kind: "SSH".to_string(),
-            access: "Run shell commands on the remote host as the connecting SSH user. Commands run unmodified and are recorded in the activity log.".to_string(),
-            policy: Some("Unrestricted — there is no allowlist; every command must be confirmed in your client before it runs.".to_string()),
+            access: "Run inspection commands on the remote host as the connecting SSH user. Every command is checked against the policy below, must be confirmed in your client, and is recorded in the activity log.".to_string(),
+            policy: Some(policy_summary()),
             hint: Some(SSH_AGENT_HINT.to_string()),
             start: Some("Start with debug_snapshot for a host overview, or list_saved_commands for curated commands. Use open_forward to reach a remote service (e.g. a database) at localhost on this machine.".to_string()),
         }
@@ -104,6 +104,18 @@ fn quote_dir(dir: &str) -> String {
     format!("'{}'", dir.replace('\'', "'\\''"))
 }
 
+/// A working directory has to clear the same path rules as the command that
+/// runs in it. Returns the directory to prefix with, or the reason it is refused.
+fn resolve_working_dir(dir: Option<&str>) -> Result<Option<String>, String> {
+    let Some(dir) = dir.map(str::trim).filter(|d| !d.is_empty()) else {
+        return Ok(None);
+    };
+    match sanitize_working_dir(dir) {
+        Some(clean) => Ok(Some(clean)),
+        None => Err(format!("working_dir not allowed: \"{dir}\"")),
+    }
+}
+
 fn format_result(stdout: &str, stderr: &str, code: Option<i32>, truncated: bool) -> String {
     let mut parts = vec![format!(
         "exit code: {}",
@@ -153,14 +165,14 @@ pub fn register_ssh_server(
     if on("run_command") {
         let mut props = Map::new();
         props.insert("command".into(), serde_json::json!({"type":"string","description":"The command to run, e.g. `docker compose ps`"}));
-        props.insert("working_dir".into(), serde_json::json!({"type":"string","description":"Directory to run in (e.g. /srv/app). Optional."}));
+        props.insert("working_dir".into(), serde_json::json!({"type":"string","description":"Directory to run in, e.g. /srv/app. Optional — a plain path, no spaces or shell characters."}));
         props.insert("timeout".into(), serde_json::json!({"type":"number","description": format!("Max seconds to wait before aborting the command (default 60).")}));
         let schema = object_schema(props, &["command"]);
         let conn_c = conn.clone();
         let owner_c = owner_id.to_string();
         let store_c = store.clone();
         host.register_tool(
-            ToolRegistration { name: "run_command".into(), description: "Run a shell command on the remote host over SSH. The command runs unmodified as the connecting user — confirm before running, as it can change or destroy remote state. Commands time out after 60 seconds by default; pass `timeout` (up to 600 seconds) for long-running commands.".into(), input_schema: schema, annotations: {
+            ToolRegistration { name: "run_command".into(), description: "Run a shell command on the remote host over SSH, as the connecting user. Read-only commands only — anything else comes back as `Blocked:` with the reason. Commands time out after 60 seconds by default; pass `timeout` (up to 600 seconds) for long-running commands.".into(), input_schema: schema, annotations: {
                 let mut m=Map::new(); m.insert("readOnlyHint".into(), Value::Bool(false)); m.insert("destructiveHint".into(), Value::Bool(true)); m.insert("openWorldHint".into(), Value::Bool(true)); m
             } },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
@@ -175,9 +187,13 @@ pub fn register_ssh_server(
                     if let Some(t) = timeout && t>MAX_COMMAND_TIMEOUT_S { return err(format!("timeout must be <= {}", MAX_COMMAND_TIMEOUT_S)); }
                     let trimmed = command.trim().to_string();
                     if trimmed.is_empty() { return err("Error: empty command."); }
+                    let working_dir = match resolve_working_dir(working_dir.as_deref()) {
+                        Ok(wd) => wd,
+                        Err(reason) => return err(format!("Blocked: {}", reason)),
+                    };
                     let detail = if let Some(ref wd)=working_dir { format!("[{}] {}", wd, trimmed) } else { trimmed.clone() };
+                    let verdict = evaluate_command(&trimmed);
                     let final_command = if let Some(wd)=working_dir.clone() { format!("cd {} && {}", quote_dir(&wd), trimmed) } else { trimmed.clone() };
-                    let verdict = evaluate_command(&final_command);
                     if !verdict.ok {
                         let reason = verdict.reason.unwrap_or_else(|| "blocked".into());
                         let draft = pluk_store::LogDraft { connection_id: conn.id.clone(), connection_name: conn.name.clone(), sql: final_command.clone(), verdict: pluk_store::Verdict::Blocked, categories: Some("command".into()), reason: Some(reason.clone()), source: Some("run_command".into()), group: conn.via_group.clone(), database: None };
@@ -213,14 +229,14 @@ pub fn register_ssh_server(
     if on("run_batch") {
         let mut props = Map::new();
         props.insert("commands".into(), serde_json::json!({"type":"array","items":{"type":"string"},"description": format!("Commands to run in order (max {}).", MAX_BATCH)}));
-        props.insert("working_dir".into(), serde_json::json!({"type":"string","description":"Directory to run every command in. Optional."}));
+        props.insert("working_dir".into(), serde_json::json!({"type":"string","description":"Directory to run every command in. Optional — a plain path, no spaces or shell characters."}));
         props.insert("stop_on_error".into(), serde_json::json!({"type":"boolean","description":"Stop at the first failed command instead of continuing. Default true."}));
         let schema = object_schema(props, &["commands"]);
         let conn_c = conn.clone();
         let owner_c = owner_id.to_string();
         let store_c = store.clone();
         host.register_tool(
-            ToolRegistration { name: "run_batch".into(), description: "Run several shell commands in sequence on the remote host. Returns each command's output in order. Confirm before running — commands run unmodified as the connecting user.".into(), input_schema: schema, annotations: { let mut m=Map::new(); m.insert("readOnlyHint".into(), Value::Bool(false)); m.insert("destructiveHint".into(), Value::Bool(true)); m.insert("openWorldHint".into(), Value::Bool(true)); m } },
+            ToolRegistration { name: "run_batch".into(), description: "Run several shell commands in sequence on the remote host, as the connecting user. Returns each command's output in order. Each command is checked on its own; a refused one comes back as `Blocked:` with the reason.".into(), input_schema: schema, annotations: { let mut m=Map::new(); m.insert("readOnlyHint".into(), Value::Bool(false)); m.insert("destructiveHint".into(), Value::Bool(true)); m.insert("openWorldHint".into(), Value::Bool(true)); m } },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
                 let conn = conn_c.clone();
                 let owner = owner_c.clone();
@@ -232,6 +248,10 @@ pub fn register_ssh_server(
                     let stop_on_error = obj.get("stop_on_error").and_then(|v| v.as_bool()).unwrap_or(true);
                     if commands.is_empty() { return err("No commands"); }
                     if commands.len()>MAX_BATCH { return err(format!("Too many commands (max {})", MAX_BATCH)); }
+                    let working_dir = match resolve_working_dir(working_dir.as_deref()) {
+                        Ok(wd) => wd,
+                        Err(reason) => return err(format!("Blocked: {}", reason)),
+                    };
                     let mut sections: Vec<String> = Vec::new();
                     let mut any_error = false;
                     for (i, cmd_val) in commands.iter().enumerate() {
@@ -239,7 +259,7 @@ pub fn register_ssh_server(
                         let trimmed = cmd.trim().to_string();
                         if trimmed.is_empty() { sections.push(format!("$ {}\nError: empty command.", cmd)); any_error=true; if stop_on_error { break; } else { continue; } }
                         let final_cmd = if let Some(ref wd)=working_dir { format!("cd {} && {}", quote_dir(wd), trimmed) } else { trimmed.clone() };
-                        let verdict = evaluate_command(&final_cmd);
+                        let verdict = evaluate_command(&trimmed);
                         if !verdict.ok {
                             let reason = verdict.reason.unwrap_or_else(|| "blocked".into());
                             sections.push(format!("$ {}\nBlocked: {}", cmd, reason));
@@ -360,10 +380,13 @@ pub fn register_ssh_server(
                         return err(format!("Saved command \"{}\" not found.{}", name, hint));
                     }};
                     let command = saved.command.clone();
-                    let working_dir = saved.working_dir.clone();
+                    let working_dir = match resolve_working_dir(saved.working_dir.as_deref()) {
+                        Ok(wd) => wd,
+                        Err(reason) => return err(format!("Blocked: {}", reason)),
+                    };
                     let detail = if let Some(ref wd)=working_dir { format!("[{}] {}", wd, command) } else { command.clone() };
                     let final_command = if let Some(wd)=working_dir.clone() { format!("cd {} && {}", quote_dir(&wd), command) } else { command.clone() };
-                    // Saved commands intentionally not filtered by policy (same freedom as ad-hoc) — but we still run policy? per brief they have no allowlist, run with same freedom. So skip policy check.
+                    // Saved commands are curated in the app, so they run outside the allowlist.
                     let target = CallTarget { connection_id: conn.id.clone(), connection_name: conn.name.clone(), group: conn.via_group.clone() };
                     let meta = GateMeta { category: "command".into(), action: "run_saved_command".into(), detail, database: None, command: Some(final_command.clone()) };
                     run_gated(&store, &target, meta, move |_log_id| {

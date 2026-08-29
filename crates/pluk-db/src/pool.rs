@@ -67,7 +67,7 @@ impl pluk_ssh::pool::DriverFactory for DbDriverFactory {
         let tunnel = dw.tunnel;
         struct TunnelDriver {
             inner: Arc<dyn DbDriver>,
-            tunnel: Option<crate::config::TunnelEndpoint>,
+            tunnel: Option<crate::factory::OwnedTunnel>,
         }
         #[async_trait::async_trait]
         impl pluk_ssh::pool::PoolDriver for TunnelDriver {
