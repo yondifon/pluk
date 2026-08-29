@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pluk — local MCP endpoints for the services you already use</title>
-  <meta name="description" content="Pluk is a macOS menu bar app that turns Postgres, MySQL, SQLite, Linear, and more into local MCP endpoints — a localhost server, a per-integration policy engine, and an activity log.">
+  <title>Pluk — database access for coding agents</title>
+  <meta name="description" content="Pluk lets coding agents query Postgres, MySQL, and SQLite through local MCP endpoints, with per-integration policies and a local activity log.">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0a">
@@ -28,7 +28,7 @@
       </a>
       <ul class="nav__links">
         <li><a href="#how-it-works">How it works</a></li>
-        <li><a href="#integrations">Integrations</a></li>
+        <li><a href="#databases">Databases</a></li>
         <li><a href="#safety">Safety</a></li>
         <li><a href="#install">Install</a></li>
       </ul>
@@ -36,20 +36,19 @@
   </header>
 
   <main id="main">
-
     <section class="hero" aria-labelledby="hero-title">
       <div class="wrap">
-        <h1 id="hero-title">Plug the services you already use into your AI tools. <span class="tone">Nothing leaves your laptop.</span></h1>
-        <p class="lede">Pluk is a macOS menu bar app that turns Postgres, MySQL, SQLite, Linear, and more into local <a href="https://modelcontextprotocol.io">MCP</a> endpoints. The server runs on <code>localhost</code>, each integration sits behind its own URL and policy, and every call an agent makes — allowed or blocked — lands in the activity log.</p>
+        <h1 id="hero-title">Let your coding agent query your database. <span class="tone">Keep the credentials on your machine.</span></h1>
+        <p class="lede">Pluk is a macOS menu bar app that turns Postgres, MySQL, and SQLite into local <a href="https://modelcontextprotocol.io">MCP</a> endpoints. Your agent calls <code>localhost</code>; Pluk applies a per-integration policy and records every tool call in the activity log.</p>
         <p class="cta-row">
           <a class="btn" href="#install">Install Pluk</a>
-          <a class="cta-link" href="#how-it-works">How it works →</a>
+          <a class="cta-link" href="#how-it-works">See how it works →</a>
         </p>
 
         <figure class="flow">
           <div class="flow__rail">
             <div class="flow__node">
-              <p class="flow__title">Your AI client</p>
+              <p class="flow__title">Your coding agent</p>
               <p class="flow__meta">Codex · opencode · Claude Code · Cursor · Windsurf · Antigravity</p>
             </div>
             <div class="wire" aria-hidden="true"></div>
@@ -64,225 +63,127 @@
             </div>
             <div class="wire" aria-hidden="true"></div>
             <div class="flow__node">
-              <p class="flow__title">Your services</p>
+              <p class="flow__title">Your database</p>
               <ul class="flow__list">
                 <li>Postgres — production</li>
-                <li>Linear workspace</li>
-                <li>SSH host</li>
+                <li>MySQL</li>
+                <li>SQLite</li>
               </ul>
-              <p class="flow__meta">nine integration types today</p>
+              <p class="flow__meta">other adapters available</p>
             </div>
           </div>
-          <figcaption>One gate for every request: your client calls <code>http://localhost:4242/mcp/&lt;token&gt;</code>, the integration's policy checks the call, the activity log records it, and the matching adapter forwards it on.</figcaption>
+          <figcaption>The agent calls <code>http://localhost:4242/mcp/&lt;token&gt;</code>. Pluk checks the policy, logs the call, and forwards it through the matching database adapter.</figcaption>
         </figure>
-      </div>
-    </section>
-
-    <section class="section band" id="problem" aria-labelledby="problem-title">
-      <div class="wrap">
-        <div class="chapter-head">
-          <h2 id="problem-title">The problem</h2>
-          <p class="lede">AI coding tools earn their keep exactly where your real things live — the production database, the issue tracker, the server you deploy to. The nervousness around granting access is rational.</p>
-        </div>
-        <div class="trio">
-          <div>
-            <h3>Credentials you can't take back</h3>
-            <p>A connection string pasted into a client config is a standing grant. You can't scope it to one agent, one task, or one afternoon.</p>
-          </div>
-          <div>
-            <h3>Calls you can't see</h3>
-            <p>Once access is granted, what the agent actually ran happens off-stage. You find out from the aftermath, not from a record.</p>
-          </div>
-          <div>
-            <h3>No dial between read and write</h3>
-            <p>Production wants "look, don't touch". A raw credential is all-or-nothing.</p>
-          </div>
-        </div>
-        <p class="turn">Pluk's answer is a broker on your own machine — local endpoints, a policy per integration, and a record of everything that ran.</p>
-      </div>
-    </section>
-
-    <section class="section" id="how-it-works" aria-labelledby="how-title">
-      <div class="wrap">
-        <div class="chapter-head">
-          <h2 id="how-title">How it works</h2>
-          <p class="lede">A native menu bar app supervises a server on <code>http://localhost:4242</code> that speaks MCP over streamable HTTP. Four steps from installed to agent-at-work:</p>
-        </div>
-        <ol class="steps">
-          <li>
-            <h3>Add an integration</h3>
-            <p>Open Pluk from the menu bar and pick a type — the form shows exactly that adapter's fields. A Postgres or MySQL database with its optional SSH tunnel and SSL settings, a local SQLite file, a Linear workspace. Tunnels follow your <code>~/.ssh/config</code>, Cloudflare Access included, and Test confirms the credentials reach the service.</p>
-          </li>
-          <li>
-            <h3>Copy its MCP URL</h3>
-            <p>Each integration gets its own endpoint, routed by a unique token: <code>http://localhost:4242/mcp/&lt;token&gt;</code>. One URL per service, so each agent sees only what you hand it.</p>
-          </li>
-          <li>
-            <h3>Paste it into your client</h3>
-            <p>Codex, opencode, Claude Code, Cursor, Windsurf, Antigravity — the detail view has a ready-made snippet for each.</p>
-          </li>
-          <li>
-            <h3>Let the agent work, inside the lines</h3>
-            <p>Tool calls arrive at the local server, the integration's policy checks each one, and every call — allowed or blocked — is written to the activity log as it happens.</p>
-          </li>
-        </ol>
-
-        <h3 class="subhead">Wire it into your client</h3>
-        <div class="snippets">
-          <figure class="code">
-            <figcaption>Codex — ~/.codex/config.toml</figcaption>
-            <pre><code>[mcp_servers.my-prod-db]
-url = "http://localhost:4242/mcp/&lt;token&gt;"</code></pre>
-          </figure>
-          <figure class="code">
-            <figcaption>opencode — opencode.jsonc</figcaption>
-            <pre><code>{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "my-prod-db": {
-      "type": "remote",
-      "enabled": true,
-      "url": "http://localhost:4242/mcp/&lt;token&gt;",
-      "oauth": false
-    }
-  }
-}</code></pre>
-          </figure>
-        </div>
-      </div>
-    </section>
-
-    <section class="section band" id="integrations" aria-labelledby="integrations-title">
-      <div class="wrap">
-        <div class="chapter-head">
-          <h2 id="integrations-title">What it connects to</h2>
-          <p class="lede">Nine integration types ship today, each a self-contained adapter that brings its own config form, its policy treatment, and its tools. Adding another type is one module in <code>pluk/src/adapters/</code> — the app picks it up with no other changes.</p>
-        </div>
-
-        <div class="table-scroller" tabindex="0" role="region" aria-label="Integration types">
-          <table>
-            <caption class="vh">The nine integration types Pluk ships with, their policy, and their tool counts.</caption>
-            <thead>
-              <tr>
-                <th scope="col">Service</th>
-                <th scope="col">What it connects to</th>
-                <th scope="col">Policy</th>
-                <th scope="col" class="num">Tools</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <th scope="row">Postgres</th>
-                <td>A network database — host, credentials, optional SSH tunnel and SSL</td>
-                <td>SQL</td>
-                <td class="num">12</td>
-              </tr>
-              <tr>
-                <th scope="row">MySQL</th>
-                <td>A network database — same fields as Postgres, default port 3306</td>
-                <td>SQL</td>
-                <td class="num">12</td>
-              </tr>
-              <tr>
-                <th scope="row">SQLite</th>
-                <td>A local database file — no network, no tunnels</td>
-                <td>SQL</td>
-                <td class="num">12</td>
-              </tr>
-              <tr>
-                <th scope="row">Linear</th>
-                <td>Your issue tracker — issues, projects, comments, notifications</td>
-                <td>Action</td>
-                <td class="num">14</td>
-              </tr>
-              <tr>
-                <th scope="row">Sentry</th>
-                <td>Errors and structured logs — sentry.io or self-hosted</td>
-                <td>Action</td>
-                <td class="num">5</td>
-              </tr>
-              <tr>
-                <th scope="row">SSH</th>
-                <td>A remote host — shell commands behind a strict allowlist</td>
-                <td>Action + allowlist</td>
-                <td class="num">2</td>
-              </tr>
-              <tr>
-                <th scope="row">Laravel Herd</th>
-                <td>Feature sites per branch, served locally by Herd</td>
-                <td>Action</td>
-                <td class="num">3</td>
-              </tr>
-              <tr>
-                <th scope="row">Spark Mail</th>
-                <td>Your mail, calendar, contacts, and meetings through Spark Desktop</td>
-                <td>Action</td>
-                <td class="num">22</td>
-              </tr>
-              <tr>
-                <th scope="row">GitHub CLI</th>
-                <td>Your GitHub account through the locally installed <code>gh</code></td>
-                <td>Action</td>
-                <td class="num">16</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="table-note">Read-only applies on top of either policy: SQL statements are classified one by one, action tools are gated individually as read or write, and SSH adds a command allowlist. Writes are blocked before they reach the service.</p>
-
-        <div class="groups">
-          <h3>Bundle a group behind one URL</h3>
-          <p>Most MCP clients connect to a fixed set of servers. A group hands an agent one URL covering a whole workflow — a database and Linear and an SSH host together — with every member's tools prefixed by its name so they never collide. Members keep their own policy and read-only flag: a read-only database stays read-only inside a group.</p>
-          <figure class="code">
-            <figcaption>One group, three members — namespaced tools</figcaption>
-            <pre><code>http://localhost:4242/mcp/&lt;group-token&gt;
-        │
-        ├─ metrics_db__query, metrics_db__list_tables, …   (member "Metrics DB")
-        ├─ linear__list_issues, linear__create_issue, …    (member "Linear")
-        └─ infra__run_command, infra__list_allowed_commands (member "Infra")</code></pre>
-          </figure>
-        </div>
       </div>
     </section>
 
     <section class="section" id="safety" aria-labelledby="safety-title">
       <div class="wrap">
         <div class="chapter-head">
-          <h2 id="safety-title">Local, logged, and in bounds</h2>
-          <p class="lede">Local-first is the design, not a setting: Pluk itself runs entirely on your machine, and the policy engine decides what an agent may do before anything is sent.</p>
+          <h2 id="safety-title">Put a boundary in front of the database.</h2>
+          <p class="lede">A raw database credential gives an agent more reach than one query needs. Pluk keeps the broker on your machine and sets the boundary per integration.</p>
         </div>
-        <div class="safety-grid">
+        <div class="feature-list">
           <div>
-            <h3>The broker is local</h3>
-            <p>The server binds to <code>localhost</code>. Your integrations, credentials, and logs live in <code>~/.pluk/</code>, and secrets are never echoed back to the UI once saved. The services you connect to can be remote — Pluk brokers the connection from your machine; it doesn't pretend your database moved.</p>
+            <h3>Local endpoint</h3>
+            <p>The server listens on <code>localhost</code>. Integrations and credentials live in <code>~/.pluk/</code>.</p>
           </div>
           <div>
-            <h3>A policy per integration</h3>
-            <p>Databases get a SQL policy engine that classifies every statement. API adapters get a read/write gate on each tool, and SSH adds a strict command allowlist. Turn on read-only and writes are refused before they reach the service.</p>
+            <h3>Read-only SQL</h3>
+            <p>The SQL policy classifies each statement and blocks writes before they reach Postgres, MySQL, or SQLite.</p>
           </div>
           <div>
-            <h3>Every call is logged</h3>
-            <p>Allowed or blocked, each tool call lands in the local activity log — and the log updates live, so a new entry appears as the agent works, without a refresh.</p>
+            <h3>Activity log</h3>
+            <p>Allowed and blocked calls are recorded locally; new entries appear without a refresh.</p>
           </div>
           <div>
             <h3>One URL, one grant</h3>
-            <p>The token in an MCP URL is a bearer secret: whoever holds it can use that integration. One URL per integration or group means each agent sees exactly what you intend — and nothing else.</p>
+            <p>Each integration gets a bearer URL. Give an agent only the database it needs.</p>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section class="section band" id="how-it-works" aria-labelledby="how-title">
+      <div class="wrap">
+        <div class="chapter-head">
+          <h2 id="how-title">How it works</h2>
+          <p class="lede">Connect a database once, then give your coding agent its local MCP URL.</p>
+        </div>
+        <ol class="steps">
+          <li>
+            <div class="step-body">
+              <h3>Add your database</h3>
+              <p>Open Pluk from the menu bar and choose Postgres, MySQL, or SQLite. Fill in its fields, add optional SSH or SSL settings, then run Test.</p>
+            </div>
+          </li>
+          <li>
+            <div class="step-body">
+              <h3>Copy the local MCP URL</h3>
+              <p>Each integration gets a unique URL such as <code>http://localhost:4242/mcp/&lt;token&gt;</code>. Give it only to the agent that needs this database.</p>
+            </div>
+          </li>
+          <li>
+            <div class="step-body">
+              <h3>Add it to your coding agent</h3>
+              <p>Paste the URL into Codex, opencode, Claude Code, Cursor, Windsurf, or Antigravity. Pluk's detail view provides the client snippet.</p>
+            </div>
+          </li>
+          <li>
+            <div class="step-body">
+              <h3>Query within the policy</h3>
+              <p>The agent calls database tools through Pluk. The SQL policy checks each statement, and the activity log records allowed and blocked calls.</p>
+            </div>
+          </li>
+        </ol>
+
+        <h3 class="subhead">One client entry</h3>
+        <figure class="code code--single">
+          <figcaption>Codex — ~/.codex/config.toml</figcaption>
+          <pre><code>[mcp_servers.my-prod-db]
+url = "http://localhost:4242/mcp/&lt;token&gt;"</code></pre>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" id="databases" aria-labelledby="databases-title">
+      <div class="wrap">
+        <div class="chapter-head">
+          <h2 id="databases-title">Connect the databases you already use.</h2>
+          <p class="lede">Postgres, MySQL, and SQLite share Pluk's SQL adapter family and 12-tool set. They differ only in how they connect.</p>
+        </div>
+        <ul class="database-list">
+          <li>
+            <h3>Postgres</h3>
+            <p>Network database with optional SSH tunnel and SSL/TLS.</p>
+            <p class="database-meta">12 SQL tools</p>
+          </li>
+          <li>
+            <h3>MySQL</h3>
+            <p>Network database with default port <code>3306</code>, SSH tunnel, and SSL/TLS.</p>
+            <p class="database-meta">12 SQL tools</p>
+          </li>
+          <li>
+            <h3>SQLite</h3>
+            <p>Local file database. No network or tunnel.</p>
+            <p class="database-meta">12 SQL tools</p>
+          </li>
+        </ul>
+        <p class="secondary-note"><strong>Also available:</strong> Linear, Sentry, SSH, Laravel Herd, Spark Mail, and GitHub CLI use the same pluggable adapter model. A group bundles several integrations behind one URL and namespaces each member's tools.</p>
       </div>
     </section>
 
     <section class="section band" id="install" aria-labelledby="install-title">
       <div class="wrap">
         <div class="chapter-head">
-          <h2 id="install-title">Install</h2>
-          <p class="lede">Pluk builds from source — no download to click, no account to make. You need macOS 14 or later, Bun, a Swift toolchain, and Make.</p>
+          <h2 id="install-title">Install Pluk.</h2>
+          <p class="lede">Pluk builds from source on macOS 14 or later. You need Bun, a Swift toolchain, and Make.</p>
         </div>
         <ul class="install-list">
           <li>macOS 14 or later</li>
-          <li>Bun — <code>curl -fsSL https://bun.sh/install | bash</code></li>
-          <li>A Swift toolchain — Xcode, or the Command Line Tools via <code>xcode-select --install</code></li>
-          <li>Make — ships with the Command Line Tools</li>
+          <li>Bun</li>
+          <li>Swift toolchain — Xcode or Command Line Tools</li>
+          <li>Make</li>
         </ul>
         <figure class="code install-commands">
           <figcaption>Clone, build, install</figcaption>
@@ -290,21 +191,14 @@ url = "http://localhost:4242/mcp/&lt;token&gt;"</code></pre>
 cd pluk
 make install</code></pre>
         </figure>
-        <p class="install-note"><code>make install</code> compiles the Bun server into a standalone binary, builds the Swift app in release mode, assembles <code>Pluk.app</code>, copies it to <code>/Applications</code>, and launches it. From then on, Pluk lives in your menu bar. To work on the app itself, <code>make dev</code> runs it from source.</p>
-      </div>
-    </section>
-
-    <section class="closing" id="next" aria-labelledby="next-title">
-      <div class="wrap">
-        <h2 id="next-title">Start with one careful URL.</h2>
-        <p>Clone it, build it, and give your agent a single read-only integration first. The activity log shows you exactly what it does.</p>
-        <p class="cta-row">
+        <p class="install-note"><code>make install</code> compiles the server, builds the app, copies <code>Pluk.app</code> to <code>/Applications</code>, and launches it in your menu bar.</p>
+        <div class="install-next">
+          <h3>Start with one read-only database.</h3>
+          <p>Build it, add one integration, and give its URL to your agent.</p>
           <a class="btn" href="https://github.com/yondifon/pluk">View the repository</a>
-          <a class="cta-link" href="https://github.com/yondifon/pluk/tree/main/docs">Read the docs →</a>
-        </p>
+        </div>
       </div>
     </section>
-
   </main>
 
   <footer class="site-footer">
@@ -319,7 +213,7 @@ make install</code></pre>
         </svg>
         <span>Pluk</span>
       </p>
-      <p class="footer-line">Local MCP endpoints for the services you already use.</p>
+      <p class="footer-line">Database access for coding agents, through localhost.</p>
       <ul class="footer-links">
         <li><a href="https://github.com/yondifon/pluk">GitHub</a></li>
         <li><a href="https://github.com/yondifon/pluk/tree/main/docs">Documentation</a></li>

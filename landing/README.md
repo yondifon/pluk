@@ -7,7 +7,7 @@ The marketing page for Pluk — static HTML and CSS in `public/`, no build step,
 From this directory:
 
 ```bash
-npx wrangler deploy        # or: bunx wrangler deploy
+bunx wrangler deploy
 ```
 
 Wrangler reads `wrangler.jsonc` and uploads `public/` as a Workers static-assets site.
@@ -18,7 +18,7 @@ these from their own Cloudflare account:
 - **`CLOUDFLARE_ACCOUNT_ID`** — the account to deploy into. Needed when your
   login or token reaches more than one account, and in CI.
 - **`CLOUDFLARE_API_TOKEN`** — a token with the *Workers Scripts: Edit*
-  permission. For an interactive machine, `npx wrangler login` once and skip
+  permission. For an interactive machine, `bunx wrangler login` once and skip
   the token entirely.
 
 The site lands at `https://pluk-landing.<your-subdomain>.workers.dev`.
