@@ -40,33 +40,26 @@ export function renderTools(
     dot.className = "tool-dot";
     dot.setAttribute("aria-label", on ? "Enabled" : "Disabled");
     dot.title = on ? "Available to the agent" : "Not available";
-    const main = document.createElement("div");
-    main.className = "tool-main";
-    const nameRow = document.createElement("div");
-    nameRow.className = "tool-name-row";
+    const head = document.createElement("div");
+    head.className = "tool-head";
     const name = document.createElement("code");
-    name.className = "mono";
+    name.className = "tool-name mono";
     name.textContent = tool.name;
-    const cat = document.createElement("span");
-    cat.className = "tool-category";
-    cat.textContent = tool.category;
-    nameRow.append(name, cat);
-    main.appendChild(nameRow);
-    if (on) {
-      const summary = settingsSummary(tool, integration.toolConfig);
-      if (summary) {
-        const s = document.createElement("div");
-        s.className = "tool-summary";
-        s.textContent = summary;
-        main.appendChild(s);
-      }
-    } else {
-      const off = document.createElement("div");
-      off.className = "tool-summary";
-      off.textContent = "Off — enable in Edit.";
-      main.appendChild(off);
+    const category = document.createElement("span");
+    category.className = "tool-category";
+    category.textContent = tool.category;
+    head.append(dot, name, category);
+    row.appendChild(head);
+    const summary = on ? settingsSummary(tool, integration.toolConfig) : "Off — enable in Edit.";
+    if (summary) {
+      const body = document.createElement("div");
+      body.className = "tool-body";
+      const s = document.createElement("div");
+      s.className = "tool-summary";
+      s.textContent = summary;
+      body.appendChild(s);
+      row.appendChild(body);
     }
-    row.append(dot, main);
     card.appendChild(row);
   }
 

@@ -14,6 +14,7 @@ export type IconName =
   | "more"
   | "refresh"
   | "search"
+  | "sidebar"
   | "spinner"
   | "terminal"
   | "trash"
@@ -40,6 +41,7 @@ const paths: Record<IconName, string[]> = {
   more: ["M6 12h.01", "M12 12h.01", "M18 12h.01"],
   refresh: ["M19 8V4m0 0h-4m4 0-4.5 4.5", "M20 14a8 8 0 1 1-2-5.3"],
   search: ["m20 20-4.5-4.5", "M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0Z"],
+  sidebar: ["M4 5h16v14H4z", "M9.5 5v14"],
   spinner: ["M12 4a8 8 0 1 0 8 8"],
   terminal: ["M4 5h16v14H4z", "m7 9 3 3-3 3", "M12 15h5"],
   trash: ["M5 7h14", "M9.5 7V4.5h5V7", "m7 7 1 12.5h8L17 7"],

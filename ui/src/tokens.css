@@ -22,14 +22,25 @@
   --control-target: 28px;
   --icon-size-md: 16px;
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23737373' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4.75 6.5 3.25-3.25 3.25 3.25'/%3E%3Cpath d='m4.75 9.5 3.25 3.25 3.25-3.25'/%3E%3C/svg%3E");
-  --focus-width: 2px;
-  --focus-offset: 0px;
+  --checkbox-size: 16px;
+  --checkbox-border-width: 2px;
+  --checkbox-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 8.5 2.75 2.75L12 5.25'/%3E%3C/svg%3E");
+  --checkbox-dash: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4.5 8h7'/%3E%3C/svg%3E");
+  --focus-width: 3px;
+  --focus-offset: 1px;
   --disabled-opacity: 0.55;
   --tracking-label: 0.05em;
   --z-menu: 60;
   --resizer-hit-area: 28px;
   --badge-size: 34px;
-  --label-column: 88px;
+  /* Label columns scale with type so a label keeps its line at any zoom.
+     Settings nested under a tool carry longer labels and redefine
+     --label-column in their own scope. */
+  --label-column: calc(112px * var(--zoom-scale));
+  --settings-label-column: calc(196px * var(--zoom-scale));
+  --number-field-width: calc(96px * var(--zoom-scale));
+  /* Indent that lines a tool's description and settings up with its name. */
+  --tool-indent: calc(var(--checkbox-size) * var(--zoom-scale) + var(--space-sm));
   --select-max-width: 240px;
   --search-min-width: 160px;
   --search-max-width: 320px;
@@ -89,9 +100,12 @@
   --action-fill-hover: #383838;
   --action-label: #ffffff;
   --danger-label: #b42318;
-  --focus-ring: #2563eb;
+  --focus-ring: rgba(37, 99, 235, 0.5);
+  --focus-ring: color-mix(in srgb, AccentColor 55%, transparent);
   --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.12);
   --accent-label: #4f46e5;
+  --control-accent: #4f46e5;
+  --control-accent-hover: #4338ca;
   --status-success: #16a34a;
   --status-danger: #dc2626;
   --status-warning: #f97316;
@@ -101,6 +115,16 @@
      IBM Plex Sans / Mono are not bundled today; fallback ships. */
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Motion — one curve, four budgets. Everything that moves uses these.
+     Opening is deliberate and slower; closing is a response and snaps. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --duration-press: 120ms;
+  --duration-exit: 150ms;
+  --duration-enter: 200ms;
+  --duration-toast: 260ms;
+  /* One revolution of an indeterminate indicator — a loop, not a budget. */
+  --duration-spin: 900ms;
 
   /* Zoom scale — applied to type only, never as a page transform */
   --zoom-scale: 1;
@@ -129,7 +153,8 @@
     --action-fill-hover: #e5e5e5;
     --action-label: #1a1a1a;
     --danger-label: #ff7b72;
-    --focus-ring: #60a5fa;
+    --focus-ring: rgba(96, 165, 250, 0.55);
+    --focus-ring: color-mix(in srgb, AccentColor 60%, transparent);
     --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.4);
     --badge-fill: rgba(99, 102, 241, 0.24);
     --badge-label: #c7d2fe;
@@ -142,6 +167,8 @@
     --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.4);
     --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.6);
     --accent-label: #a5b4fc;
+    --control-accent: #6366f1;
+    --control-accent-hover: #818cf8;
     --status-success: #4ade80;
     --status-danger: #f87171;
     --status-warning: #fb923c;

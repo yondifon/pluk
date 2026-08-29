@@ -93,7 +93,6 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
 
   const content = document.createElement("div");
   content.className = "group-content";
-  content.classList.add("group-content");
 
   function showLogs(): void {
     selectedTab = "logs";
@@ -117,7 +116,7 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
     renderTabs();
     content.innerHTML = "";
     const wrap = document.createElement("div");
-     wrap.className = "stack-lg";
+    wrap.className = "stack-lg";
     wrap.setAttribute("role", "tabpanel");
     wrap.setAttribute("aria-labelledby", "tab-overview");
 
@@ -132,10 +131,10 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
 
     // Member list
     const membersSection = document.createElement("section");
-     membersSection.className = "ui-card";
+    membersSection.className = "ui-card";
     membersSection.setAttribute("aria-label", "Integrations in this group");
     const mTitle = document.createElement("h2");
-     mTitle.className = "ui-card-title";
+    mTitle.className = "ui-card-title";
     mTitle.textContent = "Integrations";
     membersSection.appendChild(mTitle);
 
@@ -148,29 +147,28 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
       membersSection.appendChild(empty);
     } else {
       const list = document.createElement("div");
+      list.className = "member-list";
       list.setAttribute("role", "list");
       // Collision-aware prefixes
       const names = members.map((m) => m.name);
       const slugs = slugsWithCollision(names);
       members.forEach((conn, idx) => {
         const row = document.createElement("button");
-         row.className = "member-row";
-         row.setAttribute("role", "button");
+        row.className = "member-row";
         row.setAttribute("aria-label", `${conn.name}, tools under ${slugs[idx]}__`);
-        row.tabIndex = 0;
 
-         const badge = glyphElement(conn.type, 20);
-         badge.classList.add("member-glyph");
+        const badge = glyphElement(conn.type, 16);
+        badge.classList.add("member-glyph");
         badge.setAttribute("aria-hidden", "true");
 
         const info = document.createElement("div");
-         info.className = "member-info";
+        info.className = "member-info";
         const nameRow = document.createElement("div");
-         nameRow.className = "member-name-row";
+        nameRow.className = "member-name-row";
         const nameEl = document.createElement("span");
         nameEl.textContent = conn.name;
-         nameEl.className = "member-name";
-         const envTag = createBadge(envLabel(conn.environment as string), "environment");
+        nameEl.className = "member-name";
+        const envTag = createBadge(envLabel(conn.environment as string), "environment");
         nameRow.append(nameEl, envTag);
 
         info.appendChild(nameRow);
@@ -179,8 +177,7 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
         const overrideKeys = Object.keys(overrides);
         if (overrideKeys.length) {
           const ov = document.createElement("div");
-          ov.className = "mono";
-           ov.className = "mono member-overrides";
+          ov.className = "mono member-overrides";
           ov.textContent = overrideKeys
             .sort()
             .map((k) => `${k} → ${overrides[k]}`)
@@ -189,28 +186,23 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
         }
 
         const prefix = document.createElement("code");
-        prefix.className = "mono";
-         prefix.className = "mono member-prefix";
+        prefix.className = "mono member-prefix";
         prefix.textContent = `${slugs[idx]}__*`;
         prefix.setAttribute("aria-label", `Tool prefix ${slugs[idx]}__`);
 
         const chev = document.createElement("span");
-         chev.appendChild(createIcon("chevron-right"));
+        chev.className = "member-chevron";
+        chev.appendChild(createIcon("chevron-right"));
         chev.setAttribute("aria-hidden", "true");
-         chev.className = "member-chevron";
 
         row.append(badge, info, prefix, chev);
         row.addEventListener("click", () => onEditIntegration(conn.id));
-        row.addEventListener("keydown", (e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onEditIntegration(conn.id);
-          }
-        });
-         const item = document.createElement("div");
-         item.setAttribute("role", "listitem");
-         item.appendChild(row);
-         list.appendChild(item);
+
+        const item = document.createElement("div");
+        item.className = "member-item";
+        item.setAttribute("role", "listitem");
+        item.appendChild(row);
+        list.appendChild(item);
       });
       membersSection.appendChild(list);
     }

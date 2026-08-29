@@ -1,8 +1,8 @@
 # Pluk Logos
 
 Source of truth for Pluk's brand marks. The shipped app assets
-(`swift/AppIcon.icns`, `swift/Sources/Resources/MenuBarIcon.png`) are generated
-from the SVGs here — edit the SVG, then regenerate.
+(`crates/pluk-host/icons/icon.icns`, `crates/pluk-host/icons/tray.png`) are
+generated from the SVGs here — edit the SVG, then regenerate.
 
 ## The mark
 
@@ -42,10 +42,10 @@ for s in 16 32 128 256 512; do
   rsvg-convert -w $((s*2)) -h $((s*2)) logo.svg -o export/AppIcon.iconset/icon_${s}x${s}@2x.png
 done
 rsvg-convert -w 1024 -h 1024 logo.svg -o export/logo-1024.png
-iconutil -c icns export/AppIcon.iconset -o ../swift/AppIcon.icns
+iconutil -c icns export/AppIcon.iconset -o ../crates/pluk-host/icons/icon.icns
 
 # Menu bar icon — 60x36 template PNG (2x of the 30x18 bar slot)
-rsvg-convert -w 60 -h 36 menubar.svg -o ../swift/Sources/Resources/MenuBarIcon.png
+rsvg-convert -w 60 -h 36 menubar.svg -o ../crates/pluk-host/icons/tray.png
 ```
 
 `make bundle` then copies both into `Pluk.app`.

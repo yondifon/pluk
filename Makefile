@@ -79,12 +79,12 @@ bundle: check-tauri sync-version build-ui
 	@printf "→ bundling $(APP) v$(VERSION) ($(COMMIT)) via Tauri\n"
 	@printf "  macOS artefacts: target/release/bundle/macos/*.app + target/release/bundle/dmg/*.dmg\n"
 	@printf "  signing: APPLE_SIGNING_IDENTITY=\"\$$APPLE_SIGNING_IDENTITY\" (macOS), TAURI_SIGNING_PRIVATE_KEY for updater\n"
-	@printf "  unsigned? omit APPLE_SIGNING_IDENTITY (ad-hoc). signed? make bundle-signed\n"
-	cargo tauri build
+	@printf "  unsigned? make bundle-unsigned (ad-hoc, no secrets)\n"
+	bash scripts/with-secrets.sh cargo tauri build
 
 bundle-unsigned: check-tauri sync-version build-ui
 	@printf "→ bundling without signing (ad-hoc / unsigned)\n"
-	APPLE_SIGNING_IDENTITY="-" cargo tauri build
+	bash scripts/with-secrets.sh env APPLE_SIGNING_IDENTITY="-" cargo tauri build
 
 bundle-signed: check-tauri sync-version build-ui
 	@printf "→ bundling signed + notarized via 1Password\n"
@@ -98,7 +98,7 @@ bundle-signed: check-tauri sync-version build-ui
 		echo "error: .env.1password not found (template .env.1password should be committed)."; \
 		exit 1; \
 	fi
-	op run --env-file=.env.1password -- cargo tauri build
+	bash scripts/with-secrets.sh cargo tauri build
 
 # ── Publish (macOS release) ──────────────────────────────────────────────────
 # Universal (arm64 + x86_64) build via `cargo tauri build --target

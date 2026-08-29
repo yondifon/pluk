@@ -21,6 +21,9 @@ type Modal = {
 
 let activeModal: Modal | null = null;
 
+/** Matches --duration-exit, so the overlay leaves the DOM as its fade lands. */
+const EXIT_MS = 150;
+
 const focusableSelector = [
   "button:not([disabled])",
   "[href]",
@@ -118,7 +121,7 @@ export function openModal(options: ModalOptions): Modal {
       if (activeModal?.close === close) activeModal = null;
       opener?.focus();
       options.onClose?.();
-    }, 140);
+    }, EXIT_MS);
   };
 
   closeButton.addEventListener("click", close);

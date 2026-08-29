@@ -5,6 +5,16 @@
 .shell-resizer::after { position: absolute; top: 0; bottom: 0; left: calc(var(--border-width) * -1); width: var(--border-width); content: ""; background: var(--border-subtle); }
 .shell-resizer:hover::after, .shell-resizer:focus-visible::after { background: var(--border-control); }
 .shell-main { display: flex; flex: 1; flex-direction: column; min-width: 0; overflow: hidden; background: var(--surface-content); }
+/* The band across the top of the main pane: it is where the window is dragged,
+   and once the sidebar is hidden it also holds the toggle and the room the
+   traffic lights need. */
+.shell-topbar { display: flex; align-items: center; gap: var(--space-sm); min-height: var(--control-target); padding: var(--space-sm) var(--space-md); }
+.shell-topbar button { color: var(--surface-tertiary-label); }
+.shell-topbar button:hover:not(:disabled) { background: var(--surface-hover); color: var(--surface-label); }
+.shell-topbar .sidebar-toggle { display: none; }
+.sidebar-collapsed .shell-topbar .sidebar-toggle { display: inline-grid; }
+.platform-macos .sidebar-collapsed .shell-topbar { padding-left: var(--macos-titlebar-inset); }
+.sidebar-collapsed .shell-sidebar, .sidebar-collapsed .shell-resizer { display: none; }
 /* Toasts anchor to the stage, so they never sit over the banners below it. */
 .shell-stage { position: relative; display: flex; flex: 1; min-height: 0; }
 .shell-detail { flex: 1; overflow: auto; padding: 0 var(--space-xl); }

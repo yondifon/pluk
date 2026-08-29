@@ -101,37 +101,53 @@ function markMissing(control: HTMLElement, wrap: HTMLElement, message: string): 
   wrap.appendChild(error);
 }
 
-export function renderField(field: ConfigFieldDef, value: string, onChange: (v: string) => void): HTMLElement {
+/** A label in the shared column, the control on the shared axis, and anything
+    explaining it stacked underneath the control. */
+function settingRow(key: string, labelText: string): { row: HTMLElement; slot: HTMLElement; controlId: string } {
   const row = document.createElement("div");
   row.className = "inspector-row";
-  row.dataset.fieldKey = field.key;
-  const label = document.createElement("div");
+  const controlId = `control-${key}`;
+  const label = document.createElement("label");
   label.className = "inspector-label";
-  label.textContent = field.label;
-  if (field.required) label.textContent += " *";
-  row.appendChild(label);
+  label.htmlFor = controlId;
+  label.textContent = labelText;
+  const slot = document.createElement("div");
+  slot.className = "field-slot";
+  row.append(label, slot);
+  return { row, slot, controlId };
+}
 
-  const controlWrap = document.createElement("div");
-   controlWrap.className = "field-control";
+function helpText(id: string, text: string): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "hint";
+  el.id = id;
+  el.textContent = text;
+  return el;
+}
 
-  const help = field.help ? (() => { const p = document.createElement("div"); p.className = "hint"; p.id = `help-${field.key}`; p.textContent = field.help!; return p; })() : null;
+export function renderField(field: ConfigFieldDef, value: string, onChange: (v: string) => void): HTMLElement {
+  const { row, slot, controlId } = settingRow(field.key, field.required ? `${field.label} *` : field.label);
+  row.dataset.fieldKey = field.key;
+
+  const help = field.help ? helpText(`help-${field.key}`, field.help) : null;
+  const describe = (el: HTMLElement) => { if (help) el.setAttribute("aria-describedby", help.id); };
 
   switch (field.type) {
     case "toggle": {
       const input = document.createElement("input");
       input.type = "checkbox";
+      input.id = controlId;
       input.checked = value === "true";
-       input.addEventListener("change", () => onChange(input.checked ? "true" : "false"));
-       const toggleLabel = document.createElement("label");
-       toggleLabel.className = "field-toggle";
-       toggleLabel.append(input, document.createTextNode(field.label));
-       controlWrap.appendChild(toggleLabel);
+      describe(input);
+      input.addEventListener("change", () => onChange(input.checked ? "true" : "false"));
+      slot.appendChild(input);
       break;
     }
     case "select": {
       const sel = document.createElement("select");
       sel.className = "field-select";
-      if (help) sel.setAttribute("aria-describedby", help.id);
+      sel.id = controlId;
+      describe(sel);
       for (const opt of field.options ?? []) {
         const o = document.createElement("option");
         o.value = opt.value;
@@ -145,17 +161,17 @@ export function renderField(field: ConfigFieldDef, value: string, onChange: (v: 
         onChange(sel.value);
       });
       sel.title = sel.selectedOptions[0]?.text ?? "";
-      controlWrap.appendChild(sel);
+      slot.appendChild(sel);
       break;
     }
     case "file": {
-      const row2 = document.createElement("div");
-       row2.className = "field-file-row";
       const text = document.createElement("input");
       text.type = "text";
+      text.id = controlId;
       text.placeholder = field.placeholder ?? "";
       text.value = value;
       text.className = "field-input mono";
+      describe(text);
       text.addEventListener("input", () => onChange(text.value));
       const file = document.createElement("input");
       file.type = "file";
@@ -172,50 +188,37 @@ export function renderField(field: ConfigFieldDef, value: string, onChange: (v: 
       file.addEventListener("change", () => {
         if (file.files?.[0]) onChange(file.files[0].name);
       });
-      row2.append(text, btn, file);
-      controlWrap.appendChild(row2);
+      slot.append(text, btn, file);
       break;
     }
     case "number": {
       const input = document.createElement("input");
       input.type = "number";
+      input.id = controlId;
       input.placeholder = field.placeholder ?? "";
       input.value = value;
-      input.className = "field-input mono";
-      if (help) input.setAttribute("aria-describedby", help.id);
-       input.classList.add("field-number");
-       input.inputMode = "numeric";
-       input.step = "1";
-       if (help) input.setAttribute("aria-describedby", help.id);
+      input.className = "field-input mono field-number";
+      input.inputMode = "numeric";
+      input.step = "1";
+      describe(input);
       input.addEventListener("input", () => onChange(input.value));
-      controlWrap.appendChild(input);
-      break;
-    }
-    case "password": {
-      const input = document.createElement("input");
-      input.type = "password";
-      input.placeholder = field.placeholder ?? "••••••";
-      input.value = value;
-      input.className = "field-input mono";
-      if (help) input.setAttribute("aria-describedby", help.id);
-      input.addEventListener("input", () => onChange(input.value));
-      controlWrap.appendChild(input);
+      slot.appendChild(input);
       break;
     }
     default: {
       const input = document.createElement("input");
-      input.type = "text";
-      input.placeholder = field.placeholder ?? "";
+      input.type = field.type === "password" ? "password" : "text";
+      input.id = controlId;
+      input.placeholder = field.placeholder ?? (field.type === "password" ? "••••••" : "");
       input.value = value;
-       input.className = "field-input mono";
-       if (help) input.setAttribute("aria-describedby", help.id);
+      input.className = "field-input mono";
+      describe(input);
       input.addEventListener("input", () => onChange(input.value));
-      controlWrap.appendChild(input);
+      slot.appendChild(input);
       break;
     }
   }
-  if (help) controlWrap.appendChild(help);
-  row.appendChild(controlWrap);
+  if (help) row.appendChild(help);
   return row;
 }
 
@@ -244,50 +247,52 @@ export function renderToolsSection(
       const enabled = draft.toolConfig[tool.name]?.enabled ?? tool.defaultEnabled;
       const row = document.createElement("div");
       row.className = enabled ? "tool-row tool-on" : "tool-row tool-off";
+
+      const head = document.createElement("label");
+      head.className = "tool-head";
       const toggle = document.createElement("input");
       toggle.type = "checkbox";
       toggle.checked = enabled;
       toggle.setAttribute("aria-label", tool.name);
+      toggle.setAttribute("aria-describedby", `tool-desc-${tool.name}`);
       toggle.addEventListener("change", () => onToggle(tool.name, toggle.checked));
-      const info = document.createElement("div");
-       info.className = "tool-info";
-      const nameRow = document.createElement("div");
-      nameRow.className = "tool-name-row";
-       nameRow.innerHTML = `<span class="mono">${tool.name}</span><span class="tool-category">${tool.category}</span>`;
-       if (!enabled) {
-         const state = document.createElement("span");
-         state.className = "tool-state";
-         state.textContent = "Off — enable to include";
-         nameRow.appendChild(state);
-       }
+      const name = document.createElement("span");
+      name.className = "tool-name mono";
+      name.id = `tool-name-${tool.name}`;
+      name.textContent = tool.name;
+      const category = document.createElement("span");
+      category.className = "tool-category";
+      category.textContent = tool.category;
+      head.append(toggle, name, category);
+      if (!enabled) {
+        const state = document.createElement("span");
+        state.className = "tool-state";
+        state.textContent = "Off — enable to include";
+        head.appendChild(state);
+      }
+
+      const body = document.createElement("div");
+      body.className = "tool-body";
       const desc = document.createElement("div");
       desc.className = "tool-summary";
+      desc.id = `tool-desc-${tool.name}`;
       desc.textContent = tool.description;
-      info.append(nameRow, desc);
+      body.appendChild(desc);
 
       // Settings expanded when enabled
       if (enabled && tool.settings?.length) {
         const settingsWrap = document.createElement("div");
-       settingsWrap.className = "tool-settings";
+        settingsWrap.className = "tool-settings";
+        settingsWrap.setAttribute("role", "group");
+        settingsWrap.setAttribute("aria-labelledby", name.id);
         for (const s of tool.settings) {
-          const isDangerOn = s.danger && (draft.toolConfig[tool.name]?.settings[s.key] ?? s.default ?? "") === "true";
-          const sRow = renderSettingRow(tool, s, draft.toolConfig[tool.name]?.settings[s.key] ?? s.default ?? "", onSettingChange);
-          if (isDangerOn) {
-             sRow.classList.add("danger-setting");
-            const warn = document.createElement("div");
-            warn.className = "hint danger-copy";
-            warn.append(createIcon("error"));
-            const warning = document.createElement("strong");
-            warning.textContent = `Warning: ${dangerousCopy(s)}`;
-            warn.appendChild(warning);
-            sRow.appendChild(warn);
-          }
-          settingsWrap.appendChild(sRow);
+          const value = draft.toolConfig[tool.name]?.settings[s.key] ?? s.default ?? "";
+          settingsWrap.appendChild(renderSettingRow(tool, s, value, onSettingChange));
         }
-        info.appendChild(settingsWrap);
+        body.appendChild(settingsWrap);
       }
 
-      row.append(toggle, info);
+      row.append(head, body);
       wrap.appendChild(row);
     }
   };
@@ -320,26 +325,25 @@ function renderSettingRow(
   value: string,
   onChange: (tool: string, key: string, value: string) => void,
 ): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "inspector-row";
-  const label = document.createElement("div");
-  label.className = "inspector-label";
-  label.textContent = setting.label;
-  row.appendChild(label);
-  const wrap = document.createElement("div");
-   wrap.className = "field-control";
-   if (setting.type === "toggle") {
+  const key = `${tool.name}-${setting.key}`;
+  const { row, slot, controlId } = settingRow(key, setting.label);
+  const help = setting.help ? helpText(`help-${key}`, setting.help) : null;
+  const describe = (el: HTMLElement) => { if (help) el.setAttribute("aria-describedby", help.id); };
+
+  if (setting.type === "toggle") {
     const input = document.createElement("input");
     input.type = "checkbox";
+    input.id = controlId;
     input.checked = value === "true";
-    input.setAttribute("aria-label", setting.label);
+    describe(input);
     input.addEventListener("change", () => onChange(tool.name, setting.key, input.checked ? "true" : "false"));
-    wrap.appendChild(input);
-     if (setting.danger && input.checked) wrap.classList.add("danger-setting");
-   } else if (setting.type === "select") {
+    slot.appendChild(input);
+  } else if (setting.type === "select") {
     const sel = document.createElement("select");
-    if (setting.help) sel.setAttribute("aria-describedby", `help-${tool.name}-${setting.key}`);
-      for (const opt of setting.options ?? []) {
+    sel.className = "field-select";
+    sel.id = controlId;
+    describe(sel);
+    for (const opt of setting.options ?? []) {
       const o = document.createElement("option");
       o.value = opt.value; o.textContent = opt.label; o.title = opt.label;
       if (opt.value === value) o.selected = true;
@@ -350,23 +354,35 @@ function renderSettingRow(
       onChange(tool.name, setting.key, sel.value);
     });
     sel.title = sel.selectedOptions[0]?.text ?? "";
-    wrap.appendChild(sel);
+    slot.appendChild(sel);
   } else if (setting.type === "number") {
     const inp = document.createElement("input");
-     inp.type = "number"; inp.value = value; inp.inputMode = "numeric"; inp.step = "1"; inp.className = "field-input mono field-setting-number";
-     if (setting.help) inp.setAttribute("aria-describedby", `help-${tool.name}-${setting.key}`);
+    inp.type = "number"; inp.id = controlId; inp.value = value; inp.inputMode = "numeric"; inp.step = "1";
+    inp.className = "field-input mono field-number";
+    describe(inp);
     inp.addEventListener("input", () => onChange(tool.name, setting.key, inp.value));
-    wrap.appendChild(inp);
+    slot.appendChild(inp);
   } else {
     const inp = document.createElement("input");
-     inp.type = setting.type === "password" ? "password" : "text";
-     inp.placeholder = setting.placeholder ?? ""; inp.value = value; inp.className = "field-input mono";
-     if (setting.help) inp.setAttribute("aria-describedby", `help-${tool.name}-${setting.key}`);
+    inp.type = setting.type === "password" ? "password" : "text";
+    inp.id = controlId;
+    inp.placeholder = setting.placeholder ?? ""; inp.value = value; inp.className = "field-input mono";
+    describe(inp);
     inp.addEventListener("input", () => onChange(tool.name, setting.key, inp.value));
-    wrap.appendChild(inp);
+    slot.appendChild(inp);
   }
-  if (setting.help) { const h = document.createElement("div"); h.className = "hint"; h.textContent = setting.help; wrap.appendChild(h); }
-  row.appendChild(wrap);
+  if (help) row.appendChild(help);
+
+  if (setting.danger && value === "true") {
+    row.classList.add("danger-setting");
+    const warn = document.createElement("div");
+    warn.className = "hint danger-copy";
+    warn.append(createIcon("error"));
+    const warning = document.createElement("strong");
+    warning.textContent = `Warning: ${dangerousCopy(setting)}`;
+    warn.appendChild(warning);
+    row.appendChild(warn);
+  }
   return row;
 }
 
@@ -385,47 +401,41 @@ export function renderIntegrationForm(
   const general = document.createElement("div");
   general.className = "ui-card";
   general.innerHTML = `<h3 class="ui-card-title">General</h3>`;
-  const nameRow = document.createElement("div");
-  nameRow.className = "inspector-row";
-  nameRow.innerHTML = `<div class="inspector-label">Name *</div>`;
+  const name = settingRow("integration-name", "Name *");
   const nameInput = document.createElement("input");
   nameInput.type = "text"; nameInput.placeholder = manifest ? `My ${manifest.label}` : "My Service";
-  nameInput.value = draft.name; nameInput.className = "field-input"; nameInput.id = "integration-name";
+  nameInput.value = draft.name; nameInput.className = "field-input"; nameInput.id = name.controlId;
   nameInput.addEventListener("input", () => onDraftChange({ ...draft, name: nameInput.value }));
-  const nameWrap = document.createElement("div"); nameWrap.className = "field-control"; nameWrap.appendChild(nameInput);
-  nameRow.appendChild(nameWrap);
-  general.appendChild(nameRow);
+  name.slot.appendChild(nameInput);
+  general.appendChild(name.row);
 
   if (manifest) {
     const typeRow = document.createElement("div");
     typeRow.className = "inspector-row";
     typeRow.innerHTML = `<div class="inspector-label">Type</div>`;
-    const typeValue = document.createElement("div");
-    typeValue.className = "field-control field-inline";
-    typeValue.innerHTML = `<span class="mono">${manifest.label}</span>`;
+    const typeSlot = document.createElement("div");
+    typeSlot.className = "field-slot";
+    typeSlot.innerHTML = `<span class="mono">${manifest.label}</span>`;
     if (onTypeChangeClick) {
-      typeValue.appendChild(createButton("Change", { size: "sm", onClick: onTypeChangeClick }));
+      typeSlot.appendChild(createButton("Change", { size: "sm", onClick: onTypeChangeClick }));
     }
-    typeRow.appendChild(typeValue);
+    typeRow.appendChild(typeSlot);
     general.appendChild(typeRow);
   }
 
-  const envRow = document.createElement("div");
-  envRow.className = "inspector-row";
-  envRow.innerHTML = `<div class="inspector-label">Environment</div>`;
+  const env = settingRow("environment", "Environment");
   const envPicker = document.createElement("select");
   envPicker.className = "field-select";
-  envPicker.setAttribute("aria-label", "Environment");
-  for (const env of ["production", "staging", "development", "local"] as Environment[]) {
+  envPicker.id = env.controlId;
+  for (const value of ["production", "staging", "development", "local"] as Environment[]) {
     const o = document.createElement("option");
-    o.value = env; o.textContent = env[0].toUpperCase() + env.slice(1);
-    if (env === draft.environment) o.selected = true;
+    o.value = value; o.textContent = value[0].toUpperCase() + value.slice(1);
+    if (value === draft.environment) o.selected = true;
     envPicker.appendChild(o);
   }
   envPicker.addEventListener("change", () => onDraftChange(setEnvironment(draft, envPicker.value as Environment)));
-  const envWrap = document.createElement("div"); envWrap.className = "field-control"; envWrap.appendChild(envPicker);
-  envRow.appendChild(envWrap);
-  general.appendChild(envRow);
+  env.slot.appendChild(envPicker);
+  general.appendChild(env.row);
   wrap.appendChild(general);
 
   if (draft.policyKind === "sql" && (draft.environment === "development" || draft.environment === "local") && draft.toolConfig.query?.settings.mode === "mutations") {
@@ -471,7 +481,7 @@ export function renderIntegrationForm(
   const save = createButton("Save", { variant: "primary" });
   save.addEventListener("click", () => {
     if (!draft.name.trim()) {
-      markMissing(nameInput, nameWrap, "Enter a name to continue.");
+      markMissing(nameInput, name.row, "Enter a name to continue.");
       return;
     }
     if (canSave(draft)) {
@@ -485,7 +495,7 @@ export function renderIntegrationForm(
       control.setAttribute("aria-invalid", "true");
       control.focus();
       if (!invalidRow?.querySelector(".field-error")) {
-        const error = document.createElement("div"); error.className = "field-error"; error.setAttribute("role", "alert"); error.textContent = `${invalid?.label ?? "This field"} is required.`; invalidRow?.querySelector(".field-control")?.appendChild(error);
+        const error = document.createElement("div"); error.className = "field-error"; error.setAttribute("role", "alert"); error.textContent = `${invalid?.label ?? "This field"} is required.`; invalidRow?.appendChild(error);
       }
     }
   });
@@ -506,30 +516,29 @@ export function renderGroupForm(
   const wrap = document.createElement("div");
   wrap.className = "form-body";
 
-  const nameRow = document.createElement("div");
-  nameRow.className = "ui-card";
-  nameRow.innerHTML = `<h3 class="ui-card-title">Group</h3>`;
-  const row = document.createElement("div"); row.className = "inspector-row";
-  row.innerHTML = `<div class="inspector-label">Name *</div>`;
+  const card = document.createElement("div");
+  card.className = "ui-card";
+  card.innerHTML = `<h3 class="ui-card-title">Group</h3>`;
+  const name = settingRow("group-name", "Name *");
   const nameInput = document.createElement("input");
-  nameInput.type = "text"; nameInput.placeholder = "Group name"; nameInput.value = draft.name; nameInput.className = "field-input"; nameInput.id = "group-name";
+  nameInput.type = "text"; nameInput.placeholder = "Group name"; nameInput.value = draft.name; nameInput.className = "field-input"; nameInput.id = name.controlId;
   nameInput.addEventListener("input", () => onDraftChange({ ...draft, name: nameInput.value }));
-  const w = document.createElement("div"); w.className = "field-control"; w.appendChild(nameInput); row.appendChild(w);
-  nameRow.appendChild(row);
+  name.slot.appendChild(nameInput);
+  card.appendChild(name.row);
 
   // Environment picker with Any
-  const envRow = document.createElement("div"); envRow.className = "inspector-row";
-  envRow.innerHTML = `<div class="inspector-label">Environment</div>`;
+  const environment = settingRow("group-environment", "Environment");
   const sel = document.createElement("select");
   sel.className = "field-select";
+  sel.id = environment.controlId;
   const anyOpt = document.createElement("option"); anyOpt.value = ""; anyOpt.textContent = "Any (mixed)"; if (draft.environment == null) anyOpt.selected = true; sel.appendChild(anyOpt);
   for (const env of ["production", "staging", "development", "local"]) {
     const o = document.createElement("option"); o.value = env; o.textContent = env[0].toUpperCase() + env.slice(1); if (draft.environment === env) o.selected = true; sel.appendChild(o);
   }
   sel.addEventListener("change", () => onDraftChange({ ...draft, environment: sel.value || null }));
-  const ew = document.createElement("div"); ew.className = "field-control"; ew.appendChild(sel); envRow.appendChild(ew);
-  nameRow.appendChild(envRow);
-  wrap.appendChild(nameRow);
+  environment.slot.appendChild(sel);
+  card.appendChild(environment.row);
+  wrap.appendChild(card);
 
   // Checklist
   const listCard = document.createElement("div"); listCard.className = "ui-card";
@@ -560,10 +569,9 @@ export function renderGroupForm(
           const hint = document.createElement("div"); hint.className = "hint"; hint.textContent = "Overrides for this group (blank = inherit)";
           panel.appendChild(hint);
           for (const f of fields) {
-            const orRow = document.createElement("div"); orRow.className = "inspector-row";
-            orRow.innerHTML = `<div class="inspector-label">${f.label}</div>`;
+            const override = settingRow(`${conn.id}-${f.key}`, f.label);
             const inp = document.createElement("input");
-            inp.type = "text"; inp.className = "field-input mono";
+            inp.type = "text"; inp.className = "field-input mono"; inp.id = override.controlId;
              inp.placeholder = "Inherited";
              const inherited = inheritPlaceholder(conn.config, f);
              if (inherited !== "Inherited") inp.title = inherited;
@@ -574,8 +582,8 @@ export function renderGroupForm(
               if (trimmed === "") delete ov[f.key]; else ov[f.key] = inp.value;
               onDraftChange({ ...draft, overrides: { ...draft.overrides, [conn.id]: ov } });
             });
-             const ww = document.createElement("div"); ww.className = "field-control"; ww.appendChild(inp); orRow.appendChild(ww);
-            panel.appendChild(orRow);
+            override.slot.appendChild(inp);
+            panel.appendChild(override.row);
           }
           row2.appendChild(panel);
         }
@@ -589,7 +597,7 @@ export function renderGroupForm(
   const cancel = createButton("Cancel", { onClick: onCancel });
   const save = createButton("Save", { variant: "primary" });
   save.addEventListener("click", () => {
-    if (!draft.name.trim()) { markMissing(nameInput, w, "Enter a name to continue."); return; }
+    if (!draft.name.trim()) { markMissing(nameInput, name.row, "Enter a name to continue."); return; }
     if (canSaveGroup(draft)) onSave(draft);
   });
   footer.append(cancel, save); wrap.appendChild(footer);

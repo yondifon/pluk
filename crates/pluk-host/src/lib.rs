@@ -1,6 +1,8 @@
 pub mod commands;
 pub mod frame;
 pub mod server;
+#[cfg(target_os = "macos")]
+mod tray_menu;
 pub mod updater;
 pub mod version;
 pub mod zoom;
@@ -17,6 +19,12 @@ use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
 };
+
+const TRAY_ID: &str = "pluk-tray";
+const TRAY_TOGGLE_ID: &str = "tray_toggle";
+const TRAY_CHECK_UPDATES_ID: &str = "tray_updates";
+const TRAY_QUIT_ID: &str = "tray_quit";
+const CHECK_FOR_UPDATES_ID: &str = "check_for_updates";
 
 #[tauri::command]
 fn get_version() -> serde_json::Value {
@@ -66,35 +74,27 @@ pub fn run() {
                     let _ = window.emit("pluk://log-activity", payload);
                 }
             }));
-            let show = MenuItem::with_id(app, "tray_show", "Open pluk", true, None::<&str>)?;
-            let check_updates = MenuItem::with_id(
-                app,
-                "tray_updates",
-                "Check for Updates…",
-                true,
-                None::<&str>,
-            )?;
-            let quit = MenuItem::with_id(app, "tray_quit", "Quit pluk", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&show, &check_updates, &quit])?;
-            let _tray = TrayIconBuilder::with_id("pluk-tray")
+            // The status item carries no menu of its own: an attached menu is
+            // opened by AppKit on either button, which would swallow the left
+            // click. The right click attaches one for the length of the click.
+            let _tray = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(tauri::include_image!("icons/tray.png"))
-                .menu(&tray_menu)
-                .show_menu_on_left_click(false)
+                .icon_as_template(true)
                 .on_tray_icon_event(|tray, event| {
-                    if let tauri::tray::TrayIconEvent::Click { button, .. } = event
-                        && button == tauri::tray::MouseButton::Left
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button,
+                        button_state,
+                        ..
+                    } = event
+                        && button_state == tauri::tray::MouseButtonState::Down
                     {
-                        toggle_window(tray.app_handle());
+                        match button {
+                            tauri::tray::MouseButton::Left => toggle_window(tray.app_handle()),
+                            #[cfg(target_os = "macos")]
+                            tauri::tray::MouseButton::Right => tray_menu::show(tray.app_handle()),
+                            _ => {}
+                        }
                     }
-                })
-                .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "tray_show" => toggle_window(app),
-                    "tray_quit" => app.exit(0),
-                    "tray_updates" => {
-                        show_window(app);
-                        tauri::async_runtime::spawn(updater::run_check(app.clone(), true));
-                    }
-                    _ => {}
                 })
                 .build(app)?;
             #[cfg(target_os = "macos")]
@@ -148,9 +148,16 @@ pub fn run() {
                         let _ = window.emit("pluk://zoom", scale);
                     }
                 }
-                "check_for_updates" => {
+                CHECK_FOR_UPDATES_ID => {
                     tauri::async_runtime::spawn(updater::run_check(app.clone(), true));
                 }
+                TRAY_TOGGLE_ID => toggle_window(app),
+                TRAY_CHECK_UPDATES_ID => {
+                    // The check reports itself in the window, so bring it up.
+                    show_window(app);
+                    tauri::async_runtime::spawn(updater::run_check(app.clone(), true));
+                }
+                TRAY_QUIT_ID => app.exit(0),
                 _ => {}
             });
             let handle = app.handle().clone();
@@ -235,7 +242,7 @@ fn build_app_menu<R: tauri::Runtime>(
 ) -> tauri::Result<Menu<R>> {
     let check_updates = MenuItem::with_id(
         app,
-        "check_for_updates",
+        CHECK_FOR_UPDATES_ID,
         "Check for Updates…",
         true,
         None::<&str>,

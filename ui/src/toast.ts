@@ -31,7 +31,8 @@ export type PendingToast = {
 export const AUTO_DISMISS_MS = 4000;
 export const VISIBLE_TOASTS = 3;
 const MAX_TOASTS = 5;
-const EXIT_MS = 220;
+/** Matches --duration-toast, so a toast leaves the DOM as its exit lands. */
+const EXIT_MS = 260;
 
 const ICONS: Record<ToastVariant, IconName> = {
   success: "check",
@@ -146,6 +147,7 @@ export function mountToaster(container: HTMLElement): () => void {
   container.setAttribute("aria-atomic", "false");
 
   const elements = new Map<string, HTMLElement>();
+  const painted = new Map<string, ToastRecord>();
   const overflow = document.createElement("div");
   overflow.className = "toast-overflow";
   overflow.setAttribute("aria-hidden", "true");
@@ -222,6 +224,10 @@ export function mountToaster(container: HTMLElement): () => void {
       if (element) stack.push(element);
     }
 
+    // Measure everything before writing anything; interleaving the two forces
+    // a synchronous layout per toast on every add and every hover.
+    const heights = stack.map((element) => element.offsetHeight);
+
     let stacked = 0;
     stack.forEach((element, index) => {
       const hidden = !expanded && index >= VISIBLE_TOASTS;
@@ -236,10 +242,10 @@ export function mountToaster(container: HTMLElement): () => void {
         "--toast-scale",
         expanded ? "1" : String(1 - Math.min(index, VISIBLE_TOASTS) * 0.04),
       );
-      stacked += element.offsetHeight;
+      stacked += heights[index];
     });
 
-    const frontHeight = stack[0]?.offsetHeight ?? 0;
+    const frontHeight = heights[0] ?? 0;
     const overflowing = !expanded && stack.length > VISIBLE_TOASTS;
     if (overflowing) {
       overflow.textContent = `+${stack.length - VISIBLE_TOASTS} more`;
@@ -271,7 +277,13 @@ export function mountToaster(container: HTMLElement): () => void {
     for (const record of records) {
       const existing = elements.get(record.id);
       if (existing) {
-        fill(existing, record);
+        // A record is replaced wholesale when it changes, so identity decides
+        // whether the toast needs rebuilding. Refilling in place would restart
+        // the spinner and discard the toast's own open/focus state.
+        if (painted.get(record.id) !== record) {
+          fill(existing, record);
+          painted.set(record.id, record);
+        }
         continue;
       }
       const element = document.createElement("div");
@@ -280,9 +292,15 @@ export function mountToaster(container: HTMLElement): () => void {
       element.dataset.enter = "true";
       fill(element, record);
       elements.set(record.id, element);
+      painted.set(record.id, record);
       container.appendChild(element);
+      // The first frame lets the entering styles compute, the second moves off
+      // them. A single frame can land before that first style pass, leaving
+      // nothing to transition from.
       requestAnimationFrame(() => {
-        delete element.dataset.enter;
+        requestAnimationFrame(() => {
+          delete element.dataset.enter;
+        });
       });
     }
 
@@ -290,6 +308,7 @@ export function mountToaster(container: HTMLElement): () => void {
     for (const [id, element] of elements) {
       if (live.has(id)) continue;
       elements.delete(id);
+      painted.delete(id);
       element.dataset.exit = "true";
       setTimeout(() => element.remove(), EXIT_MS);
     }

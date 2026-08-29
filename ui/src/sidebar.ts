@@ -5,6 +5,7 @@ import { adapterColor, glyphElement, hexToRgba } from "./glyph";
 import { createIcon } from "./icon";
 import { confirmModal } from "./modal";
 import { createButton, openMenu, renderErrorState } from "./primitives";
+import { createSidebarToggle } from "./shell";
 import { emptyState } from "./emptyStates";
 import {
   filteredGroups,
@@ -47,6 +48,7 @@ export function createSidebar(
   // Top bar
   const toolbar = document.createElement("div");
   toolbar.className = "sidebar-topbar";
+  toolbar.setAttribute("data-tauri-drag-region", "");
   const btnNewInt = createButton("", { icon: "add", ariaLabel: "New Integration", onClick: cbs.onCreateIntegration });
   btnNewInt.classList.add("icon-button");
   btnNewInt.title = "New Integration (⌘N)";
@@ -55,7 +57,7 @@ export function createSidebar(
   btnNewGroup.classList.add("icon-button");
   btnNewGroup.title = "New Group (⇧⌘N)";
   btnNewGroup.setAttribute("aria-label", "New Group");
-  toolbar.append(btnNewInt, btnNewGroup);
+  toolbar.append(createSidebarToggle(), btnNewInt, btnNewGroup);
 
   // Search row
   const searchRow = document.createElement("div");
@@ -187,16 +189,27 @@ export function createSidebar(
       el.style.left = `${Math.max(0, rect.right - el.offsetWidth)}px`;
       el.style.top = `${rect.bottom}px`;
     };
+    // Scroll fires in capture phase for every scroller in the app, and position()
+    // reads layout then writes it. Coalesce to one measure-and-place per frame.
+    let pending = 0;
+    const reposition = () => {
+      if (pending) return;
+      pending = requestAnimationFrame(() => {
+        pending = 0;
+        position();
+      });
+    };
     el.tabIndex = -1;
     document.body.appendChild(el);
     position();
     popover = el;
     closePopover = () => {
+      if (pending) cancelAnimationFrame(pending);
       el.remove();
       popover = null;
       closePopover = null;
-      window.removeEventListener("resize", position);
-      window.removeEventListener("scroll", position, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
       document.removeEventListener("pointerdown", close);
     };
     const close = (event: PointerEvent) => {
@@ -204,8 +217,8 @@ export function createSidebar(
         closePopover?.();
       }
     };
-    window.addEventListener("resize", position);
-    window.addEventListener("scroll", position, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
     document.addEventListener("pointerdown", close);
     el.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {

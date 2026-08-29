@@ -51,16 +51,16 @@ function configPathFor(client: McpClientId, scope: ConfigScope): string {
 
 function endpointRow({ url }: McpSectionSpec): HTMLElement {
   const row = document.createElement("div");
-  row.className = "inspector-row";
+  row.className = "inspector-row endpoint-row";
   const label = document.createElement("span");
   label.className = "inspector-label";
   label.textContent = "URL";
   const urlText = document.createElement("code");
-  urlText.className = "mono";
+  urlText.className = "mono endpoint-url";
   urlText.textContent = url;
   urlText.title = url;
   const copyBtn = createButton("Copy", {
-    variant: "primary",
+    variant: "secondary",
     size: "sm",
     ariaLabel: "Copy endpoint URL",
     onClick: async () => {
@@ -75,7 +75,7 @@ function endpointRow({ url }: McpSectionSpec): HTMLElement {
 
 function agentHintRow(hint: string): HTMLElement {
   const row = document.createElement("div");
-  row.className = "inspector-row";
+  row.className = "inspector-row inspector-row-wrap";
   const label = document.createElement("span");
   label.className = "inspector-label";
   label.textContent = "Agent hint";
@@ -177,7 +177,7 @@ export function renderMcpSection(
     });
   }
 
-  const addBtn = createButton("Install", { variant: "secondary", size: "sm", ariaLabel: "Install into selected clients" });
+  const addBtn = createButton("Install", { variant: "primary", size: "sm", ariaLabel: "Install into selected clients" });
   const copyBtn = createButton("Copy", { variant: "secondary", size: "sm", ariaLabel: "Copy snippet to clipboard" });
   const snippetPre = document.createElement("pre");
   snippetPre.className = "snippet";
@@ -215,6 +215,7 @@ export function renderMcpSection(
     const t = targets();
     addBtn.disabled = t.length === 0;
     copyBtn.style.display = selectedClient === "all" ? "none" : "";
+    snippetPre.classList.toggle("snippet-targets", selectedClient === "all");
     if (selectedClient === "all") {
       const list = document.createElement("div");
       list.className = "all-target-list";
@@ -224,15 +225,21 @@ export function renderMcpSection(
         for (const id of t) {
           const row = document.createElement("div");
           row.className = "target-row";
-          const label = CLIENTS.find((x) => x.id === id)!.label;
-          row.textContent = `${label} — ${configPathFor(id, selectedScope)}`;
+          const name = document.createElement("span");
+          name.textContent = CLIENTS.find((x) => x.id === id)!.label;
+          const path = document.createElement("code");
+          path.className = "mono target-path";
+          path.textContent = configPathFor(id, selectedScope);
+          row.append(name, path);
           list.appendChild(row);
         }
       }
       snippetPre.replaceChildren(list);
-      hint.textContent = "";
+      snippetPre.setAttribute("aria-label", "Files Install will write");
+      hint.textContent = t.length ? "Install writes these files." : "";
     } else {
       const id = selectedClient as McpClientId;
+      snippetPre.setAttribute("aria-label", "Configuration snippet");
       snippetPre.textContent = snippetFor(id, target.key, target.url);
       hint.textContent = `Install to ${configPathFor(id, selectedScope)}`;
     }
@@ -248,8 +255,13 @@ export function renderMcpSection(
     renderPreview();
   });
 
-  controls.append(clientLabel, clientSelect, scopeLabel, scopeSelect, addBtn, copyBtn);
-  container.append(controls, hint, snippetPre);
+  const spacer = document.createElement("span");
+  spacer.className = "control-spacer";
+  const divider = document.createElement("div");
+  divider.className = "card-divider";
+
+  controls.append(clientLabel, clientSelect, scopeLabel, scopeSelect, spacer, copyBtn, addBtn);
+  container.append(divider, controls, snippetPre, hint);
 
   if (!opts?.installed && hasHost()) {
     invoke<McpClientId[]>("list_installed_mcp_clients")

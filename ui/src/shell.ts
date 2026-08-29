@@ -1,6 +1,47 @@
 import "./shell.css";
 import { createButton } from "./primitives";
 
+const COLLAPSED_KEY = "pluk.sidebar.collapsed";
+
+let shellRoot: HTMLElement | null = null;
+
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function applyCollapsed(collapsed: boolean): void {
+  shellRoot?.classList.toggle("sidebar-collapsed", collapsed);
+  const label = collapsed ? "Show sidebar" : "Hide sidebar";
+  for (const btn of shellRoot?.querySelectorAll<HTMLElement>(".sidebar-toggle") ?? []) {
+    btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    btn.setAttribute("aria-label", label);
+    btn.title = label;
+  }
+}
+
+/** Both toggles — the one in the sidebar and the one that replaces it — call this. */
+export function toggleSidebar(): void {
+  const collapsed = !shellRoot?.classList.contains("sidebar-collapsed");
+  applyCollapsed(collapsed);
+  try {
+    localStorage.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch {
+    // A viewer with site data blocked still gets the toggle, just not the memory of it.
+  }
+}
+
+export function createSidebarToggle(): HTMLButtonElement {
+  const btn = createButton("", { icon: "sidebar", ariaLabel: "Hide sidebar", onClick: toggleSidebar });
+  btn.classList.add("icon-button", "sidebar-toggle");
+  btn.title = "Hide sidebar";
+  btn.setAttribute("aria-controls", "pluk-sidebar");
+  return btn;
+}
+
 export type BannerState = {
   update?: { commit?: string; updating: boolean };
   serverStatus: "running" | "starting" | "stopped";
@@ -12,9 +53,11 @@ export function createShell(
 ): { root: HTMLElement; detailMount: HTMLElement; bottomMount: HTMLElement; toasterMount: HTMLElement } {
   const root = document.createElement("div");
   root.className = "shell";
+  shellRoot = root;
 
   const sidebarWrap = document.createElement("div");
   sidebarWrap.className = "shell-sidebar";
+  sidebarWrap.id = "pluk-sidebar";
   sidebarWrap.appendChild(sidebarEl);
 
   const resizer = document.createElement("div");
@@ -29,12 +72,25 @@ export function createShell(
   resizer.addEventListener("mousedown", (e) => {
     startX = e.clientX;
     startW = sidebarWrap.getBoundingClientRect().width;
+    // Width relayouts the whole shell, so coalesce to one write per frame and
+    // hold the cursor for the drag — it otherwise reverts the moment the
+    // pointer leaves the resizer's hit area.
+    const previousCursor = document.body.style.cursor;
+    document.body.style.cursor = "col-resize";
+    let pending = 0;
+    let latestX = startX;
     const onMove = (ev: MouseEvent) => {
-      const delta = ev.clientX - startX;
-      const next = Math.max(220, Math.min(320, startW + delta));
-      sidebarWrap.style.width = `${next}px`;
+      latestX = ev.clientX;
+      if (pending) return;
+      pending = requestAnimationFrame(() => {
+        pending = 0;
+        const next = Math.max(220, Math.min(320, startW + (latestX - startX)));
+        sidebarWrap.style.width = `${next}px`;
+      });
     };
     const onUp = () => {
+      if (pending) cancelAnimationFrame(pending);
+      document.body.style.cursor = previousCursor;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
@@ -57,6 +113,13 @@ export function createShell(
   const main = document.createElement("div");
   main.className = "shell-main";
 
+  // With the sidebar hidden there is nothing left holding the window's drag
+  // region or the space the traffic lights need, so this strip takes over.
+  const mainTopbar = document.createElement("div");
+  mainTopbar.className = "shell-topbar";
+  mainTopbar.setAttribute("data-tauri-drag-region", "");
+  mainTopbar.appendChild(createSidebarToggle());
+
   const detail = document.createElement("div");
   detail.className = "shell-detail";
   detail.appendChild(detailEl);
@@ -70,15 +133,15 @@ export function createShell(
   stage.className = "shell-stage";
   stage.append(detail, toasterMount);
 
-  main.append(stage, bottom);
+  main.append(mainTopbar, stage, bottom);
   root.append(sidebarWrap, resizer, main);
+  applyCollapsed(readCollapsed());
 
   return { root, detailMount: detail, bottomMount: bottom, toasterMount };
 }
 
 export function renderBanners(mount: HTMLElement, state: BannerState, onRestart: () => void, onUpdate: () => void): void {
   mount.innerHTML = "";
-  const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
   if (state.update) {
     const banner = document.createElement("div");
     banner.className = "banner";
@@ -94,7 +157,6 @@ export function renderBanners(mount: HTMLElement, state: BannerState, onRestart:
       const btn = createButton("Update & Relaunch", { size: "sm", ariaLabel: "Update and relaunch app", onClick: onUpdate });
       banner.appendChild(btn);
     }
-    if (!reduce) banner.style.transition = "transform 200ms ease, opacity 200ms ease";
     mount.appendChild(banner);
   }
   if (state.serverStatus !== "running") {
@@ -107,7 +169,6 @@ export function renderBanners(mount: HTMLElement, state: BannerState, onRestart:
       const btn = createButton("Restart", { size: "sm", ariaLabel: "Restart server", onClick: onRestart });
       banner.appendChild(btn);
     }
-    if (!reduce) banner.style.transition = "transform 200ms ease, opacity 200ms ease";
     mount.appendChild(banner);
   }
 }
