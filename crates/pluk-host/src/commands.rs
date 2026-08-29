@@ -615,6 +615,22 @@ fn parse_mcp_client(raw: &str) -> Option<pluk_core::platform::McpClient> {
     }
 }
 
+/// Collapse the home directory back to `~` so the panel can show the file it
+/// touched without a machine-specific prefix.
+fn display_path(path: &std::path::Path) -> String {
+    let full = path.display().to_string();
+    match pluk_core::platform::home_dir() {
+        Some(home) => {
+            let home = home.display().to_string();
+            match full.strip_prefix(&home) {
+                Some(rest) => format!("~{rest}"),
+                None => full,
+            }
+        }
+        None => full,
+    }
+}
+
 #[tauri::command]
 pub fn inject_mcp_config(
     client: String,
@@ -647,11 +663,11 @@ pub fn inject_mcp_config(
     match pluk_core::mcp_config::inject(mcp_client, &config_scope, &key, &url) {
         Ok(pluk_core::mcp_config::InjectResult::Added { path }) => Ok(InjectResultJson {
             status: "added".to_string(),
-            path: path.display().to_string(),
+            path: display_path(&path),
         }),
         Ok(pluk_core::mcp_config::InjectResult::Skipped { path }) => Ok(InjectResultJson {
             status: "skipped".to_string(),
-            path: path.display().to_string(),
+            path: display_path(&path),
         }),
         Err(e) => Err(format!(
             "{e} Check the file and try again, or copy the snippet manually."
@@ -689,4 +705,136 @@ pub fn reload(state: State<'_, HostState>, owner_id: Option<String>) -> usize {
 #[cfg(test)]
 pub fn steps_json() -> serde_json::Value {
     serde_json::json!(crate::zoom::STEPS)
+}
+
+/// Covers the command the Install button reaches, not a helper beneath it:
+/// every case here calls `inject_mcp_config` with the same argument shape the
+/// window sends, and asserts the file on disk afterwards.
+#[cfg(test)]
+mod inject_command_tests {
+    use super::*;
+    use std::fs;
+    use std::sync::Mutex;
+    use serde_json::Value;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const URL: &str = "http://localhost:4242/mcp/tok";
+
+    fn read_json(path: &std::path::Path) -> Value {
+        serde_json::from_str(&fs::read_to_string(path).expect("config written")).expect("valid json")
+    }
+
+    #[test]
+    fn project_scope_writes_the_repo_file() {
+        let repo = tempfile::tempdir().unwrap();
+        let res = inject_mcp_config(
+            "cursor".to_string(),
+            "project".to_string(),
+            Some(repo.path().display().to_string()),
+            "marketing-db-production".to_string(),
+            URL.to_string(),
+        )
+        .expect("install succeeds");
+
+        assert_eq!(res.status, "added");
+        let written = read_json(&repo.path().join(".cursor/mcp.json"));
+        assert_eq!(
+            written["mcpServers"]["marketing-db-production"],
+            serde_json::json!({"command": "bunx", "args": ["mcp-remote", URL]})
+        );
+    }
+
+    #[test]
+    fn project_scope_keeps_servers_already_in_the_file() {
+        let repo = tempfile::tempdir().unwrap();
+        let path = repo.path().join("opencode.json");
+        fs::write(&path, r#"{"theme":"dark","mcp":{"other":{"type":"local"}}}"#).unwrap();
+
+        inject_mcp_config(
+            "opencode".to_string(),
+            "project".to_string(),
+            Some(repo.path().display().to_string()),
+            "my-db".to_string(),
+            URL.to_string(),
+        )
+        .expect("install succeeds");
+
+        let written = read_json(&path);
+        assert_eq!(written["mcp"]["other"]["type"], "local");
+        assert_eq!(written["theme"], "dark");
+        assert_eq!(written["mcp"]["my-db"]["url"], URL);
+    }
+
+    #[test]
+    fn global_scope_writes_the_user_file_and_reports_a_tilde_path() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let orig = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", home.path()) };
+
+        let res = inject_mcp_config(
+            "claudeCode".to_string(),
+            "global".to_string(),
+            None,
+            "my-db".to_string(),
+            URL.to_string(),
+        )
+        .expect("install succeeds");
+
+        assert_eq!(res.path, "~/.mcp.json");
+        let written = read_json(&home.path().join(".mcp.json"));
+        assert_eq!(
+            written["mcpServers"]["my-db"],
+            serde_json::json!({"type": "http", "url": URL})
+        );
+
+        // A second install leaves the entry alone and says so.
+        let again = inject_mcp_config(
+            "claudeCode".to_string(),
+            "global".to_string(),
+            None,
+            "my-db".to_string(),
+            URL.to_string(),
+        )
+        .expect("second install succeeds");
+        assert_eq!(again.status, "skipped");
+
+        match orig {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+
+    #[test]
+    fn project_scope_without_a_folder_is_an_error_the_user_can_act_on() {
+        let err = inject_mcp_config(
+            "cursor".to_string(),
+            "project".to_string(),
+            None,
+            "my-db".to_string(),
+            URL.to_string(),
+        )
+        .unwrap_err();
+        assert_eq!(err, "Choose a project folder and try again.");
+    }
+
+    #[test]
+    fn a_config_that_cannot_be_parsed_is_reported_and_left_alone() {
+        let repo = tempfile::tempdir().unwrap();
+        let path = repo.path().join(".mcp.json");
+        fs::write(&path, "{ not json").unwrap();
+
+        let err = inject_mcp_config(
+            "claudeCode".to_string(),
+            "project".to_string(),
+            Some(repo.path().display().to_string()),
+            "my-db".to_string(),
+            URL.to_string(),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("Couldn't parse the existing config"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
+    }
 }

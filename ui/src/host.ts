@@ -26,6 +26,42 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   return (await call(cmd, args)) as T;
 }
 
+/**
+ * Native folder chooser. Resolves to the chosen path, or null when the user
+ * cancels. Throws when the chooser cannot open — a caller must tell the user
+ * that, not mistake it for a cancellation.
+ */
+export async function pickDirectory(title: string): Promise<string | null> {
+  const picked = await invoke<string | string[] | null>("plugin:dialog|open", {
+    options: { directory: true, multiple: false, title },
+  });
+  if (Array.isArray(picked)) return picked[0] ?? null;
+  return picked;
+}
+
+/**
+ * Register an MCP server in one AI client's config file.
+ *
+ * Argument names must stay camelCase: Tauri converts a command's Rust
+ * parameters to camelCase, so `project_dir` arrives as a missing argument and
+ * the host rejects the call.
+ */
+export async function injectMcpConfig(args: {
+  client: string;
+  scope: string;
+  projectDir: string | null;
+  key: string;
+  url: string;
+}): Promise<{ status: "added" | "skipped"; path: string }> {
+  return invoke("inject_mcp_config", {
+    client: args.client,
+    scope: args.scope,
+    projectDir: args.projectDir,
+    key: args.key,
+    url: args.url,
+  });
+}
+
 /** Subscribe to a host event. Resolves to an unlisten function. */
 export async function listen<T>(event: string, fn: (payload: T) => void): Promise<() => void> {
   const subscribe = tauri()?.event?.listen;

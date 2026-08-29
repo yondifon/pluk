@@ -449,7 +449,11 @@ fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    /// Serializes the tests that repoint `HOME` at a temp dir.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn tmp() -> TempDir {
         tempfile::tempdir().expect("tempdir")
@@ -824,8 +828,6 @@ mod tests {
 
     #[test]
     fn fan_out_global_reports_added_skipped_failed() {
-        use std::sync::Mutex;
-        static ENV_LOCK: Mutex<()> = Mutex::new(());
         let _lock = ENV_LOCK.lock().unwrap();
 
         let home = tempfile::tempdir().unwrap();
@@ -870,6 +872,71 @@ mod tests {
         assert!(!proj_result.skipped.contains(&"Windsurf".to_string()));
 
         // Cleanup HOME
+        match orig_home {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+
+    #[test]
+    fn inject_writes_the_scope_path_and_keeps_other_servers() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
+        let home = tempfile::tempdir().unwrap();
+        let orig_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", home.path()) };
+
+        let key = "marketing-db-production";
+        let url = "http://localhost:4242/mcp/tok";
+        let repo = tempfile::tempdir().unwrap();
+        let project = ConfigScope::Project {
+            root: repo.path().to_path_buf(),
+        };
+
+        // Project, fresh file.
+        let project_path = repo.path().join(".cursor/mcp.json");
+        let res = inject(McpClient::Cursor, &project, key, url).unwrap();
+        assert_eq!(
+            res,
+            InjectResult::Added {
+                path: project_path.clone()
+            }
+        );
+        let v: Value = serde_json::from_str(&fs::read_to_string(&project_path).unwrap()).unwrap();
+        assert_eq!(v["mcpServers"][key]["command"], "bunx");
+
+        // Project, second install is a no-op on an entry that is already there.
+        assert_eq!(
+            inject(McpClient::Cursor, &project, key, url).unwrap(),
+            InjectResult::Skipped { path: project_path }
+        );
+
+        // Global, existing file holding an unrelated server.
+        let global_path = home.path().join(".cursor/mcp.json");
+        fs::create_dir_all(global_path.parent().unwrap()).unwrap();
+        fs::write(
+            &global_path,
+            r#"{"other":true,"mcpServers":{"unrelated":{"command":"node"}}}"#,
+        )
+        .unwrap();
+        let res = inject(McpClient::Cursor, &ConfigScope::Global, key, url).unwrap();
+        assert_eq!(
+            res,
+            InjectResult::Added {
+                path: global_path.clone()
+            }
+        );
+        let v: Value = serde_json::from_str(&fs::read_to_string(&global_path).unwrap()).unwrap();
+        assert_eq!(v["mcpServers"]["unrelated"]["command"], "node");
+        assert_eq!(v["mcpServers"][key]["args"][0], "mcp-remote");
+        assert_eq!(v["other"], true);
+
+        // The project file is untouched by the global write.
+        let project_only: Value =
+            serde_json::from_str(&fs::read_to_string(repo.path().join(".cursor/mcp.json")).unwrap())
+                .unwrap();
+        assert!(project_only["mcpServers"].get("unrelated").is_none());
+
         match orig_home {
             Some(v) => unsafe { std::env::set_var("HOME", v) },
             None => unsafe { std::env::remove_var("HOME") },

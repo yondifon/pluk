@@ -22,7 +22,7 @@ import { ToastCenter, renderToasts } from "./toast.ts";
 import { humanizeHealthError } from "./health.ts";
 import { renderLoadingState } from "./primitives.ts";
 import { openModal } from "./modal.ts";
-import { invoke, hasHost } from "./host.ts";
+import { injectMcpConfig, invoke, hasHost } from "./host.ts";
 import { isMac } from "./platform.ts";
 import type { Integration, Group, Environment, Health } from "./types.ts";
 
@@ -168,7 +168,7 @@ function renderDetail(mount: HTMLElement): void {
           onDuplicate: () => void duplicateIntegration(row.id),
           onDelete: () => void deleteIntegration(row.id),
           onTest: () => testIntegration(row.id),
-          inject: injectClientConfig,
+          inject: injectMcpConfig,
         },
       );
       detailHandle = mounted;
@@ -193,6 +193,7 @@ function renderDetail(mount: HTMLElement): void {
         onEdit: () => startEditGroup(row.id),
         onDelete: () => void deleteGroup(row.id),
         onEditIntegration: (id) => select({ kind: "integration", id }),
+        inject: injectMcpConfig,
         toastCenter: toasts,
       });
       return;
@@ -463,22 +464,6 @@ function refreshSidebar(): void {
     sidebarWrap.innerHTML = "";
     sidebarWrap.appendChild(buildSidebar());
   }
-}
-
-async function injectClientConfig(args: {
-  client: string;
-  scope: string;
-  projectDir: string | null;
-  key: string;
-  url: string;
-}): Promise<{ status: "added" | "skipped"; path: string }> {
-  return invoke<{ status: "added" | "skipped"; path: string }>("inject_mcp_config", {
-    client: args.client,
-    scope: args.scope,
-    project_dir: args.projectDir,
-    key: args.key,
-    url: args.url,
-  });
 }
 
 // ── Data ─────────────────────────────────────────────────────────────────────

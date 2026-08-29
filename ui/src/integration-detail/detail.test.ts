@@ -38,6 +38,26 @@ describe("mountIntegrationDetail health update", () => {
     handle.destroy();
   });
 
+  test("overview shows one MCP section holding the endpoint and Install", () => {
+    const root = document.createElement("div");
+    mountIntegrationDetail(root, integration, null, null, {
+      onEdit: () => {},
+      onDuplicate: () => {},
+      onDelete: () => {},
+      onTest: async () => ({ ok: true }),
+      inject: async () => ({ status: "added", path: "" }),
+    });
+    root.querySelector<HTMLButtonElement>("#tab-overview")!.click();
+
+    const cards = [...root.querySelectorAll(".ui-card")];
+    expect(cards.map((c) => c.querySelector(".ui-card-title")!.textContent)).toEqual([
+      "MCP endpoint",
+      "Configuration",
+    ]);
+    expect(cards[0].querySelector('button[aria-label="Copy endpoint URL"]')).not.toBeNull();
+    expect(cards[0].querySelector('button[aria-label="Install into selected clients"]')).not.toBeNull();
+  });
+
   test("test updates health optimistically", async () => {
     const root = document.createElement("div");
     mountIntegrationDetail(root, integration, null, { status: "unknown" as never, at: Date.now() }, {

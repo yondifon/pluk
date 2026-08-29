@@ -1,10 +1,11 @@
 /**
- * Group detail screen — header, tabs (Logs/Overview), endpoint card,
- * client config, member list with slug-derived tool prefix.
+ * Group detail screen — header, tabs (Logs/Overview), MCP endpoint and agent
+ * install, member list with slug-derived tool prefix.
  */
 
 import { slug, slugsWithCollision } from "./slug";
-import { mcpUrl } from "./integration-detail/logic";
+import { mcpKey, mcpUrl } from "./integration-detail/logic";
+import { renderMcpSection, type InjectFn } from "./integration-detail/mcp-section";
 import type { Integration as DetailIntegration } from "./integration-detail/types";
 import { mountActivityLog } from "./activityLog/activityLog";
 import { createIcon } from "./icon";
@@ -27,6 +28,7 @@ export type GroupDetailDeps = {
   onEdit: () => void;
   onDelete: () => void;
   onEditIntegration: (id: string) => void;
+  inject: InjectFn;
   toastCenter?: { present: (t: { integrationId: string; title: string; message: string; kind: "error" | "success" }) => void };
 };
 
@@ -36,7 +38,7 @@ function envLabel(env: string | null | undefined): string {
 }
 
 export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps): void {
-  const { group, integrations, onEdit, onDelete, onEditIntegration } = deps;
+  const { group, integrations, onEdit, onDelete, onEditIntegration, inject } = deps;
   container.innerHTML = "";
   container.className = "group-detail";
   container.setAttribute("role", "main");
@@ -120,63 +122,14 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
     wrap.setAttribute("role", "tabpanel");
     wrap.setAttribute("aria-labelledby", "tab-overview");
 
-    // Endpoint card
-    const endpoint = document.createElement("section");
-     endpoint.className = "ui-card";
-    endpoint.setAttribute("aria-label", "MCP endpoint");
-    const epTitle = document.createElement("h2");
-     epTitle.className = "ui-card-title";
-    epTitle.textContent = "MCP endpoint";
-    const urlRow = document.createElement("div");
-     urlRow.className = "endpoint-row";
-    const urlText = document.createElement("code");
-    urlText.textContent = mcpUrl(group.token);
-    urlText.className = "mono";
-     const copyBtn = createButton("Copy", { variant: "primary", size: "sm", ariaLabel: "Copy endpoint URL" });
-     const copyLive = document.createElement("span");
-     copyLive.className = "sr-only";
-     copyLive.setAttribute("role", "status");
-     copyLive.setAttribute("aria-live", "polite");
-    let copyTimer: ReturnType<typeof setTimeout> | null = null;
-    copyBtn.addEventListener("click", async () => {
-      const url = mcpUrl(group.token);
-      try {
-        await navigator.clipboard.writeText(url);
-      } catch {
-        const ta = document.createElement("textarea");
-        ta.value = url;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        ta.remove();
-      }
-       copyBtn.replaceChildren(document.createTextNode("Copied!"));
-       copyLive.textContent = "Endpoint URL copied.";
-      if (copyTimer) clearTimeout(copyTimer);
-        copyBtn.classList.add("copied");
-        copyTimer = setTimeout(() => {
-          copyBtn.replaceChildren(document.createTextNode("Copy"));
-          copyBtn.classList.remove("copied");
-        }, 1500);
-    });
-     urlRow.append(urlText, copyBtn, copyLive);
-    endpoint.append(epTitle, urlRow);
-
-    // Client config reuse (group-level: R19)
-    const configSection = document.createElement("section");
-     configSection.className = "ui-card";
-    configSection.setAttribute("aria-label", "Agent setup");
-    const cfgTitle = document.createElement("h2");
-     cfgTitle.className = "ui-card-title";
-    cfgTitle.textContent = "Agent setup";
-    const cfgHint = document.createElement("p");
-    cfgHint.className = "hint";
-     cfgHint.textContent = `Endpoint name: ${group.name}`;
-    const cfgUrl = document.createElement("code");
-    cfgUrl.className = "mono";
-    cfgUrl.textContent = mcpUrl(group.token);
-     cfgUrl.classList.add("group-config-url");
-    configSection.append(cfgTitle, cfgHint, cfgUrl);
+    // A group has one endpoint that fans out to every member, so one server
+    // entry — the same section an integration shows.
+    const mcp = document.createElement("section");
+    renderMcpSection(
+      mcp,
+      { key: mcpKey(group.name, group.environment), url: mcpUrl(group.token) },
+      inject,
+    );
 
     // Member list
     const membersSection = document.createElement("section");
@@ -263,7 +216,7 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
       membersSection.appendChild(list);
     }
 
-    wrap.append(endpoint, configSection, membersSection);
+    wrap.append(mcp, membersSection);
     content.appendChild(wrap);
   }
 

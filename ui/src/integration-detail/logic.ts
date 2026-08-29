@@ -159,6 +159,21 @@ export function endpointCopyConfirmState(): { copied: boolean; trigger(): void; 
   };
 }
 
+/**
+ * Server name written into a client's config: the integration or group name,
+ * slugified, suffixed with its environment when it has one. Mirrors
+ * `swift/Sources/Connection.swift#mcpKey` so agents read `marketing-db-local`
+ * rather than an internal id.
+ */
+export function mcpKey(name: string, environment?: string | null): string {
+  const base = name
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .join("-");
+  return environment ? `${base}-${environment}` : base;
+}
+
 // Fan-out result message: actionable, no internal vocab.
 export function formatFanOutMessage(key: string, result: FanOutResult): { kind: "success" | "error"; message: string } {
   const { added, skipped, failed } = result;
@@ -167,21 +182,21 @@ export function formatFanOutMessage(key: string, result: FanOutResult): { kind: 
     return { kind: "success", message: "Nothing to update." };
   }
 
-  // Single target: keep path-like wording short but product-facing.
+  // Single target names the file, so the user knows exactly what changed.
   const totalTargets = added.length + skipped.length + failed.length;
   if (totalTargets === 1) {
     if (failed.length === 1) {
       return { kind: "error", message: `Couldn’t update ${failed[0].client}: ${failed[0].reason}` };
     }
     if (added.length === 1) {
-      return { kind: "success", message: `Added “${key}” to ${added[0]}` };
+      return { kind: "success", message: `Added “${key}” to ${added[0].path}` };
     }
-    return { kind: "success", message: `“${key}” already in ${skipped[0]} — left unchanged` };
+    return { kind: "success", message: `“${key}” already in ${skipped[0].path} — left unchanged` };
   }
 
   const parts: string[] = [];
-  if (added.length) parts.push(`Added to ${added.join(", ")}`);
-  if (skipped.length) parts.push(`Already set up in ${skipped.join(", ")}`);
+  if (added.length) parts.push(`Added to ${added.map((a) => a.client).join(", ")}`);
+  if (skipped.length) parts.push(`Already set up in ${skipped.map((s) => s.client).join(", ")}`);
   if (failed.length) {
     const fails = failed.map((f) => `${f.client}: ${f.reason}`).join("; ");
     parts.push(`Couldn’t update ${fails}`);
@@ -189,9 +204,4 @@ export function formatFanOutMessage(key: string, result: FanOutResult): { kind: 
   const message = parts.join(" · ");
   const kind = failed.length ? "error" : "success";
   return { kind, message };
-}
-
-export function prettyPath(path: string): string {
-  // Browser has no HOME; keep as-is. Tauri side expands ~ already.
-  return path;
 }

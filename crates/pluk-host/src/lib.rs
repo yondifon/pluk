@@ -50,6 +50,7 @@ pub fn run() {
     let updater = Updater::new(UpdaterConfig::placeholder());
     let activity_store = store.clone();
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(host_state)
         .manage(updater.clone())

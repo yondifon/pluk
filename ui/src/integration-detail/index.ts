@@ -1,7 +1,7 @@
 import { renderHeader, type TestState } from "./header";
 import { renderOverview } from "./overview";
 import { renderTools } from "./tools";
-import { renderClientConfig, type InjectFn } from "./client-config";
+import { type InjectFn } from "./mcp-section";
 import { renderTabs, type TabId } from "./tabs";
 import { mountActivityLog } from "../activityLog/activityLog";
 import type { AdapterManifest, ConnHealth, Integration } from "./types";
@@ -86,13 +86,13 @@ export function mountIntegrationDetail(
       });
     } else if (selectedTab === "overview") {
       const overviewWrap = document.createElement("div");
-      const clientWrap = document.createElement("div");
       overviewWrap.setAttribute("role", "tabpanel");
-       overviewWrap.setAttribute("aria-labelledby", "tab-overview");
-      renderOverview(overviewWrap, integration, manifest ?? null, (copied) => actions.onCopyEndpoint?.(copied));
-      renderClientConfig(clientWrap, integration, actions.inject);
-      overviewWrap.className = "stack-lg";
-      contentEl.append(overviewWrap, clientWrap);
+      overviewWrap.setAttribute("aria-labelledby", "tab-overview");
+      renderOverview(overviewWrap, integration, manifest ?? null, {
+        inject: actions.inject,
+        onCopyConfirm: (copied) => actions.onCopyEndpoint?.(copied),
+      });
+      contentEl.appendChild(overviewWrap);
     } else {
       const panel = document.createElement("div");
       panel.setAttribute("role", "tabpanel");

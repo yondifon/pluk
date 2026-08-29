@@ -57,7 +57,7 @@ export interface McpClientMeta {
 export type ConfigScope = "global" | "project";
 
 export interface FanOutResult {
-  added: string[];
-  skipped: string[];
+  added: Array<{ client: string; path: string }>;
+  skipped: Array<{ client: string; path: string }>;
   failed: Array<{ client: string; reason: string }>;
 }

@@ -78,7 +78,9 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .danger-copy { display: flex; align-items: flex-start; gap: var(--space-xs); }
 .more-tools-title { margin-top: var(--space-lg); }
 .snippet, .al-code { overflow-x: auto; padding: var(--space-md); border: var(--border-width) solid var(--border-control); border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--surface-label); font-family: var(--font-mono); font-size: calc(var(--type-caption) * var(--zoom-scale)); white-space: pre-wrap; word-break: break-all; }
-.all-target-list { display: flex; flex-direction: column; gap: var(--space-xs); }
+.all-target-list, .install-outcome { display: flex; flex-direction: column; gap: var(--space-xs); }
+.install-outcome:not(:empty) { margin-top: var(--space-sm); color: var(--surface-tertiary-label); }
+.install-outcome .target-row { font-family: var(--font-mono); word-break: break-all; }
 .target-row { font-size: calc(var(--type-caption) * var(--zoom-scale)); }
 .toast { margin-top: var(--space-sm); padding: var(--space-sm); border-radius: var(--radius-sm); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
 .toast-success { background: var(--success-fill); color: var(--success-label); }
@@ -158,11 +160,8 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .response-viewer-gutter { min-width: var(--gutter-width); padding: var(--space-sm); border-right: var(--border-width) solid var(--border-control); background: var(--surface-sunken); color: var(--surface-tertiary-label); text-align: right; white-space: pre; font-family: var(--font-mono); }
 .response-viewer-code { flex: 1; overflow: auto; padding: var(--space-sm); white-space: pre; font-family: var(--font-mono); }
 .group-detail { display: flex; flex-direction: column; min-height: 0; }
-.endpoint-row { display: flex; align-items: center; gap: var(--space-sm); }
-.endpoint-row .mono { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inspector-row > button, .endpoint-row > button { flex-shrink: 0; }
+.inspector-row > button { flex-shrink: 0; }
 .ui-button.copied { background: var(--success-fill); border-color: var(--success-border); color: var(--success-label); }
-.group-config-url { display: block; margin-top: var(--space-sm); word-break: break-all; }
 .member-row { display: flex; align-items: flex-start; width: 100%; gap: var(--space-md); padding: var(--space-sm) var(--space-md); border: 0; background: transparent; color: var(--surface-label); text-align: left; font: inherit; }
 .member-row:hover { background: var(--surface-hover); }
 .member-info { flex: 1; min-width: 0; }

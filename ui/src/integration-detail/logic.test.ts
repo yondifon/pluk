@@ -6,6 +6,7 @@ import {
   formatRelativeTime,
   genericConfigRows,
   isToolEnabled,
+  mcpKey,
   mcpUrl,
   orderedTools,
   overviewRows,
@@ -155,36 +156,48 @@ describe("copy action confirmation", () => {
   });
 });
 
-describe("fan-out result message", () => {
-  test("single added", () => {
-    const r = formatFanOutMessage("my-int", { added: ["Cursor"], skipped: [], failed: [] });
-    expect(r.kind).toBe("success");
-    expect(r.message).toBe('Added “my-int” to Cursor');
+describe("mcp key", () => {
+  test("slugifies the name and appends the environment", () => {
+    expect(mcpKey("Marketing DB", "production")).toBe("marketing-db-production");
   });
-  test("single skipped", () => {
-    const r = formatFanOutMessage("my-int", { added: [], skipped: ["opencode"], failed: [] });
+  test("collapses punctuation runs into one dash", () => {
+    expect(mcpKey("Acme — Analytics (EU)", "local")).toBe("acme-analytics-eu-local");
+  });
+  test("omits the suffix when there is no environment", () => {
+    expect(mcpKey("All Databases", null)).toBe("all-databases");
+  });
+});
+
+describe("fan-out result message", () => {
+  test("single added names the file", () => {
+    const r = formatFanOutMessage("my-int", { added: [{ client: "Cursor", path: "~/.cursor/mcp.json" }], skipped: [], failed: [] });
     expect(r.kind).toBe("success");
-    expect(r.message).toContain("already in opencode");
+    expect(r.message).toBe('Added \u201cmy-int\u201d to ~/.cursor/mcp.json');
+  });
+  test("single skipped names the file", () => {
+    const r = formatFanOutMessage("my-int", { added: [], skipped: [{ client: "opencode", path: "opencode.json" }], failed: [] });
+    expect(r.kind).toBe("success");
+    expect(r.message).toContain("already in opencode.json");
   });
   test("single failed", () => {
     const r = formatFanOutMessage("my-int", { added: [], skipped: [], failed: [{ client: "Windsurf", reason: "permission denied" }] });
     expect(r.kind).toBe("error");
-    expect(r.message).toContain("Couldn’t update Windsurf");
+    expect(r.message).toContain("Couldn\u2019t update Windsurf");
     expect(r.message).toContain("permission denied");
   });
   test("mix of added, skipped and failed", () => {
     const r = formatFanOutMessage("my-int", {
-      added: ["Cursor", "Claude Code"],
-      skipped: ["opencode"],
+      added: [{ client: "Cursor", path: "a" }, { client: "Claude Code", path: "b" }],
+      skipped: [{ client: "opencode", path: "c" }],
       failed: [{ client: "Windsurf", reason: "permission denied" }],
     });
     expect(r.kind).toBe("error");
-    expect(r.message).toBe("Added to Cursor, Claude Code · Already set up in opencode · Couldn’t update Windsurf: permission denied");
+    expect(r.message).toBe("Added to Cursor, Claude Code \u00b7 Already set up in opencode \u00b7 Couldn\u2019t update Windsurf: permission denied");
   });
   test("added + skipped without failure is success", () => {
-    const r = formatFanOutMessage("k", { added: ["Cursor"], skipped: ["Claude Code"], failed: [] });
+    const r = formatFanOutMessage("k", { added: [{ client: "Cursor", path: "a" }], skipped: [{ client: "Claude Code", path: "b" }], failed: [] });
     expect(r.kind).toBe("success");
-    expect(r.message).toBe("Added to Cursor · Already set up in Claude Code");
+    expect(r.message).toBe("Added to Cursor \u00b7 Already set up in Claude Code");
   });
   test("multiple fails joined", () => {
     const r = formatFanOutMessage("k", {
@@ -202,7 +215,7 @@ describe("fan-out result message", () => {
     expect(r.message).toBe("Nothing to update.");
   });
   test("no internal vocab leaks", () => {
-    const r = formatFanOutMessage("my-int", { added: ["Cursor"], skipped: [], failed: [] });
+    const r = formatFanOutMessage("my-int", { added: [{ client: "Cursor", path: "~/.cursor/mcp.json" }], skipped: [], failed: [] });
     const lower = r.message.toLowerCase();
     for (const banned of ["adapter", "owner", "manifest", "policy kind", "projection", "field map"]) {
       expect(lower).not.toContain(banned);
