@@ -1,32 +1,37 @@
-//! Tauri updater integration — replaces the source-checkout `git pull` path.
+//! Auto-update.
 //!
-//! The Swift `UpdateChecker` required a baked `PlukBuildCommit` + `PlukRepoPath`
-//! and polled `git ls-remote` every 6h. The Rust replacement uses
-//! `tauri-plugin-updater`: the app ships a public key in `tauri.conf.json`,
-//! polls a versioned JSON manifest on a schedule and on demand, Tauri
-//! verifies the Minisign signature, downloads the platform artifact, and
-//! restarts.
+//! `tauri-plugin-updater` owns the network half: it fetches the manifest named
+//! in `tauri.conf.json > plugins.updater.endpoints`, verifies the Minisign
+//! signature against the public key baked into the binary, downloads the
+//! platform artifact and swaps the bundle in place.
 //!
-//! This module owns the **state machine** and its Tauri surface. The network
-//! half is delegated to `tauri-plugin-updater`; the state half is pure and
-//! tested without touching the net.
+//! This module owns the state half — a pure, testable machine plus the Tauri
+//! command and event surface the window renders from. A build that ships
+//! without a public key or with the placeholder endpoint stays `Disabled`: no
+//! network, no banner, no toast.
 //!
-//! See `docs/updater-r23.md` for the packaging contract R23 must fulfil.
+//! See `docs/release.md` for how the manifest and artifacts are produced.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json;
+use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri_plugin_updater::UpdaterExt;
 
 /// How often the app checks for updates in the background.
-/// Kept at 6h to match the Swift checker unless benchmarks show otherwise.
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 
-/// Placeholder endpoint — R23 replaces this at packaging time.
-/// Any endpoint containing `example.com` is treated as unconfigured and the
-/// updater degrades quietly (same as Swift's `isConfigured == false` in dev).
+/// Endpoint the repo ships with. It marks the updater as unconfigured so a
+/// source checkout never reaches the network.
 pub const PLACEHOLDER_ENDPOINT: &str = "https://example.com/updates/latest.json";
+
+/// Every state change reaches the window here.
+pub const STATE_EVENT: &str = "pluk://update-state";
+
+/// Emitted only for a check the person asked for, and only when they are
+/// already on the newest version — a background check stays silent.
+pub const NO_UPDATE_EVENT: &str = "pluk://update-none";
 
 /// Current app version — filled from `CARGO_PKG_VERSION` via tauri.conf.json's
 /// `version` field at build time. Used only for display; the updater plugin
@@ -54,6 +59,31 @@ impl UpdaterConfig {
         Self {
             pubkey: String::new(),
             endpoints: vec![PLACEHOLDER_ENDPOINT.to_string()],
+        }
+    }
+
+    /// Read `plugins.updater` out of the resolved Tauri config. A missing or
+    /// malformed block reads as the placeholder, which keeps the updater off.
+    pub fn from_plugins(plugins: &tauri::utils::config::PluginConfig) -> Self {
+        let Some(block) = plugins.0.get("updater") else {
+            return Self::placeholder();
+        };
+        Self {
+            pubkey: block
+                .get("pubkey")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            endpoints: block
+                .get("endpoints")
+                .and_then(|v| v.as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -321,7 +351,146 @@ impl Updater {
     }
 }
 
-// ── Tauri command surface (thin wrappers over the handle) ─────────────────
+// ── Driving the plugin ────────────────────────────────────────────────────
+
+fn emit_state<R: Runtime>(app: &AppHandle<R>, updater: &Updater) {
+    if let Ok(payload) = serde_json::to_value(updater.state()) {
+        let _ = app.emit(STATE_EVENT, payload);
+    }
+}
+
+/// A mismatched signature means the artifact was not built with the key this
+/// binary trusts — worth naming apart from any other transport failure.
+fn is_signature_failure(error: &tauri_plugin_updater::Error) -> bool {
+    use tauri_plugin_updater::Error as E;
+    matches!(
+        error,
+        E::Minisign(_) | E::Base64(_) | E::SignatureUtf8(_) | E::InvalidUpdaterFormat
+    )
+}
+
+fn check_failure(error: &tauri_plugin_updater::Error) -> FailureKind {
+    use tauri_plugin_updater::Error as E;
+    if is_signature_failure(error) {
+        FailureKind::Signature
+    } else if matches!(
+        error,
+        E::Reqwest(_) | E::Network(_) | E::ReleaseNotFound | E::Io(_)
+    ) {
+        FailureKind::Unreachable
+    } else {
+        FailureKind::Other
+    }
+}
+
+fn download_failure(error: &tauri_plugin_updater::Error) -> FailureKind {
+    use tauri_plugin_updater::Error as E;
+    if is_signature_failure(error) {
+        FailureKind::Signature
+    } else if matches!(error, E::Reqwest(_) | E::Network(_) | E::Io(_)) {
+        FailureKind::Download
+    } else {
+        FailureKind::Other
+    }
+}
+
+fn handle<R: Runtime>(app: &AppHandle<R>) -> Option<Updater> {
+    app.try_state::<Updater>().map(|s| s.inner().clone())
+}
+
+async fn fetch_update<R: Runtime>(
+    app: &AppHandle<R>,
+) -> tauri_plugin_updater::Result<Option<tauri_plugin_updater::Update>> {
+    app.updater()?.check().await
+}
+
+/// Ask the endpoint whether a newer version exists. `user_initiated` decides
+/// whether "you are already up to date" is worth saying out loud.
+pub async fn run_check<R: Runtime>(app: AppHandle<R>, user_initiated: bool) {
+    let Some(updater) = handle(&app) else { return };
+    if !updater.is_configured() || !updater.begin_check() {
+        return;
+    }
+    emit_state(&app, &updater);
+
+    match fetch_update(&app).await {
+        Ok(found) => {
+            let is_none = found.is_none();
+            updater.finish_check(found.map(|update| UpdateInfo {
+                version: update.version.clone(),
+                notes: update.body.clone(),
+                pub_date: update.date.map(|d| d.to_string()),
+            }));
+            emit_state(&app, &updater);
+            if is_none && user_initiated {
+                let _ = app.emit(NO_UPDATE_EVENT, current_version());
+            }
+        }
+        Err(error) => {
+            updater.fail(check_failure(&error), error.to_string());
+            emit_state(&app, &updater);
+        }
+    }
+}
+
+/// Download the announced update, verify it, swap the bundle, relaunch.
+pub async fn run_install<R: Runtime>(app: AppHandle<R>) {
+    let Some(updater) = handle(&app) else { return };
+    if !updater.begin_download() {
+        return;
+    }
+    emit_state(&app, &updater);
+
+    let update = match fetch_update(&app).await {
+        Ok(Some(update)) => update,
+        Ok(None) => {
+            updater.finish_check(None);
+            emit_state(&app, &updater);
+            return;
+        }
+        Err(error) => {
+            updater.fail_loud(download_failure(&error), error.to_string());
+            emit_state(&app, &updater);
+            return;
+        }
+    };
+
+    let version = update.version.clone();
+    let mut downloaded: u64 = 0;
+    let mut last_percent: u8 = 0;
+    let outcome = update
+        .download_and_install(
+            |chunk, total| {
+                downloaded += chunk as u64;
+                let Some(total) = total.filter(|t| *t > 0) else {
+                    return;
+                };
+                let percent = ((downloaded * 100) / total).min(100) as u8;
+                if percent == last_percent {
+                    return;
+                }
+                last_percent = percent;
+                updater.update_progress(percent);
+                emit_state(&app, &updater);
+            },
+            || {},
+        )
+        .await;
+
+    match outcome {
+        Ok(()) => {
+            updater.mark_ready(version);
+            emit_state(&app, &updater);
+            app.restart();
+        }
+        Err(error) => {
+            updater.fail_loud(download_failure(&error), error.to_string());
+            emit_state(&app, &updater);
+        }
+    }
+}
+
+// ── Tauri command surface ─────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn get_update_state(updater: tauri::State<'_, Updater>) -> serde_json::Value {
@@ -329,27 +498,13 @@ pub fn get_update_state(updater: tauri::State<'_, Updater>) -> serde_json::Value
 }
 
 #[tauri::command]
-pub async fn check_for_updates(
-    updater: tauri::State<'_, Updater>,
-) -> Result<serde_json::Value, String> {
-    if !updater.is_configured() {
-        return Ok(serde_json::to_value(updater.state()).unwrap_or(serde_json::Value::Null));
-    }
-    if !updater.begin_check() {
-        return Ok(serde_json::to_value(updater.state()).unwrap_or(serde_json::Value::Null));
-    }
-    Ok(serde_json::to_value(updater.state()).unwrap_or(serde_json::Value::Null))
+pub async fn check_for_updates<R: Runtime>(app: AppHandle<R>) {
+    run_check(app, true).await;
 }
 
 #[tauri::command]
-pub fn install_update(updater: tauri::State<'_, Updater>) -> Result<serde_json::Value, String> {
-    if !updater.is_configured() {
-        return Err("updater not configured".to_string());
-    }
-    if !updater.begin_download() {
-        return Err(format!("cannot install from state {:?}", updater.state()));
-    }
-    Ok(serde_json::to_value(updater.state()).unwrap_or(serde_json::Value::Null))
+pub async fn install_update<R: Runtime>(app: AppHandle<R>) {
+    run_install(app).await;
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -514,6 +669,31 @@ mod tests {
         assert!(!cfg2.is_configured());
         let cfg3 = configured();
         assert!(cfg3.is_configured());
+    }
+
+    #[test]
+    fn config_reads_pubkey_and_endpoints_from_plugins_block() {
+        let plugins = tauri::utils::config::PluginConfig(
+            [(
+                "updater".to_string(),
+                serde_json::json!({
+                    "pubkey": "dW50cnVzdGVk",
+                    "endpoints": ["https://updates.pluk.example/latest.json"],
+                }),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let cfg = UpdaterConfig::from_plugins(&plugins);
+        assert_eq!(cfg.pubkey, "dW50cnVzdGVk");
+        assert_eq!(cfg.endpoints, ["https://updates.pluk.example/latest.json"]);
+        assert!(cfg.is_configured());
+    }
+
+    #[test]
+    fn config_without_updater_block_stays_unconfigured() {
+        let plugins = tauri::utils::config::PluginConfig(Default::default());
+        assert!(!UpdaterConfig::from_plugins(&plugins).is_configured());
     }
 
     #[test]

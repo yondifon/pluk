@@ -1,5 +1,33 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { renderMcpSection, type InjectFn } from "./mcp-section";
+import { toast, mountToaster } from "../toast";
+
+let toaster: HTMLElement;
+let unmountToaster: () => void;
+
+beforeEach(() => {
+  toaster = document.createElement("div");
+  document.body.appendChild(toaster);
+  unmountToaster = mountToaster(toaster);
+});
+
+afterEach(() => {
+  toast.clear();
+  unmountToaster();
+  toaster.remove();
+});
+
+function currentToast(): HTMLElement {
+  return toaster.querySelector<HTMLElement>(".toast:not([data-exit])")!;
+}
+
+function toastText(selector: string): string {
+  return currentToast().querySelector(selector)!.textContent ?? "";
+}
+
+function detailLines(): string[] {
+  return (currentToast().querySelector(".toast-detail")!.textContent ?? "").split("\n");
+}
 
 const target = { key: "marketing-db-production", url: "http://localhost:4242/mcp/tok" };
 
@@ -19,10 +47,6 @@ function mount(
 
 function installButton(root: HTMLElement): HTMLButtonElement {
   return root.querySelector<HTMLButtonElement>('button[aria-label="Install into selected clients"]')!;
-}
-
-function outcomeLines(root: HTMLElement): string[] {
-  return [...root.querySelectorAll(".install-outcome .target-row")].map((r) => r.textContent ?? "");
 }
 
 async function clickInstall(root: HTMLElement): Promise<void> {
@@ -97,7 +121,8 @@ describe("agent setup install", () => {
     await clickInstall(root);
 
     expect(called).toBe(false);
-    expect(root.querySelector(".toast")!.textContent).toBe("Nothing installed — choose a project folder first.");
+    expect(toastText(".toast-title")).toBe("Nothing installed");
+    expect(toastText(".toast-description")).toBe("Choose a project folder to install into.");
   });
 
   test("reports the file behind every client, written or already there", async () => {
@@ -109,11 +134,11 @@ describe("agent setup install", () => {
 
     await clickInstall(root);
 
-    expect(outcomeLines(root)).toEqual([
+    expect(detailLines()).toEqual([
       "Cursor — added to /repo/.cursor/mcp.json",
       "Claude Code — already set up in /repo/.mcp.json",
     ]);
-    expect(root.querySelector(".toast")!.className).toContain("toast-success");
+    expect(currentToast().dataset.variant).toBe("success");
   });
 
   test("a failing client reports its reason and does not stop the others", async () => {
@@ -124,11 +149,11 @@ describe("agent setup install", () => {
 
     await clickInstall(root);
 
-    expect(outcomeLines(root)).toEqual([
+    expect(detailLines()).toEqual([
       "Cursor — added to /repo/.cursor/mcp.json",
       "Claude Code — Couldn't write /repo/.mcp.json: denied",
     ]);
-    expect(root.querySelector(".toast")!.className).toContain("toast-error");
+    expect(currentToast().dataset.variant).toBe("error");
     expect(installButton(root).textContent).toBe("Install");
   });
 
@@ -147,8 +172,6 @@ describe("agent setup install", () => {
     expect(calls.map((c) => c.client)).toEqual(["codex"]);
     // Codex has no project file, so the scope falls back to global.
     expect(calls[0].scope).toBe("global");
-    expect(root.querySelector(".toast")!.textContent).toBe(
-      `Added “${target.key}” to ~/.codex/config.toml`,
-    );
+    expect(toastText(".toast-description")).toBe(`Added “${target.key}” to ~/.codex/config.toml`);
   });
 });

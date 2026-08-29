@@ -11,11 +11,13 @@
 .sidebar-filter-btn { background: var(--surface-control); }
 .sidebar-filter-btn.active { color: var(--accent-label); }
 .sidebar-search-clear { min-width: var(--control-target); min-height: var(--control-target); }
-.popover { position: fixed; z-index: var(--z-menu); width: var(--popover-width); max-height: var(--popover-height); overflow: auto; padding: var(--space-sm) 0; border: var(--border-width) solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-panel); box-shadow: var(--shadow-menu); }
-.popover-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-sm) var(--space-md); }
-.popover-section { padding: var(--space-sm) var(--space-md); }
-.popover-section-title { margin-bottom: var(--space-xs); color: var(--surface-sidebar-tertiary); font-size: var(--type-caption2); font-weight: 600; }
+.popover { position: fixed; z-index: var(--z-menu); width: var(--popover-width); max-height: var(--popover-height); margin-top: var(--space-xs); overflow: auto; outline: 0; padding: var(--space-xs) 0; border: var(--border-width) solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-panel); box-shadow: var(--shadow-menu); color: var(--surface-label); font-size: calc(var(--type-callout) * var(--zoom-scale)); }
+.popover-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); min-height: var(--control-target); padding: 0 var(--space-md); }
+.popover-title { color: var(--surface-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); font-weight: 600; }
+.popover-section { padding: var(--space-xs) var(--space-md); }
+.popover-section-title { margin-bottom: var(--space-xxs); color: var(--surface-sidebar-tertiary); font-size: calc(var(--type-caption2) * var(--zoom-scale)); font-weight: 600; }
 .popover-option { display: flex; align-items: center; gap: var(--space-sm); min-height: var(--control-target); }
+.popover-empty { padding: 0 var(--space-md) var(--space-xs); color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
 .environment-dot { width: var(--space-sm); height: var(--space-sm); border-radius: 50%; }
 .environment-production { background: var(--status-danger); }
 .environment-staging { background: var(--status-warning); }

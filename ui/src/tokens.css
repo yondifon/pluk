@@ -42,8 +42,9 @@
   --modal-header-height: 52px;
   --modal-sidebar-min: 180px;
   --toast-width: 356px;
+  --toast-detail-height: 160px;
   --z-modal: 1000;
-  --z-toast: 50;
+  --z-toast: 1100;
   --border-accent-width: 2px;
   --border-width: 1px;
   --radius-xs: 3px;

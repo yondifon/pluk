@@ -1,13 +1,30 @@
-import { describe, test, expect, beforeEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mountIntegrationDetail } from "./index";
+import { toast, mountToaster } from "../toast";
 import type { Integration } from "./types";
+
+let toaster: HTMLElement;
+let unmountToaster: () => void;
 
 beforeEach(() => {
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
     core: { invoke: async () => 30 },
     event: { listen: async () => () => {} },
   } as never;
+  toaster = document.createElement("div");
+  document.body.appendChild(toaster);
+  unmountToaster = mountToaster(toaster);
 });
+
+afterEach(() => {
+  toast.clear();
+  unmountToaster();
+  toaster.remove();
+});
+
+function currentToast(): HTMLElement {
+  return toaster.querySelector<HTMLElement>(".toast:not([data-exit])")!;
+}
 
 const integration: Integration = {
   id: "1",
@@ -58,7 +75,7 @@ describe("mountIntegrationDetail health update", () => {
     expect(cards[0].querySelector('button[aria-label="Install into selected clients"]')).not.toBeNull();
   });
 
-  test("test updates health optimistically", async () => {
+  test("a failed test resolves its own toast and marks the connection failing", async () => {
     const root = document.createElement("div");
     mountIntegrationDetail(root, integration, null, { status: "unknown" as never, at: Date.now() }, {
       onEdit: () => {},
@@ -69,12 +86,35 @@ describe("mountIntegrationDetail health update", () => {
     });
     const btn = root.querySelector("button") as HTMLButtonElement;
     expect(btn.textContent).toBe("Test");
+
     btn.click();
-    await new Promise((r) => setTimeout(r, 10));
-    // after click, testing then fail state should show error with health failing
-    // wait for async handler
-    await new Promise((r) => setTimeout(r, 20));
-    const live = root.querySelector("[role='status']");
-    expect(live).not.toBeNull();
+    expect(currentToast().dataset.variant).toBe("pending");
+    expect(currentToast().querySelector(".toast-description")!.textContent).toBe("Testing connection…");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(toaster.querySelectorAll(".toast:not([data-exit])")).toHaveLength(1);
+    expect(currentToast().dataset.variant).toBe("error");
+    expect(currentToast().querySelector(".toast-description")!.textContent).toContain("Couldn’t connect");
+    expect(root.querySelector(".status-failing")).not.toBeNull();
+    expect(root.querySelector(".detail-header [role='status']")).toBeNull();
+  });
+
+  test("a passing test resolves the same toast into a success", async () => {
+    const root = document.createElement("div");
+    mountIntegrationDetail(root, integration, null, null, {
+      onEdit: () => {},
+      onDuplicate: () => {},
+      onDelete: () => {},
+      onTest: async () => ({ ok: true }),
+      inject: async () => ({ status: "added", path: "" }),
+    });
+
+    (root.querySelector("button") as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(toaster.querySelectorAll(".toast:not([data-exit])")).toHaveLength(1);
+    expect(currentToast().dataset.variant).toBe("success");
+    expect(currentToast().querySelector(".toast-title")!.textContent).toBe("Prod DB");
+    expect(root.querySelector(".status-ok")).not.toBeNull();
   });
 });

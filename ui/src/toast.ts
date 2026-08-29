@@ -1,192 +1,320 @@
 /**
- * Toast system — one toast at a time per integration, newer replaces previous.
- * Errors persist longer than successes and also raise a system notification.
- * Animations respect `prefers-reduced-motion`.
- * Mirrors `swift/Sources/Toast.swift#ToastCenter`.
+ * Toasts — one stack in the bottom-right corner, newest nearest the corner.
+ * A pending toast resolves into its own success or error, so an action reports
+ * once rather than twice. Hovering or focusing the stack expands it and holds
+ * every countdown.
  */
 
-import { createIcon } from "./icon";
+import { createIcon, type IconName } from "./icon";
 import { createButton } from "./primitives";
 
-export type ToastKind = "error" | "success";
+export type ToastVariant = "success" | "error" | "info" | "pending";
 
-export type Toast = {
-  id: string;
-  integrationId: string;
-  title: string;
-  message: string;
-  kind: ToastKind;
+export type ToastOptions = {
+  description?: string;
+  /** Long text the toast reveals on request and scrolls, never truncates away. */
+  detail?: string;
+  action?: { label: string; onClick: () => void };
 };
 
-export const ERROR_LIFETIME_MS = 8000;
-export const SUCCESS_LIFETIME_MS = 3000;
+type ToastRecord = ToastOptions & {
+  id: string;
+  variant: ToastVariant;
+  title: string;
+};
 
-function prefersReducedMotion(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+export type PendingToast = {
+  success(title: string, options?: ToastOptions): void;
+  error(title: string, options?: ToastOptions): void;
+};
+
+export const AUTO_DISMISS_MS = 4000;
+export const VISIBLE_TOASTS = 3;
+const MAX_TOASTS = 5;
+const EXIT_MS = 220;
+
+const ICONS: Record<ToastVariant, IconName> = {
+  success: "check",
+  error: "error",
+  info: "info",
+  pending: "spinner",
+};
+
+type Countdown = { remaining: number; startedAt: number; handle: ReturnType<typeof setTimeout> | null };
+
+const records: ToastRecord[] = [];
+const countdowns = new Map<string, Countdown>();
+const listeners = new Set<() => void>();
+let sequence = 0;
+let held = false;
+
+function notify(): void {
+  for (const listener of listeners) listener();
 }
 
-export type ToastListener = (toasts: Toast[]) => void;
+function durationFor(variant: ToastVariant): number | null {
+  return variant === "success" || variant === "info" ? AUTO_DISMISS_MS : null;
+}
 
-export class ToastCenter {
-  private toasts: Toast[] = [];
-  private timers = new Map<string, ReturnType<typeof setTimeout>>();
-  private listeners = new Set<ToastListener>();
-  private _onRetry: (integrationId: string) => void;
+function startCountdown(id: string, countdown: Countdown): void {
+  countdown.startedAt = Date.now();
+  countdown.handle = setTimeout(() => dismiss(id), countdown.remaining);
+}
 
-  constructor(onRetry?: (integrationId: string) => void) {
-    this._onRetry = onRetry ?? (() => {});
+function schedule(id: string, duration: number | null): void {
+  clearCountdown(id);
+  if (duration == null) return;
+  const countdown: Countdown = { remaining: duration, startedAt: Date.now(), handle: null };
+  countdowns.set(id, countdown);
+  if (!held) startCountdown(id, countdown);
+}
+
+function clearCountdown(id: string): void {
+  const countdown = countdowns.get(id);
+  if (countdown?.handle) clearTimeout(countdown.handle);
+  countdowns.delete(id);
+}
+
+function add(variant: ToastVariant, title: string, options?: ToastOptions): string {
+  const id = `toast-${++sequence}`;
+  records.push({ id, variant, title, ...options });
+  while (records.length > MAX_TOASTS) clearCountdown(records.shift()!.id);
+  schedule(id, durationFor(variant));
+  notify();
+  return id;
+}
+
+function resolve(id: string, variant: ToastVariant, title: string, options?: ToastOptions): void {
+  const index = records.findIndex((record) => record.id === id);
+  if (index === -1) return;
+  records[index] = { id, variant, title, ...options };
+  schedule(id, durationFor(variant));
+  notify();
+}
+
+function dismiss(id: string): void {
+  const index = records.findIndex((record) => record.id === id);
+  if (index === -1) return;
+  records.splice(index, 1);
+  clearCountdown(id);
+  notify();
+}
+
+function clear(): void {
+  for (const record of records) clearCountdown(record.id);
+  records.length = 0;
+  notify();
+}
+
+function hold(): void {
+  if (held) return;
+  held = true;
+  for (const countdown of countdowns.values()) {
+    if (!countdown.handle) continue;
+    clearTimeout(countdown.handle);
+    countdown.handle = null;
+    countdown.remaining = Math.max(0, countdown.remaining - (Date.now() - countdown.startedAt));
   }
+}
 
-  set onRetry(fn: (id: string) => void) {
-    this._onRetry = fn;
-  }
+function release(): void {
+  if (!held) return;
+  held = false;
+  for (const [id, countdown] of countdowns) startCountdown(id, countdown);
+}
 
-  get all(): Toast[] {
-    return [...this.toasts];
-  }
-
-  subscribe(fn: ToastListener): () => void {
-    this.listeners.add(fn);
-    fn(this.all);
-    return () => this.listeners.delete(fn);
-  }
-
-  private notify(): void {
-    const snap = this.all;
-    for (const fn of this.listeners) fn(snap);
-  }
-
-  private lifetime(kind: ToastKind): number {
-    return kind === "error" ? ERROR_LIFETIME_MS : SUCCESS_LIFETIME_MS;
-  }
-
-  present(toast: Omit<Toast, "id"> & { id?: string }): Toast {
-    const full: Toast = {
-      id: toast.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      ...toast,
+export const toast = {
+  success: (title: string, options?: ToastOptions): void => void add("success", title, options),
+  error: (title: string, options?: ToastOptions): void => void add("error", title, options),
+  info: (title: string, options?: ToastOptions): void => void add("info", title, options),
+  pending(title: string, options?: ToastOptions): PendingToast {
+    const id = add("pending", title, options);
+    return {
+      success: (nextTitle, nextOptions) => resolve(id, "success", nextTitle, nextOptions),
+      error: (nextTitle, nextOptions) => resolve(id, "error", nextTitle, nextOptions),
     };
+  },
+  clear,
+};
 
-    // Replace any existing toast for same integration
-    const existingIdx = this.toasts.findIndex((t) => t.integrationId === full.integrationId);
-    if (existingIdx !== -1) {
-      const existing = this.toasts[existingIdx];
-      const timer = this.timers.get(existing.id);
-      if (timer) clearTimeout(timer);
-      this.timers.delete(existing.id);
-      this.toasts.splice(existingIdx, 1);
+/** Renders the stack into its single mount point in the shell. */
+export function mountToaster(container: HTMLElement): () => void {
+  container.className = "toaster";
+  container.setAttribute("role", "region");
+  container.setAttribute("aria-label", "Notifications");
+  container.setAttribute("aria-live", "polite");
+  container.setAttribute("aria-atomic", "false");
+
+  const elements = new Map<string, HTMLElement>();
+  const overflow = document.createElement("div");
+  overflow.className = "toast-overflow";
+  overflow.setAttribute("aria-hidden", "true");
+  let expanded = false;
+
+  function fill(element: HTMLElement, record: ToastRecord): void {
+    element.dataset.variant = record.variant;
+    element.setAttribute("role", record.variant === "error" ? "alert" : "status");
+    element.setAttribute("aria-live", record.variant === "error" ? "assertive" : "polite");
+
+    const icon = document.createElement("span");
+    icon.className = "toast-icon";
+    icon.appendChild(createIcon(ICONS[record.variant]));
+
+    const body = document.createElement("div");
+    body.className = "toast-body";
+
+    const title = document.createElement("p");
+    title.className = "toast-title";
+    title.textContent = record.title;
+    body.appendChild(title);
+
+    if (record.description) {
+      const description = document.createElement("p");
+      description.className = "toast-description";
+      description.textContent = record.description;
+      body.appendChild(description);
     }
 
-    this.toasts.push(full);
-
-    if (full.kind === "error") this.postNotification(full);
-
-    const lifetime = this.lifetime(full.kind);
-    const timer = setTimeout(() => this.dismiss(full.id), lifetime);
-    this.timers.set(full.id, timer);
-
-    this.notify();
-    return full;
-  }
-
-  dismiss(id: string): void {
-    const idx = this.toasts.findIndex((t) => t.id === id);
-    if (idx === -1) return;
-    this.toasts.splice(idx, 1);
-    const timer = this.timers.get(id);
-    if (timer) clearTimeout(timer);
-    this.timers.delete(id);
-    this.notify();
-  }
-
-  clear(): void {
-    for (const t of this.timers.values()) clearTimeout(t);
-    this.timers.clear();
-    this.toasts = [];
-    this.notify();
-  }
-
-  private postNotification(toast: Toast): void {
-    try {
-      // Web Notifications API (Tauri maps to native notification when permitted)
-      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-        new Notification(toast.title, { body: toast.message });
-        return;
-      }
-      // Tauri notification plugin fallback
-      const tauri = (window as unknown as { __TAURI__?: { notification?: { sendNotification: (o: unknown) => void } } }).__TAURI__;
-      if (tauri?.notification?.sendNotification) {
-        tauri.notification.sendNotification({ title: toast.title, body: toast.message });
-      }
-    } catch {
-      // best-effort
+    if (record.detail) {
+      const detail = document.createElement("pre");
+      detail.className = "toast-detail";
+      detail.id = `${record.id}-detail`;
+      detail.textContent = record.detail;
+      detail.hidden = true;
+      const toggle = createButton("Show details", { size: "sm" });
+      toggle.classList.add("toast-detail-toggle");
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.setAttribute("aria-controls", detail.id);
+      toggle.addEventListener("click", () => {
+        const opening = detail.hidden;
+        detail.hidden = !opening;
+        toggle.setAttribute("aria-expanded", String(opening));
+        toggle.replaceChildren(document.createTextNode(opening ? "Hide details" : "Show details"));
+        layout();
+      });
+      body.append(toggle, detail);
     }
-  }
 
-  // For testing: expose lifetimes
-  lifetimeFor(kind: ToastKind): number {
-    return this.lifetime(kind);
-  }
-
-  shouldAnimate(): boolean {
-    return !prefersReducedMotion();
-  }
-}
-
-/** Render toasts into a mount element. Respects reduced-motion. */
-export function renderToasts(
-  mount: HTMLElement,
-  center: ToastCenter,
-  onRetry: (integrationId: string) => void,
-): () => void {
-  function render(toasts: Toast[]): void {
-    mount.innerHTML = "";
-    const reduce = !center.shouldAnimate();
-    for (const toast of toasts) {
-      const card = document.createElement("div");
-      card.className = `toast-card toast-${toast.kind}`;
-      card.setAttribute("role", toast.kind === "error" ? "alert" : "status");
-      card.setAttribute("aria-live", toast.kind === "error" ? "assertive" : "polite");
-      card.dataset.toastId = toast.id;
-      card.dataset.integrationId = toast.integrationId;
-
-      const icon = document.createElement("span");
-      icon.className = "toast-icon";
-      icon.appendChild(createIcon(toast.kind === "error" ? "error" : "check"));
-
-      const body = document.createElement("div");
-      body.className = "toast-body";
-      const title = document.createElement("div");
-      title.className = "toast-title";
-      title.textContent = toast.title;
-      const msg = document.createElement("div");
-      msg.className = "toast-message";
-      msg.textContent = toast.message;
-      body.append(title, msg);
-
-
-      const dismiss = document.createElement("button");
-      dismiss.className = "toast-dismiss icon-button";
-      dismiss.appendChild(createIcon("close"));
-      dismiss.setAttribute("aria-label", "Dismiss notification");
-      dismiss.addEventListener("click", () => center.dismiss(toast.id));
-
-      card.append(icon, body);
-      if (toast.kind === "error") {
-        const retry = createButton("Retry", { size: "sm", ariaLabel: `Retry connection for ${toast.title}`, onClick: () => onRetry(toast.integrationId) });
-        retry.classList.add("toast-action");
-        card.appendChild(retry);
-      }
-      card.appendChild(dismiss);
-
-      if (!reduce) {
-        card.style.animation = "toast-in 180ms ease-out";
-      }
-
-      mount.appendChild(card);
+    if (record.action) {
+      const action = createButton(record.action.label, {
+        variant: "secondary",
+        size: "sm",
+        onClick: record.action.onClick,
+      });
+      action.classList.add("toast-action");
+      body.appendChild(action);
     }
+
+    const close = createButton("", {
+      icon: "close",
+      ariaLabel: "Dismiss notification",
+      onClick: () => dismiss(record.id),
+    });
+    close.classList.add("icon-button", "toast-close");
+
+    element.replaceChildren(icon, body, close);
   }
 
-  const unsub = center.subscribe(render);
-  return unsub;
+  function layout(): void {
+    const stack: HTMLElement[] = [];
+    for (let i = records.length - 1; i >= 0; i--) {
+      const element = elements.get(records[i].id);
+      if (element) stack.push(element);
+    }
+
+    let stacked = 0;
+    stack.forEach((element, index) => {
+      const hidden = !expanded && index >= VISIBLE_TOASTS;
+      element.toggleAttribute("data-hidden", hidden);
+      element.style.setProperty(
+        "--toast-y",
+        expanded
+          ? `calc(-1 * (${stacked}px + ${index} * var(--space-sm)))`
+          : `calc(-1 * ${index} * var(--space-md))`,
+      );
+      element.style.setProperty(
+        "--toast-scale",
+        expanded ? "1" : String(1 - Math.min(index, VISIBLE_TOASTS) * 0.04),
+      );
+      stacked += element.offsetHeight;
+    });
+
+    const frontHeight = stack[0]?.offsetHeight ?? 0;
+    const overflowing = !expanded && stack.length > VISIBLE_TOASTS;
+    if (overflowing) {
+      overflow.textContent = `+${stack.length - VISIBLE_TOASTS} more`;
+      overflow.style.setProperty(
+        "--toast-y",
+        `calc(-1 * (${frontHeight}px + ${VISIBLE_TOASTS} * var(--space-md)))`,
+      );
+      container.appendChild(overflow);
+    } else {
+      overflow.remove();
+    }
+
+    container.toggleAttribute("data-empty", stack.length === 0);
+    const overflowRoom = overflowing ? " + var(--space-lg)" : "";
+    container.style.height = expanded
+      ? `calc(${stacked}px + ${Math.max(stack.length - 1, 0)} * var(--space-sm))`
+      : `calc(${frontHeight}px + ${Math.min(stack.length, VISIBLE_TOASTS)} * var(--space-md)${overflowRoom})`;
+  }
+
+  function setExpanded(next: boolean): void {
+    if (expanded === next) return;
+    expanded = next;
+    if (next) hold();
+    else release();
+    layout();
+  }
+
+  function render(): void {
+    for (const record of records) {
+      const existing = elements.get(record.id);
+      if (existing) {
+        fill(existing, record);
+        continue;
+      }
+      const element = document.createElement("div");
+      element.className = "toast";
+      element.dataset.toastId = record.id;
+      element.dataset.enter = "true";
+      fill(element, record);
+      elements.set(record.id, element);
+      container.appendChild(element);
+      requestAnimationFrame(() => {
+        delete element.dataset.enter;
+      });
+    }
+
+    const live = new Set(records.map((record) => record.id));
+    for (const [id, element] of elements) {
+      if (live.has(id)) continue;
+      elements.delete(id);
+      element.dataset.exit = "true";
+      setTimeout(() => element.remove(), EXIT_MS);
+    }
+
+    if (!records.length) setExpanded(false);
+    layout();
+  }
+
+  container.addEventListener("mouseenter", () => setExpanded(true));
+  container.addEventListener("mouseleave", () => setExpanded(false));
+  container.addEventListener("focusin", () => setExpanded(true));
+  container.addEventListener("focusout", (event) => {
+    if (!container.contains(event.relatedTarget as Node | null)) setExpanded(false);
+  });
+  container.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const element = (event.target as HTMLElement).closest<HTMLElement>(".toast");
+    if (!element?.dataset.toastId) return;
+    event.preventDefault();
+    dismiss(element.dataset.toastId);
+  });
+
+  listeners.add(render);
+  render();
+  return () => {
+    listeners.delete(render);
+  };
 }

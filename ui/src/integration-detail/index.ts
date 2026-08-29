@@ -1,9 +1,11 @@
-import { renderHeader, type TestState } from "./header";
+import { renderHeader } from "./header";
 import { renderOverview } from "./overview";
 import { renderTools } from "./tools";
 import { type InjectFn } from "./mcp-section";
 import { renderTabs, type TabId } from "./tabs";
 import { mountActivityLog } from "../activityLog/activityLog";
+import { humanizeHealthError } from "../health";
+import { toast, type PendingToast } from "../toast";
 import type { AdapterManifest, ConnHealth, Integration } from "./types";
 
 export type DetailActions = {
@@ -12,7 +14,6 @@ export type DetailActions = {
   onDelete: () => void;
   onTest: () => Promise<{ ok: boolean; error?: string }>;
   inject: InjectFn;
-  onCopyEndpoint?: (copied: boolean) => void;
 };
 
 export function mountIntegrationDetail(
@@ -33,36 +34,44 @@ export function mountIntegrationDetail(
 
   let currentHealth: ConnHealth | null | undefined = health ?? null;
   let selectedTab: TabId = "logs";
-  let testState: TestState = "idle";
-  let resetTimer: ReturnType<typeof setTimeout> | null = null;
+  let testing = false;
   const logsMount = document.createElement("div");
   logsMount.className = "logs-mount";
   let logs: { destroy: () => void } | null = null;
 
+  function reportTestFailure(error: string, pending: PendingToast): void {
+    currentHealth = { status: "error", error, at: Date.now() };
+    const description = humanizeHealthError(error);
+    pending.error(integration.name, {
+      description,
+      detail: description.includes(error.trim()) ? undefined : error,
+      action: { label: "Try again", onClick: () => void runTest() },
+    });
+  }
+
+  async function runTest(): Promise<void> {
+    if (testing) return;
+    testing = true;
+    render();
+    const pending = toast.pending(integration.name, { description: "Testing connection…" });
+    try {
+      const result = await actions.onTest();
+      if (result.ok) {
+        currentHealth = { status: "ok", at: Date.now() };
+        pending.success(integration.name, { description: "Connected." });
+      } else {
+        reportTestFailure(result.error ?? "Unknown error", pending);
+      }
+    } catch (e) {
+      reportTestFailure(e instanceof Error ? e.message : String(e), pending);
+    }
+    testing = false;
+    render();
+  }
+
   function render() {
-    renderHeader(headerEl, integration, manifest ?? null, currentHealth ?? null, testState, {
-      onTest: async () => {
-        if (resetTimer) clearTimeout(resetTimer);
-        testState = "testing";
-        render();
-        try {
-          const res = await actions.onTest();
-          testState = res.ok ? "ok" : { kind: "fail", error: res.error ?? "Unknown error" };
-          currentHealth = res.ok
-            ? { status: "ok", at: Date.now() }
-            : { status: "error", error: res.error ?? "Unknown error", at: Date.now() };
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          testState = { kind: "fail", error: msg };
-          currentHealth = { status: "error", error: msg, at: Date.now() };
-        }
-        render();
-        const delay = testState === "ok" ? 3000 : 5000;
-        resetTimer = setTimeout(() => {
-          testState = "idle";
-          render();
-        }, delay);
-      },
+    renderHeader(headerEl, integration, manifest ?? null, currentHealth ?? null, testing, {
+      onTest: () => void runTest(),
       onEdit: actions.onEdit,
       onDuplicate: actions.onDuplicate,
       onDelete: actions.onDelete,
@@ -88,10 +97,7 @@ export function mountIntegrationDetail(
       const overviewWrap = document.createElement("div");
       overviewWrap.setAttribute("role", "tabpanel");
       overviewWrap.setAttribute("aria-labelledby", "tab-overview");
-      renderOverview(overviewWrap, integration, manifest ?? null, {
-        inject: actions.inject,
-        onCopyConfirm: (copied) => actions.onCopyEndpoint?.(copied),
-      });
+      renderOverview(overviewWrap, integration, manifest ?? null, { inject: actions.inject });
       contentEl.appendChild(overviewWrap);
     } else {
       const panel = document.createElement("div");
@@ -110,7 +116,6 @@ export function mountIntegrationDetail(
       render();
     },
     destroy() {
-      if (resetTimer) clearTimeout(resetTimer);
       logs?.destroy();
       logs = null;
       root.innerHTML = "";

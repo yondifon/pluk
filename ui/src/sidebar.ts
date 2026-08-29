@@ -103,7 +103,10 @@ export function createSidebar(
     el.className = "popover";
     const header = document.createElement("div");
     header.className = "popover-header";
-    header.innerHTML = `<strong>Filters</strong>`;
+    const title = document.createElement("span");
+    title.className = "popover-title";
+    title.textContent = "Filters";
+    header.appendChild(title);
     const clear = createButton("Clear", { size: "sm" });
     clear.classList.add("popover-clear");
     clear.style.display = typeFilter.size || envFilter.size ? "" : "none";
@@ -173,13 +176,20 @@ export function createSidebar(
       }
       el.appendChild(sec);
     }
+    if (!types.length && !envs.length) {
+      const empty = document.createElement("div");
+      empty.className = "popover-empty";
+      empty.textContent = "Add an integration to see filters.";
+      el.appendChild(empty);
+    }
     const position = () => {
       const rect = filterBtn.getBoundingClientRect();
-      el.style.left = `${Math.max(0, rect.right - 224)}px`;
-      el.style.top = `${rect.bottom + 4}px`;
+      el.style.left = `${Math.max(0, rect.right - el.offsetWidth)}px`;
+      el.style.top = `${rect.bottom}px`;
     };
-    position();
+    el.tabIndex = -1;
     document.body.appendChild(el);
+    position();
     popover = el;
     closePopover = () => {
       el.remove();
@@ -204,7 +214,7 @@ export function createSidebar(
         filterBtn.focus();
       }
     });
-    queueMicrotask(() => el.querySelector<HTMLElement>("button, input")?.focus());
+    queueMicrotask(() => (el.querySelector<HTMLElement>("input") ?? el).focus());
   }
 
   filterBtn.addEventListener("click", showPopover);

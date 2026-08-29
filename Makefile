@@ -4,7 +4,7 @@ DIST      := dist
 VERSION   := $(shell cat VERSION 2>/dev/null | tr -d ' \n')
 COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: dev deps build build-ui bundle bundle-unsigned bundle-signed install test lint clean sync-version check-tauri swift-build swift-bundle help
+.PHONY: dev deps build build-ui bundle bundle-unsigned bundle-signed publish check-publish-tools install test lint clean sync-version check-tauri swift-build swift-bundle help
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:
@@ -14,6 +14,7 @@ help:
 	@printf "  make bundle           Frontend + cargo tauri build (release bundles, unsigned if no identity)\n"
 	@printf "  make bundle-signed    Signed + notarized via 1Password (op run --env-file=.env.1password)\n"
 	@printf "  make bundle-unsigned  Force ad-hoc signing (no identity)\n"
+	@printf "  make publish          Universal build, sign, notarize, staple, verify, GitHub release\n"
 	@printf "  make install          Build bundles and install Pluk.app to /Applications (macOS)\n"
 	@printf "  make test             cargo test --workspace\n"
 	@printf "  make lint             cargo clippy + frontend typecheck\n"
@@ -98,6 +99,54 @@ bundle-signed: check-tauri sync-version build-ui
 		exit 1; \
 	fi
 	op run --env-file=.env.1password -- cargo tauri build
+
+# ── Publish (macOS release) ──────────────────────────────────────────────────
+# Universal (arm64 + x86_64) build via `cargo tauri build --target
+# universal-apple-darwin`, signed + notarized + stapled (Tauri's bundler does
+# this automatically once APPLE_SIGNING_IDENTITY + APPLE_ID + APPLE_PASSWORD +
+# APPLE_TEAM_ID are set), then verified with codesign/spctl/stapler before
+# anything is uploaded. Secrets come from a mounted .env when one exists at
+# the repo root, otherwise scripts/publish.sh resolves .env.1password live via
+# `op run` — see scripts/publish.sh for that precedence and the full build
+# sequence, docs/release-checklist.md for one-time setup and every var.
+check-publish-tools:
+	@command -v gh >/dev/null 2>&1 || { \
+		echo "error: gh CLI not found. install: https://cli.github.com/"; \
+		exit 1; \
+	}
+	@if [ -f .env ]; then \
+		echo "→ secrets: using mounted .env (takes precedence over .env.1password)"; \
+	elif [ -f .env.1password ]; then \
+		command -v op >/dev/null 2>&1 || { \
+			echo "error: 1Password CLI (op) not found (or shadowed by a shell alias)."; \
+			echo "  install: https://developer.1password.com/docs/cli/get-started/"; \
+			exit 1; \
+		}; \
+		op --version >/dev/null 2>&1 || { \
+			echo "error: 'op' does not behave like the 1Password CLI — something else is shadowing it."; \
+			echo "  run: unalias op && type op   # confirm it points at the real 1Password binary"; \
+			exit 1; \
+		}; \
+		op whoami >/dev/null 2>&1 || { \
+			echo "error: not signed in to the 1Password CLI."; \
+			echo "  run: op signin"; \
+			exit 1; \
+		}; \
+		op run --env-file=.env.1password -- true || { \
+			echo "error: a 1Password reference in .env.1password failed to resolve (see error above)."; \
+			echo "  check the \"Pluk-signing\" item exists in the \"DesgnSpace\" vault with every field .env.1password lists"; \
+			exit 1; \
+		}; \
+	else \
+		echo "error: no secrets source found."; \
+		echo "  create .env (cp .env.example .env, fill in from 1Password — or: op inject -i .env.1password -o .env)"; \
+		echo "  or restore .env.1password (template, committed)"; \
+		exit 1; \
+	fi
+
+publish: check-tauri check-publish-tools sync-version build-ui
+	@printf "→ publish: universal signed + notarized $(APP) v$(VERSION), verify, GitHub release\n"
+	bash scripts/publish.sh
 
 # ── Install (macOS) ─────────────────────────────────────────────────────────
 install: bundle

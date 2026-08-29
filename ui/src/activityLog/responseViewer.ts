@@ -1,5 +1,6 @@
 import { parseLanguage, highlightedHtml } from "./highlight";
 import { openModal } from "../modal";
+import { toast } from "../toast";
 
 function singleFencedBlock(s: string): { code: string; language: string } | null {
   const trimmed = s.trim();
@@ -79,9 +80,7 @@ export function createResponseViewer(): { open: (title: string, text: string) =>
 
     controls.querySelector("[data-action='copy']")?.addEventListener("click", async () => {
       await navigator.clipboard.writeText(text);
-      const btn = controls.querySelector("[data-action='copy']") as HTMLElement;
-      btn.textContent = "Copied!";
-      setTimeout(() => (btn.textContent = "Copy"), 1200);
+      toast.success("Response copied");
     });
     const upd = (deltaFont: number, deltaLh: number) => {
       const fs = Math.max(10, Math.min(24, getFontSize() + deltaFont));

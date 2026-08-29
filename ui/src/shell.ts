@@ -9,7 +9,7 @@ export type BannerState = {
 export function createShell(
   sidebarEl: HTMLElement,
   detailEl: HTMLElement,
-): { root: HTMLElement; detailMount: HTMLElement; bottomMount: HTMLElement; toastMount: HTMLElement } {
+): { root: HTMLElement; detailMount: HTMLElement; bottomMount: HTMLElement; toasterMount: HTMLElement } {
   const root = document.createElement("div");
   root.className = "shell";
 
@@ -64,15 +64,16 @@ export function createShell(
   const bottom = document.createElement("div");
   bottom.className = "shell-bottom";
 
-  const toastMount = document.createElement("div");
-  toastMount.className = "toast-mount";
-  toastMount.id = "toast-mount";
-  toastMount.setAttribute("aria-live", "polite");
+  const toasterMount = document.createElement("div");
 
-  main.append(detail, bottom, toastMount);
+  const stage = document.createElement("div");
+  stage.className = "shell-stage";
+  stage.append(detail, toasterMount);
+
+  main.append(stage, bottom);
   root.append(sidebarWrap, resizer, main);
 
-  return { root, detailMount: detail, bottomMount: bottom, toastMount };
+  return { root, detailMount: detail, bottomMount: bottom, toasterMount };
 }
 
 export function renderBanners(mount: HTMLElement, state: BannerState, onRestart: () => void, onUpdate: () => void): void {

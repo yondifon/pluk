@@ -138,27 +138,6 @@ export function mcpUrl(token: string): string {
   return `http://localhost:4242/mcp/${token}`;
 }
 
-export function endpointCopyConfirmState(): { copied: boolean; trigger(): void; reset(): void } {
-  let copied = false;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  return {
-    get copied() {
-      return copied;
-    },
-    trigger() {
-      copied = true;
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        copied = false;
-      }, 1500);
-    },
-    reset() {
-      copied = false;
-      if (timer) clearTimeout(timer);
-    },
-  };
-}
-
 /**
  * Server name written into a client's config: the integration or group name,
  * slugified, suffixed with its environment when it has one. Mirrors

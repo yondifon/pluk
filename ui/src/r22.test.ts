@@ -1,6 +1,5 @@
 import { describe, test, expect } from "bun:test";
 import { slug, slugsWithCollision, toolPrefix } from "./slug";
-import { ToastCenter, ERROR_LIFETIME_MS, SUCCESS_LIFETIME_MS } from "./toast";
 import { detectTransitions } from "./health";
 import { emptyState } from "./emptyStates";
 
@@ -42,43 +41,6 @@ describe("slug derivation matches server", () => {
   test("toolPrefix helper", () => {
     expect(toolPrefix("Metrics DB")).toBe("metrics_db__*");
     expect(toolPrefix("")).toBe("member__*");
-  });
-});
-
-describe("toast replacement per integration", () => {
-  test("newer toast replaces previous for same integration", () => {
-    const center = new ToastCenter();
-    center.present({ integrationId: "i1", title: "DB", message: "first", kind: "error" });
-    expect(center.all.length).toBe(1);
-    expect(center.all[0].message).toBe("first");
-    center.present({ integrationId: "i1", title: "DB", message: "second", kind: "error" });
-    expect(center.all.length).toBe(1);
-    expect(center.all[0].message).toBe("second");
-  });
-
-  test("different integrations coexist", () => {
-    const center = new ToastCenter();
-    center.present({ integrationId: "i1", title: "A", message: "a", kind: "error" });
-    center.present({ integrationId: "i2", title: "B", message: "b", kind: "success" });
-    expect(center.all.length).toBe(2);
-  });
-
-  test("dismiss removes specific toast", () => {
-    const center = new ToastCenter();
-    const t = center.present({ integrationId: "i1", title: "A", message: "a", kind: "error" });
-    center.dismiss(t.id);
-    expect(center.all.length).toBe(0);
-  });
-});
-
-describe("error toasts outlive success toasts", () => {
-  test("lifetimes", () => {
-    const center = new ToastCenter();
-    expect(center.lifetimeFor("error")).toBe(ERROR_LIFETIME_MS);
-    expect(center.lifetimeFor("success")).toBe(SUCCESS_LIFETIME_MS);
-    expect(ERROR_LIFETIME_MS).toBeGreaterThan(SUCCESS_LIFETIME_MS);
-    expect(ERROR_LIFETIME_MS).toBe(8000);
-    expect(SUCCESS_LIFETIME_MS).toBe(3000);
   });
 });
 
@@ -137,61 +99,6 @@ describe("health transition-only firing", () => {
     const nextOk = { x: { status: "ok" as const, at: 2 } };
     // absent -> ok should not fire (was not error)
     expect(detectTransitions(prev, nextOk).length).toBe(0);
-  });
-});
-
-describe("retry re-tests connection", () => {
-  test("onRetry callback is invoked with integrationId", async () => {
-    let retriedId: string | null = null;
-    const onRetry = (id: string) => {
-      retriedId = id;
-    };
-    const center = new ToastCenter(onRetry);
-    center.present({ integrationId: "i42", title: "DB", message: "Connection is failing.", kind: "error" });
-    // simulate clicking retry: centre's listener would call onRetry
-    onRetry("i42");
-    expect(retriedId).toBe("i42");
-  });
-});
-
-describe("reduced-motion suppressing animation", () => {
-  test("shouldAnimate respects prefers-reduced-motion", () => {
-    const g = globalThis as unknown as { window?: { matchMedia: (q: string) => unknown } };
-    const hadWindow = g.window;
-    const fakeWindow: { matchMedia: (q: string) => unknown } = { matchMedia: () => ({ matches: false }) };
-    if (!g.window) (g as unknown as { window: unknown }).window = fakeWindow;
-    const w = (g.window as unknown as { matchMedia: (q: string) => MediaQueryList });
-    const orig = w.matchMedia;
-    // reduced motion on
-    w.matchMedia = ((q: string) => ({
-      matches: q === "(prefers-reduced-motion: reduce)" ? true : false,
-      media: q,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    })) as unknown as typeof window.matchMedia;
-    const c1 = new ToastCenter();
-    expect(c1.shouldAnimate()).toBe(false);
-
-    // reduced motion off
-    w.matchMedia = ((q: string) => ({
-      matches: false,
-      media: q,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    })) as unknown as typeof window.matchMedia;
-    const c2 = new ToastCenter();
-    expect(c2.shouldAnimate()).toBe(true);
-
-    w.matchMedia = orig;
-    if (!hadWindow) delete (g as unknown as { window?: unknown }).window;
   });
 });
 

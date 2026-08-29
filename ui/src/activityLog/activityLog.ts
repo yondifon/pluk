@@ -13,6 +13,7 @@ import { capResponse } from "./caps";
 import { createResponseViewer } from "./responseViewer";
 import { createIcon } from "../icon";
 import { confirmModal } from "../modal";
+import { toast } from "../toast";
 import { ENTRY_RENDERERS, entryType, responseTextForCopy } from "./renderers";
 
 export interface ActivityLogOptions {
@@ -448,7 +449,10 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
       title: "Clear activity history?",
       message: "This permanently removes the recorded activity for this integration.",
       confirmLabel: "Clear history",
-      onConfirm: () => void clearLogs(opts.scope).then(() => reload(true)).catch((e) => alert(String(e))),
+      onConfirm: () =>
+        void clearLogs(opts.scope)
+          .then(() => reload(true))
+          .catch((e) => toast.error("History not cleared", { description: String(e) })),
     });
   });
 
@@ -460,9 +464,9 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
       const row = copyBlock.closest<HTMLElement>("[data-id]");
       const entry = row ? entries.find(item => item.id === Number(row.dataset.id)) : undefined;
       if (entry) {
-        await navigator.clipboard.writeText(copyBlock.dataset.copyBlock === "request" ? entry.sql : responseTextForCopy(entry));
-        copyBlock.replaceChildren(createIcon("check", { size: 14 }));
-        window.setTimeout(() => copyBlock.replaceChildren(createIcon("copy", { size: 14 })), 1000);
+        const isRequest = copyBlock.dataset.copyBlock === "request";
+        await navigator.clipboard.writeText(isRequest ? entry.sql : responseTextForCopy(entry));
+        toast.success(isRequest ? "Request copied" : "Response copied");
       }
       return;
     }

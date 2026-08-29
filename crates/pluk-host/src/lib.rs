@@ -47,14 +47,15 @@ pub fn run() {
         let z = host_state.zoom.lock().expect("zoom lock");
         z.state().reset_title()
     };
-    let updater = Updater::new(UpdaterConfig::placeholder());
     let activity_store = store.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(host_state)
-        .manage(updater.clone())
         .setup(move |app| {
+            app.manage(Updater::new(UpdaterConfig::from_plugins(
+                &app.config().plugins,
+            )));
             // Every written log row reaches the window as it happens, so the
             // activity log needs no polling.
             let activity_app = app.handle().clone();
@@ -75,7 +76,6 @@ pub fn run() {
             )?;
             let quit = MenuItem::with_id(app, "tray_quit", "Quit pluk", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&show, &check_updates, &quit])?;
-            let updater_for_tray = updater.clone();
             let _tray = TrayIconBuilder::with_id("pluk-tray")
                 .icon(tauri::include_image!("icons/tray.png"))
                 .menu(&tray_menu)
@@ -92,29 +92,7 @@ pub fn run() {
                     "tray_quit" => app.exit(0),
                     "tray_updates" => {
                         show_window(app);
-                        if let Some(u) = app.try_state::<Updater>() {
-                            if u.is_configured() && u.begin_check() {
-                                if let Some(w) = app.get_webview_window("main") {
-                                    let _ = w.emit(
-                                        "pluk://update-state",
-                                        serde_json::to_value(u.state()).unwrap(),
-                                    );
-                                }
-                            } else if let Some(w) = app.get_webview_window("main") {
-                                let _ = w.emit(
-                                    "pluk://update-state",
-                                    serde_json::to_value(u.state()).unwrap(),
-                                );
-                            }
-                        } else if updater_for_tray.is_configured()
-                            && updater_for_tray.begin_check()
-                            && let Some(w) = app.get_webview_window("main")
-                        {
-                            let _ = w.emit(
-                                "pluk://update-state",
-                                serde_json::to_value(updater_for_tray.state()).unwrap(),
-                            );
-                        }
+                        tauri::async_runtime::spawn(updater::run_check(app.clone(), true));
                     }
                     _ => {}
                 })
@@ -171,51 +149,16 @@ pub fn run() {
                     }
                 }
                 "check_for_updates" => {
-                    if let Some(u) = app.try_state::<Updater>()
-                        && u.is_configured()
-                        && u.begin_check()
-                        && let Some(w) = app.get_webview_window("main")
-                    {
-                        let _ = w.emit(
-                            "pluk://update-state",
-                            serde_json::to_value(u.state()).unwrap(),
-                        );
-                    }
+                    tauri::async_runtime::spawn(updater::run_check(app.clone(), true));
                 }
                 _ => {}
             });
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                updater::run_check(handle.clone(), false).await;
                 loop {
                     tokio::time::sleep(updater::CHECK_INTERVAL).await;
-                    if let Some(u) = handle.try_state::<Updater>() {
-                        if !u.is_configured() {
-                            continue;
-                        }
-                        if u.begin_check() {
-                            if let Some(w) = handle.get_webview_window("main") {
-                                let _ = w.emit(
-                                    "pluk://update-state",
-                                    serde_json::to_value(u.state()).unwrap(),
-                                );
-                            }
-                            let h2 = handle.clone();
-                            tauri::async_runtime::spawn(async move {
-                                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                                if let Some(u2) = h2.try_state::<Updater>()
-                                    && matches!(u2.state(), updater::UpdateState::Checking)
-                                {
-                                    u2.set_state(updater::UpdateState::Idle);
-                                    if let Some(w) = h2.get_webview_window("main") {
-                                        let _ = w.emit(
-                                            "pluk://update-state",
-                                            serde_json::to_value(u2.state()).unwrap(),
-                                        );
-                                    }
-                                }
-                            });
-                        }
-                    }
+                    updater::run_check(handle.clone(), false).await;
                 }
             });
             Ok(())

@@ -9,6 +9,7 @@ export type IconName =
   | "filter"
   | "group"
   | "group-add"
+  | "info"
   | "lock"
   | "more"
   | "refresh"
@@ -34,6 +35,7 @@ const paths: Record<IconName, string[]> = {
   filter: ["M4 7h16", "M7 12h10", "M10 17h4"],
   group: ["M5 8.5h11v10H5z", "M8 5h11v10H8z"],
   "group-add": ["M4 7h11v11H4z", "M17 12v7", "m13.5 15.5 7 0"],
+  info: ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z", "M12 11.5v5", "M12 8h.01"],
   lock: ["M6 11h12v9H6z", "M8 11V8a4 4 0 0 1 8 0v3"],
   more: ["M6 12h.01", "M12 12h.01", "M18 12h.01"],
   refresh: ["M19 8V4m0 0h-4m4 0-4.5 4.5", "M20 14a8 8 0 1 1-2-5.3"],

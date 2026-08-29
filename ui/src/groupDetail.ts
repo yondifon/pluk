@@ -29,7 +29,6 @@ export type GroupDetailDeps = {
   onDelete: () => void;
   onEditIntegration: (id: string) => void;
   inject: InjectFn;
-  toastCenter?: { present: (t: { integrationId: string; title: string; message: string; kind: "error" | "success" }) => void };
 };
 
 function envLabel(env: string | null | undefined): string {

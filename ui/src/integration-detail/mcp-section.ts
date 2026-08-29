@@ -1,6 +1,7 @@
 import { formatFanOutMessage } from "./logic";
 import type { ConfigScope, FanOutResult, McpClientId } from "./types";
 import { createButton } from "../primitives";
+import { toast } from "../toast";
 import { hasHost, invoke, pickDirectory } from "../host";
 
 const CLIENTS: Array<{ id: McpClientId; label: string; supportsProject: boolean; globalPath: string; projectPath: string | null; language: string }> = [
@@ -22,7 +23,6 @@ export type McpSectionSpec = {
   key: string;
   url: string;
   agentHint?: string | null;
-  onCopyConfirm?: (copied: boolean) => void;
 };
 
 const TITLE_ID = "mcp-section-title";
@@ -49,7 +49,7 @@ function configPathFor(client: McpClientId, scope: ConfigScope): string {
   return c.globalPath;
 }
 
-function endpointRow({ url, onCopyConfirm }: McpSectionSpec): HTMLElement {
+function endpointRow({ url }: McpSectionSpec): HTMLElement {
   const row = document.createElement("div");
   row.className = "inspector-row";
   const label = document.createElement("span");
@@ -59,28 +59,17 @@ function endpointRow({ url, onCopyConfirm }: McpSectionSpec): HTMLElement {
   urlText.className = "mono";
   urlText.textContent = url;
   urlText.title = url;
-  const copyBtn = createButton("Copy", { variant: "primary", size: "sm", ariaLabel: "Copy endpoint URL" });
-  const live = document.createElement("span");
-  live.className = "sr-only";
-  live.setAttribute("role", "status");
-  live.setAttribute("aria-live", "polite");
-
-  let resetTimer: ReturnType<typeof setTimeout> | null = null;
-  copyBtn.addEventListener("click", async () => {
-    await copyText(url);
-    copyBtn.replaceChildren(document.createTextNode("Copied!"));
-    copyBtn.classList.add("copied");
-    live.textContent = "Endpoint URL copied.";
-    onCopyConfirm?.(true);
-    if (resetTimer) clearTimeout(resetTimer);
-    resetTimer = setTimeout(() => {
-      copyBtn.replaceChildren(document.createTextNode("Copy"));
-      copyBtn.classList.remove("copied");
-      onCopyConfirm?.(false);
-    }, 1500);
+  const copyBtn = createButton("Copy", {
+    variant: "primary",
+    size: "sm",
+    ariaLabel: "Copy endpoint URL",
+    onClick: async () => {
+      await copyText(url);
+      toast.success("Endpoint URL copied");
+    },
   });
 
-  row.append(label, urlText, copyBtn, live);
+  row.append(label, urlText, copyBtn);
   return row;
 }
 
@@ -198,13 +187,6 @@ export function renderMcpSection(
   hint.className = "hint";
   hint.id = "pluk-config-hint";
   snippetPre.setAttribute("aria-describedby", "pluk-config-hint");
-  const toast = document.createElement("div");
-  toast.className = "toast";
-  toast.setAttribute("role", "status");
-  toast.setAttribute("aria-live", "polite");
-  toast.setAttribute("aria-atomic", "true");
-  const outcome = document.createElement("div");
-  outcome.className = "install-outcome";
 
   function syncScopeOptions() {
     const single = selectedClient !== "all" ? CLIENTS.find((x) => x.id === selectedClient) : null;
@@ -267,7 +249,7 @@ export function renderMcpSection(
   });
 
   controls.append(clientLabel, clientSelect, scopeLabel, scopeSelect, addBtn, copyBtn);
-  container.append(controls, hint, snippetPre, toast, outcome);
+  container.append(controls, hint, snippetPre);
 
   if (!opts?.installed && hasHost()) {
     invoke<McpClientId[]>("list_installed_mcp_clients")
@@ -284,38 +266,22 @@ export function renderMcpSection(
   copyBtn.addEventListener("click", async () => {
     if (selectedClient === "all") return;
     await copyText(snippetFor(selectedClient as McpClientId, target.key, target.url));
-    const prev = copyBtn.textContent;
-    copyBtn.textContent = "Copied!";
-    setTimeout(() => (copyBtn.textContent = prev), 1500);
+    toast.success("Snippet copied");
   });
 
-  function outcomeRow(client: string, detail: string): HTMLElement {
-    const row = document.createElement("div");
-    row.className = "target-row";
-    row.textContent = `${client} — ${detail}`;
-    return row;
-  }
-
-  // One row per client, so the fan-out never hides which file it touched.
-  function showOutcome({ added, skipped, failed }: FanOutResult) {
-    outcome.replaceChildren(
-      ...added.map((r) => outcomeRow(r.client, `added to ${r.path}`)),
-      ...skipped.map((r) => outcomeRow(r.client, `already set up in ${r.path}`)),
-      ...failed.map((r) => outcomeRow(r.client, r.reason)),
-    );
-  }
-
-  // Every exit from Install lands here, so no click ends without a word.
-  function say(message: string, kind: "" | "success" | "error" = "") {
-    toast.textContent = message;
-    toast.className = kind ? `toast toast-${kind}` : "toast";
-    outcome.replaceChildren();
+  // One line per client, so the fan-out never hides which file it touched.
+  function outcomeDetail({ added, skipped, failed }: FanOutResult): string {
+    return [
+      ...added.map((r) => `${r.client} — added to ${r.path}`),
+      ...skipped.map((r) => `${r.client} — already set up in ${r.path}`),
+      ...failed.map((r) => `${r.client} — ${r.reason}`),
+    ].join("\n");
   }
 
   addBtn.addEventListener("click", async () => {
     const t = targets();
     if (!t.length) {
-      say("No AI client found to install into. Copy the snippet instead.", "error");
+      toast.error("No AI client found", { description: "Copy the snippet and paste it into your client’s config." });
       return;
     }
     let projectDir: string | null = null;
@@ -323,17 +289,18 @@ export function renderMcpSection(
       try {
         projectDir = await chooseDir("Choose the project folder");
       } catch (e) {
-        say(`Couldn’t open the folder chooser: ${errorText(e)}`, "error");
+        toast.error("Couldn’t open the folder chooser", { description: errorText(e) });
         return;
       }
       if (!projectDir) {
-        say("Nothing installed — choose a project folder first.");
+        toast.info("Nothing installed", { description: "Choose a project folder to install into." });
         return;
       }
     }
     addBtn.disabled = true;
     addBtn.setAttribute("aria-busy", "true");
     addBtn.textContent = "Installing…";
+    const pending = toast.pending("Installing…");
     const result: FanOutResult = { added: [], skipped: [], failed: [] };
     for (const cid of t) {
       const client = CLIENTS.find((x) => x.id === cid)!.label;
@@ -346,8 +313,9 @@ export function renderMcpSection(
       }
     }
     const { kind, message } = formatFanOutMessage(target.key, result);
-    say(message, kind);
-    showOutcome(result);
+    const options = { description: message, detail: outcomeDetail(result) };
+    if (kind === "error") pending.error("Install didn’t finish", options);
+    else pending.success("Installed", options);
     addBtn.disabled = targets().length === 0;
     addBtn.removeAttribute("aria-busy");
     addBtn.textContent = "Install";

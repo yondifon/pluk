@@ -18,8 +18,8 @@ import {
 } from "./forms/connectionDraft.ts";
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
 import type { AdapterManifest as CatalogManifest, ToolState } from "./forms/catalog.ts";
-import { ToastCenter, renderToasts } from "./toast.ts";
-import { humanizeHealthError } from "./health.ts";
+import { toast, mountToaster } from "./toast.ts";
+import { mountUpdates } from "./update.ts";
 import { renderLoadingState } from "./primitives.ts";
 import { openModal } from "./modal.ts";
 import { injectMcpConfig, invoke, hasHost } from "./host.ts";
@@ -94,8 +94,6 @@ let detachDetail: (() => void) | null = null;
 
 type SidebarElement = HTMLElement & { _destroy?: () => void };
 
-const toasts = new ToastCenter();
-
 function manifestFor(type: string): CatalogManifest | undefined {
   return manifests.find((m) => m.id === type);
 }
@@ -117,14 +115,9 @@ function toDetailIntegration(row: HostIntegration): DetailIntegration {
   };
 }
 
-function report(error: unknown, integrationId: string, title: string): void {
+function report(error: unknown, title: string): void {
   const reason = error instanceof Error ? error.message : String(error);
-  toasts.present({
-    integrationId,
-    title,
-    message: `${reason.replace(/\.?$/, ".")} Try again.`,
-    kind: "error",
-  });
+  toast.error(title, { description: `${reason.replace(/\.?$/, ".")} Try again.` });
 }
 
 // ── Detail rendering ─────────────────────────────────────────────────────────
@@ -194,7 +187,6 @@ function renderDetail(mount: HTMLElement): void {
         onDelete: () => void deleteGroup(row.id),
         onEditIntegration: (id) => select({ kind: "integration", id }),
         inject: injectMcpConfig,
-        toastCenter: toasts,
       });
       return;
     }
@@ -374,7 +366,7 @@ async function saveIntegration(saved: ConnectionDraft): Promise<void> {
     closeForm();
     await loadData();
   } catch (error) {
-    report(error, editing ?? "", "Integration not saved");
+    report(error, "Integration not saved");
   }
 }
 
@@ -393,7 +385,7 @@ async function saveGroup(saved: GroupDraft): Promise<void> {
     closeForm();
     await loadData();
   } catch (error) {
-    report(error, "", "Group not saved");
+    report(error, "Group not saved");
   }
 }
 
@@ -411,7 +403,7 @@ async function duplicateIntegration(id: string): Promise<void> {
     });
     await loadData();
   } catch (error) {
-    report(error, id, "Integration not duplicated");
+    report(error, "Integration not duplicated");
   }
 }
 
@@ -423,7 +415,7 @@ async function deleteIntegration(id: string): Promise<void> {
     }
     await loadData();
   } catch (error) {
-    report(error, id, "Integration not deleted");
+    report(error, "Integration not deleted");
   }
 }
 
@@ -435,21 +427,13 @@ async function deleteGroup(id: string): Promise<void> {
     }
     await loadData();
   } catch (error) {
-    report(error, "", "Group not deleted");
+    report(error, "Group not deleted");
   }
 }
 
 async function testIntegration(id: string): Promise<{ ok: boolean; error?: string }> {
   const result = await invoke<{ ok: boolean; error?: string }>("test_connection", { id });
   await loadHealth();
-  const row = hostIntegrations.find((c) => c.id === id);
-  const name = row?.name ?? "Integration";
-  if (result.ok) {
-    toasts.present({ integrationId: id, title: name, message: "Connected — your integration is working.", kind: "success" });
-  } else {
-    const msg = humanizeHealthError(result.error ?? null);
-    toasts.present({ integrationId: id, title: name, message: msg, kind: "error" });
-  }
   const h = state.health[id];
   detailHandle?.updateHealth(h ? { status: h.status, error: h.error ?? null, at: h.at } : null);
   refreshSidebar();
@@ -562,7 +546,8 @@ async function bootstrap(): Promise<void> {
   shellMounts = createShell(buildSidebar(), detailEl);
   app.innerHTML = "";
   app.appendChild(shellMounts.root);
-  renderToasts(shellMounts.toastMount, toasts, (id) => void testIntegration(id));
+  mountToaster(shellMounts.toasterMount);
+  void mountUpdates();
 
   if (!hasHost()) {
     state.loading = false;

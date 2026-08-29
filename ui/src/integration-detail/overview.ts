@@ -6,7 +6,7 @@ export function renderOverview(
   container: HTMLElement,
   integration: Integration,
   manifest: AdapterManifest | null | undefined,
-  deps: { inject: InjectFn; onCopyConfirm: (copied: boolean) => void },
+  deps: { inject: InjectFn },
 ): void {
   container.innerHTML = "";
   container.className = "overview-tab stack-lg";
@@ -18,7 +18,6 @@ export function renderOverview(
       key: mcpKey(integration.name, integration.environment ?? "development"),
       url: mcpUrl(integration.token),
       agentHint: manifest?.agentHint,
-      onCopyConfirm: deps.onCopyConfirm,
     },
     deps.inject,
   );

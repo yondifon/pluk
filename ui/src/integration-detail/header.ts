@@ -1,8 +1,6 @@
 import { deriveStatus, formatMetaLine, formatRelativeTime, statusLabel } from "./logic";
 import type { AdapterManifest, ConnHealth, Integration } from "./types";
-import { createIcon } from "../icon";
 import { createButton, createBadge, openMenu } from "../primitives";
-import { humanizeHealthError } from "../health";
 import { typeBadge } from "../glyph";
 
 export type HeaderActions = {
@@ -12,14 +10,12 @@ export type HeaderActions = {
   onDelete: () => void;
 };
 
-export type TestState = "idle" | "testing" | "ok" | { kind: "fail"; error: string };
-
 export function renderHeader(
   container: HTMLElement,
   integration: Integration,
   manifest: AdapterManifest | null | undefined,
   health: ConnHealth | null | undefined,
-  testState: TestState,
+  testing: boolean,
   actions: HeaderActions,
 ): void {
   container.innerHTML = "";
@@ -61,33 +57,15 @@ export function renderHeader(
   }
   if (health?.error) chip.title = health.error;
 
-  const testWrap = document.createElement("span");
-  testWrap.className = "test-wrap";
-
-  const glyph = testState === "testing"
-    ? createIcon("spinner")
-    : testState === "ok"
-      ? createIcon("check")
-      : typeof testState === "object" && testState.kind === "fail"
-      ? createIcon("close")
-        : null;
-  if (glyph) {
-    glyph.classList.add("test-glyph");
-    testWrap.appendChild(glyph);
-  }
-
-  const testBtn = createButton("Test", { variant: "secondary", size: "sm", ariaLabel: "Test connection", onClick: actions.onTest });
+  const testBtn = createButton(testing ? "Testing…" : "Test", {
+    variant: "secondary",
+    size: "sm",
+    ariaLabel: "Test connection",
+    onClick: actions.onTest,
+  });
   testBtn.classList.add("test-button");
-  if (testState === "testing") {
-    testBtn.replaceChildren(document.createTextNode("Testing…"));
-    testBtn.disabled = true;
-    testBtn.setAttribute("aria-busy", "true");
-  } else {
-    testBtn.replaceChildren(document.createTextNode("Test"));
-    testBtn.disabled = false;
-    testBtn.removeAttribute("aria-busy");
-  }
-  testWrap.appendChild(testBtn);
+  testBtn.disabled = testing;
+  if (testing) testBtn.setAttribute("aria-busy", "true");
 
   const menu = createButton("", { icon: "more", ariaLabel: "More actions" });
   menu.classList.add("icon-button");
@@ -99,7 +77,7 @@ export function renderHeader(
     { label: "Delete…", icon: "trash", danger: true, onSelect: actions.onDelete },
   ]));
 
-  titleRow.append(title, chip, testWrap, menu);
+  titleRow.append(title, chip, testBtn, menu);
 
   const metaRow = document.createElement("div");
   metaRow.className = "detail-meta";
@@ -110,18 +88,6 @@ export function renderHeader(
   }
 
   stack.append(titleRow, metaRow);
-
-  if (testState !== "idle") {
-    const live = document.createElement("div");
-    live.className = `test-result test-result-${testState === "testing" ? "testing" : testState === "ok" ? "ok" : "fail"}`;
-    live.setAttribute("role", "status");
-    live.setAttribute("aria-live", "polite");
-    live.setAttribute("aria-atomic", "true");
-    if (testState === "testing") live.textContent = "Testing connection…";
-    else if (testState === "ok") live.textContent = "Connected — your integration is working.";
-    else live.textContent = humanizeHealthError(testState.error);
-    stack.appendChild(live);
-  }
 
   top.append(badge, stack);
   container.appendChild(top);

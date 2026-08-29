@@ -5,9 +5,21 @@
  * covered by `commands::inject_command_tests`.
  */
 
-import { describe, test, expect, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { renderMcpSection } from "./mcp-section";
 import { injectMcpConfig } from "../host";
+import { toast, mountToaster } from "../toast";
+
+let toaster: HTMLElement;
+let unmountToaster: () => void;
+
+function currentToast(): HTMLElement {
+  return toaster.querySelector<HTMLElement>(".toast:not([data-exit])")!;
+}
+
+function toastText(selector: string): string {
+  return currentToast().querySelector(selector)!.textContent ?? "";
+}
 
 const target = { key: "marketing-db-production", url: "http://localhost:4242/mcp/tok" };
 
@@ -44,8 +56,17 @@ function settle(): Promise<void> {
   return new Promise((r) => setTimeout(r, 0));
 }
 
+beforeEach(() => {
+  toaster = document.createElement("div");
+  document.body.appendChild(toaster);
+  unmountToaster = mountToaster(toaster);
+});
+
 afterEach(() => {
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+  toast.clear();
+  unmountToaster();
+  toaster.remove();
 });
 
 describe("install click path", () => {
@@ -94,12 +115,8 @@ describe("install click path", () => {
 
     await mountAndInstall(root);
 
-    expect(root.querySelector(".toast")!.textContent).toBe(
-      `Added “${target.key}” to /repo/.cursor/mcp.json`,
-    );
-    expect([...root.querySelectorAll(".install-outcome .target-row")].map((r) => r.textContent)).toEqual([
-      "Cursor — added to /repo/.cursor/mcp.json",
-    ]);
+    expect(toastText(".toast-description")).toBe(`Added “${target.key}” to /repo/.cursor/mcp.json`);
+    expect(toastText(".toast-detail")).toBe("Cursor — added to /repo/.cursor/mcp.json");
   });
 
   test("a folder chooser the host refuses is reported, not swallowed", async () => {
@@ -111,9 +128,9 @@ describe("install click path", () => {
 
     await mountAndInstall(root);
 
-    const toast = root.querySelector(".toast")!;
-    expect(toast.textContent).toBe("Couldn’t open the folder chooser: dialog.open not allowed");
-    expect(toast.className).toContain("toast-error");
+    expect(toastText(".toast-title")).toBe("Couldn’t open the folder chooser");
+    expect(toastText(".toast-description")).toBe("dialog.open not allowed");
+    expect(currentToast().dataset.variant).toBe("error");
   });
 
   test("a host that rejects the write names the reason", async () => {
@@ -126,8 +143,8 @@ describe("install click path", () => {
 
     await mountAndInstall(root);
 
-    expect(root.querySelector(".toast")!.textContent).toContain("Permission denied");
-    expect(root.querySelector(".toast")!.className).toContain("toast-error");
+    expect(toastText(".toast-detail")).toContain("Permission denied");
+    expect(currentToast().dataset.variant).toBe("error");
   });
 
   test("no host attached says so instead of doing nothing", async () => {
@@ -136,7 +153,7 @@ describe("install click path", () => {
 
     await mountAndInstall(root);
 
-    expect(root.querySelector(".toast")!.textContent).toContain("No Pluk host attached");
-    expect(root.querySelector(".toast")!.className).toContain("toast-error");
+    expect(toastText(".toast-description")).toContain("No Pluk host attached");
+    expect(currentToast().dataset.variant).toBe("error");
   });
 });
