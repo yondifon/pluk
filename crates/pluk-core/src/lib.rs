@@ -4,3 +4,4 @@
 
 pub mod mcp_config;
 pub mod platform;
+pub mod process;

@@ -2,6 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use pluk_core::process::RunError;
+use pluk_ssh::SshTunnelConfig;
+
 use crate::error::AdapterError;
 
 pub const DEFAULT_EXEC_TIMEOUT_MS: u64 = 60_000;
@@ -109,44 +112,47 @@ impl SshExecutor for RealSshExecutor {
 
         let mut cmd = TokioCommand::new("ssh");
         cmd.args(&args);
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-
-        let child = cmd.spawn().map_err(|e| AdapterError::new(e.to_string()))?;
 
         let timeout = Duration::from_millis(timeout_ms);
-        let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
-
-        match result {
-            Ok(Ok(output)) => {
-                let code = output.status.code();
+        match pluk_core::process::run_capture(&mut cmd, timeout).await {
+            Ok(output) => {
                 let mut stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
                 let mut stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
-                let mut truncated = false;
-                if stdout_str.len() + stderr_str.len() > MAX_OUTPUT_BYTES {
-                    truncated = true;
-                    let remaining = MAX_OUTPUT_BYTES;
-                    if stdout_str.len() > remaining {
-                        stdout_str.truncate(remaining);
+                let truncated = stdout_str.len() + stderr_str.len() > MAX_OUTPUT_BYTES;
+                if truncated {
+                    if stdout_str.len() > MAX_OUTPUT_BYTES {
+                        truncate_chars(&mut stdout_str, MAX_OUTPUT_BYTES);
                         stderr_str.clear();
                     } else {
-                        stderr_str.truncate(remaining - stdout_str.len());
+                        truncate_chars(&mut stderr_str, MAX_OUTPUT_BYTES - stdout_str.len());
                     }
                 }
                 Ok(ExecResult {
                     stdout: stdout_str,
                     stderr: stderr_str,
-                    code,
+                    code: output.code,
                     truncated,
                 })
             }
-            Ok(Err(e)) => Err(AdapterError::new(e.to_string())),
-            Err(_) => Err(AdapterError::new(format!(
-                "Command timed out after {}s",
+            Err(RunError::TimedOut) => Err(AdapterError::new(format!(
+                "Command timed out after {}s and was stopped",
                 timeout_ms / 1000
             ))),
+            Err(e) => Err(AdapterError::new(e.to_string())),
         }
     }
+}
+
+/// Cut `s` down to at most `max` bytes without splitting a character.
+fn truncate_chars(s: &mut String, max: usize) {
+    if s.len() <= max {
+        return;
+    }
+    let mut cut = max;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    s.truncate(cut);
 }
 
 static EXECUTOR: OnceLock<Arc<dyn SshExecutor>> = OnceLock::new();
@@ -235,7 +241,8 @@ pub async fn run_command(
     .await
 }
 
-// Forwards
+// ── forwards ─────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone)]
 pub struct ForwardInfo {
     pub id: String,
@@ -244,14 +251,46 @@ pub struct ForwardInfo {
     pub local_port: u16,
 }
 
+/// A live local port forward. Dropping it closes the forward.
+pub trait Forward: Send + Sync {
+    fn local_port(&self) -> u16;
+}
+
+impl Forward for pluk_ssh::Tunnel {
+    fn local_port(&self) -> u16 {
+        self.local_port
+    }
+}
+
+/// What actually opens the forward — the SSH transport in production, a stub in
+/// tests, mirroring the [`SshExecutor`] seam.
+#[async_trait::async_trait]
+pub trait ForwardOpener: Send + Sync {
+    async fn open(&self, config: SshTunnelConfig) -> Result<Arc<dyn Forward>, AdapterError>;
+}
+
+struct SshForwardOpener;
+
+#[async_trait::async_trait]
+impl ForwardOpener for SshForwardOpener {
+    async fn open(&self, config: SshTunnelConfig) -> Result<Arc<dyn Forward>, AdapterError> {
+        let tunnel = pluk_ssh::open_ssh_tunnel(config, None)
+            .await
+            .map_err(|e| AdapterError::new(e.to_string()))?;
+        Ok(Arc::new(tunnel))
+    }
+}
+
 struct ForwardEntry {
     info: ForwardInfo,
-    // keep tunnel alive if real; stub just holds info
+    /// Held so the forward stays open until it is closed or the entry is dropped.
+    _handle: Arc<dyn Forward>,
 }
 
 static FORWARDS: OnceLock<Mutex<HashMap<String, HashMap<String, ForwardEntry>>>> = OnceLock::new();
 static USED_PORTS: OnceLock<Mutex<HashSet<u16>>> = OnceLock::new();
-static NEXT_PORT: OnceLock<Mutex<u16>> = OnceLock::new();
+static OPENER: OnceLock<Arc<dyn ForwardOpener>> = OnceLock::new();
+static TEST_OPENER: OnceLock<Mutex<Option<Arc<dyn ForwardOpener>>>> = OnceLock::new();
 
 fn forwards_map() -> &'static Mutex<HashMap<String, HashMap<String, ForwardEntry>>> {
     FORWARDS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -259,63 +298,51 @@ fn forwards_map() -> &'static Mutex<HashMap<String, HashMap<String, ForwardEntry
 fn used_ports() -> &'static Mutex<HashSet<u16>> {
     USED_PORTS.get_or_init(|| Mutex::new(HashSet::new()))
 }
-fn next_port_counter() -> &'static Mutex<u16> {
-    NEXT_PORT.get_or_init(|| Mutex::new(40000))
+fn test_opener_slot() -> &'static Mutex<Option<Arc<dyn ForwardOpener>>> {
+    TEST_OPENER.get_or_init(|| Mutex::new(None))
+}
+
+pub fn set_test_forward_opener(opener: Arc<dyn ForwardOpener>) {
+    *test_opener_slot().lock().unwrap() = Some(opener);
+}
+pub fn clear_test_forward_opener() {
+    *test_opener_slot().lock().unwrap() = None;
+}
+
+fn opener() -> Arc<dyn ForwardOpener> {
+    if let Some(test) = test_opener_slot().lock().unwrap().clone() {
+        return test;
+    }
+    OPENER
+        .get_or_init(|| Arc::new(SshForwardOpener) as Arc<dyn ForwardOpener>)
+        .clone()
 }
 
 fn owner_key(owner_id: &str, integration_id: &str) -> String {
     format!("{}::{}", owner_id, integration_id)
 }
 
-fn allocate_port(requested: Option<u16>) -> Result<u16, AdapterError> {
-    let mut used = used_ports().lock().unwrap();
-    if let Some(p) = requested {
-        if used.contains(&p) {
-            return Err(AdapterError::new(format!(
-                "Local port {} is already in use. Pick another local_port or omit it to auto-assign.",
-                p
-            )));
-        }
-        // try bind to check real OS
-        // Use std::net::TcpListener to test availability synchronously
-        match std::net::TcpListener::bind(format!("127.0.0.1:{}", p)) {
-            Ok(l) => {
-                drop(l);
-                used.insert(p);
-                return Ok(p);
-            }
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::AddrInUse {
-                    return Err(AdapterError::new(format!(
-                        "Local port {} is already in use. Pick another local_port or omit it to auto-assign.",
-                        p
-                    )));
-                } else {
-                    return Err(AdapterError::new(e.to_string()));
-                }
-            }
-        }
+fn port_in_use(port: u16) -> AdapterError {
+    AdapterError::new(format!(
+        "Local port {} is already in use. Pick another local_port or omit it to auto-assign.",
+        port
+    ))
+}
+
+/// Reject a requested port that is already forwarded or otherwise listening,
+/// before the transport tries to bind it and fails with a cryptic message.
+fn check_requested_port(port: u16) -> Result<(), AdapterError> {
+    if used_ports().lock().unwrap().contains(&port) {
+        return Err(port_in_use(port));
     }
-    let mut counter = next_port_counter().lock().unwrap();
-    for _ in 0..1000 {
-        let p = *counter;
-        *counter = counter.wrapping_add(1);
-        if *counter < 1024 {
-            *counter = 1024;
+    match std::net::TcpListener::bind(format!("127.0.0.1:{}", port)) {
+        Ok(listener) => {
+            drop(listener);
+            Ok(())
         }
-        if used.contains(&p) {
-            continue;
-        }
-        match std::net::TcpListener::bind(format!("127.0.0.1:{}", p)) {
-            Ok(l) => {
-                drop(l);
-                used.insert(p);
-                return Ok(p);
-            }
-            Err(_) => continue,
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => Err(port_in_use(port)),
+        Err(e) => Err(AdapterError::new(e.to_string())),
     }
-    Err(AdapterError::new("failed to allocate local port"))
 }
 
 pub async fn open_forward(
@@ -332,7 +359,6 @@ pub async fn open_forward(
     };
     let id = format!("{}:{}", rh, remote_port);
     let key = owner_key(owner_id, &conn.id);
-    // check existing
     {
         let map = forwards_map().lock().unwrap();
         if let Some(inner) = map.get(&key)
@@ -341,16 +367,40 @@ pub async fn open_forward(
             return Ok(entry.info.clone());
         }
     }
-    let local_port = allocate_port(requested_local_port)?;
+    if let Some(port) = requested_local_port {
+        check_requested_port(port)?;
+    }
+
+    let (host, port, user, auth_type, key_path, password) = ssh_params(conn);
+    let handle = opener()
+        .open(SshTunnelConfig {
+            host,
+            port,
+            user,
+            auth_type,
+            key_path,
+            passphrase: password,
+            remote_host: rh.clone(),
+            remote_port,
+            local_port: requested_local_port,
+        })
+        .await?;
+
     let info = ForwardInfo {
         id: id.clone(),
-        remote_host: rh.clone(),
+        remote_host: rh,
         remote_port,
-        local_port,
+        local_port: handle.local_port(),
     };
+    used_ports().lock().unwrap().insert(info.local_port);
     let mut map = forwards_map().lock().unwrap();
-    let inner = map.entry(key).or_default();
-    inner.insert(id, ForwardEntry { info: info.clone() });
+    map.entry(key).or_default().insert(
+        id,
+        ForwardEntry {
+            info: info.clone(),
+            _handle: handle,
+        },
+    );
     Ok(info)
 }
 
@@ -369,36 +419,26 @@ pub fn list_forwards(owner_id: &str, conn: &pluk_store::Integration) -> Vec<Forw
 pub fn close_forward(owner_id: &str, conn: &pluk_store::Integration, id: &str) -> bool {
     let key = owner_key(owner_id, &conn.id);
     let mut map = forwards_map().lock().unwrap();
-    if let Some(inner) = map.get_mut(&key)
-        && inner.remove(id).is_some()
-    {
-        // free port
-        // we could remove from used_ports but keep for now to avoid reuse collisions? Actually free it
-        // Find info port
-        // Need to release used port; we already removed entry, but need port value
-        // Instead track ports separately: we don't have port here after removal. Use closure to get before.
-        // Simplify: don't free, keep allocated (ports stay used) — matches real OS behavior where port remains bound until close
-        // But we need to free for tests to reuse ports. We'll attempt to remove port from used set by scanning? Not needed for now.
-        if inner.is_empty() {
-            map.remove(&key);
-        }
-        return true;
+    let Some(inner) = map.get_mut(&key) else {
+        return false;
+    };
+    // Dropping the entry closes the forward.
+    let Some(entry) = inner.remove(id) else {
+        return false;
+    };
+    used_ports().lock().unwrap().remove(&entry.info.local_port);
+    if inner.is_empty() {
+        map.remove(&key);
     }
-    false
+    true
 }
 
-// Release port helper for tests
 #[cfg(test)]
 pub fn reset_forwards_for_test() {
     forwards_map().lock().unwrap().clear();
     used_ports().lock().unwrap().clear();
-    *next_port_counter().lock().unwrap() = 40000;
     clear_test_executor();
-}
-
-#[cfg(test)]
-pub fn free_port_for_test(port: u16) {
-    used_ports().lock().unwrap().remove(&port);
+    clear_test_forward_opener();
 }
 
 // Test stub executor

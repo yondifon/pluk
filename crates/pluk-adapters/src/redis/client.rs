@@ -233,8 +233,8 @@ async fn open_resource(cfg: RedisConfig) -> Result<Arc<RedisResource>, AdapterEr
             passphrase: ssh.passphrase.clone(),
             remote_host: cfg.host.clone(),
             remote_port: cfg.port,
+            local_port: None,
         };
-        // consume R08 transport
         let tunnel = pluk_ssh::open_ssh_tunnel(tunnel_cfg, None)
             .await
             .map_err(|e| AdapterError::new(format!("SSH tunnel failed: {e}")))?;
@@ -289,14 +289,11 @@ impl RedisAccessor {
     }
 
     pub async fn raw(&self, cmd: &str, args: Vec<String>) -> Result<Value, AdapterError> {
-        let _res = self.get_resource().await?;
+        let resource = self.get_resource().await?;
         if let Some(runner) = get_runner() {
             return runner(cmd.to_string(), args).await;
         }
-        // Without a runner, attempt real redis using `redis` crate.
-        // We do not actually need a live server for tests; in production this path runs.
-        let url = _res.url.clone();
-        run_real_redis_command(&url, cmd, args).await
+        run_real_redis_command(&resource.url, cmd, args).await
     }
 
     // Typed helpers
@@ -319,13 +316,19 @@ impl RedisAccessor {
     }
 }
 
+/// Build a client for `url`. `rediss://` needs the crate's rustls backend, so a
+/// URL that parses here is one this build can actually connect over.
+fn redis_client(url: &str) -> Result<redis::Client, AdapterError> {
+    redis::Client::open(url.to_string())
+        .map_err(|e| AdapterError::new(format!("Redis client error: {e}")))
+}
+
 async fn run_real_redis_command(
     url: &str,
     cmd: &str,
     args: Vec<String>,
 ) -> Result<Value, AdapterError> {
-    let client = redis::Client::open(url.to_string())
-        .map_err(|e| AdapterError::new(format!("Redis client error: {e}")))?;
+    let client = redis_client(url)?;
     let mut conn = client
         .get_multiplexed_async_connection()
         .await
@@ -354,8 +357,7 @@ pub async fn test_redis(conn: &pluk_store::Integration) -> Result<(), AdapterErr
         return Ok(());
     }
     // real ping
-    let client = redis::Client::open(resource.url.clone())
-        .map_err(|e| AdapterError::new(format!("Redis client error: {e}")))?;
+    let client = redis_client(&resource.url)?;
     let mut c = client
         .get_multiplexed_async_connection()
         .await
@@ -370,4 +372,17 @@ pub async fn test_redis(conn: &pluk_store::Integration) -> Result<(), AdapterErr
 // Helper to capture open counts across clones for testing
 pub fn accessor_for_test(cfg: RedisConfig) -> RedisAccessor {
     RedisAccessor::new(cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_schemes_build_a_client() {
+        // A build without the TLS backend rejects `rediss://` outright, which is
+        // every managed provider.
+        assert!(redis_client("rediss://:pw@example.upstash.io:6379/0").is_ok());
+        assert!(redis_client("redis://127.0.0.1:6379/0").is_ok());
+    }
 }
