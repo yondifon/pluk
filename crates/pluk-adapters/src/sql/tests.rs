@@ -36,6 +36,7 @@ struct CaptureHost {
     tools_meta: std::collections::HashMap<String, ToolRegistration>,
     prompts: std::collections::HashMap<String, (String, Option<Map<String, Value>>)>,
     resources: std::collections::HashMap<String, (String, String)>,
+    resource_handlers: std::collections::HashMap<String, ResourceHandler>,
 }
 impl CaptureHost {
     fn new() -> Self {
@@ -44,6 +45,7 @@ impl CaptureHost {
             tools_meta: std::collections::HashMap::new(),
             prompts: std::collections::HashMap::new(),
             resources: std::collections::HashMap::new(),
+            resource_handlers: std::collections::HashMap::new(),
         }
     }
 }
@@ -68,10 +70,11 @@ impl ToolHost for CaptureHost {
         uri: &str,
         mime: &str,
         _desc: Option<&str>,
-        _h: ResourceHandler,
+        handler: ResourceHandler,
     ) {
         self.resources
             .insert(uri.to_string(), (name.to_string(), mime.to_string()));
+        self.resource_handlers.insert(uri.to_string(), handler);
     }
 }
 
@@ -655,4 +658,162 @@ async fn connection_testing_opens_and_closes() {
         "test_connection should succeed: {:?}",
         res.err()
     );
+}
+
+/// A SQLite file with one table, so introspection has something real to read.
+fn sqlite_fixture() -> (tempfile::TempDir, Integration) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("audit.sqlite");
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute("CREATE TABLE users (id INTEGER, email TEXT)", [])
+        .unwrap();
+    db.execute("INSERT INTO users VALUES (1, 'a@b.c')", [])
+        .unwrap();
+    // The opt-in introspection tools are off by default; this fixture turns
+    // them on so the audit covers every one of them.
+    let policy = r#"{"tools":{"list_schemas":{"enabled":true},"table_stats":{"enabled":true},"list_relationships":{"enabled":true}}}"#;
+    let conn = make_integration(
+        "sq1",
+        "sqlite",
+        json!({ "filename": path.to_str().unwrap() }),
+        Some(policy),
+    );
+    (dir, conn)
+}
+
+fn log_rows(store: &Store) -> Vec<pluk_store::LogEntry> {
+    store
+        .read_log_page(&LogScope::Connection("sq1".into()), LogRange::All, None)
+        .unwrap()
+        .entries
+}
+
+#[tokio::test]
+async fn every_call_that_reaches_the_database_leaves_a_log_row() {
+    let (_dir, store) = temp_store();
+    let (_db, conn) = sqlite_fixture();
+    let host = capture_for(&conn, store.clone());
+
+    let calls: Vec<(&str, Value)> = vec![
+        ("list_tables", json!({})),
+        ("sample_table", json!({ "table": "users" })),
+        ("describe_table", json!({ "table": "users" })),
+        ("search_schema", json!({ "term": "user" })),
+        ("list_schemas", json!({})),
+        ("table_stats", json!({ "table": "users" })),
+        ("list_relationships", json!({})),
+    ];
+    for (name, args) in &calls {
+        let handler = host.tools.get(*name).unwrap_or_else(|| panic!("{name}"));
+        let res = handler(args.clone()).await;
+        assert!(!res.is_error, "{name} failed: {}", res.text());
+    }
+
+    let schema = host.resource_handlers.get("schema://full").unwrap();
+    assert!(schema().await.text.contains("users"));
+
+    let sources: std::collections::HashSet<String> = log_rows(&store)
+        .iter()
+        .filter_map(|e| e.source.clone())
+        .collect();
+    for (name, _) in &calls {
+        assert!(sources.contains(*name), "{name} left no log row: {sources:?}");
+    }
+    assert!(
+        sources.contains("schema"),
+        "the schema resource left no log row: {sources:?}"
+    );
+    assert!(
+        log_rows(&store).iter().all(|e| e.verdict == "allowed"),
+        "every recorded call ran"
+    );
+}
+
+#[tokio::test]
+async fn a_sampled_table_records_the_rows_it_returned() {
+    let (_dir, store) = temp_store();
+    let (_db, conn) = sqlite_fixture();
+    let host = capture_for(&conn, store.clone());
+
+    let res = host.tools.get("sample_table").unwrap()(json!({ "table": "users" })).await;
+    assert!(!res.is_error, "{}", res.text());
+
+    let row = log_rows(&store)
+        .into_iter()
+        .find(|e| e.source.as_deref() == Some("sample_table"))
+        .expect("sample_table row");
+    assert_eq!(row.sql, "sample_table users");
+    let snapshot: Value = serde_json::from_str(row.result_json.as_deref().unwrap()).unwrap();
+    assert_eq!(snapshot["rows"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_failed_introspection_call_is_recorded_as_an_error() {
+    let (_dir, store) = temp_store();
+    let (_db, conn) = sqlite_fixture();
+    let host = capture_for(&conn, store.clone());
+
+    let res = host.tools.get("sample_table").unwrap()(json!({ "table": "nope" })).await;
+    assert!(res.is_error);
+
+    let row = log_rows(&store)
+        .into_iter()
+        .find(|e| e.source.as_deref() == Some("sample_table"))
+        .expect("sample_table row");
+    assert_eq!(row.verdict, "error");
+}
+
+#[tokio::test]
+async fn mysql_gates_the_statement_it_will_run_not_the_placeholder_form() {
+    let (_dir, store) = temp_store();
+    // Read-only by default, so the rendered UPDATE is refused at the gate and
+    // no connection is attempted.
+    let conn = make_integration("my1", "mysql", json!({ "host": "127.0.0.1" }), None);
+    let host = capture_for(&conn, store.clone());
+
+    let res = host.tools.get("query").unwrap()(json!({
+        "sql": "UPDATE users SET email = ? WHERE id = ?",
+        "params": ["a'; DROP TABLE users; --", 7],
+    }))
+    .await;
+    assert!(res.is_error, "read-only must refuse an UPDATE: {}", res.text());
+
+    let row = mysql_row(&store);
+    assert_eq!(row.verdict, "blocked");
+    // MySQL inlines its parameters, so the placeholder form is not what runs:
+    // the row records the statement the gate actually judged.
+    assert_eq!(
+        row.sql,
+        "UPDATE users SET email = 'a\\'; DROP TABLE users; --' WHERE id = 7"
+    );
+}
+
+#[tokio::test]
+async fn a_parameter_cannot_smuggle_a_statement_past_the_gate() {
+    let (_dir, store) = temp_store();
+    let conn = make_integration("my1", "mysql", json!({ "host": "127.0.0.1" }), None);
+    let host = capture_for(&conn, store.clone());
+
+    // The `?` sits inside a literal, so it is not a placeholder: substituting
+    // there would close the quote and hand the rest back as SQL.
+    let res = host.tools.get("query").unwrap()(json!({
+        "sql": "UPDATE users SET email = '?'",
+        "params": ["x'; DROP TABLE users; --"],
+    }))
+    .await;
+    assert!(res.is_error);
+
+    let row = mysql_row(&store);
+    assert_eq!(row.verdict, "blocked");
+    assert_eq!(row.sql, "UPDATE users SET email = '?'");
+}
+
+fn mysql_row(store: &Store) -> pluk_store::LogEntry {
+    store
+        .read_log_page(&LogScope::Connection("my1".into()), LogRange::All, None)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|e| e.source.as_deref() == Some("query"))
+        .expect("query row")
 }

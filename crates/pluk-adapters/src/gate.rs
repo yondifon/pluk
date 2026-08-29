@@ -6,7 +6,8 @@
 //!    entry is written (matching how policy denials are logged today).
 //! 2. **pending** — a log row is created so long-running calls are visible
 //!    while they run. The row id flows into `run`, which can register a
-//!    per-call abort against it.
+//!    per-call abort against it. A row that cannot be written blocks the
+//!    call: nothing reaches a remote system unaudited.
 //! 3. **run** — the adapter body executes.
 //! 4. **finalize** — the row gets its verdict: `allowed`, `blocked` (a
 //!    post-pending block, e.g. a SQL cost gate), or a terminal failure.
@@ -298,13 +299,17 @@ fn draft_for(
     draft
 }
 
+/// Text returned when the pending audit row cannot be written.
+const UNAUDITABLE: &str =
+    "Blocked: Pluk could not record this in the activity log, so the action did not run. \
+     Try again, and restart Pluk if it keeps failing.";
+
 /// Run a tool body through the policy gate + activity log, returning a shaped
 /// MCP response. See the module docs for the flow.
 ///
-/// `run` receives the log row id (`None` only when the row could not be
-/// created, which must not fail the call). Log-write failures are swallowed
-/// exactly like the TypeScript server's try/catch: auditing degrades, the
-/// call does not.
+/// `run` receives the log row id. An operation that cannot be audited does not
+/// run: a failed pending write blocks the call rather than letting it through
+/// unrecorded.
 pub async fn run_gated<F, Fut>(
     store: &Store,
     target: &CallTarget,
@@ -313,7 +318,7 @@ pub async fn run_gated<F, Fut>(
     opts: GateOpts,
 ) -> ToolResult
 where
-    F: FnOnce(Option<i64>) -> Fut,
+    F: FnOnce(i64) -> Fut,
     Fut: Future<Output = Result<Outcome, AdapterError>>,
 {
     let recorded_sql = meta.command.clone().unwrap_or_else(|| meta.detail.clone());
@@ -331,20 +336,21 @@ where
         return err(format!("Blocked: {block}"));
     }
 
-    let log_id = store
-        .create_log_entry(draft_for(
-            target,
-            &recorded_sql,
-            &meta,
-            Verdict::Pending,
-            None,
-        ))
-        .ok();
+    // No audit row, no call: nothing reaches a remote system unrecorded.
+    let Ok(log_id) = store.create_log_entry(draft_for(
+        target,
+        &recorded_sql,
+        &meta,
+        Verdict::Pending,
+        None,
+    )) else {
+        return err(UNAUDITABLE);
+    };
 
     let finalized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     struct PendingGuard {
         store: *const Store,
-        id: Option<i64>,
+        id: i64,
         finalized: std::sync::Arc<std::sync::atomic::AtomicBool>,
     }
     unsafe impl Send for PendingGuard {}
@@ -352,11 +358,10 @@ where
     impl Drop for PendingGuard {
         fn drop(&mut self) {
             if !self.finalized.load(std::sync::atomic::Ordering::SeqCst)
-                && let Some(id) = self.id
                 && let Some(s) = unsafe { self.store.as_ref() }
             {
                 let _ = s.update_log_entry(
-                    id,
+                    self.id,
                     LogUpdate {
                         verdict: Verdict::Error,
                         reason: Some("Query was interrupted (dropped or panicked)".into()),
@@ -387,14 +392,12 @@ where
 
     match run_result {
         Ok(Outcome::Blocked(block)) => {
-            if let Some(id) = log_id {
-                let update = LogUpdate {
-                    verdict: Verdict::Blocked,
-                    reason: Some(block.clone()),
-                    ..Default::default()
-                };
-                let _ = store.update_log_entry(id, update);
-            }
+            let update = LogUpdate {
+                verdict: Verdict::Blocked,
+                reason: Some(block.clone()),
+                ..Default::default()
+            };
+            let _ = store.update_log_entry(log_id, update);
             err(format!("Blocked: {block}"))
         }
         Ok(Outcome::Ran(ran)) => {
@@ -403,16 +406,14 @@ where
             } else {
                 Verdict::Allowed
             };
-            if let Some(id) = log_id {
-                let update = LogUpdate {
-                    sql: ran.command.clone(),
-                    verdict: status,
-                    reason: ran.reason.clone(),
-                    result: ran.result.clone(),
-                    response_text: ran.response_text.clone(),
-                };
-                let _ = store.update_log_entry(id, update);
-            }
+            let update = LogUpdate {
+                sql: ran.command.clone(),
+                verdict: status,
+                reason: ran.reason.clone(),
+                result: ran.result.clone(),
+                response_text: ran.response_text.clone(),
+            };
+            let _ = store.update_log_entry(log_id, update);
             if ran.is_error {
                 err(ran.text)
             } else {
@@ -443,16 +444,14 @@ where
                         error.message
                     )
                 });
-            if let Some(id) = log_id {
-                let update = LogUpdate {
-                    sql: meta.command.clone(),
-                    verdict: status,
-                    reason: Some(error.message.clone()),
-                    response_text: Some(text.clone()),
-                    ..Default::default()
-                };
-                let _ = store.update_log_entry(id, update);
-            }
+            let update = LogUpdate {
+                sql: meta.command.clone(),
+                verdict: status,
+                reason: Some(error.message.clone()),
+                response_text: Some(text.clone()),
+                ..Default::default()
+            };
+            let _ = store.update_log_entry(log_id, update);
             // Cancellations and SSH pending approvals keep their resources:
             // neither is the driver's fault.
             if status == Verdict::Error
@@ -750,6 +749,44 @@ mod tests {
         let row = single_entry(&store).await;
         assert_eq!(row.verdict, "error");
         assert_eq!(row.reason.as_deref(), Some("non-zero exit"));
+    }
+
+    #[tokio::test]
+    async fn a_call_that_cannot_be_audited_does_not_run() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("pluk.db");
+        let store = Store::open(&path).expect("open");
+        // Take the audit table out from under the store, so writing the
+        // pending row fails the way a broken database would.
+        rusqlite::Connection::open(&path)
+            .expect("second handle")
+            .execute("DROP TABLE query_log", [])
+            .expect("drop");
+
+        let ran = Arc::new(Mutex::new(false));
+        let flag = ran.clone();
+        let result = run_gated(
+            &store,
+            &target(),
+            GateMeta::new("delete", "del", "DEL session:*"),
+            move |_| async move {
+                *flag.lock().unwrap() = true;
+                Ok(Outcome::ran("deleted"))
+            },
+            GateOpts::default(),
+        )
+        .await;
+
+        assert!(result.is_error);
+        assert!(
+            !*ran.lock().unwrap(),
+            "an unauditable call must not reach the remote system"
+        );
+        assert!(
+            result.text().starts_with("Blocked:"),
+            "{}",
+            result.text()
+        );
     }
 
     #[test]

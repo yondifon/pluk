@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Map, Value};
@@ -27,6 +28,7 @@ use crate::tool_spec::ToolSpec;
 use super::error::{driver_error_to_adapter, format_sql_error};
 use pluk_db::config::SqlConfig;
 use pluk_db::factory::{CreateDriverOpts, create_driver};
+use pluk_db::resolve_statement;
 use pluk_db::types::{QueryOpts, QueryResult as DbQueryResult};
 
 pub fn sql_label(type_name: &str) -> String {
@@ -517,10 +519,96 @@ fn projected_json(
     Ok(serde_json::to_string_pretty(&projected).unwrap())
 }
 
+/// Everything one connection's calls record about themselves, captured once at
+/// registration so each tool can build its own [`CallTarget`].
+#[derive(Clone)]
+struct AuditTarget {
+    connection_id: String,
+    connection_name: String,
+    group: Option<pluk_store::LogGroup>,
+    database: Option<String>,
+}
+
+impl AuditTarget {
+    fn of(conn: &Integration, pinned: Option<&String>) -> Self {
+        AuditTarget {
+            connection_id: conn.id.clone(),
+            connection_name: conn.name.clone(),
+            group: conn.via_group.clone(),
+            database: pinned.cloned(),
+        }
+    }
+
+    fn call(&self) -> CallTarget {
+        CallTarget {
+            connection_id: self.connection_id.clone(),
+            connection_name: self.connection_name.clone(),
+            group: self.group.clone(),
+        }
+    }
+
+    fn meta(&self, action: &str, detail: String, database: Option<&str>) -> GateMeta {
+        let mut meta = GateMeta::new("inspect", action, detail);
+        meta.database = database
+            .map(str::to_string)
+            .or_else(|| self.database.clone());
+        meta
+    }
+}
+
+/// Why the policy refused this statement, when it did.
+fn policy_block(verdict: &pluk_policy::policy::EvalResult) -> Option<String> {
+    if verdict.ok {
+        return None;
+    }
+    Some(
+        verdict
+            .reason
+            .clone()
+            .unwrap_or_else(|| "blocked".to_string()),
+    )
+}
+
+/// The log line for an introspection call: the tool name plus the arguments
+/// that decided what it read.
+fn detail_line(action: &str, args: &[Option<&str>]) -> String {
+    std::iter::once(action)
+        .chain(args.iter().copied().flatten())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Run an introspection call through the audited lifecycle.
+///
+/// Reading a schema still reaches the live database, so it leaves a log row
+/// like any other call. Argument validation happens before this and never
+/// touches the server, so it stays outside.
+async fn audited<F, Fut>(
+    store: &Store,
+    target: &AuditTarget,
+    action: &str,
+    detail: String,
+    database: Option<&str>,
+    run: F,
+) -> ToolResult
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<Outcome, crate::error::AdapterError>>,
+{
+    run_gated(
+        store,
+        &target.call(),
+        target.meta(action, detail, database),
+        move |_log_id| run(),
+        GateOpts::default().format_error(|e, _| format_sql_error(e)),
+    )
+    .await
+}
+
 pub fn register_sql_server(
     host: &mut dyn ToolHost,
     conn: &Integration,
-    owner_id: &str,
+    _owner_id: &str,
     store: Arc<Store>,
     cancels: Arc<SqlCancelRegistry>,
 ) -> Result<(), crate::error::AdapterError> {
@@ -537,6 +625,7 @@ pub fn register_sql_server(
 
     let masked_columns = store.list_masked_columns(&conn.id).unwrap_or_default();
     let pinned = pinned_db(conn);
+    let audit = AuditTarget::of(conn, pinned.as_ref());
     let supports_db = supports_db_arg(conn, pinned.as_ref());
     let supports_schema = supports_schema_arg(conn);
     let uses_ssh_flag = uses_ssh(conn);
@@ -597,7 +686,7 @@ pub fn register_sql_server(
         // resource schema://full
         let store_res = store.clone();
         let conn_res = conn.clone();
-        let owner_res = owner_id.to_string();
+        let audit_res = audit.clone();
         host.register_resource(
             "schema",
             "schema://full",
@@ -606,27 +695,31 @@ pub fn register_sql_server(
             Arc::new(move || -> BoxFuture<ResourceContents> {
                 let store = store_res.clone();
                 let conn = conn_res.clone();
-                let _owner = owner_res.clone();
+                let audit = audit_res.clone();
                 Box::pin(async move {
-                    let cfg = sql_config_from(&conn, None);
-                    let driver_res = create_driver(CreateDriverOpts::new(cfg)).await;
-                    let text = match driver_res {
-                        Ok(dw) => {
-                            let r = dw.driver.get_full_schema(None).await;
+                    // A resource read hits the database like a tool call does,
+                    // so it goes through the same audited lifecycle.
+                    let result = audited(
+                        &store,
+                        &audit,
+                        "schema",
+                        "schema://full".to_string(),
+                        None,
+                        || async move {
+                            let cfg = sql_config_from(&conn, None);
+                            let dw = create_driver(CreateDriverOpts::new(cfg))
+                                .await
+                                .map_err(driver_error_to_adapter)?;
+                            let schema = dw.driver.get_full_schema(None).await;
                             let _ = dw.close().await;
-                            match r {
-                                Ok(t) => t,
-                                Err(e) => format!("Error: {}", driver_error_to_adapter(e).message),
-                            }
-                        }
-                        Err(e) => format!("Error: {}", driver_error_to_adapter(e).message),
-                    };
-                    // also need to handle eviction etc? ignore
-                    let _ = &store; // keep
+                            Ok(Outcome::ran(schema.map_err(driver_error_to_adapter)?))
+                        },
+                    )
+                    .await;
                     ResourceContents {
                         uri: "schema://full".into(),
                         mime_type: "text/plain".into(),
-                        text,
+                        text: result.text().to_string(),
                     }
                 })
             }),
@@ -739,12 +832,10 @@ pub fn register_sql_server(
                     } else if timeout_ms.is_none() {
                         timeout_ms = Some(30_000);
                     }
-                    // switch block
-                    if let Some(block) = switch_block(&sql, pinned.as_ref()) { return err(format!("Blocked: {}", block)); }
+                    // The gate must see what the driver will run: MySQL inlines
+                    // its parameters, so the placeholder form is not it.
+                    let (sql, params) = resolve_statement(&conn.r#type, &sql, &params);
                     let verdict = evaluate(&sql, &policy, dialect);
-                    if !verdict.ok {
-                        // blocked via precheck? run_gated will handle but we need to mimic TS: use run_gated with precheck
-                    }
                     let target = CallTarget { connection_id: conn_id.clone(), connection_name: conn_name.clone(), group: via_group.clone() };
                     let meta = GateMeta { category: verdict.categories.clone(), action: "query".to_string(), detail: sql.clone(), database: db_opt.clone().or_else(|| pinned.clone()), command: None };
                     let sql_clone = sql.clone();
@@ -774,16 +865,10 @@ pub fn register_sql_server(
                         let pinned = pinned_for_effective.clone();
                         let timeout = timeout_ms;
                         async move {
-                            let token = log_id.map(|id| cancels.register(id));
-                            let query_opts = {
-                                let has_timeout = timeout.is_some();
-                                let has_cancel = token.is_some();
-                                if has_timeout || has_cancel {
-                                    Some(QueryOpts { timeout_ms: timeout, cancel: token.clone() })
-                                } else {
-                                    None
-                                }
-                            };
+                            let query_opts = Some(QueryOpts {
+                                timeout_ms: timeout,
+                                cancel: Some(cancels.register(log_id)),
+                            });
                             // create driver
                             let cfg = sql_config_from(&conn, db_opt.as_deref());
                             let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
@@ -796,13 +881,13 @@ pub fn register_sql_server(
                             let res = match res {
                                 Ok(r) => r,
                                 Err(e) => {
-                                    if let Some(id)=log_id { cancels.clear(id); }
+                                    cancels.clear(log_id);
                                     let _ = dw.close().await;
                                     return Err(driver_error_to_adapter(e));
                                 }
                             };
                             let _ = dw.close().await;
-                            if let Some(id)=log_id { cancels.clear(id); }
+                            cancels.clear(log_id);
                             // cap then mask
                             let effective_cap: Option<usize> = match policy.max_rows {
                                 None => limit_c,
@@ -898,6 +983,7 @@ pub fn register_sql_server(
         let store_lt = store.clone();
         let conn_lt = conn.clone();
         let pinned_lt = pinned.clone();
+        let audit_lt = audit.clone();
         host.register_tool(
             ToolRegistration {
                 name: "list_tables".into(),
@@ -906,36 +992,41 @@ pub fn register_sql_server(
                 annotations: Map::new(),
             },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
-                let _store = store_lt.clone();
+                let store = store_lt.clone();
                 let conn = conn_lt.clone();
                 let pinned = pinned_lt.clone();
+                let audit = audit_lt.clone();
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let database = obj.get("database").and_then(|v| v.as_str());
                     let schema_val = obj.get("schema").and_then(|v| v.as_str());
-                    // validate
-                    if let Err(e) = resolve_database(pinned.as_ref(), database) {
-                        return err(e);
-                    }
+                    let db_opt = match resolve_database(pinned.as_ref(), database) {
+                        Ok(v) => v,
+                        Err(e) => return err(e),
+                    };
                     let schema_opt = match resolve_schema(schema_val) {
                         Ok(v) => v,
                         Err(e) => return err(e),
                     };
-                    let db_opt = resolve_database(pinned.as_ref(), database).unwrap().clone();
-                    let cfg = sql_config_from(&conn, db_opt.as_deref());
-                    // introspection: use run_gated? In TS introspect uses getDriver directly with tool timeout, not gated log? Actually instrumented via sql_log . For Rust we just call driver directly and handle errors via err.
-                    // Use run_gated with simple Ok path? Simpler: direct driver call and return ok/err without pending log (introspection is logged via driver layer)
-                    match create_driver(CreateDriverOpts::new(cfg)).await {
-                        Ok(dw) => {
+                    let detail = detail_line("list_tables", &[schema_opt.as_deref()]);
+                    let db_for_driver = db_opt.clone();
+                    audited(
+                        &store,
+                        &audit,
+                        "list_tables",
+                        detail,
+                        db_opt.as_deref(),
+                        || async move {
+                            let cfg = sql_config_from(&conn, db_for_driver.as_deref());
+                            let dw = create_driver(CreateDriverOpts::new(cfg))
+                                .await
+                                .map_err(driver_error_to_adapter)?;
                             let res = dw.driver.list_tables(schema_opt.as_deref()).await;
                             let _ = dw.close().await;
-                            match res {
-                                Ok(tables) => ok(tables.join("\n")),
-                                Err(e) => err(driver_error_to_adapter(e).message),
-                            }
-                        }
-                        Err(e) => err(driver_error_to_adapter(e).message),
-                    }
+                            Ok(Outcome::ran(res.map_err(driver_error_to_adapter)?.join("\n")))
+                        },
+                    )
+                    .await
                 })
             }),
         );
@@ -995,6 +1086,7 @@ pub fn register_sql_server(
         let conn_name_st = conn_name.clone();
         let conn_type_st = conn_type.clone();
         let conn_env_st = conn_env.clone();
+        let audit_st = audit.clone();
         host.register_tool(
             ToolRegistration { name: "sample_table".into(), description: "Preview rows from a table without writing SQL".into(), input_schema: schema, annotations: Map::new() },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
@@ -1006,6 +1098,7 @@ pub fn register_sql_server(
                 let conn_type = conn_type_st.clone();
                 let conn_env = conn_env_st.clone();
                 let store = store_st.clone();
+                let audit = audit_st.clone();
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let table = obj.get("table").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1014,40 +1107,42 @@ pub fn register_sql_server(
                     let database = obj.get("database").and_then(|v| v.as_str());
                     let schema_val = obj.get("schema").and_then(|v| v.as_str());
                     let only = obj.get("only").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect::<Vec<_>>());
-                    if let Err(e)=resolve_database(pinned.as_ref(), database) { return err(e); }
+                    let db_opt = match resolve_database(pinned.as_ref(), database) { Ok(v)=>v, Err(e)=> return err(e) };
                     let schema_opt = match resolve_schema(schema_val) { Ok(v)=>v, Err(e)=> return err(e) };
-                    let db_opt = resolve_database(pinned.as_ref(), database).unwrap().clone();
                     let effective_limit = match policy.max_rows { None => limit, Some(max) => std::cmp::min(limit, max as usize) };
-                    let cfg = sql_config_from(&conn, db_opt.as_deref());
-                    let dw = match create_driver(CreateDriverOpts::new(cfg)).await { Ok(d)=>d, Err(e)=> return err(driver_error_to_adapter(e).message) };
-                    let res = dw.driver.sample_table(&table, effective_limit as i64, schema_opt.as_deref()).await;
-                    let _ = dw.close().await;
-                    let res = match res { Ok(r)=>r, Err(e)=> return err(driver_error_to_adapter(e).message) };
-                    let total = res.rows.len();
-                    let cap = policy.max_rows.map(|v| v as usize);
-                    let (mut rows, truncated, cap_limit) = cap_rows_vec(res.rows.into_iter().collect(), cap);
-                    mask_rows(&mut rows, &masked);
-                    let fields = res.fields.unwrap_or_default();
-                    let meta_val = serde_json::json!({
-                        "env": conn_env,
-                        "connection": conn_name,
-                        "type": conn_type,
-                        "database": effective_db(pinned.as_ref(), db_opt.as_deref()),
-                        "fields": fields,
-                        "rows": rows.clone(),
-                        "truncated": truncated,
-                        "row_cap": cap_limit.map(|v| Value::Number((v as i64).into())).unwrap_or(Value::Null),
-                        "row_count": total,
-                        "returned_rows": rows.len()
-                    });
-                    let mut text = match projected_json(meta_val, only, &query_map()) { Ok(t)=>t, Err(e)=> return err(e) };
-                    if truncated {
-                        let lim = cap_limit.unwrap_or(0);
-                        text.push_str(&format!("\n\n[Row limit: showing first {} of {} rows.]", lim, total));
-                    }
-                    // introspection not gated? but we return ok
-                    let _ = store;
-                    ok(text)
+                    let detail = detail_line("sample_table", &[Some(&table), schema_opt.as_deref()]);
+                    let db_for_meta = db_opt.clone();
+                    audited(&store, &audit, "sample_table", detail, db_opt.as_deref(), || async move {
+                        let cfg = sql_config_from(&conn, db_for_meta.as_deref());
+                        let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
+                        let res = dw.driver.sample_table(&table, effective_limit as i64, schema_opt.as_deref()).await;
+                        let _ = dw.close().await;
+                        let res = res.map_err(driver_error_to_adapter)?;
+                        let total = res.rows.len();
+                        let cap = policy.max_rows.map(|v| v as usize);
+                        let (mut rows, truncated, cap_limit) = cap_rows_vec(res.rows.into_iter().collect(), cap);
+                        mask_rows(&mut rows, &masked);
+                        let fields = res.fields.unwrap_or_default();
+                        let meta_val = serde_json::json!({
+                            "env": conn_env,
+                            "connection": conn_name,
+                            "type": conn_type,
+                            "database": effective_db(pinned.as_ref(), db_for_meta.as_deref()),
+                            "fields": fields,
+                            "rows": rows.clone(),
+                            "truncated": truncated,
+                            "row_cap": cap_limit.map(|v| Value::Number((v as i64).into())).unwrap_or(Value::Null),
+                            "row_count": total,
+                            "returned_rows": rows.len()
+                        });
+                        let mut text = projected_json(meta_val, only, &query_map()).map_err(crate::error::AdapterError::new)?;
+                        if truncated {
+                            let lim = cap_limit.unwrap_or(0);
+                            text.push_str(&format!("\n\n[Row limit: showing first {} of {} rows.]", lim, total));
+                        }
+                        let snapshot = pluk_store::QueryResult { fields, rows };
+                        Ok(Outcome::Ran(RunOutcome { text, result: Some(snapshot), ..Default::default() }))
+                    }).await
                 })
             })
         );
@@ -1097,6 +1192,7 @@ pub fn register_sql_server(
         let policy_eq = policy.clone();
         let dialect_eq = dialect;
         let store_eq = store.clone();
+        let audit_eq = audit.clone();
         host.register_tool(
             ToolRegistration {
                 name: "explain_query".into(),
@@ -1110,6 +1206,7 @@ pub fn register_sql_server(
                 let policy = policy_eq.clone();
                 let dialect = dialect_eq;
                 let store = store_eq.clone();
+                let audit = audit_eq.clone();
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let sql = obj
@@ -1122,10 +1219,10 @@ pub fn register_sql_server(
                         _ => return err("Missing SQL. Pass either \"sql\" or \"query\"."),
                     };
                     let database = obj.get("database").and_then(|v| v.as_str());
-                    if let Err(e) = resolve_database(pinned.as_ref(), database) {
-                        return err(e);
-                    }
-                    let db_opt = resolve_database(pinned.as_ref(), database).unwrap().clone();
+                    let db_opt = match resolve_database(pinned.as_ref(), database) {
+                        Ok(v) => v,
+                        Err(e) => return err(e),
+                    };
                     let params = obj
                         .get("params")
                         .and_then(|v| v.as_array())
@@ -1136,40 +1233,37 @@ pub fn register_sql_server(
                             .filter_map(|x| x.as_str().map(|s| s.to_string()))
                             .collect::<Vec<_>>()
                     });
+                    let (sql, params) = resolve_statement(&conn.r#type, &sql, &params);
                     let verdict = evaluate(&sql, &policy, dialect);
-                    if !verdict.ok {
-                        // log blocked
-                        let draft = pluk_store::LogDraft {
-                            connection_id: conn.id.clone(),
-                            connection_name: conn.name.clone(),
-                            sql: sql.clone(),
-                            verdict: pluk_store::Verdict::Blocked,
-                            categories: Some(verdict.categories.clone()),
-                            reason: verdict.reason.clone(),
-                            source: Some("explain_query".to_string()),
-                            group: conn.via_group.clone(),
-                            database: db_opt.clone().or_else(|| pinned.clone()),
-                        };
-                        let _ = store.create_log_entry(draft);
-                        return err(format!("Blocked: {}", verdict.reason.unwrap_or_default()));
-                    }
-                    let cfg = sql_config_from(&conn, db_opt.as_deref());
-                    let dw = match create_driver(CreateDriverOpts::new(cfg)).await {
-                        Ok(d) => d,
-                        Err(e) => return err(driver_error_to_adapter(e).message),
-                    };
-                    let res = dw.driver.explain(&sql, &params).await;
-                    let _ = dw.close().await;
-                    let res = match res {
-                        Ok(r) => r,
-                        Err(e) => return err(driver_error_to_adapter(e).message),
-                    };
-                    let val = serde_json::json!({ "rows": res.rows, "fields": res.fields });
-                    let map = FieldMap::new(&["rows", "fields"], &["rows", "fields"]);
-                    match projected_json(val, only, &map) {
-                        Ok(t) => ok(t),
-                        Err(e) => err(e),
-                    }
+                    let mut meta =
+                        GateMeta::new(verdict.categories.clone(), "explain_query", sql.clone());
+                    meta.database = db_opt.clone().or_else(|| pinned.clone());
+                    let db_for_driver = db_opt.clone();
+                    let sql_for_driver = sql.clone();
+                    run_gated(
+                        &store,
+                        &audit.call(),
+                        meta,
+                        move |_log_id| async move {
+                            let cfg = sql_config_from(&conn, db_for_driver.as_deref());
+                            let dw = create_driver(CreateDriverOpts::new(cfg))
+                                .await
+                                .map_err(driver_error_to_adapter)?;
+                            let res = dw.driver.explain(&sql_for_driver, &params).await;
+                            let _ = dw.close().await;
+                            let res = res.map_err(driver_error_to_adapter)?;
+                            let val =
+                                serde_json::json!({ "rows": res.rows, "fields": res.fields });
+                            let map = FieldMap::new(&["rows", "fields"], &["rows", "fields"]);
+                            let text = projected_json(val, only, &map)
+                                .map_err(crate::error::AdapterError::new)?;
+                            Ok(Outcome::ran(text))
+                        },
+                        GateOpts::default()
+                            .precheck(move || policy_block(&verdict))
+                            .format_error(|e, _| format_sql_error(e)),
+                    )
+                    .await
                 })
             }),
         );
@@ -1207,29 +1301,35 @@ pub fn register_sql_server(
             );
         }
         let schema = object_schema(props, &["table"]);
+        let store_dt = store.clone();
         let conn_dt = conn.clone();
         let pinned_dt = pinned.clone();
+        let audit_dt = audit.clone();
         host.register_tool(
             ToolRegistration { name: "describe_table".into(), description: "Get column definitions for a table".into(), input_schema: schema, annotations: Map::new() },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
+                let store = store_dt.clone();
                 let conn = conn_dt.clone();
                 let pinned = pinned_dt.clone();
+                let audit = audit_dt.clone();
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let table = obj.get("table").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     let database = obj.get("database").and_then(|v| v.as_str());
                     let schema_val = obj.get("schema").and_then(|v| v.as_str());
-                    if let Err(e)=resolve_database(pinned.as_ref(), database) { return err(e); }
+                    let db_opt = match resolve_database(pinned.as_ref(), database) { Ok(v)=>v, Err(e)=> return err(e) };
                     let schema_opt = match resolve_schema(schema_val) { Ok(v)=>v, Err(e)=> return err(e) };
-                    let db_opt = resolve_database(pinned.as_ref(), database).unwrap().clone();
-                    let cfg = sql_config_from(&conn, db_opt.as_deref());
-                    let dw = match create_driver(CreateDriverOpts::new(cfg)).await { Ok(d)=>d, Err(e)=> return err(driver_error_to_adapter(e).message) };
-                    let res = dw.driver.describe_table(&table, schema_opt.as_deref()).await;
-                    let _ = dw.close().await;
-                    match res { Ok(cols) => {
+                    let detail = detail_line("describe_table", &[Some(&table), schema_opt.as_deref()]);
+                    let db_for_driver = db_opt.clone();
+                    audited(&store, &audit, "describe_table", detail, db_opt.as_deref(), || async move {
+                        let cfg = sql_config_from(&conn, db_for_driver.as_deref());
+                        let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
+                        let res = dw.driver.describe_table(&table, schema_opt.as_deref()).await;
+                        let _ = dw.close().await;
+                        let cols = res.map_err(driver_error_to_adapter)?;
                         let vals: Vec<Value> = cols.into_iter().map(|c| serde_json::json!({"column": c.column, "type": c.r#type, "nullable": c.nullable})).collect();
-                        ok(serde_json::to_string_pretty(&vals).unwrap())
-                    }, Err(e)=> err(driver_error_to_adapter(e).message) }
+                        Ok(Outcome::ran(serde_json::to_string_pretty(&vals).unwrap()))
+                    }).await
                 })
             })
         );
@@ -1268,8 +1368,10 @@ pub fn register_sql_server(
         }
         props.insert("only".into(), only_param_schema(&["constraints"]));
         let schema = object_schema(props, &[]);
+        let store_lr = store.clone();
         let conn_lr = conn.clone();
         let pinned_lr = pinned.clone();
+        let audit_lr = audit.clone();
         host.register_tool(
             ToolRegistration {
                 name: "list_relationships".into(),
@@ -1278,8 +1380,10 @@ pub fn register_sql_server(
                 annotations: Map::new(),
             },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
+                let store = store_lr.clone();
                 let conn = conn_lr.clone();
                 let pinned = pinned_lr.clone();
+                let audit = audit_lr.clone();
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let table = obj
@@ -1293,47 +1397,55 @@ pub fn register_sql_server(
                             .filter_map(|x| x.as_str().map(|s| s.to_string()))
                             .collect::<Vec<_>>()
                     });
-                    if let Err(e) = resolve_database(pinned.as_ref(), database) {
-                        return err(e);
-                    }
+                    let db_opt = match resolve_database(pinned.as_ref(), database) {
+                        Ok(v) => v,
+                        Err(e) => return err(e),
+                    };
                     let schema_opt = match resolve_schema(schema_val) {
                         Ok(v) => v,
                         Err(e) => return err(e),
                     };
-                    let db_opt = resolve_database(pinned.as_ref(), database).unwrap().clone();
-                    let cfg = sql_config_from(&conn, db_opt.as_deref());
-                    let dw = match create_driver(CreateDriverOpts::new(cfg)).await {
-                        Ok(d) => d,
-                        Err(e) => return err(driver_error_to_adapter(e).message),
-                    };
-                    let res = dw
-                        .driver
-                        .list_relationships(table.as_deref(), schema_opt.as_deref())
-                        .await;
-                    let _ = dw.close().await;
-                    let res = match res {
-                        Ok(r) => r,
-                        Err(e) => return err(driver_error_to_adapter(e).message),
-                    };
-                    let vals: Vec<Value> = res
-                        .into_iter()
-                        .map(|r| {
-                            let mut m = serde_json::Map::new();
-                            m.insert("from_table".into(), Value::String(r.from_table));
-                            m.insert("from_column".into(), Value::String(r.from_column));
-                            m.insert("to_table".into(), Value::String(r.to_table));
-                            m.insert("to_column".into(), Value::String(r.to_column));
-                            if let Some(c) = r.constraint_name {
-                                m.insert("constraint_name".into(), Value::String(c));
-                            }
-                            Value::Object(m)
-                        })
-                        .collect();
-                    let val = Value::Array(vals);
-                    match projected_json(val, only, &relationships_map()) {
-                        Ok(t) => ok(t),
-                        Err(e) => err(e),
-                    }
+                    let detail =
+                        detail_line("list_relationships", &[table.as_deref(), schema_opt.as_deref()]);
+                    let db_for_driver = db_opt.clone();
+                    audited(
+                        &store,
+                        &audit,
+                        "list_relationships",
+                        detail,
+                        db_opt.as_deref(),
+                        || async move {
+                            let cfg = sql_config_from(&conn, db_for_driver.as_deref());
+                            let dw = create_driver(CreateDriverOpts::new(cfg))
+                                .await
+                                .map_err(driver_error_to_adapter)?;
+                            let res = dw
+                                .driver
+                                .list_relationships(table.as_deref(), schema_opt.as_deref())
+                                .await;
+                            let _ = dw.close().await;
+                            let vals: Vec<Value> = res
+                                .map_err(driver_error_to_adapter)?
+                                .into_iter()
+                                .map(|r| {
+                                    let mut m = serde_json::Map::new();
+                                    m.insert("from_table".into(), Value::String(r.from_table));
+                                    m.insert("from_column".into(), Value::String(r.from_column));
+                                    m.insert("to_table".into(), Value::String(r.to_table));
+                                    m.insert("to_column".into(), Value::String(r.to_column));
+                                    if let Some(c) = r.constraint_name {
+                                        m.insert("constraint_name".into(), Value::String(c));
+                                    }
+                                    Value::Object(m)
+                                })
+                                .collect();
+                            let text =
+                                projected_json(Value::Array(vals), only, &relationships_map())
+                                    .map_err(crate::error::AdapterError::new)?;
+                            Ok(Outcome::ran(text))
+                        },
+                    )
+                    .await
                 })
             }),
         );
@@ -1371,8 +1483,10 @@ pub fn register_sql_server(
             );
         }
         let schema = object_schema(props, &["term"]);
+        let store_ss = store.clone();
         let conn_ss = conn.clone();
         let pinned_ss = pinned.clone();
+        let audit_ss = audit.clone();
         host.register_tool(
             ToolRegistration {
                 name: "search_schema".into(),
@@ -1381,8 +1495,10 @@ pub fn register_sql_server(
                 annotations: Map::new(),
             },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
+                let store = store_ss.clone();
                 let conn = conn_ss.clone();
                 let pinned = pinned_ss.clone();
+                let audit = audit_ss.clone();
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let term = obj
@@ -1392,24 +1508,32 @@ pub fn register_sql_server(
                         .to_string();
                     let database = obj.get("database").and_then(|v| v.as_str());
                     let schema_val = obj.get("schema").and_then(|v| v.as_str());
-                    if let Err(e) = resolve_database(pinned.as_ref(), database) {
-                        return err(e);
-                    }
+                    let db_opt = match resolve_database(pinned.as_ref(), database) {
+                        Ok(v) => v,
+                        Err(e) => return err(e),
+                    };
                     let schema_opt = match resolve_schema(schema_val) {
                         Ok(v) => v,
                         Err(e) => return err(e),
                     };
-                    let db_opt = resolve_database(pinned.as_ref(), database).unwrap().clone();
-                    let cfg = sql_config_from(&conn, db_opt.as_deref());
-                    let dw = match create_driver(CreateDriverOpts::new(cfg)).await {
-                        Ok(d) => d,
-                        Err(e) => return err(driver_error_to_adapter(e).message),
-                    };
-                    let res = dw.driver.search_schema(&term, schema_opt.as_deref()).await;
-                    let _ = dw.close().await;
-                    match res {
-                        Ok(v) => {
-                            let vals: Vec<Value> = v
+                    let detail =
+                        detail_line("search_schema", &[Some(&term), schema_opt.as_deref()]);
+                    let db_for_driver = db_opt.clone();
+                    audited(
+                        &store,
+                        &audit,
+                        "search_schema",
+                        detail,
+                        db_opt.as_deref(),
+                        || async move {
+                            let cfg = sql_config_from(&conn, db_for_driver.as_deref());
+                            let dw = create_driver(CreateDriverOpts::new(cfg))
+                                .await
+                                .map_err(driver_error_to_adapter)?;
+                            let res = dw.driver.search_schema(&term, schema_opt.as_deref()).await;
+                            let _ = dw.close().await;
+                            let vals: Vec<Value> = res
+                                .map_err(driver_error_to_adapter)?
                                 .into_iter()
                                 .map(|r| {
                                     let mut m = serde_json::Map::new();
@@ -1424,10 +1548,12 @@ pub fn register_sql_server(
                                     Value::Object(m)
                                 })
                                 .collect();
-                            ok(serde_json::to_string_pretty(&vals).unwrap())
-                        }
-                        Err(e) => err(driver_error_to_adapter(e).message),
-                    }
+                            Ok(Outcome::ran(
+                                serde_json::to_string_pretty(&vals).unwrap(),
+                            ))
+                        },
+                    )
+                    .await
                 })
             }),
         );
@@ -1466,34 +1592,42 @@ pub fn register_sql_server(
         }
         props.insert("only".into(), only_param_schema(&["indexes"]));
         let schema = object_schema(props, &["table"]);
+        let store_ts = store.clone();
         let conn_ts = conn.clone();
         let pinned_ts = pinned.clone();
+        let audit_ts = audit.clone();
         host.register_tool(
             ToolRegistration { name: "table_stats".into(), description: "Get cheap table statistics (estimated rows, size, indexes)".into(), input_schema: schema, annotations: Map::new() },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
+                let store = store_ts.clone();
                 let conn = conn_ts.clone();
                 let pinned = pinned_ts.clone();
+                let audit = audit_ts.clone();
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let table = obj.get("table").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     let database = obj.get("database").and_then(|v| v.as_str());
                     let schema_val = obj.get("schema").and_then(|v| v.as_str());
                     let only = obj.get("only").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect::<Vec<_>>());
-                    if let Err(e)=resolve_database(pinned.as_ref(), database) { return err(e); }
+                    let db_opt = match resolve_database(pinned.as_ref(), database) { Ok(v)=>v, Err(e)=> return err(e) };
                     let schema_opt = match resolve_schema(schema_val) { Ok(v)=>v, Err(e)=> return err(e) };
-                    let db_opt = resolve_database(pinned.as_ref(), database).unwrap().clone();
-                    let cfg = sql_config_from(&conn, db_opt.as_deref());
-                    let dw = match create_driver(CreateDriverOpts::new(cfg)).await { Ok(d)=>d, Err(e)=> return err(driver_error_to_adapter(e).message) };
-                    let res = dw.driver.table_stats(&table, schema_opt.as_deref()).await;
-                    let _ = dw.close().await;
-                    let res = match res { Ok(r)=>r, Err(e)=> return err(driver_error_to_adapter(e).message) };
-                    let val = serde_json::json!({
-                        "table": res.table,
-                        "estimatedRows": res.estimated_rows,
-                        "sizeBytes": res.size_bytes,
-                        "indexes": res.indexes.into_iter().map(|i| serde_json::json!({"name": i.name, "columns": i.columns, "unique": i.unique})).collect::<Vec<_>>()
-                    });
-                    match projected_json(val, only, &table_stats_map()) { Ok(t)=> ok(t), Err(e)=> err(e) }
+                    let detail = detail_line("table_stats", &[Some(&table), schema_opt.as_deref()]);
+                    let db_for_driver = db_opt.clone();
+                    audited(&store, &audit, "table_stats", detail, db_opt.as_deref(), || async move {
+                        let cfg = sql_config_from(&conn, db_for_driver.as_deref());
+                        let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
+                        let res = dw.driver.table_stats(&table, schema_opt.as_deref()).await;
+                        let _ = dw.close().await;
+                        let res = res.map_err(driver_error_to_adapter)?;
+                        let val = serde_json::json!({
+                            "table": res.table,
+                            "estimatedRows": res.estimated_rows,
+                            "sizeBytes": res.size_bytes,
+                            "indexes": res.indexes.into_iter().map(|i| serde_json::json!({"name": i.name, "columns": i.columns, "unique": i.unique})).collect::<Vec<_>>()
+                        });
+                        let text = projected_json(val, only, &table_stats_map()).map_err(crate::error::AdapterError::new)?;
+                        Ok(Outcome::ran(text))
+                    }).await
                 })
             })
         );
@@ -1501,7 +1635,9 @@ pub fn register_sql_server(
 
     // list_schemas
     if on("list_schemas") {
+        let store_ls = store.clone();
         let conn_ls = conn.clone();
+        let audit_ls = audit.clone();
         host.register_tool(
             ToolRegistration {
                 name: "list_schemas".into(),
@@ -1510,19 +1646,29 @@ pub fn register_sql_server(
                 annotations: Map::new(),
             },
             Arc::new(move |_args: Value| -> BoxFuture<ToolResult> {
+                let store = store_ls.clone();
                 let conn = conn_ls.clone();
+                let audit = audit_ls.clone();
                 Box::pin(async move {
-                    let cfg = sql_config_from(&conn, None);
-                    let dw = match create_driver(CreateDriverOpts::new(cfg)).await {
-                        Ok(d) => d,
-                        Err(e) => return err(driver_error_to_adapter(e).message),
-                    };
-                    let res = dw.driver.list_schemas().await;
-                    let _ = dw.close().await;
-                    match res {
-                        Ok(v) => ok(v.join("\n")),
-                        Err(e) => err(driver_error_to_adapter(e).message),
-                    }
+                    audited(
+                        &store,
+                        &audit,
+                        "list_schemas",
+                        "list_schemas".to_string(),
+                        None,
+                        || async move {
+                            let cfg = sql_config_from(&conn, None);
+                            let dw = create_driver(CreateDriverOpts::new(cfg))
+                                .await
+                                .map_err(driver_error_to_adapter)?;
+                            let res = dw.driver.list_schemas().await;
+                            let _ = dw.close().await;
+                            Ok(Outcome::ran(
+                                res.map_err(driver_error_to_adapter)?.join("\n"),
+                            ))
+                        },
+                    )
+                    .await
                 })
             }),
         );
@@ -1535,7 +1681,9 @@ pub fn register_sql_server(
         } else {
             "List databases on the server."
         };
+        let store_ld = store.clone();
         let conn_ld = conn.clone();
+        let audit_ld = audit.clone();
         host.register_tool(
             ToolRegistration {
                 name: "list_databases".into(),
@@ -1544,19 +1692,29 @@ pub fn register_sql_server(
                 annotations: Map::new(),
             },
             Arc::new(move |_args: Value| -> BoxFuture<ToolResult> {
+                let store = store_ld.clone();
                 let conn = conn_ld.clone();
+                let audit = audit_ld.clone();
                 Box::pin(async move {
-                    let cfg = sql_config_from(&conn, None);
-                    let dw = match create_driver(CreateDriverOpts::new(cfg)).await {
-                        Ok(d) => d,
-                        Err(e) => return err(driver_error_to_adapter(e).message),
-                    };
-                    let res = dw.driver.list_databases().await;
-                    let _ = dw.close().await;
-                    match res {
-                        Ok(v) => ok(v.join("\n")),
-                        Err(e) => err(driver_error_to_adapter(e).message),
-                    }
+                    audited(
+                        &store,
+                        &audit,
+                        "list_databases",
+                        "list_databases".to_string(),
+                        None,
+                        || async move {
+                            let cfg = sql_config_from(&conn, None);
+                            let dw = create_driver(CreateDriverOpts::new(cfg))
+                                .await
+                                .map_err(driver_error_to_adapter)?;
+                            let res = dw.driver.list_databases().await;
+                            let _ = dw.close().await;
+                            Ok(Outcome::ran(
+                                res.map_err(driver_error_to_adapter)?.join("\n"),
+                            ))
+                        },
+                    )
+                    .await
                 })
             }),
         );
@@ -1662,7 +1820,7 @@ pub fn register_sql_server(
                     } else if timeout_ms.is_none() {
                         timeout_ms = Some(30_000);
                     }
-                    if let Some(b)=switch_block(&sql, pinned.as_ref()) { return err(format!("Blocked: {}", b)); }
+                    let (sql, params) = resolve_statement(&conn.r#type, &sql, &params);
                     let verdict = evaluate(&sql, &policy, dialect);
                     let target = CallTarget { connection_id: conn_id.clone(), connection_name: conn_name.clone(), group: via_group.clone() };
                     let meta = GateMeta { category: verdict.categories.clone(), action: "export_query".to_string(), detail: sql.clone(), database: db_opt.clone().or_else(|| pinned.clone()), command: None };
@@ -1686,25 +1844,19 @@ pub fn register_sql_server(
                         let format = format.clone();
                         let pinned_for_payload = pinned_for_inner.clone();
                         async move {
-                            let token = log_id.map(|id| cancels.register(id));
-                            let opts = {
-                                let has_timeout = timeout.is_some();
-                                let has_cancel = token.is_some();
-                                if has_timeout || has_cancel {
-                                    Some(QueryOpts { timeout_ms: timeout, cancel: token.clone() })
-                                } else {
-                                    None
-                                }
-                            };
+                            let opts = Some(QueryOpts {
+                                timeout_ms: timeout,
+                                cancel: Some(cancels.register(log_id)),
+                            });
                             let cfg = sql_config_from(&conn, db_opt.as_deref());
                             let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
                             let res = {
                                 let use_ro = policy.allowed.len()==2 && policy.allowed.contains(&pluk_policy::category::StatementCategory::Select);
                                 if use_ro { dw.driver.query_read_only(&sql, &params, opts.clone()).await } else { dw.driver.query(&sql, &params, opts.clone()).await }
                             };
-                            let res = match res { Ok(r)=>r, Err(e)=> { if let Some(id)=log_id { cancels.clear(id); } let _ = dw.close().await; return Err(driver_error_to_adapter(e)); } };
+                            let res = match res { Ok(r)=>r, Err(e)=> { cancels.clear(log_id); let _ = dw.close().await; return Err(driver_error_to_adapter(e)); } };
                             let _ = dw.close().await;
-                            if let Some(id)=log_id { cancels.clear(id); }
+                            cancels.clear(log_id);
                             let cap = policy.max_rows.map(|v| v as usize);
                             let total = res.rows.len();
                             let fields_tmp = res.fields.clone();
@@ -1837,8 +1989,7 @@ pub fn register_sql_server(
                         timeout_ms = Some(30_000);
                     }
                     let saved = match store.get_saved_query(&conn.id, &name).unwrap_or(None) { Some(q)=>q, None=> return err(format!("Saved query \"{}\" not found.", name)) };
-                    let sql = saved.sql.clone();
-                    if let Some(b)=switch_block(&sql, pinned.as_ref()) { return err(format!("Blocked: {}", b)); }
+                    let (sql, params) = resolve_statement(&conn.r#type, &saved.sql, &params);
                     let verdict = evaluate(&sql, &policy, dialect);
                     let target = CallTarget { connection_id: conn_id.clone(), connection_name: conn_name.clone(), group: via_group.clone() };
                     let meta = GateMeta { category: verdict.categories.clone(), action: "run_saved_query".to_string(), detail: sql.clone(), database: db_opt.clone().or_else(|| pinned.clone()), command: None };
@@ -1868,23 +2019,17 @@ pub fn register_sql_server(
                         let only = only_c.clone();
                         let timeout = timeout_ms;
                         async move {
-                            let token = log_id.map(|id| cancels.register(id));
-                            let opts = {
-                                let has_timeout = timeout.is_some();
-                                let has_cancel = token.is_some();
-                                if has_timeout || has_cancel {
-                                    Some(QueryOpts { timeout_ms: timeout, cancel: token.clone() })
-                                } else {
-                                    None
-                                }
-                            };
+                            let opts = Some(QueryOpts {
+                                timeout_ms: timeout,
+                                cancel: Some(cancels.register(log_id)),
+                            });
                             let cfg = sql_config_from(&conn, db_opt.as_deref());
                             let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
                             let use_ro = policy.allowed.len()==2;
                             let res = if use_ro { dw.driver.query_read_only(&sql, &params, opts.clone()).await } else { dw.driver.query(&sql, &params, opts.clone()).await };
-                            let res = match res { Ok(r)=>r, Err(e)=> { if let Some(id)=log_id { cancels.clear(id); } let _ = dw.close().await; return Err(driver_error_to_adapter(e)); } };
+                            let res = match res { Ok(r)=>r, Err(e)=> { cancels.clear(log_id); let _ = dw.close().await; return Err(driver_error_to_adapter(e)); } };
                             let _ = dw.close().await;
-                            if let Some(id)=log_id { cancels.clear(id); }
+                            cancels.clear(log_id);
                             let cap = policy.max_rows.map(|v| v as usize);
                             let total = res.rows.len();
                             let (mut rows, truncated, cap_limit) = cap_rows_vec(res.rows.into_iter().collect(), cap);

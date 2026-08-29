@@ -5,6 +5,7 @@ pub mod live {
     use sqlx::{Column, MySqlPool, Row, TypeInfo};
 
     use crate::driver::Driver;
+    use crate::statement::interpolate_mysql;
     use crate::error::DriverError;
     use crate::ssl::SslConfig;
     use crate::types::*;
@@ -235,53 +236,6 @@ pub mod live {
         let _ = f.keep().map_err(|_| ())?;
         let _ = prefix;
         Ok(path)
-    }
-
-    fn escape_mysql_string(s: &str) -> String {
-        let mut out = String::with_capacity(s.len() + 2);
-        out.push('\'');
-        for ch in s.chars() {
-            match ch {
-                '\'' => out.push_str("\\'"),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\0' => out.push_str("\\0"),
-                _ => out.push(ch),
-            }
-        }
-        out.push('\'');
-        out
-    }
-
-    fn interpolate_mysql(sql: &str, params: &[serde_json::Value]) -> String {
-        let mut out = String::with_capacity(sql.len() + params.len() * 8);
-        let mut idx = 0;
-        for ch in sql.chars() {
-            if ch == '?' && idx < params.len() {
-                let v = &params[idx];
-                idx += 1;
-                let s = match v {
-                    serde_json::Value::Null => "NULL".to_string(),
-                    serde_json::Value::Bool(b) => {
-                        if *b {
-                            "1".to_string()
-                        } else {
-                            "0".to_string()
-                        }
-                    }
-                    serde_json::Value::Number(n) => n.to_string(),
-                    serde_json::Value::String(s) => escape_mysql_string(s),
-                    serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-                        escape_mysql_string(&v.to_string())
-                    }
-                };
-                out.push_str(&s);
-            } else {
-                out.push(ch);
-            }
-        }
-        out
     }
 
     impl MySqlDriver {

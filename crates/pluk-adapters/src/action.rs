@@ -500,6 +500,27 @@ impl<C> Adapter for ActionAdapter<C> {
     }
 }
 
+/// Reject an argument whose value falls outside the `enum` its schema
+/// declares.
+///
+/// A tool's schema is advertised to the agent, never enforced by the protocol.
+/// A tool that multiplexes verbs behind one name — send, delete, block — keeps
+/// its policy category only if the verb is the one it published.
+fn enum_violation(schema: Option<&Map<String, Value>>, args: &Value) -> Option<String> {
+    let (schema, args) = (schema?, args.as_object()?);
+    args.iter().find_map(|(key, value)| {
+        let allowed = schema
+            .get(key)
+            .and_then(|property| property.get("enum"))
+            .and_then(Value::as_array)?;
+        if allowed.contains(value) {
+            return None;
+        }
+        let choices: Vec<&str> = allowed.iter().filter_map(Value::as_str).collect();
+        Some(format!("\"{key}\" must be one of: {}", choices.join(", ")))
+    })
+}
+
 /// Bind one tool into a callable MCP handler carrying the audited lifecycle.
 fn make_handler(
     store: Arc<Store>,
@@ -514,6 +535,7 @@ fn make_handler(
     let detail_fn = tool.detail.clone();
     let command_fn = tool.command.clone();
     let run_fn = tool.run.clone();
+    let schema = tool.schema.clone();
     let conn = conn.clone();
 
     Arc::new(move |args: Value| {
@@ -525,6 +547,7 @@ fn make_handler(
         let detail_fn = detail_fn.clone();
         let command_fn = command_fn.clone();
         let run_fn = run_fn.clone();
+        let schema = schema.clone();
         let settings = settings.clone();
         let on_tool_error = on_tool_error.clone();
 
@@ -537,6 +560,7 @@ fn make_handler(
             if let Some(command_fn) = command_fn.as_ref() {
                 meta = meta.with_command(command_fn(&args, &settings));
             }
+            let precheck_args = args.clone();
 
             run_gated(
                 &store,
@@ -554,7 +578,8 @@ fn make_handler(
                 },
                 {
                     let name = name.clone();
-                    let mut opts = GateOpts::default();
+                    let mut opts = GateOpts::default()
+                        .precheck(move || enum_violation(schema.as_ref(), &precheck_args));
                     if let Some(hook) = on_tool_error {
                         opts = opts.on_error(move |error| hook(&name, error));
                     }
@@ -953,6 +978,71 @@ mod tests {
         let reported = seen.lock().unwrap().clone();
         // Only the true error reaches the hook; the SSH pending approval is suppressed.
         assert_eq!(reported, vec!["flaky: boom".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_verb_outside_the_declared_enum_is_blocked_and_logged() {
+        let (_dir, store) = temp_store();
+        let ran: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let record = ran.clone();
+        let spec = ActionAdapterSpec::<()>::new(ADAPTER_ID, "Mail", "misc")
+            .client(|_, _| Ok(()))
+            .tools(move |_, _| {
+                let record = record.clone();
+                vec![
+                    ActionTool::new("email_action", "Act on mail", ActionCategory::Write)
+                        .schema({
+                            let mut props = Map::new();
+                            props.insert(
+                                "action".into(),
+                                json!({"type":"string","enum":["archive","pin"]}),
+                            );
+                            props
+                        })
+                        .run(move |args, _| {
+                            let record = record.clone();
+                            async move {
+                                record.lock().unwrap().push(args["action"].to_string());
+                                Ok(ActionOutput::text("done"))
+                            }
+                        }),
+                ]
+            });
+        let adapter = action_adapter(spec, store.clone());
+        let conn = integration(Some(&tool_config(&["email_action"])));
+
+        let mut capturing = CapturingHost::default();
+        adapter
+            .register(&mut capturing, &conn, "")
+            .expect("register");
+        let handler = capturing.handlers.remove(0).1;
+
+        // The protocol does not enforce the schema, so the tool checks the
+        // verbs it published itself.
+        let refused = handler(json!({ "action": "sendMail" })).await;
+        assert!(refused.is_error);
+        assert_eq!(
+            refused.text(),
+            "Blocked: \"action\" must be one of: archive, pin"
+        );
+        assert!(
+            ran.lock().unwrap().is_empty(),
+            "a refused verb must never reach the service"
+        );
+
+        let allowed = handler(json!({ "action": "archive" })).await;
+        assert!(!allowed.is_error, "{}", allowed.text());
+        assert_eq!(ran.lock().unwrap().len(), 1);
+
+        let page = store
+            .read_log_page(
+                &pluk_store::LogScope::Connection("r1".into()),
+                pluk_store::LogRange::All,
+                None,
+            )
+            .expect("page");
+        let verdicts: Vec<&str> = page.entries.iter().map(|e| e.verdict.as_str()).collect();
+        assert_eq!(verdicts, vec!["allowed", "blocked"], "newest first");
     }
 
     #[tokio::test]

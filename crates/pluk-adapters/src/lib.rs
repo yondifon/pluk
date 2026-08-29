@@ -47,7 +47,8 @@ pub use projection::{
 pub use registry::{AdapterRegistry, default_registry};
 pub use ssh_fields::ssh_auth_fields;
 pub use tool_host::{
-    BoxFuture, PromptHandler, PromptMessage, PromptResult, PromptRole, ResourceContents,
-    ResourceHandler, ToolHandler, ToolHost, ToolRegistration, object_schema,
+    BoxFuture, PolicyGatedHost, PromptHandler, PromptMessage, PromptResult, PromptRole,
+    ResourceContents, ResourceHandler, ToolHandler, ToolHost, ToolRegistration, object_schema,
+    register_gated,
 };
 pub use tool_spec::ToolSpec;

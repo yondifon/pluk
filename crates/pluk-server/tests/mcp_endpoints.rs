@@ -426,3 +426,48 @@ async fn get_on_the_mcp_endpoint_has_no_session_stream() {
         .as_u16();
     assert_eq!(status, 405, "stateless serving has no GET stream");
 }
+
+/// Tool names the endpoint advertises for `token`.
+async fn listed_tools(app: &TestApp, token: &str) -> Vec<String> {
+    let (_, _, body) = app
+        .mcp_post(
+            token,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {} }),
+        )
+        .await;
+    let mut names = body["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn the_endpoint_hides_tools_the_policy_disables() {
+    let app = spawn_app().await;
+    let (id, token) = integration(&app, "Main DB");
+
+    // The stub registers `wipe` unconditionally; a fresh integration must not
+    // see it, because a delete tool ships off.
+    let fresh = listed_tools(&app, &token).await;
+    assert!(!fresh.contains(&"wipe".to_string()), "{fresh:?}");
+
+    app.store
+        .update_integration(
+            &id,
+            &pluk_store::IntegrationUpdate {
+                query_policy: Some(Some(
+                    r#"{"tools":{"wipe":{"enabled":true}}}"#.to_string(),
+                )),
+                ..Default::default()
+            },
+        )
+        .expect("enable wipe");
+
+    // The toggle is the switch: the surface is rebuilt per request.
+    let enabled = listed_tools(&app, &token).await;
+    assert!(enabled.contains(&"wipe".to_string()), "{enabled:?}");
+}
