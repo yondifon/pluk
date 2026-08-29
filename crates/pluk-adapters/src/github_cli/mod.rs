@@ -303,6 +303,35 @@ fn project(data: Value, only: Option<Vec<String>>, map: &FieldMap) -> Result<Val
     apply_only(&data, only_ref, map).map_err(|e| AdapterError::new(e.to_string()))
 }
 
+/// The review action to submit. Anything unrecognised is refused rather than
+/// defaulted — a review posts under the user's own GitHub identity.
+fn review_flag(args: &Value) -> Result<&'static str, AdapterError> {
+    match extract_str(args, "event").unwrap_or_default().as_str() {
+        "APPROVE" => Ok("--approve"),
+        "COMMENT" => Ok("--comment"),
+        "REQUEST_CHANGES" => Ok("--request-changes"),
+        "" => Err(AdapterError::new(
+            "event is required. Pass APPROVE, COMMENT, or REQUEST_CHANGES.",
+        )),
+        other => Err(AdapterError::new(format!(
+            "Invalid event \"{other}\". Pass APPROVE, COMMENT, or REQUEST_CHANGES."
+        ))),
+    }
+}
+
+fn review_args(cfg: &GhConfig, args: &Value, flag: Option<&str>) -> Vec<String> {
+    let number = extract_i64(args, "number").unwrap_or(0);
+    let mut a = vec!["pr".to_string(), "review".to_string(), number.to_string()];
+    a.extend(repo_flag(cfg, extract_str(args, "repo").as_deref()));
+    if let Some(flag) = flag {
+        a.push(flag.to_string());
+    }
+    if let Some(body) = extract_str(args, "body").filter(|b| !b.is_empty()) {
+        a.extend(vec!["--body".to_string(), body]);
+    }
+    a
+}
+
 pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
     let mut tools: Vec<ActionTool> = Vec::new();
 
@@ -1402,23 +1431,7 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
             .command_fn({
                 let c = cfg_cmd.clone();
                 move |args, _| {
-                    let repo = extract_str(args, "repo");
-                    let n = extract_i64(args, "number").unwrap_or(0);
-                    let ev = extract_str(args, "event").unwrap_or_default();
-                    let body = extract_str(args, "body");
-                    let flag = match ev.as_str() {
-                        "APPROVE" => "--approve",
-                        "COMMENT" => "--comment",
-                        _ => "--request-changes",
-                    };
-                    let mut a = vec!["pr".to_string(), "review".to_string(), n.to_string()];
-                    a.extend(repo_flag(&c, repo.as_deref()));
-                    a.extend(vec![flag.to_string()]);
-                    if let Some(b) = body
-                        && !b.is_empty()
-                    {
-                        a.extend(vec!["--body".to_string(), b]);
-                    }
+                    let a = review_args(&c, args, review_flag(args).ok());
                     gh_command(&c, &a)
                 }
             })
@@ -1427,24 +1440,9 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
                 move |args, _| {
                     let c = c.clone();
                     async move {
-                        let repo = extract_str(&args, "repo");
-                        let n = extract_i64(&args, "number").unwrap_or(0);
-                        let ev = extract_str(&args, "event").unwrap_or_default();
-                        let body = extract_str(&args, "body");
+                        let flag = review_flag(&args)?;
                         let cwd = extract_str(&args, "cwd");
-                        let flag = match ev.as_str() {
-                            "APPROVE" => "--approve",
-                            "COMMENT" => "--comment",
-                            _ => "--request-changes",
-                        };
-                        let mut a = vec!["pr".to_string(), "review".to_string(), n.to_string()];
-                        a.extend(repo_flag(&c, repo.as_deref()));
-                        a.extend(vec![flag.to_string()]);
-                        if let Some(b) = body
-                            && !b.is_empty()
-                        {
-                            a.extend(vec!["--body".to_string(), b]);
-                        }
+                        let a = review_args(&c, &args, Some(flag));
                         let cmd = gh_command(&c, &a);
                         let text = gh_text(&c, a, cwd.as_deref()).await?;
                         Ok(ActionOutput::with_command(Value::String(text), cmd))
@@ -1590,6 +1588,8 @@ mod tests {
     use super::*;
     use crate::adapter::Adapter;
 
+    use crate::test_support::{recorded_pid, tree_script, wait_until_gone};
+
     use pluk_store::{Integration, Store};
     use serde_json::{Map, Value, json};
     use std::sync::{Arc, Mutex};
@@ -1650,6 +1650,10 @@ mod tests {
         set_gh_runner(None);
     }
 
+    /// The `gh` runner seam is process-global, so the tests that install one run
+    /// in sequence.
+    static GH_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[test]
     fn gh_config_defaults() {
         let cfg = gh_cfg(json!({}));
@@ -1708,6 +1712,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_gh_forwards_cwd() {
+        let _guard = GH_TEST_LOCK.lock().await;
         let cfg = gh_cfg(json!({"default_cwd":"/wt"}));
         let calls = Arc::new(Mutex::new(Vec::new()));
         set_fake(
@@ -1765,6 +1770,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_issue_passes_number_and_cwd() {
+        let _guard = GH_TEST_LOCK.lock().await;
         let cfg = gh_cfg(json!({}));
         let calls = Arc::new(Mutex::new(Vec::new()));
         set_fake(
@@ -1797,6 +1803,7 @@ mod tests {
 
     #[tokio::test]
     async fn nonzero_surfaces_stderr() {
+        let _guard = GH_TEST_LOCK.lock().await;
         let cfg = gh_cfg(json!({}));
         let calls = Arc::new(Mutex::new(Vec::new()));
         set_fake(
@@ -1816,7 +1823,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn timed_out_command_leaves_nothing_running() {
+        let _guard = GH_TEST_LOCK.lock().await;
+        clear_fake();
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("grandchild.pid");
+        let cfg = gh_cfg(json!({"gh_bin":"/bin/sh","timeout_seconds":1}));
+        let err = crate::github_cli::client::run_gh(
+            &cfg,
+            vec!["-c".to_string(), tree_script(&pid_file)],
+            None,
+        )
+        .await
+        .expect_err("should time out");
+        assert!(err.message.contains("timed out"), "got: {}", err.message);
+        let grandchild = recorded_pid(&pid_file).await;
+        assert!(
+            wait_until_gone(grandchild).await,
+            "a timed-out gh call left {grandchild} running"
+        );
+    }
+
+    #[tokio::test]
+    async fn review_refuses_an_event_it_was_not_given() {
+        let _guard = GH_TEST_LOCK.lock().await;
+        let cfg = gh_cfg(json!({"default_repo":"acme/app"}));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        set_fake(
+            calls.clone(),
+            Arc::new(|_| (0, String::new(), String::new())),
+        );
+        let tools = github_cli_tools(cfg);
+        let t = tools
+            .into_iter()
+            .find(|x| x.name == "review_pull_request")
+            .unwrap();
+
+        for args in [
+            json!({"number":7}),
+            json!({"number":7,"event":""}),
+            json!({"number":7,"event":"request_changes"}),
+            json!({"number":7,"event":"LGTM"}),
+        ] {
+            let err = (t.run)(args.clone(), Map::new())
+                .await
+                .expect_err("should refuse");
+            assert!(
+                err.message.contains("APPROVE, COMMENT, or REQUEST_CHANGES"),
+                "got: {} for {args}",
+                err.message
+            );
+            assert!(
+                !(t.command.as_ref().unwrap())(&args, &Map::new()).contains("--request-changes"),
+                "the logged command must not claim a review action"
+            );
+        }
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "no review may be submitted without an explicit event"
+        );
+
+        (t.run)(json!({"number":7,"event":"APPROVE"}), Map::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.lock().unwrap()[0].args,
+            vec!["pr", "review", "7", "--repo", "acme/app", "--approve"]
+        );
+        clear_fake();
+    }
+
+    #[tokio::test]
     async fn missing_executable_clear_error() {
+        let _guard = GH_TEST_LOCK.lock().await;
         clear_fake();
         let cfg = gh_cfg(json!({"gh_bin":"/nope/gh"}));
         let err = crate::github_cli::client::run_gh(&cfg, vec!["--version".to_string()], None)
@@ -1828,6 +1907,7 @@ mod tests {
 
     #[tokio::test]
     async fn worktree_pr_creation_defaults() {
+        let _guard = GH_TEST_LOCK.lock().await;
         let cfg = gh_cfg(json!({}));
         let calls = Arc::new(Mutex::new(Vec::new()));
         set_fake(
@@ -1851,6 +1931,7 @@ mod tests {
     }
     #[tokio::test]
     async fn worktree_pr_creation_flags() {
+        let _guard = GH_TEST_LOCK.lock().await;
         let cfg = gh_cfg(json!({}));
         let calls = Arc::new(Mutex::new(Vec::new()));
         set_fake(
@@ -1875,6 +1956,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_backed_pr_files_resolves_repo() {
+        let _guard = GH_TEST_LOCK.lock().await;
         let cfg = gh_cfg(json!({}));
         let calls = Arc::new(Mutex::new(Vec::new()));
         set_fake(
@@ -1907,6 +1989,7 @@ mod tests {
 
     #[tokio::test]
     async fn release_tools_cover_list_view_create() {
+        let _guard = GH_TEST_LOCK.lock().await;
         let calls = Arc::new(Mutex::new(Vec::new()));
         set_fake(
             calls.clone(),
@@ -1970,6 +2053,7 @@ mod tests {
 
     #[tokio::test]
     async fn tag_flag_refused() {
+        let _guard = GH_TEST_LOCK.lock().await;
         let cfg = gh_cfg(json!({}));
         let tools = github_cli_tools(cfg);
         let t = tools.into_iter().find(|x| x.name == "get_release").unwrap();
@@ -1982,6 +2066,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_connection_guidance() {
+        let _guard = GH_TEST_LOCK.lock().await;
         let calls = Arc::new(Mutex::new(Vec::new()));
         set_fake(
             calls.clone(),
@@ -2051,6 +2136,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_repo_projection() {
+        let _guard = GH_TEST_LOCK.lock().await;
         let cfg = gh_cfg(json!({}));
         clear_fake();
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -2098,6 +2184,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_issues_default_and_preset_and_star() {
+        let _guard = GH_TEST_LOCK.lock().await;
         let cfg = gh_cfg(json!({}));
         clear_fake();
         let calls = Arc::new(Mutex::new(Vec::new()));

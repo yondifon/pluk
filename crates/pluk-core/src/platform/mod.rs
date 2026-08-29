@@ -151,6 +151,21 @@ pub fn ssh_control_dir() -> PathBuf {
     imp::ssh_control_dir()
 }
 
+/// Kill `leader_pid` and every process still in its group.
+///
+/// Both supported platforms are POSIX and answer to the same call, so this is
+/// resolved here rather than in the per-platform modules. `leader_pid` must be
+/// a process started with its own group (see [`crate::process::run_capture`])
+/// and must not have been reaped yet — a reaped pid can be reused, and killing
+/// its group would hit whatever inherited the number.
+pub fn kill_process_group(leader_pid: u32) {
+    // SAFETY: killpg only reads the pid and signal number; any error (the group
+    // has already exited) is reported through the return value, not memory.
+    unsafe {
+        libc::killpg(leader_pid as libc::pid_t, libc::SIGKILL);
+    }
+}
+
 /// An MCP client's config file for `scope`.
 pub fn mcp_config_path(client: McpClient, scope: &ConfigScope) -> PathBuf {
     match scope {

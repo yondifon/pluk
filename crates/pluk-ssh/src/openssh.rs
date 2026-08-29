@@ -44,6 +44,8 @@ pub struct SshTunnelConfig {
     pub passphrase: Option<String>,
     pub remote_host: String,
     pub remote_port: u16,
+    /// Local port to listen on. `None` picks a free one.
+    pub local_port: Option<u16>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -328,7 +330,10 @@ pub async fn open_openssh_tunnel(
 
     ensure_master(config, &target, readiness_timeout_ms).await?;
 
-    let local_port = reserve_local_port().await.map_err(SshError::Io)?;
+    let local_port = match config.local_port {
+        Some(port) => port,
+        None => reserve_local_port().await.map_err(SshError::Io)?,
+    };
     let spec = format!(
         "127.0.0.1:{local_port}:{}:{}",
         config.remote_host, config.remote_port
@@ -531,6 +536,7 @@ mod tests {
             passphrase: None,
             remote_host: "db.internal".into(),
             remote_port: 5432,
+            local_port: None,
         };
         let ssh_cfg = SshConfigEntry {
             port: Some(2200),

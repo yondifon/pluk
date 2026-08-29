@@ -711,7 +711,7 @@ pub fn register_sql_server(
                                 .await
                                 .map_err(driver_error_to_adapter)?;
                             let schema = dw.driver.get_full_schema(None).await;
-                            let _ = dw.driver.close().await;
+                            let _ = dw.close().await;
                             Ok(Outcome::ran(schema.map_err(driver_error_to_adapter)?))
                         },
                     )
@@ -882,11 +882,11 @@ pub fn register_sql_server(
                                 Ok(r) => r,
                                 Err(e) => {
                                     cancels.clear(log_id);
-                                    let _ = dw.driver.close().await;
+                                    let _ = dw.close().await;
                                     return Err(driver_error_to_adapter(e));
                                 }
                             };
-                            let _ = dw.driver.close().await;
+                            let _ = dw.close().await;
                             cancels.clear(log_id);
                             // cap then mask
                             let effective_cap: Option<usize> = match policy.max_rows {
@@ -1022,7 +1022,7 @@ pub fn register_sql_server(
                                 .await
                                 .map_err(driver_error_to_adapter)?;
                             let res = dw.driver.list_tables(schema_opt.as_deref()).await;
-                            let _ = dw.driver.close().await;
+                            let _ = dw.close().await;
                             Ok(Outcome::ran(res.map_err(driver_error_to_adapter)?.join("\n")))
                         },
                     )
@@ -1116,7 +1116,7 @@ pub fn register_sql_server(
                         let cfg = sql_config_from(&conn, db_for_meta.as_deref());
                         let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
                         let res = dw.driver.sample_table(&table, effective_limit as i64, schema_opt.as_deref()).await;
-                        let _ = dw.driver.close().await;
+                        let _ = dw.close().await;
                         let res = res.map_err(driver_error_to_adapter)?;
                         let total = res.rows.len();
                         let cap = policy.max_rows.map(|v| v as usize);
@@ -1250,7 +1250,7 @@ pub fn register_sql_server(
                                 .await
                                 .map_err(driver_error_to_adapter)?;
                             let res = dw.driver.explain(&sql_for_driver, &params).await;
-                            let _ = dw.driver.close().await;
+                            let _ = dw.close().await;
                             let res = res.map_err(driver_error_to_adapter)?;
                             let val =
                                 serde_json::json!({ "rows": res.rows, "fields": res.fields });
@@ -1325,7 +1325,7 @@ pub fn register_sql_server(
                         let cfg = sql_config_from(&conn, db_for_driver.as_deref());
                         let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
                         let res = dw.driver.describe_table(&table, schema_opt.as_deref()).await;
-                        let _ = dw.driver.close().await;
+                        let _ = dw.close().await;
                         let cols = res.map_err(driver_error_to_adapter)?;
                         let vals: Vec<Value> = cols.into_iter().map(|c| serde_json::json!({"column": c.column, "type": c.r#type, "nullable": c.nullable})).collect();
                         Ok(Outcome::ran(serde_json::to_string_pretty(&vals).unwrap()))
@@ -1423,7 +1423,7 @@ pub fn register_sql_server(
                                 .driver
                                 .list_relationships(table.as_deref(), schema_opt.as_deref())
                                 .await;
-                            let _ = dw.driver.close().await;
+                            let _ = dw.close().await;
                             let vals: Vec<Value> = res
                                 .map_err(driver_error_to_adapter)?
                                 .into_iter()
@@ -1531,7 +1531,7 @@ pub fn register_sql_server(
                                 .await
                                 .map_err(driver_error_to_adapter)?;
                             let res = dw.driver.search_schema(&term, schema_opt.as_deref()).await;
-                            let _ = dw.driver.close().await;
+                            let _ = dw.close().await;
                             let vals: Vec<Value> = res
                                 .map_err(driver_error_to_adapter)?
                                 .into_iter()
@@ -1617,7 +1617,7 @@ pub fn register_sql_server(
                         let cfg = sql_config_from(&conn, db_for_driver.as_deref());
                         let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
                         let res = dw.driver.table_stats(&table, schema_opt.as_deref()).await;
-                        let _ = dw.driver.close().await;
+                        let _ = dw.close().await;
                         let res = res.map_err(driver_error_to_adapter)?;
                         let val = serde_json::json!({
                             "table": res.table,
@@ -1662,7 +1662,7 @@ pub fn register_sql_server(
                                 .await
                                 .map_err(driver_error_to_adapter)?;
                             let res = dw.driver.list_schemas().await;
-                            let _ = dw.driver.close().await;
+                            let _ = dw.close().await;
                             Ok(Outcome::ran(
                                 res.map_err(driver_error_to_adapter)?.join("\n"),
                             ))
@@ -1708,7 +1708,7 @@ pub fn register_sql_server(
                                 .await
                                 .map_err(driver_error_to_adapter)?;
                             let res = dw.driver.list_databases().await;
-                            let _ = dw.driver.close().await;
+                            let _ = dw.close().await;
                             Ok(Outcome::ran(
                                 res.map_err(driver_error_to_adapter)?.join("\n"),
                             ))
@@ -1854,8 +1854,8 @@ pub fn register_sql_server(
                                 let use_ro = policy.allowed.len()==2 && policy.allowed.contains(&pluk_policy::category::StatementCategory::Select);
                                 if use_ro { dw.driver.query_read_only(&sql, &params, opts.clone()).await } else { dw.driver.query(&sql, &params, opts.clone()).await }
                             };
-                            let res = match res { Ok(r)=>r, Err(e)=> { cancels.clear(log_id); let _ = dw.driver.close().await; return Err(driver_error_to_adapter(e)); } };
-                            let _ = dw.driver.close().await;
+                            let res = match res { Ok(r)=>r, Err(e)=> { cancels.clear(log_id); let _ = dw.close().await; return Err(driver_error_to_adapter(e)); } };
+                            let _ = dw.close().await;
                             cancels.clear(log_id);
                             let cap = policy.max_rows.map(|v| v as usize);
                             let total = res.rows.len();
@@ -2027,8 +2027,8 @@ pub fn register_sql_server(
                             let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
                             let use_ro = policy.allowed.len()==2;
                             let res = if use_ro { dw.driver.query_read_only(&sql, &params, opts.clone()).await } else { dw.driver.query(&sql, &params, opts.clone()).await };
-                            let res = match res { Ok(r)=>r, Err(e)=> { cancels.clear(log_id); let _ = dw.driver.close().await; return Err(driver_error_to_adapter(e)); } };
-                            let _ = dw.driver.close().await;
+                            let res = match res { Ok(r)=>r, Err(e)=> { cancels.clear(log_id); let _ = dw.close().await; return Err(driver_error_to_adapter(e)); } };
+                            let _ = dw.close().await;
                             cancels.clear(log_id);
                             let cap = policy.max_rows.map(|v| v as usize);
                             let total = res.rows.len();

@@ -1559,7 +1559,7 @@ mod tests {
 
     #[tokio::test]
     async fn verbatim_passthrough_via_mock_runner() {
-        let _g = client::runner_lock();
+        let _g = client::RUNNER_LOCK.lock().await;
         client::set_spark_runner(None);
         let cfg = SparkCfg {
             bin: "/usr/local/bin/spark".to_string(),
@@ -1596,7 +1596,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unpublished_verb_never_reaches_the_cli() {
-        let _g = client::runner_lock();
+        let _g = client::RUNNER_LOCK.lock().await;
         let seen: std::sync::Arc<std::sync::Mutex<Vec<Vec<String>>>> = Default::default();
         let record = seen.clone();
         client::set_spark_runner(Some(std::sync::Arc::new(move |_, args: Vec<String>, _| {

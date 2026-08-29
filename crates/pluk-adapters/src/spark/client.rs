@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use pluk_core::process::RunError;
 use pluk_store::Integration;
 
 use crate::error::AdapterError;
@@ -286,34 +287,25 @@ async fn spawn_spark(
     }
     let mut cmd = tokio::process::Command::new(bin);
     cmd.args(args);
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-    cmd.stdin(std::process::Stdio::null());
-    let child = cmd.spawn().map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("No such file") || msg.contains("ENOENT") || msg.contains("not found") {
-            AdapterError::new(format!(
-                "Spark CLI not found: {bin}. Install Spark Desktop, or set the CLI path on this integration."
-            ))
-        } else {
-            AdapterError::new(format!("Could not start spark: {msg}"))
+    match pluk_core::process::run_capture(&mut cmd, timeout).await {
+        Ok(output) => Ok(SparkRunResult {
+            code: output.code.unwrap_or(0),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        }),
+        Err(RunError::Spawn(e)) => {
+            let msg = e.to_string();
+            if msg.contains("No such file") || msg.contains("ENOENT") || msg.contains("not found") {
+                Err(AdapterError::new(format!(
+                    "Spark CLI not found: {bin}. Install Spark Desktop, or set the CLI path on this integration."
+                )))
+            } else {
+                Err(AdapterError::new(format!("Could not start spark: {msg}")))
+            }
         }
-    })?;
-    let res = tokio::time::timeout(timeout, child.wait_with_output()).await;
-    match res {
-        Ok(Ok(output)) => {
-            let code = output.status.code().unwrap_or(0);
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            Ok(SparkRunResult {
-                code,
-                stdout,
-                stderr,
-            })
-        }
-        Ok(Err(e)) => Err(AdapterError::new(e.to_string())),
-        Err(_) => Err(AdapterError::new(format!(
-            "spark {} timed out after {}s.",
+        Err(RunError::Io(e)) => Err(AdapterError::new(e.to_string())),
+        Err(RunError::TimedOut) => Err(AdapterError::new(format!(
+            "spark {} timed out after {}s and was stopped.",
             args.first().map(|s| s.as_str()).unwrap_or(""),
             timeout.as_secs()
         ))),
@@ -397,20 +389,15 @@ pub async fn test_spark(conn: &Integration) -> Result<(), AdapterError> {
     Ok(())
 }
 
+/// The runner seam is process-global, so the tests that install one run in
+/// sequence.
 #[cfg(test)]
-pub(crate) static RUNNER_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
-    std::sync::OnceLock::new();
-#[cfg(test)]
-pub(crate) fn runner_lock() -> std::sync::MutexGuard<'static, ()> {
-    RUNNER_LOCK
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .unwrap()
-}
+pub(crate) static RUNNER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{recorded_pid, tree_script, wait_until_gone};
     use serde_json::json;
 
     fn cfg_with_account(account: &str) -> SparkCfg {
@@ -543,7 +530,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_binary_produces_clear_error() {
-        let _g = crate::spark::client::runner_lock();
+        let _g = crate::spark::client::RUNNER_LOCK.lock().await;
         set_spark_runner(None);
         let cfg = SparkCfg {
             bin: "/nonexistent/spark-binary-xyz".to_string(),
@@ -564,8 +551,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn timed_out_command_leaves_nothing_running() {
+        let _g = crate::spark::client::RUNNER_LOCK.lock().await;
+        set_spark_runner(None);
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("grandchild.pid");
+        let cfg = SparkCfg {
+            bin: "/bin/sh".to_string(),
+            account: String::new(),
+            folder: String::new(),
+            team: String::new(),
+            max_page_size: 25,
+            timeout_ms: 400,
+        };
+        let err = run_spark(&cfg, vec!["-c".to_string(), tree_script(&pid_file)])
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("timed out"), "got: {}", err.message);
+        let grandchild = recorded_pid(&pid_file).await;
+        assert!(
+            wait_until_gone(grandchild).await,
+            "a timed-out spark call left {grandchild} running"
+        );
+    }
+
+    #[tokio::test]
     async fn verbatim_passthrough_trims_output() {
-        let _g = crate::spark::client::runner_lock();
+        let _g = crate::spark::client::RUNNER_LOCK.lock().await;
         let cfg = SparkCfg {
             bin: "/usr/local/bin/spark".to_string(),
             account: String::new(),

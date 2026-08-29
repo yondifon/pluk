@@ -23,6 +23,8 @@ pub mod spark;
 pub mod sql;
 pub mod ssh;
 mod ssh_fields;
+#[cfg(test)]
+mod test_support;
 mod tool_host;
 mod tool_spec;
 
