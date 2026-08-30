@@ -8,16 +8,22 @@
 use std::sync::Arc;
 
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, GetPromptRequestParams,
-    GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult, ListResourcesResult,
-    ListToolsResult, Prompt, PromptArgument, PromptMessage, ReadResourceRequestParams,
-    ReadResourceResponse, ReadResourceResult, ResourceContents, Role, ServerCapabilities,
-    ServerInfo, ToolsCapability,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+    GetPromptRequestParams, GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult,
+    ListResourcesResult, ListToolsResult, Prompt, PromptArgument, PromptMessage,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, ResourceContents, Role,
+    ServerCapabilities, ServerInfo, ToolsCapability,
 };
 use rmcp::{ErrorData as McpError, ServerHandler};
 use serde_json::{Map, Value};
 
 use pluk_adapters::{PromptHandler, PromptRole, ResourceHandler, ToolHandler, ToolRegistration};
+
+/// Protocol revision 2026-07-28 requires `ttlMs` and `cacheScope` on every
+/// list and read result (SEP-2549); strict clients reject a response without
+/// them. A surface is derived from the token owner's integrations and changes
+/// whenever those do, so it is never shareable and never fresh.
+const SURFACE_TTL_MS: u64 = 0;
 
 /// One registered tool.
 struct RegisteredTool {
@@ -254,7 +260,9 @@ impl ServerHandler for Surface {
                 entry
             })
             .collect();
-        Ok(ListToolsResult::with_all_items(tools))
+        Ok(ListToolsResult::with_all_items(tools)
+            .with_ttl_ms(SURFACE_TTL_MS)
+            .with_cache_scope(CacheScope::Private))
     }
 
     async fn call_tool(
@@ -299,7 +307,9 @@ impl ServerHandler for Surface {
                 )
             })
             .collect();
-        Ok(ListPromptsResult::with_all_items(prompts))
+        Ok(ListPromptsResult::with_all_items(prompts)
+            .with_ttl_ms(SURFACE_TTL_MS)
+            .with_cache_scope(CacheScope::Private))
     }
 
     async fn get_prompt(
@@ -344,7 +354,9 @@ impl ServerHandler for Surface {
                 entry
             })
             .collect();
-        Ok(ListResourcesResult::with_all_items(resources))
+        Ok(ListResourcesResult::with_all_items(resources)
+            .with_ttl_ms(SURFACE_TTL_MS)
+            .with_cache_scope(CacheScope::Private))
     }
 
     async fn read_resource(
@@ -363,8 +375,10 @@ impl ServerHandler for Surface {
         let contents = (resource.handler)().await;
         let contents =
             ResourceContents::text(contents.text, contents.uri).with_mime_type(contents.mime_type);
-        Ok(ReadResourceResponse::Complete(ReadResourceResult::new(
-            vec![contents],
-        )))
+        Ok(ReadResourceResponse::Complete(
+            ReadResourceResult::new(vec![contents])
+                .with_ttl_ms(SURFACE_TTL_MS)
+                .with_cache_scope(CacheScope::Private),
+        ))
     }
 }

@@ -83,6 +83,11 @@ async fn a_token_serves_its_integration_statelessly() {
         .unwrap();
     assert_eq!(ping["annotations"]["readOnlyHint"], true);
 
+    // Revision 2026-07-28 requires the cache fields on every list and read
+    // result; strict clients reject a response without them.
+    assert_eq!(body["result"]["ttlMs"], 0);
+    assert_eq!(body["result"]["cacheScope"], "private");
+
     // And the tool is callable.
     let (_, _, call) = app
         .mcp_post(
@@ -102,6 +107,8 @@ async fn a_token_serves_its_integration_statelessly() {
         )
         .await;
     assert_eq!(prompts["result"]["prompts"][0]["name"], "greet");
+    assert_eq!(prompts["result"]["ttlMs"], 0);
+    assert_eq!(prompts["result"]["cacheScope"], "private");
 
     let (_, _, read) = app
         .mcp_post(
@@ -111,6 +118,8 @@ async fn a_token_serves_its_integration_statelessly() {
         )
         .await;
     assert_eq!(read["result"]["contents"][0]["text"], "everything");
+    assert_eq!(read["result"]["ttlMs"], 0);
+    assert_eq!(read["result"]["cacheScope"], "private");
 
     // Unknown tools are invalid params, not transport errors.
     let (_, _, unknown) = app
