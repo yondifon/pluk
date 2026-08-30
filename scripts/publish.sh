@@ -141,6 +141,9 @@ echo "=== Tagging $TAG ==="
 if ! git rev-parse "$TAG" >/dev/null 2>&1; then
     git tag -a "$TAG" -m "$TAG"
 fi
+# The branch carries the release commit the tag points at; push it too, so a
+# clone of the default branch matches the version that just shipped.
+git push origin "$(git rev-parse --abbrev-ref HEAD)"
 git push origin "$TAG"
 
 echo "=== Publishing GitHub release ==="

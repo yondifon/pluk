@@ -4,7 +4,7 @@ DIST      := dist
 VERSION   := $(shell cat VERSION 2>/dev/null | tr -d ' \n')
 COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: dev deps build build-ui bundle bundle-unsigned bundle-signed publish check-publish-tools install test lint clean sync-version check-tauri swift-build swift-bundle help
+.PHONY: dev deps build build-ui bundle bundle-unsigned bundle-signed publish _publish major minor fix check-publish-tools install test lint clean sync-version check-tauri swift-build swift-bundle help
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:
@@ -14,7 +14,7 @@ help:
 	@printf "  make bundle           Frontend + cargo tauri build (release bundles, unsigned if no identity)\n"
 	@printf "  make bundle-signed    Signed + notarized via 1Password (op run --env-file=.env.1password)\n"
 	@printf "  make bundle-unsigned  Force ad-hoc signing (no identity)\n"
-	@printf "  make publish          Universal build, sign, notarize, staple, verify, GitHub release\n"
+	@printf "  make publish [major|minor|fix]  Bump version, then universal build, sign, notarize, staple, verify, GitHub release\n"
 	@printf "  make install          Build bundles and install Pluk.app to /Applications (macOS)\n"
 	@printf "  make test             cargo test --workspace\n"
 	@printf "  make lint             cargo clippy + frontend typecheck\n"
@@ -144,7 +144,17 @@ check-publish-tools:
 		exit 1; \
 	fi
 
-publish: check-tauri check-publish-tools sync-version build-ui
+# `make publish fix` (or minor / major) bumps VERSION first; bare `make publish`
+# asks which. The bump has to land before the version is read into Cargo.toml
+# and tauri.conf.json, so the release runs in a sub-make that re-reads VERSION.
+publish:
+	@bash scripts/bump-version.sh $(filter-out publish,$(MAKECMDGOALS))
+	@$(MAKE) --no-print-directory _publish
+
+major minor fix:
+	@:
+
+_publish: check-tauri check-publish-tools sync-version build-ui
 	@printf "→ publish: universal signed + notarized $(APP) v$(VERSION), verify, GitHub release\n"
 	bash scripts/publish.sh
 

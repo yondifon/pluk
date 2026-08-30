@@ -164,18 +164,19 @@ From a cold terminal, once one-time setup is done:
 git checkout main
 git pull origin main
 
-# 1) bump the version
-echo "0.2.0" > VERSION
-git add VERSION
-git commit -m "chore: release v0.2.0"
-git push origin main
-
-# 2) publish
-make publish
+make publish fix     # or: make publish minor / make publish major
 ```
+
+The bump type is the release type: `fix` for a bug fix (0.1.0 → 0.1.1),
+`minor` for a backward-compatible feature (0.1.0 → 0.2.0), `major` for a
+breaking change (0.1.0 → 1.0.0). Bare `make publish` asks which.
 
 `make publish`:
 
+0. Runs `scripts/bump-version.sh`: refuses to start with uncommitted changes,
+   shows the version it is about to cut and asks for confirmation, then writes
+   `VERSION`, syncs it into `Cargo.toml` and `tauri.conf.json`, and commits
+   `chore: release vX.Y.Z` — so the tag in step 7 points at the bumped version.
 1. Checks `cargo tauri` and `gh` are installed, then checks whichever secrets
    route applies: if `.env` exists, that's it; otherwise checks `op` is the
    real 1Password CLI, signed in, and every `op://` reference in
@@ -194,8 +195,8 @@ make publish
    `xcrun stapler validate`, `spctl` again against the `.dmg`.
 6. Builds `latest.json` (the updater manifest) from the signed
    `.app.tar.gz` and its `.sig`.
-7. Tags `vX.Y.Z`, pushes the tag, and creates (or updates) the GitHub
-   release with the `.dmg`, updater archive, signature, and manifest.
+7. Tags `vX.Y.Z`, pushes the branch and the tag, and creates (or updates) the
+   GitHub release with the `.dmg`, updater archive, signature, and manifest.
 
 Nothing uploads if signing, notarization, or verification fails.
 
