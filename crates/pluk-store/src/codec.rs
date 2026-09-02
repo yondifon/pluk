@@ -34,8 +34,8 @@ pub fn serialize_config(config: &Config) -> String {
 /// { "tools": { "query": { "enabled": true, "settings": { "limit": 50 } } } }
 /// ```
 ///
-/// Unknown fields are captured so a parse → serialize round trip is lossless;
-/// the Swift app re-serializes this blob on every connection edit.
+/// Unknown fields are captured so a parse → serialize round trip is lossless,
+/// preserving forward compatibility.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct QueryPolicy {
     #[serde(default)]
@@ -47,7 +47,7 @@ pub struct QueryPolicy {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolPolicy {
-    /// Absent means enabled (mirrors the Swift parser's default).
+    /// Absent means enabled (default).
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
@@ -77,8 +77,8 @@ pub fn serialize_query_policy(policy: &QueryPolicy) -> String {
 /// Parse the `member_ids` column: an array of `{id, overrides}` objects with
 /// entries that predate overrides stored as bare id strings.
 ///
-/// Mirrors the TS/Swift parsers: anything unparseable yields no members rather
-/// than an error — a group with garbage members still lists, it just has none.
+/// Anything unparseable yields no members rather than an error — a group with
+/// garbage members still lists, it just has none.
 pub fn parse_members(raw: &str) -> Vec<GroupMember> {
     let parsed: Value = match serde_json::from_str(raw) {
         Ok(v) => v,
@@ -168,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn absent_enabled_defaults_to_true_like_swift() {
+    fn absent_enabled_defaults_to_true() {
         let policy = parse_query_policy(Some(r#"{"tools":{"run_saved_command":{}}}"#)).unwrap();
         assert!(policy.tools["run_saved_command"].enabled);
     }

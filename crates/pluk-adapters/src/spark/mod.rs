@@ -19,7 +19,6 @@ pub use fields::spark_fields;
 const AGENT_HINT: &str = "Use this for the user's mail, calendar, contacts and meetings in Spark. accounts first to see accounts, calendars and each one's access level; list_emails to browse a folder, search_emails to answer questions (it returns bodies), read_thread for the whole conversation. When this integration names an account every folder, scope and calendar is confined to it — a bare folder name means that account's folder, and another account, shared inbox or team is refused, not silently redirected. Spark itself gates writes per account (read-only / triage / send) on top of this integration's tools.";
 const ACCESS: &str = "Reads mail, calendar, contacts, meetings and teams from the Spark Desktop running on this machine; drafts, comments, email and contact actions, and calendar writes only when those tools are enabled. Sending a draft and deleting an event are separate tools, off by default. Every call is policy-checked and recorded in the activity log — including the message bodies Spark returns.";
 
-// ── helpers for JSON arg extraction ───────────────────────────────────────
 
 fn s(args: &Value, key: &str) -> Option<String> {
     args.get(key)
@@ -57,7 +56,6 @@ fn prop_opt_str(desc: &str) -> Value {
     json!({"type":"string","description":desc})
 }
 
-// ── tool builders ─────────────────────────────────────────────────────────
 
 pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
     let mut tools: Vec<ActionTool> = Vec::new();

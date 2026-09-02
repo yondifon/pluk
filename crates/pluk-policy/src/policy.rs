@@ -428,7 +428,6 @@ pub fn parse_postgres_cost(plan_json: &Value) -> CostEstimate {
     }
 }
 
-// ── Typed readers live in `tool_config` (they mirror toolConfig.ts) ──────────
 
 use crate::tool_config::{js_truthy, read_number, setting_bool, setting_string};
 
@@ -444,7 +443,6 @@ mod tests {
         evaluate(sql, policy, dialect_for(db_type))
     }
 
-    // ── evaluate - read-only preset ──────────────────────────────────────────
 
     #[test]
     fn read_only_preset_allows_reads_and_blocks_everything_else() {
@@ -543,7 +541,6 @@ mod tests {
         );
     }
 
-    // ── presets ──────────────────────────────────────────────────────────────
 
     #[test]
     fn presets_match_the_ts_definitions() {
@@ -604,7 +601,6 @@ mod tests {
         }
     }
 
-    // ── sqlPolicyFromSettings ────────────────────────────────────────────────
 
     fn settings_from(json: serde_json::Value) -> Map<String, Value> {
         serde_json::from_value(json).expect("object")
@@ -687,7 +683,6 @@ mod tests {
         assert_eq!(sql_policy_from_settings(&Map::new()).max_rows, Some(1000.0));
     }
 
-    // ── parsePolicy ──────────────────────────────────────────────────────────
 
     #[test]
     fn legacy_read_only_flag_selects_presets() {
@@ -742,7 +737,6 @@ mod tests {
         assert_eq!(p.max_estimated_cost, None);
     }
 
-    // ── capRows ──────────────────────────────────────────────────────────────
 
     fn rows(n: usize) -> Vec<Value> {
         (0..n).map(|i| json!({"id": i})).collect()
@@ -769,7 +763,6 @@ mod tests {
         assert_eq!(r.limit, Some(10.0));
     }
 
-    // ── parsePostgresCost ────────────────────────────────────────────────────
 
     #[test]
     fn parses_plan_cost_and_row_estimate() {
@@ -798,7 +791,6 @@ mod tests {
         );
     }
 
-    // ── policy_description ───────────────────────────────────────────────────
 
     #[test]
     fn description_matches_the_ts_format() {
@@ -814,7 +806,6 @@ mod tests {
         );
     }
 
-    // ── end-to-end gate behaviour ────────────────────────────────────────────
 
     #[test]
     fn destructive_mode_still_denies_unidentified_statements_and_load_data() {

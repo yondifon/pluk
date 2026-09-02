@@ -86,7 +86,6 @@ pub fn spark_config(conn: &Integration) -> SparkCfg {
     }
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────
 
 pub fn assert_positional(value: &str, what: &str) -> Result<String, AdapterError> {
     let v = value.trim().to_string();
@@ -245,7 +244,6 @@ pub fn range_args(
     }
 }
 
-// ── process ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct SparkRunResult {

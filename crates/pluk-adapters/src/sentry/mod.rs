@@ -42,7 +42,6 @@ fn sentry_fields() -> Vec<ConfigField> {
     ]
 }
 
-// -- attachment helpers
 fn data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("PLUK_DATA_DIR") {
         PathBuf::from(dir)
@@ -150,7 +149,6 @@ async fn download_attachment(
     Ok((path, w))
 }
 
-// -- field maps
 fn list_projects_map() -> FieldMap {
     let mut m = FieldMap::new(
         &[

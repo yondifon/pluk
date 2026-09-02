@@ -195,7 +195,6 @@ impl ToSql for Param {
 const ENTRY_COLUMNS: &str = "id, connection_id, connection_name, sql, verdict, reason, categories, source, \
      result_json, row_count, response_text, group_id, group_name, database, created_at";
 
-// ── Activity feed ────────────────────────────────────────────────────────────
 //
 // Subscribers learn about every new or updated log row the moment it is
 // written, so the app can update its log views without polling. The feed is

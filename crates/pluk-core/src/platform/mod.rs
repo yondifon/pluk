@@ -28,9 +28,7 @@ mod imp;
 
 /// An MCP client whose config Pluk can write itself into.
 ///
-/// Mirrors the client list in the SwiftUI app (`MCPClient` in
-/// `swift/Sources/ConnectionDetailView.swift`). Codex is TOML; every other
-/// client reads JSON.
+/// Codex config is TOML; every other client reads JSON.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum McpClient {
     Opencode,

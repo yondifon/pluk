@@ -239,7 +239,6 @@ pub fn sql_tool_specs() -> Vec<ToolSpec> {
     ]
 }
 
-// ── Cancellation registry ────────────────────────────────────────────────────
 
 #[derive(Default)]
 pub struct SqlCancelRegistry {

@@ -1,9 +1,8 @@
 //! Timestamps as SQLite writes them.
 //!
 //! Every `created_at` column holds the output of SQLite's `datetime('now')`:
-//! UTC, formatted `yyyy-MM-dd HH:mm:ss`. The Swift app parses this format with
-//! an explicit POSIX locale and UTC zone because locale-default parsing breaks;
-//! this module does the equivalent work explicitly on the Rust side.
+//! UTC, formatted `yyyy-MM-dd HH:mm:ss`. This module parses the format
+//! with an explicit POSIX locale and UTC zone.
 //!
 //! Inserts keep relying on the columns' SQL defaults so rows carry the
 //! database's own clock — the same clock retention and range queries compare

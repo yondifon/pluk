@@ -18,7 +18,6 @@ use crate::pending::{
     is_ssh_stalled, record_connect_failure_msg, start_connect_attempt,
 };
 
-// ── Budgets ──────────────────────────────────────────────────────────────────
 
 pub const IDLE_MS: u64 = 5 * 60 * 1000;
 pub const TOOL_TIMEOUT_MS: u64 = 30_000;
@@ -30,7 +29,6 @@ pub const RECONNECT_DELAYS_MS: &[u64] = &[2_000, 5_000, 15_000, 30_000, 60_000];
 pub const RECONNECT_AUTH_DELAY_MS: u64 = 60_000;
 pub const MAX_RECONNECT_ATTEMPTS: usize = 12;
 
-// ── Pool key ─────────────────────────────────────────────────────────────────
 
 pub fn driver_key(owner_id: &str, integration_id: &str, database: Option<&str>) -> String {
     format!(
@@ -45,7 +43,6 @@ fn key_integration_id(key: &str) -> Option<&str> {
     key.split("::").nth(1)
 }
 
-// ── Driver abstraction ───────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]
 pub enum PoolError {
@@ -105,7 +102,6 @@ pub trait DriverFactory: Send + Sync {
     ) -> Result<Arc<dyn PoolDriver>, PoolError>;
 }
 
-// ── Entry ────────────────────────────────────────────────────────────────────
 
 struct Entry {
     driver: Arc<tokio::sync::Mutex<DriverState>>,
@@ -134,7 +130,6 @@ impl Entry {
     }
 }
 
-// ── Pool ─────────────────────────────────────────────────────────────────────
 
 pub struct DriverPool {
     entries: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Entry>>>>,
@@ -159,7 +154,6 @@ impl DriverPool {
         driver_key(owner_id, integration_id, database)
     }
 
-    // ── Owner tokens ─────────────────────────────────────────────────────
 
     pub fn open_owner(&self, owner_id: &str) -> CancellationToken {
         let mut map = self.owner_tokens.lock().unwrap();
@@ -170,7 +164,6 @@ impl DriverPool {
         self.owner_tokens.lock().unwrap().get(owner_id).cloned()
     }
 
-    // ── Per-query cancellation ───────────────────────────────────────────
 
     pub fn register_query_abort(&self, log_id: i64, owner_id: &str) -> CancellationToken {
         let token = CancellationToken::new();
@@ -202,7 +195,6 @@ impl DriverPool {
         }
     }
 
-    // ── Core ─────────────────────────────────────────────────────────────
 
     pub async fn get_driver(
         self: &Arc<Self>,

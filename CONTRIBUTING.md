@@ -2,26 +2,34 @@
 
 ## Dev setup
 
+Frontend:
+
 ```bash
-cd pluk
+cd ui
 bun install
-bun test
-bunx tsc --noEmit
 ```
 
-- `make dev` runs the Swift app from source (`swift run`), which starts the app and the bundled server.
-- `make install` builds and installs the full app bundle to `/Applications`.
+Server/Host (Rust):
+
+```bash
+cargo fetch
+cargo build --workspace
+```
+
+Then run `make dev` to start the full app, or test components individually:
+
+- `make dev` — starts the Tauri host and Vite dev server
+- `cargo run -p pluk-host` — runs the Tauri app directly
+- `cd crates/pluk-core && cargo run --bin pluk-server` — runs the MCP server standalone
 
 ## Tests and types
 
-`bun test` (from `pluk/`) must pass. `bunx tsc --noEmit` must be clean.
+Run `make test` to run all tests. The suite covers:
 
-The suite covers the adapters (GitHub CLI, Herd, Linear, Redis, Sentry, Slack,
-Spark, SSH, and the SQL family), the DB layer (SQLite, SSH tunneling and routing,
-timestamp handling), and the MCP transport (server, connection pool, integration
-grouping). The SQL policy engine (`mcp/policy.ts`) and the SSH command policy
-(`adapters/ssh/policy.ts`) get direct test coverage — they're what stands between
-an agent and a production database or shell, so changes there need tests.
+- **Adapters** (in Rust, `crates/pluk-core/src/adapters/`) — GitHub CLI, Linear, Redis, Sentry, Slack, Spark, SSH, and the SQL family
+- **Store layer** — SQLite, migrations, and concurrency handling
+- **Platform layer** — MCP config injection, tray/window management, update checking
+- **Policy engines** — SQL policy (`sql.rs`) and SSH command policy (`ssh/policy.rs`) get direct test coverage — they're what stands between an agent and a production database or shell, so changes there need tests
 
 ## Code style
 
@@ -37,12 +45,7 @@ short sentences. Doc strings and tool descriptions follow the same voice.
 
 ## Adding an adapter
 
-Adding a service means implementing the `Adapter` contract
-(`pluk/src/adapters/types.ts`) and registering it in `pluk/src/adapters/index.ts`.
-Nothing else — store, MCP transport, REST layer, or Swift UI — needs editing.
-Declaring `configFields` is enough for the macOS add/edit form to render that
-adapter's settings; the DB family lives in `adapters/sql/`, Linear in
-`adapters/linear/`.
+Adapters live in Rust now (`crates/pluk-core/src/adapters/`). The frontend auto-discovers adapters via the `/api/adapters` endpoint, so declaring config fields in the adapter is enough for the UI to render that adapter's settings.
 
 ## License
 

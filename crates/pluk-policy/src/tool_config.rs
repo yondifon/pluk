@@ -106,8 +106,6 @@ pub fn default_enabled_for_category(category: &str) -> bool {
     category == "read" || category == "inspect"
 }
 
-// ── Settings readers (typed accessors over the loose settings blob) ──────────
-
 pub(crate) fn read_string(settings: &Map<String, Value>, key: &str) -> Option<String> {
     settings.get(key).and_then(Value::as_str).map(Into::into)
 }

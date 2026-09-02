@@ -241,7 +241,6 @@ pub async fn run_command(
     .await
 }
 
-// ── forwards ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct ForwardInfo {

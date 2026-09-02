@@ -2,8 +2,6 @@
 //!
 //! The frontend applies the factor as a CSS variable / root font-size.
 //! The host owns the value, the persistence, and the menu enablement.
-//!
-//! Ported from `swift/Sources/AppZoom.swift`. No window transform.
 
 use std::path::PathBuf;
 
@@ -59,7 +57,7 @@ impl ZoomState {
         format!("{}%", (self.scale() * 100.0).round() as i64)
     }
 
-    /// "Actual Size" or "Actual Size (125%)" — matches Swift's validation.
+    /// "Actual Size" or "Actual Size (125%)".
     pub fn reset_title(&self) -> String {
         if self.is_default() {
             "Actual Size".to_string()
@@ -85,7 +83,6 @@ impl ZoomState {
     }
 }
 
-// ── Persistence ──────────────────────────────────────────────────────────
 
 /// Persisted zoom backed by either `pluk_store::Store` (`settings` table)
 /// or a plain file at `app_config_dir/zoom.json`. The file path is

@@ -414,7 +414,6 @@ mod tests {
         let _ = provider;
     }
 
-    // ── tunnel teardown ──────────────────────────────────────────────────
     // A leaked tunnel keeps a forwarded port and an `ssh` child alive, so every
     // way out of a tunnelled call has to close it.
 

@@ -9,7 +9,7 @@ use crate::error::Result;
 const DEFAULT_RETENTION_DAYS: i64 = 30;
 
 pub const LOG_RETENTION_DAYS_KEY: &str = "log_retention_days";
-/// The SwiftUI app's SSE resume high-water mark; owned by the app, stored here.
+/// SSE resume high-water mark for the log stream.
 pub const LOG_CURSOR_KEY: &str = "log_cursor";
 
 impl Store {

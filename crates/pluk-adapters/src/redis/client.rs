@@ -163,7 +163,6 @@ pub fn build_url(scheme: &str, host: &str, port: u16, db: i64, password: &str) -
     format!("{scheme}://{auth}{host}:{port}/{db}")
 }
 
-// ── lazy accessor with tunnel handling ───────────────────────────────────────
 
 pub struct RedisResource {
     pub url: String,

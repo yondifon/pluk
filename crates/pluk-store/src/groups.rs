@@ -18,8 +18,7 @@ pub struct GroupInput {
 }
 
 /// A partial update. `environment` is doubly optional so a scoped group can go
-/// back to unscoped (`Some(None)`), which the Swift app's full-row update can
-/// do today.
+/// back to unscoped (`Some(None)`).
 #[derive(Debug, Clone, Default)]
 pub struct GroupUpdate {
     pub name: Option<String>,

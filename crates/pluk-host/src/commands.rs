@@ -14,8 +14,6 @@ use crate::zoom::ZoomState;
 
 type CmdResult<T> = Result<T, String>;
 
-// ── Shared state managed by Tauri ─────────────────────────────────────
-
 pub struct HostState {
     pub store: std::sync::Arc<pluk_store::Store>,
     pub server: tokio::sync::Mutex<ServerHandle>,
@@ -24,8 +22,6 @@ pub struct HostState {
     pub shared: crate::server::SharedState,
     pub zoom: std::sync::Mutex<crate::zoom::PersistedZoom>,
 }
-
-// ── Zoom ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ZoomInfo {
@@ -82,8 +78,6 @@ pub fn zoom_reset(state: State<'_, HostState>) -> ZoomInfo {
     ZoomInfo::from(zoom.state())
 }
 
-// ── Frame ───────────────────────────────────────────────────────────────
-
 #[tauri::command]
 pub fn get_frame() -> Frame {
     frame::load(&frame::default_file_path())
@@ -95,8 +89,6 @@ pub fn set_frame(frame: Frame) -> CmdResult<Frame> {
     frame::save(&frame::default_file_path(), &clamped).map_err(|e| e.to_string())?;
     Ok(clamped)
 }
-
-// ── Integrations ───────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -246,8 +238,6 @@ pub fn delete_integration(state: State<'_, HostState>, id: String) -> CmdResult<
     Ok(did)
 }
 
-// ── Groups ─────────────────────────────────────────────────────────────
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupJson {
@@ -360,8 +350,6 @@ pub fn delete_group(state: State<'_, HostState>, id: String) -> CmdResult<bool> 
     Ok(did)
 }
 
-// ── Adapter catalog ────────────────────────────────────────────────────
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdapterInfo {
@@ -392,8 +380,6 @@ pub fn list_adapters(state: State<'_, HostState>) -> Vec<AdapterInfo> {
         })
         .collect()
 }
-
-// ── Health ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HealthEntry {
@@ -459,8 +445,6 @@ pub async fn test_connection(
         }
     }
 }
-
-// ── Logs ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -593,8 +577,6 @@ pub fn cancel_query(state: State<'_, HostState>, log_id: i64) -> bool {
     state.shared.cancels.cancel(log_id)
 }
 
-// ── MCP client config ──────────────────────────────────────────────────
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InjectResultJson {
     pub status: String,
@@ -691,15 +673,11 @@ pub fn list_installed_mcp_clients() -> Vec<String> {
         .collect()
 }
 
-// ── Reload ─────────────────────────────────────────────────────────────
-
 #[tauri::command]
 pub fn reload(state: State<'_, HostState>, owner_id: Option<String>) -> usize {
     let owners = state.shared.owners.clone();
     owners.reset_owners(owner_id.as_deref())
 }
-
-// ── Helpers for serialization tests ────────────────────────────────────
 
 /// Verify STEPS serializes stably as JSON numbers.
 #[cfg(test)]

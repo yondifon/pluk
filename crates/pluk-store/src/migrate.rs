@@ -427,7 +427,7 @@ mod tests {
         ] {
             assert!(groups.contains(name));
         }
-        // The legacy flag must stay populated-by-default for the Swift app.
+        // The legacy flag must stay populated-by-default for schema compatibility.
         let read_only_default: String = conn
             .query_row(
                 "SELECT dflt_value FROM pragma_table_info('integrations') WHERE name='read_only'",

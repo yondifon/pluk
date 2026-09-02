@@ -1,7 +1,4 @@
-//! MCP client config injection.
-//!
-//! Ports `swift/Sources/MCPConfigInjector.swift` and the client table plus
-//! snippet code from `swift/Sources/ConnectionDetailView.swift`.
+//! MCP client config injection across supported tools (Claude Code, opencode, Cursor, etc.).
 //!
 //! All transforms are pure String→String so they can be tested without touching
 //! real config files. File I/O is isolated to `inject`/`inject_many` which
@@ -16,7 +13,6 @@ use serde_json::Value;
 
 use crate::platform::{ConfigFormat, ConfigScope, McpClient, mcp_config_path};
 
-// ── Public types ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InjectResult {
@@ -93,7 +89,6 @@ pub struct FanOutResult {
     pub failed: Vec<String>,
 }
 
-// ── Snippet + entry object ─────────────────────────────────────────────────
 
 /// JSON value written into a client's config for `url`.
 pub fn entry_object(client: McpClient, url: &str) -> Value {
@@ -140,7 +135,6 @@ pub fn snippet(client: McpClient, key: &str, url: &str) -> String {
     }
 }
 
-// ── Public inject entry points ────────────────────────────────────────────
 
 /// Inject one client's config.
 pub fn inject(
@@ -182,7 +176,6 @@ pub fn inject_many(
     result
 }
 
-// ── JSON path ─────────────────────────────────────────────────────────────
 
 fn inject_json(
     path: &Path,
@@ -275,7 +268,6 @@ fn sort_value(value: &Value) -> Value {
     }
 }
 
-// ── JSONC sanitizer ───────────────────────────────────────────────────────
 
 pub fn sanitize_jsonc(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
@@ -372,7 +364,6 @@ fn strip_trailing_commas(text: &str) -> String {
     keep.into_iter().collect()
 }
 
-// ── TOML path ─────────────────────────────────────────────────────────────
 
 fn inject_toml(
     path: &Path,
@@ -411,7 +402,6 @@ pub fn toml_has_table(text: &str, header: &str) -> bool {
     text.lines().any(|line| line.trim() == header)
 }
 
-// ── File I/O helpers ──────────────────────────────────────────────────────
 
 fn backup_and_write(path: &Path, contents: &str, had_existing: bool) -> Result<(), InjectError> {
     if let Some(parent) = path.parent()
@@ -459,10 +449,9 @@ mod tests {
         tempfile::tempdir().expect("tempdir")
     }
 
-    // ── Entry shapes ──────────────────────────────────────────────────
 
     #[test]
-    fn entry_shapes_match_swift_table() {
+    fn entry_shapes_match_spec() {
         let url = "http://localhost:4242/mcp/token";
         assert_eq!(
             entry_object(McpClient::Opencode, url),
@@ -514,7 +503,6 @@ mod tests {
         assert!(s2.contains("\"serverUrl\""));
     }
 
-    // ── JSON: basic inject ────────────────────────────────────────────
 
     #[test]
     fn json_creates_file_when_missing() {
@@ -625,7 +613,6 @@ mod tests {
         assert!(v.get("mcpServers").is_none());
     }
 
-    // ── JSONC sanitizer ───────────────────────────────────────────────
 
     #[test]
     fn sanitize_preserves_slash_in_string() {
@@ -705,7 +692,6 @@ mod tests {
         assert!(!PathBuf::from(format!("{}.bak", path.display())).exists());
     }
 
-    // ── TOML ──────────────────────────────────────────────────────────
 
     #[test]
     fn toml_appends_when_absent() {
@@ -795,7 +781,6 @@ mod tests {
         assert!(matches!(res2, InjectResult::Added { .. }));
     }
 
-    // ── Fan-out result shape ──────────────────────────────────────────
 
     #[test]
     fn fan_out_result_holds_added_skipped_failed() {

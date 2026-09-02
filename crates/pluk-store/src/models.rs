@@ -1,9 +1,7 @@
-//! Typed rows for the shared `pluk.db` schema.
+//! Typed rows for the `pluk.db` schema.
 //!
 //! Column names are kept verbatim (including legacy ones like
-//! `groups.member_ids` and `integrations.read_only`) because this schema is a
-//! contract with two other writers: the TypeScript server (`pluk/src/store`)
-//! and the SwiftUI app (`swift/Sources/ConnectionStore.swift`).
+//! `groups.member_ids` and `integrations.read_only`) for compatibility.
 
 use std::fmt;
 
@@ -63,8 +61,7 @@ pub struct Integration {
     /// `None` only for rows written before environments existed; new rows
     /// always carry one (the column default is `development`).
     pub environment: Option<Environment>,
-    /// Legacy flag. The server ignores it; the Swift app still writes 0 and
-    /// the column must stay populated for the shared schema.
+    /// Legacy column; kept for schema compatibility.
     pub read_only: i64,
     /// Serialized [`QueryPolicy`](crate::codec::QueryPolicy) blob, passed
     /// through opaquely so unknown fields survive round trips untouched.

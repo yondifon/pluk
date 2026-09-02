@@ -4,7 +4,7 @@ DIST      := dist
 VERSION   := $(shell cat VERSION 2>/dev/null | tr -d ' \n')
 COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: dev deps build build-ui bundle bundle-unsigned bundle-signed publish _publish major minor fix check-publish-tools install test lint clean sync-version check-tauri swift-build swift-bundle help
+.PHONY: dev deps build build-ui bundle bundle-unsigned bundle-signed publish _publish major minor fix check-publish-tools install test lint clean sync-version check-tauri help
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:
@@ -19,9 +19,6 @@ help:
 	@printf "  make test             cargo test --workspace\n"
 	@printf "  make lint             cargo clippy + frontend typecheck\n"
 	@printf "  make clean            Remove dist/ and build artefacts\n"
-	@printf "Legacy Swift (fallback, not required for Rust):\n"
-	@printf "  make swift-build      Legacy Swift build (swift/ — do not run in agent)\n"
-	@printf "  make swift-bundle     Legacy Swift bundle (server + Swift app)\n"
 
 # ── Dev (Rust) ────────────────────────────────────────────────────────────────
 dev:
@@ -177,25 +174,9 @@ lint:
 	cargo clippy --workspace -- -D warnings
 	bun run --silent --cwd ui build 2>&1 | head -20
 
-# ── Legacy Swift (fallback) ────────────────────────────────────────────────
-# The Swift app stays buildable as the fallback until the Rust app reaches
-# parity. Do not run these in an agent sandbox — XCBBuildService gets EPERM.
-# A human with Xcode runs them locally.
-
-swift-build:
-	@printf "→ [legacy] building Swift app\n"
-	@printf "  (requires Xcode, not run in agent — see docs)\n"
-	cd swift && swift build -c release
-
-swift-bundle: swift-build
-	@printf "→ [legacy] assembling Pluk.app from Swift + bun server (old flow)\n"
-	@printf "  See git history before R23 for the full legacy bundle recipe.\n"
-	@false
-
 # ── Clean ───────────────────────────────────────────────────────────────────
 clean:
 	rm -rf $(DIST)
 	rm -rf target
 	rm -rf ui/dist
 	rm -rf ui/node_modules/.vite
-	cd swift && swift package clean 2>/dev/null || true

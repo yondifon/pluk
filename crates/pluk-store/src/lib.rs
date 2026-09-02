@@ -1,11 +1,8 @@
 //! SQLite persistence for Pluk.
 //!
 //! Owns the single `pluk.db` file: integrations, groups, the query audit log,
-//! settings, masked columns, and saved queries/commands. The file is a shared
-//! contract — the TypeScript server (`pluk/src/store/*`) and the SwiftUI app
-//! (`swift/Sources/ConnectionStore.swift`) still open it, so the schema moves
-//! only through the `user_version` migration ladder and never reshapes beyond
-//! what they expect.
+//! settings, masked columns, and saved queries/commands. The schema evolves
+//! only through the `user_version` migration ladder.
 //!
 //! Open a store against the platform location with [`Store::open_default`]
 //! (honors `PLUK_DATA_DIR`), or against any path with [`Store::open`] — tests
@@ -60,9 +57,7 @@ const PURGE_MIN_INTERVAL: Duration = Duration::from_secs(15 * 60);
 /// A handle to the Pluk SQLite database.
 ///
 /// Access is serialized behind a mutex: one writer thread at a time within
-/// this codebase. Cross-process concurrency (the SwiftUI app keeps the same
-/// file open) is handled by WAL journaling plus a busy timeout — see the
-/// journal-mode note in `docs/rust-rewrite.md`.
+/// this codebase. WAL journaling plus a busy timeout handle any concurrent access.
 pub struct Store {
     conn: Mutex<rusqlite::Connection>,
     last_purge: Mutex<Option<Instant>>,
@@ -117,13 +112,10 @@ impl Store {
 
 /// Connection-level settings applied to every open.
 fn configure(conn: &mut rusqlite::Connection) -> Result<()> {
-    // A reader must not fail outright while another process holds a write lock
-    // (the Swift app shares this file); wait instead, briefly.
+    // Wait instead of failing when a write lock is held, avoiding spurious errors.
     conn.busy_timeout(Duration::from_millis(5_000))?;
-    // Write-ahead logging: readers never block the writer across processes,
-    // which is exactly this file's access pattern. The mode is persistent in
-    // the database header — once set here, the Swift app's plain sqlite3_open
-    // picks it up unchanged.
+    // Write-ahead logging: readers never block the writer. The mode is persistent in
+    // the database header.
     let _journal: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
     // With WAL, NORMAL fsyncs at checkpoints rather than every commit: safe
     // against application crashes; trades away durability of the final seconds

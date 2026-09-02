@@ -9,8 +9,6 @@
 //! command and event surface the window renders from. A build that ships
 //! without a public key or with the placeholder endpoint stays `Disabled`: no
 //! network, no banner, no toast.
-//!
-//! See `docs/release.md` for how the manifest and artifacts are produced.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -40,7 +38,6 @@ pub fn current_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-// ── Configuration ─────────────────────────────────────────────────────────
 
 /// Runtime view of whether the updater is configured.
 ///
@@ -87,9 +84,7 @@ impl UpdaterConfig {
         }
     }
 
-    /// Whether Tauri's updater has something to do. Mirrors Swift's
-    /// `isConfigured` — baked commit + repo path both present and repo exists.
-    /// Here: pubkey non-empty and at least one real endpoint.
+    /// Whether the updater is configured: pubkey non-empty and at least one real endpoint.
     pub fn is_configured(&self) -> bool {
         if self.pubkey.trim().is_empty() {
             return false;
@@ -110,7 +105,6 @@ impl UpdaterConfig {
     }
 }
 
-// ── State machine ─────────────────────────────────────────────────────────
 
 /// Why an update check or install failed. The frontend uses `kind` to decide
 /// whether to show a toast (`Download`, `Signature`, `Other`) or degrade
@@ -132,7 +126,7 @@ pub enum FailureKind {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum UpdateState {
     /// Updater not configured (dev run, placeholder endpoint/pubkey).
-    /// No banner, no toast, no crash — matches Swift dev-run disabled path.
+    /// No banner, no toast, no crash.
     Disabled {
         reason: String,
     },
@@ -195,7 +189,6 @@ pub struct UpdateInfo {
     pub pub_date: Option<String>,
 }
 
-// ── Updater handle (shared state) ─────────────────────────────────────────
 
 /// Thread-safe updater handle owned by Tauri's managed state.
 /// Frontend reads via `get_update_state`; backend drives transitions and
@@ -237,7 +230,6 @@ impl Updater {
         *self.state.lock().expect("updater state") = next;
     }
 
-    // ── Pure transitions — no I/O, fully testable ─────────────────────
 
     /// Begin a check. No-op when disabled or already checking/updating.
     /// Returns true if a check should actually be performed.
@@ -351,7 +343,6 @@ impl Updater {
     }
 }
 
-// ── Driving the plugin ────────────────────────────────────────────────────
 
 fn emit_state<R: Runtime>(app: &AppHandle<R>, updater: &Updater) {
     if let Ok(payload) = serde_json::to_value(updater.state()) {
@@ -490,7 +481,6 @@ pub async fn run_install<R: Runtime>(app: AppHandle<R>) {
     }
 }
 
-// ── Tauri command surface ─────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn get_update_state(updater: tauri::State<'_, Updater>) -> serde_json::Value {
@@ -507,7 +497,6 @@ pub async fn install_update<R: Runtime>(app: AppHandle<R>) {
     run_install(app).await;
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

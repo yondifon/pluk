@@ -28,7 +28,6 @@ use crate::instructions::{InstructionParts, build_instructions};
 use crate::tool_host::{BoxFuture, ToolHandler, ToolHost, ToolRegistration, object_schema};
 use crate::tool_spec::ToolSpec;
 
-// ── Tool outputs ─────────────────────────────────────────────────────────────
 
 /// What a tool's run function produced.
 ///
@@ -95,7 +94,6 @@ fn shape_output(output: ActionOutput) -> RunOutcome {
     }
 }
 
-// ── One tool ─────────────────────────────────────────────────────────────────
 
 type DetailFn = Arc<dyn Fn(&Value) -> String + Send + Sync>;
 type CommandFn = Arc<dyn Fn(&Value, &Map<String, Value>) -> String + Send + Sync>;
@@ -211,7 +209,6 @@ impl ToolSpec {
     }
 }
 
-// ── The spec ─────────────────────────────────────────────────────────────────
 
 pub type ClientFn<C> = Box<dyn Fn(&Integration, &str) -> Result<C, AdapterError> + Send + Sync>;
 pub type TestConnectionFn =
@@ -333,7 +330,6 @@ impl<C> ActionAdapterSpec<C> {
     }
 }
 
-// ── The built adapter ────────────────────────────────────────────────────────
 
 /// A complete action adapter: gating, logging, instructions and registration
 /// supplied by the factory; only the spec's declarations vary per service.

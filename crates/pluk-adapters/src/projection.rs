@@ -84,7 +84,6 @@ impl std::fmt::Display for OnlyError {
 
 impl std::error::Error for OnlyError {}
 
-// ── Path projection ──────────────────────────────────────────────────────────
 
 /// One node of the trie built from dot paths; empty children mean a leaf.
 struct PathNode(BTreeMap<String, PathNode>);
@@ -133,7 +132,6 @@ pub fn pick_paths(value: &Value, paths: &[String]) -> Value {
     project_tree(value, &build_tree(paths))
 }
 
-// ── Selection application ────────────────────────────────────────────────────
 
 fn unknown_field_error(entry: &str, map: &FieldMap) -> OnlyError {
     let mut message = format!(
@@ -214,7 +212,6 @@ pub fn apply_only(
     }
 }
 
-// ── Shared argument definition + extractor ───────────────────────────────────
 
 /// The `only` parameter description shared by every read tool, so all tools
 /// explain the convention identically (including their own presets).

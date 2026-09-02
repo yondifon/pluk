@@ -45,8 +45,6 @@ fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
     (status, Json(value)).into_response()
 }
 
-// ── Fixed REST routes ────────────────────────────────────────────────────────
-
 /// GET /api/adapters — the adapter catalog for the UI to render forms
 /// dynamically. Definitions only; never stored secret values.
 async fn adapters_catalog(State(state): State<AppState>) -> Response {
@@ -252,8 +250,6 @@ async fn health_report(State(state): State<AppState>) -> Response {
     json_response(StatusCode::OK, serde_json::json!({ "health": report }))
 }
 
-// ── Adapter-supplied APIs ────────────────────────────────────────────────────
-
 async fn adapter_apis_or_not_found(
     State(state): State<AppState>,
     method: Method,
@@ -329,8 +325,6 @@ fn api_response(response: pluk_adapters::ApiResponse) -> Response {
 fn not_found() -> Response {
     (StatusCode::NOT_FOUND, "Not found").into_response()
 }
-
-// ── MCP endpoint ─────────────────────────────────────────────────────────────
 
 /// /mcp/:token — MCP streamable HTTP for AI agents. The token resolves to a
 /// single integration or a group; everything long-lived keys on that owner.

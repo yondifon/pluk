@@ -26,7 +26,6 @@ use pluk_store::{LogDraft, LogGroup, LogUpdate, QueryResult, Store, Verdict};
 
 use crate::error::AdapterError;
 
-// ── MCP response shaping ─────────────────────────────────────────────────────
 
 /// One text block of an MCP tool response.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -77,7 +76,6 @@ impl ToolResult {
     }
 }
 
-// ── Gate inputs ──────────────────────────────────────────────────────────────
 
 /// Structured metadata describing one gated call.
 #[derive(Debug, Clone)]
@@ -275,7 +273,6 @@ pub fn cancelled_when_message_contains(
     }
 }
 
-// ── The lifecycle ────────────────────────────────────────────────────────────
 
 /// Assemble a draft carrying everything one call records up front.
 fn draft_for(
