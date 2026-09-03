@@ -1,0 +1,376 @@
+@font-face {
+  font-family: "Syne";
+  src: url("fonts/syne-var.woff2") format("woff2-variations");
+  font-weight: 400 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/inter-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Space Mono";
+  src: url("fonts/space-mono-700.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  --canvas: #fffdf5;
+  --ink: #000000;
+
+  /* Three accents, one job each. Gold is the brand's own hue and carries the
+     mark and the primary action; green fills the single chapter band; blue is
+     focus and appears nowhere else. */
+  --gold: #e0a23b;
+  --green: #88d498;
+  --focus: #2f6fed;
+
+  --border: 3px solid #000;
+  --shadow-sm: 3px 3px 0 0 #000;
+  --shadow: 5px 5px 0 0 #000;
+  --shadow-hover: 8px 8px 0 0 #000;
+  --radius: 0;
+
+  --display: "Syne", "Trebuchet MS", sans-serif;
+  --body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "Space Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--body);
+  font-size: 1.0625rem;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--canvas);
+  text-wrap: pretty;
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-family: var(--display);
+}
+
+p {
+  margin: 0;
+}
+
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+::selection {
+  background: var(--gold);
+  color: var(--ink);
+}
+
+/* The ring must be seen against a 3px black border on one side and the
+   off-white canvas on the other, so it clears 3:1 on both. */
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.skip {
+  position: fixed;
+  top: 1rem;
+  left: 1rem;
+  z-index: 100;
+  transform: translateY(-250%);
+  background: var(--gold);
+  color: var(--ink);
+  border: var(--border);
+  box-shadow: var(--shadow);
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 0.9375rem;
+  padding: 0.75rem 1.25rem;
+  text-decoration: none;
+}
+
+.skip:focus-visible {
+  transform: translateY(0);
+}
+
+.wrap {
+  width: 100%;
+  max-width: 64rem;
+  margin-inline: auto;
+  padding-inline: clamp(1.25rem, 4vw, 3rem);
+}
+
+/* Hero */
+
+.hero {
+  padding-block: clamp(3.5rem, 9vw, 6rem) clamp(4rem, 9vw, 6.5rem);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+.brand__mark {
+  display: block;
+  width: auto;
+  height: 1.75rem;
+  color: currentColor;
+}
+
+.eyebrow {
+  margin-block-start: clamp(2.5rem, 6vw, 4rem);
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 0.8125rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin-block-start: 1.25rem;
+  font-weight: 800;
+  font-size: clamp(2.75rem, 7.6vw, 5.25rem);
+  line-height: 0.95;
+  letter-spacing: -0.035em;
+}
+
+.lede {
+  margin-block-start: 1.75rem;
+  max-width: 46ch;
+  font-size: 1.1875rem;
+  line-height: 1.55;
+}
+
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.25rem 1.5rem;
+  margin-block-start: 2.5rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  background: var(--gold);
+  color: var(--ink);
+  border: var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 1.0625rem;
+  line-height: 1;
+  padding: 1.0625rem 1.75rem;
+  text-decoration: none;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover {
+    transform: translate(-3px, -3px);
+    box-shadow: var(--shadow-hover);
+  }
+}
+
+.btn:active {
+  transform: translate(5px, 5px);
+  box-shadow: none;
+}
+
+.cta-meta {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.note {
+  margin-block-start: 1.75rem;
+  max-width: 46ch;
+  font-size: 1rem;
+}
+
+/* The one chapter band: a change of fill and a hard edge, not whitespace. */
+
+.band {
+  background: var(--green);
+  border-top: var(--border);
+  border-bottom: var(--border);
+  padding-block: clamp(3rem, 7vw, 4.5rem) clamp(3.5rem, 8vw, 5rem);
+}
+
+h2 {
+  font-weight: 800;
+  font-size: clamp(1.875rem, 4.4vw, 2.75rem);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin-block-start: clamp(2rem, 4vw, 2.75rem);
+}
+
+.card {
+  background: var(--canvas);
+  border: var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.5rem;
+}
+
+/* One dominant block, so the chapter has an entry point rather than a wall of
+   equal boxes. */
+.card--lead,
+.card--wide {
+  grid-column: span 2;
+}
+
+.card p {
+  margin-block-start: 1rem;
+  font-size: 1rem;
+}
+
+.card--lead p {
+  font-size: 1.1875rem;
+  line-height: 1.5;
+}
+
+.tag {
+  display: inline-block;
+  background: var(--ink);
+  color: var(--canvas);
+  border: var(--border);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 0.75rem;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  padding: 0.5rem 0.625rem;
+}
+
+/* Footer — the loudest block on the page. */
+
+.site-footer {
+  background: var(--ink);
+  color: var(--canvas);
+  padding-block: clamp(3rem, 7vw, 4.5rem) clamp(3rem, 6vw, 4rem);
+}
+
+.footer-brand {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: clamp(3rem, 9vw, 5.5rem);
+  line-height: 0.9;
+  letter-spacing: -0.04em;
+}
+
+.footer-brand .brand__mark {
+  height: clamp(2.25rem, 6.5vw, 4rem);
+}
+
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  margin-block-start: clamp(2rem, 5vw, 3rem);
+  margin-inline-start: -0.5rem;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 0.9375rem;
+}
+
+/* These are standalone links rather than links inside a sentence, so they owe
+   the 24px target rather than taking the inline exception. */
+.footer-links a {
+  display: inline-block;
+  padding: 0.3125rem 0.5rem;
+}
+
+.footer-small {
+  margin-block-start: 1.5rem;
+  font-size: 0.875rem;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  a:hover {
+    background: var(--ink);
+    color: var(--canvas);
+    text-decoration-color: transparent;
+  }
+
+  .site-footer a:hover {
+    background: var(--canvas);
+    color: var(--ink);
+  }
+
+  .btn:hover,
+  .skip:hover {
+    background: var(--gold);
+    color: var(--ink);
+  }
+}
+
+@media (max-width: 760px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .card--lead,
+  .card--wide {
+    grid-column: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  /* Colour and border feedback stay; only the movement goes. */
+  .btn:hover,
+  .btn:active {
+    transform: none;
+  }
+}
