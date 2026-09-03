@@ -13,6 +13,9 @@ pub enum DangerousConstruct {
     AttachDatabase,
     PgReadFile,
     LoImport,
+    XpCmdshell,
+    BulkInsert,
+    Openrowset,
 }
 
 impl DangerousConstruct {
@@ -25,7 +28,14 @@ impl DangerousConstruct {
             DangerousConstruct::AttachDatabase => "attach-database",
             DangerousConstruct::PgReadFile => "pg-read-file",
             DangerousConstruct::LoImport => "lo-import",
+            DangerousConstruct::XpCmdshell => "xp-cmdshell",
+            DangerousConstruct::BulkInsert => "bulk-insert",
+            DangerousConstruct::Openrowset => "openrowset",
         }
+    }
+
+    pub fn always_blocked(&self) -> bool {
+        matches!(self, Self::XpCmdshell | Self::BulkInsert | Self::Openrowset)
     }
 }
 
@@ -48,6 +58,9 @@ static PATTERNS: LazyLock<Vec<(Regex, DangerousConstruct)>> = LazyLock::new(|| {
         ),
         (r"(?i)\bpg_read_file\b", DangerousConstruct::PgReadFile),
         (r"(?i)\blo_import\b", DangerousConstruct::LoImport),
+        (r"(?i)\bxp_cmdshell\b", DangerousConstruct::XpCmdshell),
+        (r"(?i)\bbulk\s+insert\b", DangerousConstruct::BulkInsert),
+        (r"(?i)\bopenrowset\b", DangerousConstruct::Openrowset),
     ];
     rules
         .iter()

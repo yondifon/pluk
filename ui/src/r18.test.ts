@@ -121,6 +121,13 @@ describe("three health states rendering distinctly", () => {
   });
 });
 
+describe("database adapter glyphs", () => {
+  test("MSSQL has a first-class color and abbreviation", () => {
+    expect(adapterColor("mssql")).toBe("#6a7d8f");
+    expect(adapterAbbrev("mssql")).toBe("MS");
+  });
+});
+
 describe("zoom applying to type scale", () => {
   test("scaledSize multiplies base by zoom", () => {
     // base body is 13

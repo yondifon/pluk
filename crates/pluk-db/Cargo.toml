@@ -1,6 +1,6 @@
 [package]
 name = "pluk-db"
-description = "Database driver abstraction for Pluk — Postgres and MySQL engines"
+description = "Database driver abstraction for Pluk — Postgres, MySQL, MSSQL, and SQLite engines"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -31,10 +31,15 @@ tempfile = "3"
 # MySQL
 sqlx = { version = "0.8", default-features = false, features = ["mysql", "runtime-tokio-rustls", "tls-rustls"], optional = true }
 
+# Microsoft SQL Server
+tiberius = { version = "0.12.3", default-features = false, features = ["rustls", "tds73", "tokio"], optional = true }
+futures-util = { version = "0.3", optional = true }
+
 [features]
-default = ["postgres", "mysql"]
+default = ["postgres", "mysql", "mssql"]
 postgres = ["dep:deadpool-postgres", "dep:tokio-postgres", "dep:postgres-native-tls", "dep:native-tls", "dep:chrono", "dep:uuid"]
 mysql = ["dep:sqlx"]
+mssql = ["dep:tiberius", "dep:futures-util"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }

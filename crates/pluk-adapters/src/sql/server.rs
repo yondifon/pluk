@@ -35,6 +35,7 @@ pub fn sql_label(type_name: &str) -> String {
     match type_name {
         "postgres" => "PostgreSQL".to_string(),
         "mysql" => "MySQL".to_string(),
+        "mssql" => "Microsoft SQL Server".to_string(),
         "sqlite" => "SQLite".to_string(),
         _ => type_name.to_string(),
     }
@@ -45,6 +46,8 @@ pub fn sql_agent_hint(type_name: &str) -> String {
         "Use this to query and inspect a SQLite database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT before wider queries.".to_string()
     } else if type_name == "mysql" {
         "Use this to query and inspect a MySQL database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT for production data.".to_string()
+    } else if type_name == "mssql" {
+        "Use this to query and inspect a Microsoft SQL Server database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with TOP or OFFSET/FETCH for production data.".to_string()
     } else {
         "Use this to query and inspect a PostgreSQL database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT for production data.".to_string()
     }
@@ -290,7 +293,7 @@ fn supports_db_arg(conn: &Integration, pinned: Option<&String>) -> bool {
     pinned.is_none() && conn.r#type != "sqlite"
 }
 fn supports_schema_arg(conn: &Integration) -> bool {
-    conn.r#type == "postgres"
+    matches!(conn.r#type.as_str(), "postgres" | "mssql")
 }
 
 fn resolve_schema(requested: Option<&str>) -> Result<Option<String>, String> {
@@ -430,6 +433,22 @@ fn sql_config_from(conn: &Integration, database_override: Option<&str>) -> SqlCo
         .get("ssl_key_path")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    cfg.encrypt = conn.config.get("encrypt").and_then(Value::as_bool);
+    if cfg.encrypt.is_none() {
+        cfg.encrypt = conn
+            .config
+            .get("encrypt")
+            .and_then(Value::as_str)
+            .and_then(|s| s.parse().ok());
+    }
+    cfg.trust_cert = conn.config.get("trust_cert").and_then(Value::as_bool);
+    if cfg.trust_cert.is_none() {
+        cfg.trust_cert = conn
+            .config
+            .get("trust_cert")
+            .and_then(Value::as_str)
+            .and_then(|s| s.parse().ok());
+    }
     let use_ssh_val = conn.config.get("use_ssh").map(|v| match v {
         Value::Bool(b) => {
             if *b {
@@ -768,7 +787,7 @@ pub fn register_sql_server(
         if supports_db {
             props.insert("database".into(), Value::Object({ let mut m=Map::new(); m.insert("type".into(), Value::String("string".into())); m.insert("description".into(), Value::String("Database to run against on this server. This connection has no fixed database, so name the one to use (see list_schemas). Access is limited to databases the connection's user was granted.".into())); m }));
         }
-        props.insert("params".into(), Value::Object({ let mut m=Map::new(); m.insert("type".into(), Value::String("array".into())); m.insert("description".into(), Value::String(if conn.r#type=="postgres" {"Values to bind to $1, $2, … placeholders in the SQL. Prefer this over inlining values.".to_string()} else {"Values to bind to ? placeholders in the SQL. Prefer this over inlining values.".to_string()})); m }));
+        props.insert("params".into(), Value::Object({ let mut m=Map::new(); m.insert("type".into(), Value::String("array".into())); m.insert("description".into(), Value::String(if conn.r#type=="postgres" {"Values to bind to $1, $2, … placeholders in the SQL. Prefer this over inlining values.".to_string()} else if conn.r#type=="mssql" {"Values to bind to @P1, @P2, … placeholders in the SQL. Prefer this over inlining values.".to_string()} else {"Values to bind to ? placeholders in the SQL. Prefer this over inlining values.".to_string()})); m }));
         props.insert(
             "limit".into(),
             Value::Object({

@@ -192,6 +192,23 @@ pub async fn create_driver(mut opts: CreateDriverOpts) -> Result<DriverWithTunne
             #[cfg(not(feature = "mysql"))]
             return Err(DriverError::UnsupportedType("mysql".into()));
         }
+        "mssql" => {
+            #[cfg(feature = "mssql")]
+            {
+                let d = crate::mssql::live::MsSqlDriver::new(
+                    effective_host,
+                    effective_port,
+                    opts.cfg.user.clone(),
+                    opts.cfg.password.clone(),
+                    opts.cfg.database.clone(),
+                    opts.cfg.encrypt.unwrap_or(true),
+                    opts.cfg.trust_cert.unwrap_or(false),
+                );
+                Box::new(d)
+            }
+            #[cfg(not(feature = "mssql"))]
+            return Err(DriverError::UnsupportedType("mssql".into()));
+        }
         other => return Err(DriverError::UnsupportedType(other.to_string())),
     };
 
