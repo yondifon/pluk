@@ -68,6 +68,7 @@ pub fn default_registry(
     }
     registry.register(crate::ssh::SshAdapter::new(store.clone()))?;
     registry.register(crate::redis::RedisAdapter::new(store.clone()))?;
+    registry.register(crate::mongodb::MongoAdapter::new(store.clone()))?;
     registry.register(crate::slack::SlackAdapter::new(store.clone()))?;
     registry.register(crate::linear::LinearAdapter::new(store.clone()))?;
     registry.register(crate::sentry::SentryAdapter::new(store.clone()))?;
