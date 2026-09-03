@@ -28,6 +28,12 @@ urlencoding = "2"
 # which locks out every managed provider. Reuses the rustls stack reqwest and
 # sqlx already build.
 redis = { version = "0.32", features = ["tokio-comp", "tokio-rustls-comp"] }
+# rustls plus the SRV resolver `mongodb+srv://` needs; `openssl-tls` stays off
+# so no build here pulls in OpenSSL. bson 3 rather than the default bson 2,
+# which forces `serde_json/preserve_order` on the whole workspace and would
+# reorder every JSON object Pluk already emits.
+mongodb = { version = "3", default-features = false, features = ["compat-3-3-0", "bson-3", "rustls-tls", "dns-resolver"] }
+bson = { version = "3", features = ["serde_json-1"] }
 
 [dev-dependencies]
 tempfile = "3"

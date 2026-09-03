@@ -2,7 +2,7 @@
 
 Pluk turns the services you already use — databases, [Linear](https://linear.app), and more — into local [MCP](https://modelcontextprotocol.io) endpoints, so AI tools can use them safely from your own machine. Nothing leaves your laptop: the server runs on `localhost`, integrations are stored locally, and a per-integration policy engine keeps agents in bounds.
 
-Each service is a pluggable **adapter**. Pluk ships with database adapters (Postgres / MySQL / SQLite) and a Linear adapter; adding another is one module — no changes to the app, server, or UI.
+Each service is a pluggable **adapter**. Pluk ships with database adapters (Postgres / MySQL / SQLite / MongoDB) and a Linear adapter; adding another is one module — no changes to the app, server, or UI.
 
 It ships as a macOS menu bar app with an embedded server. You add an integration in the UI, copy its MCP URL, and paste it into your AI client.
 
@@ -70,7 +70,7 @@ The server listens on `http://localhost:4242`. Health check: `curl http://localh
 
 ## Use it
 
-1. Open Pluk from the menu bar and add an integration. Pick a type — a database (host, port, credentials, optional SSH and read-only flag) or Linear (API key) — and the form shows just that adapter's settings.
+1. Open Pluk from the menu bar and add an integration. Pick a type — a database (host, port, credentials, optional SSH and read-only flag), MongoDB (connection string), or Linear (API key) — and the form shows just that adapter's settings.
 2. Test the integration from the detail view.
 3. Copy its MCP URL — one URL per integration, so each agent only sees what you intend.
 4. Add it to your MCP client. Examples:
@@ -110,6 +110,7 @@ Every integration carries its own policy, and all access is recorded in a local 
 
 - **Databases** — a SQL policy engine classifies each statement. Treat production as read-heavy: prefer `SELECT`, add explicit `LIMIT`s, avoid broad scans and writes. Enable **read-only mode** and Pluk blocks write statements; Postgres also uses short connect/query timeouts so failed tunnels don't hang the UI.
 - **Microsoft SQL Server** — use `TOP` or `OFFSET/FETCH` instead of `LIMIT`; `explain_query` uses SQL Server `SHOWPLAN_TEXT` and does not execute the query.
+- **MongoDB** — reading documents and inspecting collections is on; inserting, updating and deleting stay off until you turn them on. Queries that run server-side JavaScript or write into another collection are refused, an update or delete needs a filter, and one read returns at most 1000 documents.
 - **Linear** (and other API adapters) — a coarse read/write policy. Read-only blocks mutating actions (create issue, comment); read & write allows them.
 
 ### SSH and Cloudflare Access

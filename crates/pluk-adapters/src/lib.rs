@@ -14,6 +14,7 @@ mod gate;
 pub mod github_cli;
 mod instructions;
 pub mod linear;
+pub mod mongodb;
 mod projection;
 pub mod redis;
 mod registry;
