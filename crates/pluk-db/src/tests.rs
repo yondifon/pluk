@@ -172,6 +172,15 @@ mod tests {
         assert!(matches!(err, DriverError::Cancelled));
     }
 
+    #[test]
+    fn mssql_uses_sql_server_default_port() {
+        let cfg = crate::config::SqlConfig {
+            r#type: "mssql".into(),
+            ..Default::default()
+        };
+        assert_eq!(cfg.effective_port(), 1433);
+    }
+
     #[tokio::test]
     async fn ssh_seam_rewrites_host_port() {
         struct FakeTunnel;

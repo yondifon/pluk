@@ -9,6 +9,7 @@ pub enum Dialect {
     PostgreSQL,
     MySQL,
     SQLite,
+    MSSQL,
 }
 
 impl Dialect {
@@ -18,6 +19,7 @@ impl Dialect {
             Dialect::PostgreSQL => &sqlparser::dialect::PostgreSqlDialect {},
             Dialect::MySQL => &sqlparser::dialect::MySqlDialect {},
             Dialect::SQLite => &sqlparser::dialect::SQLiteDialect {},
+            Dialect::MSSQL => &sqlparser::dialect::MsSqlDialect {},
         }
     }
 }
@@ -28,6 +30,7 @@ pub fn dialect_for(db_type: &str) -> Dialect {
         "postgres" => Dialect::PostgreSQL,
         "mysql" => Dialect::MySQL,
         "sqlite" => Dialect::SQLite,
+        "mssql" => Dialect::MSSQL,
         _ => Dialect::PostgreSQL,
     }
 }
@@ -41,6 +44,7 @@ mod tests {
         assert_eq!(dialect_for("postgres"), Dialect::PostgreSQL);
         assert_eq!(dialect_for("mysql"), Dialect::MySQL);
         assert_eq!(dialect_for("sqlite"), Dialect::SQLite);
+        assert_eq!(dialect_for("mssql"), Dialect::MSSQL);
     }
 
     #[test]

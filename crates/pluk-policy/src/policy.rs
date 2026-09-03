@@ -273,16 +273,31 @@ pub fn evaluate(sql: &str, policy: &QueryPolicy, dialect: Dialect) -> EvalResult
         );
     }
 
-    if let Some(dangerous) = result.dangerous
-        && !policy.allow_filesystem
-    {
+    if matches!(dialect, Dialect::MSSQL) && result.has_go_batch {
         return denied(
-            format!(
-                "Filesystem/RCE construct '{}' is blocked on this connection.",
-                dangerous.as_str()
-            ),
+            "GO batches are blocked. Submit one SQL statement at a time.".to_string(),
             cats,
         );
+    }
+
+    if let Some(dangerous) = result.dangerous {
+        let mssql_only = matches!(
+            dangerous,
+            crate::dangerous::DangerousConstruct::XpCmdshell
+                | crate::dangerous::DangerousConstruct::BulkInsert
+                | crate::dangerous::DangerousConstruct::Openrowset
+        );
+        if (!mssql_only || matches!(dialect, Dialect::MSSQL))
+            && (!policy.allow_filesystem || dangerous.always_blocked())
+        {
+            return denied(
+                format!(
+                    "Filesystem/RCE construct '{}' is blocked on this connection.",
+                    dangerous.as_str()
+                ),
+                cats,
+            );
+        }
     }
 
     for cat in &result.categories {
@@ -506,6 +521,20 @@ mod tests {
 
         let r = eval("SELECT * FROM t INTO OUTFILE '/tmp/x'", &locked, "mysql");
         assert!(!r.ok);
+    }
+
+    #[test]
+    fn mssql_server_capabilities_stay_blocked_even_when_filesystem_is_allowed() {
+        let policy = QueryPolicy::preset(PresetName::Unrestricted).expect("exists");
+        for sql in [
+            "EXEC xp_cmdshell 'whoami'",
+            "BULK INSERT users FROM '/tmp/users.csv'",
+            "SELECT * FROM OPENROWSET(BULK '/tmp/users.csv')",
+        ] {
+            let result = eval(sql, &policy, "mssql");
+            assert!(!result.ok, "{sql} must be blocked");
+        }
+        assert!(!eval("SELECT 1\nGO\nSELECT 2", &policy, "mssql").ok);
     }
 
     #[test]

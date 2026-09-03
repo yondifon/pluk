@@ -4,6 +4,7 @@ import { adapterLogo } from "./adapterLogo";
 export const adapterColors: Record<string, string> = {
   postgres: "#4d75a8", // 0.30,0.46,0.66
   mysql: "#c78c33", // 0.78,0.55,0.20
+  mssql: "#6a7d8f",
   sqlite: "#73808f", // 0.45,0.50,0.56
   linear: "#5e6ad2", // 0.37,0.42,0.82 approx Linear indigo
   sentry: "#7d6bc7", // 0.49,0.42,0.78
@@ -24,6 +25,8 @@ export function adapterAbbrev(type: string): string {
       return "PG";
     case "mysql":
       return "MY";
+    case "mssql":
+      return "MS";
     case "sqlite":
       return "LT";
     default:
@@ -91,6 +94,6 @@ export function typeBadge(type: string, label: string): HTMLElement {
     return badge;
   }
 
-  badge.textContent = label.slice(0, 2).toUpperCase();
+  badge.textContent = type === "mssql" ? adapterAbbrev(type) : label.slice(0, 2).toUpperCase();
   return badge;
 }

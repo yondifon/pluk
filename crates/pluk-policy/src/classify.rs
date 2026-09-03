@@ -23,6 +23,7 @@ pub struct ClassifyResult {
     pub statement_count: usize,
     pub has_update_or_delete_without_where: bool,
     pub dangerous: Option<DangerousConstruct>,
+    pub has_go_batch: bool,
 }
 
 /// Classify a SQL string: attempt a full AST parse for the dialect and fall
@@ -33,6 +34,7 @@ pub struct ClassifyResult {
 /// input) is denied rather than allowed.
 pub fn classify(sql: &str, dialect: Dialect) -> ClassifyResult {
     let dangerous = crate::dangerous::scan_dangerous(sql);
+    let has_go_batch = crate::keywords::has_go_batch(sql);
 
     let mut categories = Vec::new();
     let mut has_update_or_delete_without_where = false;
@@ -74,6 +76,7 @@ pub fn classify(sql: &str, dialect: Dialect) -> ClassifyResult {
         has_update_or_delete_without_where,
         categories,
         dangerous,
+        has_go_batch,
     }
 }
 
@@ -298,5 +301,30 @@ mod tests {
         assert_eq!(r.dangerous, Some(DangerousConstruct::PgReadFile));
         let r = classify("SELECT 1", Dialect::PostgreSQL);
         assert_eq!(r.dangerous, None);
+    }
+
+    #[test]
+    fn mssql_statements_use_tsql_dialect() {
+        assert_eq!(cats("SELECT TOP (10) * FROM users", Dialect::MSSQL), vec![Some(Select)]);
+        let update = classify("UPDATE users SET active = 0", Dialect::MSSQL);
+        assert!(update.has_update_or_delete_without_where);
+        assert_eq!(cats("UPDATE users SET active = 0 WHERE id = 1", Dialect::MSSQL), vec![Some(Update)]);
+    }
+
+    #[test]
+    fn mssql_batches_and_server_capabilities_are_detected() {
+        assert!(classify("SELECT 1\nGO\nSELECT 2", Dialect::MSSQL).has_go_batch);
+        assert_eq!(
+            classify("EXEC xp_cmdshell 'whoami'", Dialect::MSSQL).dangerous,
+            Some(DangerousConstruct::XpCmdshell)
+        );
+        assert_eq!(
+            classify("BULK INSERT users FROM '/tmp/users.csv'", Dialect::MSSQL).dangerous,
+            Some(DangerousConstruct::BulkInsert)
+        );
+        assert_eq!(
+            classify("SELECT * FROM OPENROWSET(BULK '/tmp/users.csv')", Dialect::MSSQL).dangerous,
+            Some(DangerousConstruct::Openrowset)
+        );
     }
 }

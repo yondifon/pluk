@@ -4,7 +4,7 @@ pub mod fields;
 pub mod server;
 
 pub use error::{classify_sql_error, format_sql_error, humanize_sql_error, SqlErrorCategory, SqlErrorInfo};
-pub use fields::{network_sql_fields, sqlite_fields};
+pub use fields::{mssql_fields, network_sql_fields, sqlite_fields};
 pub use server::{sql_agent_hint, sql_instructions, sql_label, sql_tool_specs, register_sql_server, SqlCancelRegistry};
 
 use std::sync::Arc;
@@ -39,6 +39,10 @@ fn db_config_from(conn: &Integration) -> DbSqlConfig {
     cfg.ssl_ca_path = conn.config.get("ssl_ca_path").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.ssl_cert_path = conn.config.get("ssl_cert_path").and_then(|v| v.as_str()).map(|s| s.to_string());
     cfg.ssl_key_path = conn.config.get("ssl_key_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+    cfg.encrypt = conn.config.get("encrypt").and_then(|v| v.as_bool())
+        .or_else(|| conn.config.get("encrypt").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()));
+    cfg.trust_cert = conn.config.get("trust_cert").and_then(|v| v.as_bool())
+        .or_else(|| conn.config.get("trust_cert").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()));
     cfg.use_ssh = conn.config.get("use_ssh").map(|v| match v {
         serde_json::Value::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
         serde_json::Value::String(s) => s.clone(),
@@ -81,6 +85,9 @@ impl SqlAdapter {
     pub fn sqlite(store: Arc<Store>, cancels: Arc<SqlCancelRegistry>) -> Arc<Self> {
         Arc::new(Self { id: "sqlite", label: "SQLite", store, cancels })
     }
+    pub fn mssql(store: Arc<Store>, cancels: Arc<SqlCancelRegistry>) -> Arc<Self> {
+        Arc::new(Self { id: "mssql", label: "Microsoft SQL Server", store, cancels })
+    }
 }
 
 #[async_trait]
@@ -97,6 +104,7 @@ impl Adapter for SqlAdapter {
         match self.id {
             "postgres" => "Use this to query and inspect a PostgreSQL database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT for production data.",
             "mysql" => "Use this to query and inspect a MySQL database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT for production data.",
+            "mssql" => "Use this to query and inspect a Microsoft SQL Server database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with TOP or OFFSET/FETCH for production data.",
             _ => "Use this to query and inspect a SQLite database — read schema and rows, run SELECTs, and write only when the policy permits. Use SELECT with LIMIT before wider queries.",
         }
     }
@@ -105,9 +113,11 @@ impl Adapter for SqlAdapter {
         static POSTGRES_SPECS: std::sync::OnceLock<Vec<ToolSpec>> = std::sync::OnceLock::new();
         static MYSQL_SPECS: std::sync::OnceLock<Vec<ToolSpec>> = std::sync::OnceLock::new();
         static SQLITE_SPECS: std::sync::OnceLock<Vec<ToolSpec>> = std::sync::OnceLock::new();
+        static MSSQL_SPECS: std::sync::OnceLock<Vec<ToolSpec>> = std::sync::OnceLock::new();
         match self.id {
             "postgres" => POSTGRES_SPECS.get_or_init(sql_tool_specs),
             "mysql" => MYSQL_SPECS.get_or_init(sql_tool_specs),
+            "mssql" => MSSQL_SPECS.get_or_init(sql_tool_specs),
             _ => SQLITE_SPECS.get_or_init(sql_tool_specs),
         }
     }
@@ -115,9 +125,11 @@ impl Adapter for SqlAdapter {
         static PG_FIELDS: std::sync::OnceLock<Vec<ConfigField>> = std::sync::OnceLock::new();
         static MY_FIELDS: std::sync::OnceLock<Vec<ConfigField>> = std::sync::OnceLock::new();
         static SQ_FIELDS: std::sync::OnceLock<Vec<ConfigField>> = std::sync::OnceLock::new();
+        static MSSQL_FIELDS: std::sync::OnceLock<Vec<ConfigField>> = std::sync::OnceLock::new();
         match self.id {
             "postgres" => PG_FIELDS.get_or_init(|| network_sql_fields(5432)),
             "mysql" => MY_FIELDS.get_or_init(|| network_sql_fields(3306)),
+            "mssql" => MSSQL_FIELDS.get_or_init(mssql_fields),
             _ => SQ_FIELDS.get_or_init(sqlite_fields),
         }
     }
@@ -153,6 +165,7 @@ pub fn sql_adapters(store: Arc<Store>, cancels: Arc<SqlCancelRegistry>) -> Vec<A
     vec![
         SqlAdapter::postgres(store.clone(), cancels.clone()),
         SqlAdapter::mysql(store.clone(), cancels.clone()),
+        SqlAdapter::mssql(store.clone(), cancels.clone()),
         SqlAdapter::sqlite(store.clone(), cancels.clone()),
     ]
 }
@@ -183,5 +196,29 @@ mod tests {
         assert_eq!(cfg.ssl_ca_path.as_deref(), Some("/tmp/ca.pem"));
         assert_eq!(cfg.ssl_cert_path.as_deref(), Some("/tmp/client.pem"));
         assert_eq!(cfg.ssl_key_path.as_deref(), Some("/tmp/client.key"));
+    }
+
+    #[test]
+    fn connection_test_preserves_mssql_tls_config() {
+        let conn = Integration {
+            id: "mssql".into(),
+            name: "MSSQL".into(),
+            r#type: "mssql".into(),
+            config: serde_json::from_value(serde_json::json!({
+                "host": "sql.internal",
+                "encrypt": false,
+                "trust_cert": true,
+            }))
+            .unwrap(),
+            environment: None,
+            read_only: 0,
+            query_policy: None,
+            token: "token".into(),
+            created_at: String::new(),
+            via_group: None,
+        };
+        let cfg = db_config_from(&conn);
+        assert_eq!(cfg.encrypt, Some(false));
+        assert_eq!(cfg.trust_cert, Some(true));
     }
 }

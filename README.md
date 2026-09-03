@@ -109,6 +109,7 @@ The server listens on `http://localhost:4242`. Health check: `curl http://localh
 Every integration carries its own policy, and all access is recorded in a local activity log.
 
 - **Databases** — a SQL policy engine classifies each statement. Treat production as read-heavy: prefer `SELECT`, add explicit `LIMIT`s, avoid broad scans and writes. Enable **read-only mode** and Pluk blocks write statements; Postgres also uses short connect/query timeouts so failed tunnels don't hang the UI.
+- **Microsoft SQL Server** — use `TOP` or `OFFSET/FETCH` instead of `LIMIT`; `explain_query` uses SQL Server `SHOWPLAN_TEXT` and does not execute the query.
 - **Linear** (and other API adapters) — a coarse read/write policy. Read-only blocks mutating actions (create issue, comment); read & write allows them.
 
 ### SSH and Cloudflare Access
