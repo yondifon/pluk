@@ -1,15 +1,14 @@
 :root {
   --canvas: #ffffff;
   --ink: #161616;
+  --ink-strong: #000000;
   --support: rgba(22, 22, 22, 0.72);
   --meta: rgba(22, 22, 22, 0.62);
   --hairline: rgba(22, 22, 22, 0.1);
   --hairline-strong: rgba(22, 22, 22, 0.18);
-  --fill-quiet: rgba(22, 22, 22, 0.04);
   --fill-selection: rgba(22, 22, 22, 0.14);
   --accent: #e0a23b;
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", monospace;
 }
 
 /* The same alpha buys more contrast on a dark canvas, so the ink ladder is
@@ -18,11 +17,11 @@
   :root {
     --canvas: #0a0a0a;
     --ink: #fafaf7;
+    --ink-strong: #ffffff;
     --support: rgba(250, 250, 247, 0.56);
     --meta: rgba(250, 250, 247, 0.5);
     --hairline: rgba(250, 250, 247, 0.12);
     --hairline-strong: rgba(250, 250, 247, 0.2);
-    --fill-quiet: rgba(250, 250, 247, 0.05);
     --fill-selection: rgba(250, 250, 247, 0.2);
   }
 }
@@ -73,22 +72,6 @@ a {
 
 a:hover {
   text-decoration-color: currentColor;
-}
-
-code {
-  font-family: var(--mono);
-  font-size: 0.9em;
-  overflow-wrap: anywhere;
-}
-
-pre code {
-  overflow-wrap: normal;
-}
-
-:not(pre) > code {
-  background: var(--fill-quiet);
-  border-radius: 4px;
-  padding: 0.125em 0.375em;
 }
 
 ::selection {
@@ -163,30 +146,43 @@ h1 {
   line-height: 1.6;
 }
 
-/* The commands are the install action; there is no binary to download. */
-.install {
-  margin: clamp(2.5rem, 6vw, 3.5rem) 0 0;
-  background: var(--fill-quiet);
-  border-radius: 10px;
-  overflow: hidden;
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.875rem 1.25rem;
+  margin-block-start: clamp(2.5rem, 6vw, 3.5rem);
 }
 
-.install figcaption {
-  padding: 0.75rem 1.25rem;
-  border-bottom: 1px solid var(--hairline);
+.btn {
+  display: inline-flex;
+  align-items: center;
+  background: var(--ink);
+  color: var(--canvas);
+  font-weight: 500;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.9375rem 1.75rem;
+  border-radius: 8px;
+  text-decoration: none;
+  transition: background-color 120ms ease;
+}
+
+.btn:hover {
+  background: var(--ink-strong);
+}
+
+.cta-meta {
   color: var(--meta);
-  font-size: 0.8125rem;
-}
-
-.install pre {
-  margin: 0;
-  padding: 1.125rem 1.25rem;
-  overflow-x: auto;
-}
-
-.install code {
   font-size: 0.875rem;
-  line-height: 1.7;
+}
+
+.note {
+  margin-block-start: 1.375rem;
+  max-width: 34rem;
+  color: var(--meta);
+  font-size: 0.9375rem;
+  line-height: 1.6;
 }
 
 .about {
