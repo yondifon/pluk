@@ -88,3 +88,45 @@ pub fn sqlite_fields() -> Vec<ConfigField> {
     fields.extend(ssh);
     fields
 }
+
+pub fn mssql_fields() -> Vec<ConfigField> {
+    let mut fields = vec![
+        ConfigField::new("host", "Host", FieldType::Text)
+            .group("Connection")
+            .placeholder("localhost")
+            .default_value(&json!("localhost")),
+        ConfigField::new("port", "Port", FieldType::Number)
+            .group("Connection")
+            .default_value(&json!(1433)),
+        ConfigField::new("user", "User", FieldType::Text).group("Connection"),
+        ConfigField::new("password", "Password", FieldType::Password)
+            .group("Connection")
+            .secret(),
+        ConfigField::new("database", "Database", FieldType::Text).group("Connection"),
+        ConfigField::new("encrypt", "Encrypt connection", FieldType::Toggle)
+            .group("Security")
+            .default_value(&json!(true)),
+        ConfigField::new("trust_cert", "Trust server certificate", FieldType::Toggle)
+            .group("Security")
+            .default_value(&json!(false))
+            .danger()
+            .show_if(ShowIf::eq_str("encrypt", "true")),
+        ConfigField::new("use_ssh", "SSH Tunnel", FieldType::Toggle).group("SSH Tunnel"),
+        ConfigField::new("ssh_host", "SSH Host", FieldType::Text)
+            .group("SSH Tunnel")
+            .show_if(ShowIf::eq_str("use_ssh", "true")),
+        ConfigField::new("ssh_port", "SSH Port", FieldType::Number)
+            .group("SSH Tunnel")
+            .default_value(&json!(22))
+            .show_if(ShowIf::eq_str("use_ssh", "true")),
+        ConfigField::new("ssh_user", "SSH User", FieldType::Text)
+            .group("SSH Tunnel")
+            .show_if(ShowIf::eq_str("use_ssh", "true")),
+    ];
+    fields.extend(ssh_auth_fields(
+        "ssh_",
+        "SSH Tunnel",
+        Some(ShowIf::eq_str("use_ssh", "true")),
+    ));
+    fields
+}

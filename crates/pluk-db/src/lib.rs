@@ -6,6 +6,7 @@ pub mod factory;
 #[cfg(test)]
 pub mod fake;
 pub mod mysql;
+pub mod mssql;
 pub mod pool;
 pub mod postgres;
 pub mod sql_log;

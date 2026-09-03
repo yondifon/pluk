@@ -85,6 +85,17 @@ fn capture_for(conn: &Integration, store: Arc<Store>) -> CaptureHost {
     host
 }
 
+#[test]
+fn mssql_manifest_exposes_sql_server_connection_fields() {
+    let (_dir, store) = temp_store();
+    let adapter = crate::sql::SqlAdapter::mssql(store, Arc::new(SqlCancelRegistry::default()));
+    let fields = adapter.config_fields();
+    assert!(fields.iter().any(|field| field.key == "port" && field.default.as_deref() == Some("1433")));
+    assert!(fields.iter().any(|field| field.key == "encrypt"));
+    assert!(fields.iter().any(|field| field.key == "trust_cert"));
+    assert!(fields.iter().any(|field| field.key == "use_ssh"));
+}
+
 #[tokio::test]
 async fn query_happy_path_returns_rows() {
     let (_dir, store) = temp_store();

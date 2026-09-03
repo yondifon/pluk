@@ -12,6 +12,13 @@ static LINE_DASH_COMMENT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"--[^\n]*").expect("valid regex"));
 static LINE_HASH_COMMENT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"#[^\n]*").expect("valid regex"));
+static GO_BATCH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?im)^\s*GO(?:\s+\d+)?\s*;?\s*(?:--[^\n]*)?$").expect("valid GO regex")
+});
+
+pub fn has_go_batch(sql: &str) -> bool {
+    GO_BATCH.is_match(sql)
+}
 
 /// Strip comments so a comment prefix can't disguise the leading keyword.
 ///

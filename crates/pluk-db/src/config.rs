@@ -16,6 +16,8 @@ pub struct SqlConfig {
     pub ssl_ca_path: Option<String>,
     pub ssl_cert_path: Option<String>,
     pub ssl_key_path: Option<String>,
+    pub encrypt: Option<bool>,
+    pub trust_cert: Option<bool>,
     pub use_ssh: Option<String>,
     pub ssh_host: Option<String>,
     pub ssh_port: Option<u16>,
@@ -33,8 +35,11 @@ impl SqlConfig {
         if self.r#type == "sqlite" {
             return self.port.unwrap_or(0);
         }
-        self.port
-            .unwrap_or_else(|| if self.r#type == "mysql" { 3306 } else { 5432 })
+        self.port.unwrap_or(match self.r#type.as_str() {
+            "mysql" => 3306,
+            "mssql" => 1433,
+            _ => 5432,
+        })
     }
     pub fn sqlite_filename(&self) -> Option<String> {
         self.filename.clone().or_else(|| self.database.clone())
