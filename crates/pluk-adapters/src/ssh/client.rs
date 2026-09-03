@@ -1,11 +1,152 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pluk_core::process::RunError;
 use pluk_ssh::SshTunnelConfig;
 
 use crate::error::AdapterError;
+
+const SSH_COMMAND_RETRY_DELAYS_MS: &[u64] = &[2_000, 4_000, 8_000];
+
+fn retry_exhausted_error(
+    auth_type: &str,
+    attempts: usize,
+    elapsed: Duration,
+    last: &AdapterError,
+) -> AdapterError {
+    let reason = if auth_type == "agent"
+        && (last.code.as_deref() == Some(pluk_ssh::SSH_AGENT_UNREACHABLE_CODE)
+            || pluk_ssh::is_ssh_agent_retryable_error(&last.message))
+    {
+        format!(
+            "1Password is locked / not running, or its approval timed out: {}",
+            last.message
+        )
+    } else {
+        format!("last error: {}", last.message)
+    };
+    AdapterError::new(format!(
+        "SSH command connection failed after {attempts} attempts over {}s; gave up after the bounded retry window ({reason}).",
+        elapsed.as_secs()
+    ))
+    .with_code(last.code.clone().unwrap_or_else(|| "SSH_RETRY_EXHAUSTED".into()))
+}
+
+async fn run_ssh_attempt(
+    host: &str,
+    port: u16,
+    user: &str,
+    auth_type: &str,
+    key_path: Option<String>,
+    command: &str,
+    timeout_ms: u64,
+) -> Result<ExecResult, AdapterError> {
+    use tokio::process::Command as TokioCommand;
+
+    let control_path = pluk_ssh::openssh::control_path();
+    let ssh_config = pluk_ssh::config::parse_ssh_config(host);
+    let effective_host = ssh_config.host_name.as_deref().unwrap_or(host);
+    let effective_port = ssh_config.port.unwrap_or(port);
+    let effective_user = if !user.is_empty() {
+        user.to_string()
+    } else if let Some(u) = ssh_config.user.clone() {
+        u
+    } else {
+        std::env::var("USER").unwrap_or_else(|_| "root".into())
+    };
+
+    let mut args: Vec<String> = vec![
+        "-o".to_string(),
+        format!("ControlPath={control_path}"),
+        "-o".to_string(),
+        "ControlMaster=auto".to_string(),
+        "-o".to_string(),
+        "ControlPersist=10m".to_string(),
+        "-o".to_string(),
+        "ServerAliveInterval=30".to_string(),
+        "-o".to_string(),
+        "StrictHostKeyChecking=accept-new".to_string(),
+        "-p".to_string(),
+        effective_port.to_string(),
+    ];
+    if !effective_user.is_empty() {
+        args.push("-l".to_string());
+        args.push(effective_user.clone());
+    }
+    if auth_type == "key"
+        && let Some(kp) = key_path
+    {
+        args.push("-i".to_string());
+        args.push(pluk_ssh::config::expand_home(&kp));
+        args.push("-o".to_string());
+        args.push("IdentitiesOnly=yes".to_string());
+        args.push("-o".to_string());
+        args.push("IdentityAgent=none".to_string());
+    }
+    let mut agent_pending = false;
+    if auth_type == "agent" {
+        if let Some(agent) = pluk_ssh::agent::resolve_live_agent(host).await {
+            agent_pending = agent.probe.state_str() == "mute";
+            args.push("-o".to_string());
+            args.push(format!("IdentityAgent=\"{}\"", agent.socket));
+        } else {
+            return Err(
+                AdapterError::new(pluk_ssh::agent::agent_unreachable_error().message)
+                    .with_code(pluk_ssh::SSH_AGENT_UNREACHABLE_CODE),
+            );
+        }
+    }
+    if auth_type == "password" {
+        return Err(AdapterError::new(
+            "password auth not supported via OpenSSH transport; use key or agent",
+        ));
+    }
+    args.push(effective_host.to_string());
+    args.push(command.to_string());
+
+    let mut cmd = TokioCommand::new("ssh");
+    cmd.args(&args);
+    let timeout = Duration::from_millis(timeout_ms);
+    match pluk_core::process::run_capture(&mut cmd, timeout).await {
+        Ok(output) => {
+            let mut stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
+            let mut stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
+            let truncated = stdout_str.len() + stderr_str.len() > MAX_OUTPUT_BYTES;
+            if truncated {
+                if stdout_str.len() > MAX_OUTPUT_BYTES {
+                    truncate_chars(&mut stdout_str, MAX_OUTPUT_BYTES);
+                    stderr_str.clear();
+                } else {
+                    truncate_chars(&mut stderr_str, MAX_OUTPUT_BYTES - stdout_str.len());
+                }
+            }
+            let result = ExecResult {
+                stdout: stdout_str,
+                stderr: stderr_str,
+                code: output.code,
+                truncated,
+            };
+            if agent_pending && result.code == Some(255) {
+                return Err(AdapterError::new(format!(
+                    "1Password SSH agent approval pending: {}",
+                    result.stderr.trim()
+                ))
+                .with_code("SSH_AGENT_PENDING"));
+            }
+            Ok(result)
+        }
+        Err(RunError::TimedOut) => Err(AdapterError::new(format!(
+            "Command timed out after {}s and was stopped",
+            timeout_ms / 1000
+        ))
+        .with_code("SSH_COMMAND_TIMEOUT")),
+        Err(RunError::Spawn(e)) => {
+            Err(AdapterError::new(e.to_string()).with_code("SSH_SPAWN_ERROR"))
+        }
+        Err(RunError::Io(e)) => Err(AdapterError::new(e.to_string()).with_code("SSH_IO_ERROR")),
+    }
+}
 
 pub const DEFAULT_EXEC_TIMEOUT_MS: u64 = 60_000;
 pub const MAX_COMMAND_TIMEOUT_S: u64 = 600;
@@ -50,96 +191,77 @@ impl SshExecutor for RealSshExecutor {
         command: &str,
         timeout_ms: u64,
     ) -> Result<ExecResult, AdapterError> {
-        use tokio::process::Command as TokioCommand;
-        let control_path = pluk_ssh::openssh::control_path();
-        let ssh_config = pluk_ssh::config::parse_ssh_config(host);
-        let effective_host = ssh_config.host_name.as_deref().unwrap_or(host);
-        let effective_port = ssh_config.port.unwrap_or(port);
-        let effective_user = if !user.is_empty() {
-            user.to_string()
-        } else if let Some(u) = ssh_config.user.clone() {
-            u
-        } else {
-            std::env::var("USER").unwrap_or_else(|_| "root".into())
-        };
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(timeout_ms);
+        let max_attempts = SSH_COMMAND_RETRY_DELAYS_MS.len() + 1;
+        let mut attempts_run = 0;
+        let mut last_error: Option<AdapterError> = None;
 
-        let mut args: Vec<String> = vec![
-            "-o".to_string(),
-            format!("ControlPath={}", control_path),
-            "-o".to_string(),
-            "ControlMaster=auto".to_string(),
-            "-o".to_string(),
-            "ControlPersist=10m".to_string(),
-            "-o".to_string(),
-            "ServerAliveInterval=30".to_string(),
-            "-o".to_string(),
-            "StrictHostKeyChecking=accept-new".to_string(),
-            "-p".to_string(),
-            effective_port.to_string(),
-        ];
-        if !effective_user.is_empty() {
-            args.push("-l".to_string());
-            args.push(effective_user.clone());
-        }
-        if auth_type == "key" {
-            if let Some(kp) = key_path.clone() {
-                args.push("-i".to_string());
-                args.push(pluk_ssh::config::expand_home(&kp));
-                args.push("-o".to_string());
-                args.push("IdentitiesOnly=yes".to_string());
-                args.push("-o".to_string());
-                args.push("IdentityAgent=none".to_string());
+        for attempt in 1..=max_attempts {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            if remaining == 0 {
+                break;
             }
-        } else if auth_type == "agent" {
-            if let Some(agent) = pluk_ssh::agent::resolve_live_agent(host).await {
-                args.push("-o".to_string());
-                args.push(format!("IdentityAgent=\"{}\"", agent.socket));
-            } else {
-                return Err(
-                    AdapterError::new(pluk_ssh::agent::agent_unreachable_error().message)
-                        .with_code(pluk_ssh::agent::SSH_AGENT_UNREACHABLE_CODE),
-                );
-            }
-        }
-        // password auth not supported via openssh non-interactively; fallback to error
-        if auth_type == "password" {
-            return Err(AdapterError::new(
-                "password auth not supported via OpenSSH transport; use key or agent",
-            ));
-        }
-        args.push(effective_host.to_string());
-        args.push(command.to_string());
-
-        let mut cmd = TokioCommand::new("ssh");
-        cmd.args(&args);
-
-        let timeout = Duration::from_millis(timeout_ms);
-        match pluk_core::process::run_capture(&mut cmd, timeout).await {
-            Ok(output) => {
-                let mut stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
-                let mut stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
-                let truncated = stdout_str.len() + stderr_str.len() > MAX_OUTPUT_BYTES;
-                if truncated {
-                    if stdout_str.len() > MAX_OUTPUT_BYTES {
-                        truncate_chars(&mut stdout_str, MAX_OUTPUT_BYTES);
-                        stderr_str.clear();
-                    } else {
-                        truncate_chars(&mut stderr_str, MAX_OUTPUT_BYTES - stdout_str.len());
+            attempts_run = attempt;
+            match run_ssh_attempt(
+                host,
+                port,
+                user,
+                auth_type,
+                key_path.clone(),
+                command,
+                remaining,
+            )
+            .await
+            {
+                Ok(result) if result.code == Some(255) => {
+                    if !pluk_ssh::is_ssh_retryable_error(&result.stderr) {
+                        return Ok(result);
                     }
+                    last_error = Some(AdapterError::new(result.stderr.clone().trim().to_string()));
                 }
-                Ok(ExecResult {
-                    stdout: stdout_str,
-                    stderr: stderr_str,
-                    code: output.code,
-                    truncated,
-                })
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    if matches!(
+                        error.code.as_deref(),
+                        Some("SSH_COMMAND_TIMEOUT")
+                            | Some("SSH_SPAWN_ERROR")
+                            | Some("SSH_IO_ERROR")
+                    ) {
+                        return Err(error);
+                    }
+                    if !pluk_ssh::is_ssh_retryable_error(&error.message)
+                        && error.code.as_deref() != Some(pluk_ssh::SSH_AGENT_UNREACHABLE_CODE)
+                    {
+                        return Err(error);
+                    }
+                    last_error = Some(error);
+                }
             }
-            Err(RunError::TimedOut) => Err(AdapterError::new(format!(
-                "Command timed out after {}s and was stopped",
-                timeout_ms / 1000
-            ))),
-            Err(e) => Err(AdapterError::new(e.to_string())),
+
+            if attempt == max_attempts {
+                break;
+            }
+            let delay = SSH_COMMAND_RETRY_DELAYS_MS[attempt - 1];
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            if remaining <= delay {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(delay)).await;
         }
+
+        Err(retry_exhausted_error(
+            auth_type,
+            attempts_run,
+            started.elapsed(),
+            &last_error.unwrap_or_else(|| AdapterError::new("SSH connection deadline expired")),
+        ))
     }
 }
 
@@ -240,7 +362,6 @@ pub async fn run_command(
     )
     .await
 }
-
 
 #[derive(Debug, Clone)]
 pub struct ForwardInfo {

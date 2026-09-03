@@ -13,14 +13,14 @@ use std::time::Duration;
 use tokio::process::Command;
 
 use crate::config::{SshConfigEntry, expand_home, parse_ssh_config};
-use crate::pending::is_ssh_auth_error;
+use crate::pending::{is_ssh_agent_retryable_error, is_ssh_fatal_error, is_ssh_retryable_error};
 
 pub const HANDSHAKE_TIMEOUT_MS: u64 = 180_000;
-pub const FAST_RETRY_WINDOW_MS: u64 = 10_000;
 pub const CONTROL_PERSIST: &str = "10m";
 pub const CONTROL_CMD_TIMEOUT_MS: u64 = 10_000;
 pub const MASTER_POLL_MS: u64 = 30_000;
 pub const READINESS_TIMEOUT_MS: u64 = 15_000;
+pub const CONNECT_RETRY_DELAYS_MS: &[u64] = &[2_000, 4_000, 8_000];
 
 /// Template uses `%C` hash token so the full path stays under the 104-byte
 /// `sun_path` limit (see `pluk_core::platform::ssh_control_dir`).
@@ -63,11 +63,35 @@ pub enum SshError {
 impl SshError {
     pub fn is_auth(&self) -> bool {
         match self {
-            Self::AgentUnreachable(_) => true,
-            Self::Tunnel(msg) => is_ssh_auth_error(msg),
+            Self::Tunnel(msg) => is_ssh_fatal_error(msg),
             _ => false,
         }
     }
+
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::AgentUnreachable(_) | Self::Timeout(_) => true,
+            Self::Tunnel(msg) => is_ssh_retryable_error(msg),
+            Self::Io(_) => true,
+        }
+    }
+
+    fn is_agent_retryable(&self) -> bool {
+        matches!(self, Self::AgentUnreachable(_))
+            || matches!(self, Self::Tunnel(msg) if is_ssh_agent_retryable_error(msg))
+    }
+}
+
+fn exhausted_error(attempts: u32, elapsed: Duration, last: &SshError) -> SshError {
+    let seconds = elapsed.as_secs();
+    let reason = if last.is_agent_retryable() {
+        format!("1Password is locked / not running, or its approval timed out: {last}")
+    } else {
+        format!("last error: {last}")
+    };
+    SshError::Tunnel(format!(
+        "SSH connection failed after {attempts} attempts over {seconds}s; gave up after the bounded retry window ({reason})."
+    ))
 }
 
 /// The args that identify one master: they feed `%C`, so every command that has
@@ -166,7 +190,7 @@ async fn ensure_master(
                     a.push(config.host.clone());
                     a
                 },
-                CONTROL_CMD_TIMEOUT_MS,
+                CONTROL_CMD_TIMEOUT_MS.min(timeout_ms),
             )
             .await;
             if code == 0 {
@@ -198,7 +222,8 @@ async fn ensure_master(
         a.push(config.host.clone());
         a
     };
-    let (code, _) = run_ssh_command(&check_args, CONTROL_CMD_TIMEOUT_MS).await;
+    let control_timeout = CONTROL_CMD_TIMEOUT_MS.min(timeout_ms);
+    let (code, _) = run_ssh_command(&check_args, control_timeout).await;
     if code == 0 {
         return Ok(());
     }
@@ -330,6 +355,13 @@ pub async fn open_openssh_tunnel(
 
     ensure_master(config, &target, readiness_timeout_ms).await?;
 
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    if elapsed_ms >= readiness_timeout_ms {
+        return Err(SshError::Timeout(
+            "SSH tunnel setup exceeded its connection deadline".into(),
+        ));
+    }
+
     let local_port = match config.local_port {
         Some(port) => port,
         None => reserve_local_port().await.map_err(SshError::Io)?,
@@ -350,7 +382,8 @@ pub async fn open_openssh_tunnel(
         a.push(config.host.clone());
         a
     };
-    let (code, stderr) = run_ssh_command(&fwd_args, CONTROL_CMD_TIMEOUT_MS).await;
+    let remaining = readiness_timeout_ms - elapsed_ms;
+    let (code, stderr) = run_ssh_command(&fwd_args, CONTROL_CMD_TIMEOUT_MS.min(remaining)).await;
     if code != 0 {
         let msg = if stderr.is_empty() {
             format!("ssh -O forward failed (exit {code})")
@@ -361,7 +394,12 @@ pub async fn open_openssh_tunnel(
     }
 
     let elapsed_ms = started.elapsed().as_millis() as u64;
-    let remaining = readiness_timeout_ms.saturating_sub(elapsed_ms).max(1_000);
+    let remaining = readiness_timeout_ms.saturating_sub(elapsed_ms);
+    if remaining == 0 {
+        return Err(SshError::Timeout(
+            "SSH tunnel setup exceeded its connection deadline".into(),
+        ));
+    }
 
     if let Err(e) = wait_for_port(local_port, remaining).await {
         let cancel_args: Vec<String> = {
@@ -453,12 +491,10 @@ pub async fn open_ssh_tunnel_via_openssh(
         config.auth_type == "agent" || (config.auth_type == "key" && config.passphrase.is_none());
 
     if use_openssh {
-        let attempts: u32 = if ssh_config.proxy_command.is_some() {
-            3
-        } else {
-            1
-        };
+        let attempts = CONNECT_RETRY_DELAYS_MS.len() as u32 + 1;
+        let overall_started = std::time::Instant::now();
         let deadline = std::time::Instant::now() + Duration::from_millis(HANDSHAKE_TIMEOUT_MS);
+        let mut attempts_run = 0;
         let mut last_err: Option<SshError> = None;
 
         for attempt in 1..=attempts {
@@ -469,7 +505,7 @@ pub async fn open_ssh_tunnel_via_openssh(
             if remaining == 0 {
                 break;
             }
-            let started = std::time::Instant::now();
+            attempts_run = attempt;
             match open_openssh_tunnel(&config, &ssh_config, &username, remaining, on_fatal.clone())
                 .await
             {
@@ -478,23 +514,34 @@ pub async fn open_ssh_tunnel_via_openssh(
                     if e.is_auth() {
                         return Err(e);
                     }
-                    let failed_fast = started.elapsed().as_millis() < FAST_RETRY_WINDOW_MS as u128;
-                    let is_readiness_timeout = matches!(e, SshError::Timeout(_));
-                    if attempt < attempts && failed_fast && !is_readiness_timeout {
+                    if attempt < attempts && e.is_retryable() {
+                        let delay_ms = CONNECT_RETRY_DELAYS_MS[(attempt - 1) as usize];
+                        let remaining_ms = deadline
+                            .checked_duration_since(std::time::Instant::now())
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        if remaining_ms <= delay_ms {
+                            return Err(exhausted_error(attempt, overall_started.elapsed(), &e));
+                        }
                         eprintln!(
-                            "[pluk] OpenSSH tunnel attempt {attempt} failed: {e}. Retrying in 2s…"
+                            "[pluk] OpenSSH tunnel attempt {attempt} failed: {e}. Retrying in {delay_ms}ms…"
                         );
-                        tokio::time::sleep(Duration::from_millis(2000)).await;
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                         last_err = Some(e);
                     } else {
-                        return Err(e);
+                        return Err(if e.is_retryable() {
+                            exhausted_error(attempt, overall_started.elapsed(), &e)
+                        } else {
+                            e
+                        });
                     }
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| {
-            SshError::Tunnel("SSH tunnel did not become ready before connect deadline".into())
-        }))
+        Err(last_err.map_or_else(
+            || SshError::Tunnel("SSH tunnel did not become ready before connect deadline".into()),
+            |e| exhausted_error(attempts_run, overall_started.elapsed(), &e),
+        ))
     } else {
         Err(SshError::Tunnel(
             "password/encrypted-key tunnel requires russh feature".into(),
@@ -546,5 +593,31 @@ mod tests {
         assert!(t.contains(&"-o".to_string()));
         assert!(t.contains(&"alice".to_string()));
         assert!(t.contains(&"2200".to_string()));
+    }
+
+    #[test]
+    fn retry_delays_are_bounded_and_backoff() {
+        assert_eq!(CONNECT_RETRY_DELAYS_MS, &[2_000, 4_000, 8_000]);
+        assert!(CONNECT_RETRY_DELAYS_MS.iter().sum::<u64>() < HANDSHAKE_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn agent_exhaustion_explains_the_fix() {
+        let error = exhausted_error(
+            4,
+            Duration::from_secs(14),
+            &SshError::AgentUnreachable("no agent socket answered".into()),
+        );
+        let message = error.to_string();
+        assert!(message.contains("4 attempts"));
+        assert!(message.contains("1Password is locked / not running"));
+        assert!(message.contains("bounded retry window"));
+    }
+
+    #[test]
+    fn fatal_ssh_errors_keep_their_original_classification() {
+        assert!(SshError::Tunnel("Host key verification failed.".into()).is_auth());
+        assert!(!SshError::Tunnel("Connection timed out".into()).is_auth());
+        assert!(SshError::Tunnel("Connection timed out".into()).is_retryable());
     }
 }

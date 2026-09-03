@@ -59,12 +59,33 @@ export function recordConnectFailure(key: string, err: unknown): void {
   ep.lastErrorSeq = ++seq;
 }
 
-// Auth and agent failures are deterministic: a locked or unreachable agent and
-// a rejected pubkey won't clear while a caller waits, so "still connecting,
-// maybe approving" must never mask one that already happened.
+// Authentication failures after the agent is available are deterministic.
 export function isSshAuthError(err: unknown): boolean {
   const msg = (err as { message?: string } | null)?.message ?? "";
-  return /permission denied|communication with agent failed|signing failed|publickey|no supported authentication|authentication failed|too many authentication failures|SSH key agent/i.test(msg);
+  return /permission denied|publickey|no supported authentication|authentication failed|too many authentication failures/i.test(msg);
+}
+
+export function isSshHostVerificationError(err: unknown): boolean {
+  const msg = (err as { message?: string } | null)?.message ?? "";
+  return /host key verification failed|remote host identification has changed|could not resolve hostname|name or service not known|nodename nor servname provided|unknown host/i.test(msg);
+}
+
+export function isSshPolicyError(err: unknown): boolean {
+  const msg = (err as { message?: string } | null)?.message ?? "";
+  return /administratively prohibited|channel open failed: prohibited|operation not permitted/i.test(msg);
+}
+
+export function isSshAgentRetryableError(err: unknown): boolean {
+  const msg = (err as { message?: string } | null)?.message ?? "";
+  return /communication with agent failed|signing failed|agent refused operation|SSH key agent|SSH_AGENT_UNREACHABLE|agent unreachable|could not connect to agent|approval/i.test(msg);
+}
+
+export function isSshFatalError(err: unknown): boolean {
+  return isSshAuthError(err) || isSshHostVerificationError(err) || isSshPolicyError(err);
+}
+
+export function isSshRetryableError(err: unknown): boolean {
+  return !isSshFatalError(err) || isSshAgentRetryableError(err);
 }
 
 // Error for a caller whose bounded wait on an in-flight connect ran out. This

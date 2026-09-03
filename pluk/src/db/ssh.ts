@@ -14,7 +14,10 @@ import {
   type SSHConfigEntry,
 } from "../ssh/config.js";
 import { agentUnreachableError, resolveLiveAgent } from "../ssh/agent.js";
-import { isSshAuthError } from "../ssh/pending.js";
+import {
+  isSshAgentRetryableError,
+  isSshRetryableError,
+} from "../ssh/pending.js";
 
 export interface SSHTunnelConfig {
   host: string;
@@ -35,7 +38,7 @@ export interface Tunnel {
 // SSH handshake budget. Long enough for interactive agent/proxy auth (1Password
 // confirm or Cloudflare browser approval), but still bounded.
 const HANDSHAKE_TIMEOUT_MS = 180_000;
-const FAST_RETRY_WINDOW_MS = 10_000;
+const CONNECT_RETRY_DELAYS_MS = [2_000, 4_000, 8_000] as const;
 
 // Connection multiplexing. Every tunnel to the same host+port+user rides one
 // persistent master, so authentication — and with it the agent signature the
@@ -144,7 +147,7 @@ async function ensureMaster(
 
   const start = (async () => {
     mkdirSync(CONTROL_DIR, { recursive: true });
-    const check = await runSSHCommand(["-O", "check", ...target, config.host], CONTROL_CMD_TIMEOUT_MS);
+    const check = await runSSHCommand(["-O", "check", ...target, config.host], Math.min(CONTROL_CMD_TIMEOUT_MS, timeoutMs));
     if (check.code === 0) return; // already up: no auth, no prompt, no wait
 
     // ControlMaster=auto + ControlPersist makes ssh fork the master into the
@@ -173,12 +176,14 @@ async function ensureMaster(
     // sign or prompt. The probe walks IdentityAgent from ~/.ssh/config, then
     // SSH_AUTH_SOCK, then the well-known 1Password sockets, and the probe's own
     // agent request is what wakes a locked 1Password into showing its unlock
-    // window. No live socket at all is a hard auth failure: fail now, before
-    // ssh burns the handshake budget waiting on a prompt that cannot appear.
+    // window. No live socket is retryable: the app or agent may start while
+    // the bounded connection window is still open.
     // -o overrides config/env, so the agent is deterministic.
+    let agentPending = false;
     if (config.authType === "agent") {
       const agent = await resolveLiveAgent(config.host);
       if (!agent) throw agentUnreachableError();
+      agentPending = agent.probe.state === "mute";
       console.log(`[pluk] SSH agent socket: ${agent.socket} (${agent.probe.state})`);
       // ssh parses the -o value with its own tokenizer, so a socket path with
       // spaces (e.g. 1Password's "~/Library/Group Containers/…/agent.sock") must
@@ -189,7 +194,11 @@ async function ensureMaster(
 
     console.log(`[pluk] OpenSSH master: ssh ${args.join(" ")}`);
     const started = await runSSHCommand(args, timeoutMs);
-    if (started.code !== 0) throw new Error(started.stderr || `ssh master failed (exit ${started.code})`);
+    if (started.code !== 0) {
+      const message = started.stderr || `ssh master failed (exit ${started.code})`;
+      if (agentPending) throw new Error(`1Password SSH agent approval pending: ${message}`);
+      throw new Error(message);
+    }
   })();
 
   masterStarts.set(key, start);
@@ -211,15 +220,27 @@ async function openOpenSSHTunnel(
   const started = Date.now();
   await ensureMaster(config, target, readinessTimeoutMs);
 
+  const setupElapsed = Date.now() - started;
+  if (setupElapsed >= readinessTimeoutMs) {
+    throw new TunnelReadinessTimeout("SSH tunnel setup exceeded its connection deadline");
+  }
+
   const localPort = await reserveLocalPort();
   const spec = `127.0.0.1:${localPort}:${config.remoteHost}:${config.remotePort}`;
 
   // The forward belongs to the master, not to a child of ours: it outlives any
   // single ssh invocation and is removed by `-O cancel`, never by killing a pid.
-  const fwd = await runSSHCommand(["-O", "forward", "-L", spec, ...target, config.host], CONTROL_CMD_TIMEOUT_MS);
+  const fwd = await runSSHCommand(
+    ["-O", "forward", "-L", spec, ...target, config.host],
+    Math.min(CONTROL_CMD_TIMEOUT_MS, readinessTimeoutMs - setupElapsed)
+  );
   if (fwd.code !== 0) throw new Error(fwd.stderr || `ssh -O forward failed (exit ${fwd.code})`);
 
-  const remaining = Math.max(1_000, readinessTimeoutMs - (Date.now() - started));
+  const remaining = readinessTimeoutMs - (Date.now() - started);
+  if (remaining <= 0) {
+    await runSSHCommand(["-O", "cancel", "-L", spec, ...target, config.host], CONTROL_CMD_TIMEOUT_MS);
+    throw new TunnelReadinessTimeout("SSH tunnel setup exceeded its connection deadline");
+  }
   try {
     await waitForPort(localPort, remaining);
   } catch (err) {
@@ -272,30 +293,36 @@ export async function openSSHTunnel(
   // 1Password agent via IdentityAgent. Password auth can't be fed to OpenSSH
   // non-interactively; encrypted key files also need ssh2's passphrase support.
   if (config.authType === "agent" || (config.authType === "key" && !config.passphrase)) {
-    // proxyCommand tunnels (e.g. Cloudflare Access) can fail transiently on DNS
-    // or auth — retry within the handshake budget. Direct tunnels get one shot.
-    const attempts = sshConfig.proxyCommand ? 3 : 1;
+    const attempts = CONNECT_RETRY_DELAYS_MS.length + 1;
     let lastErr: Error | undefined;
+    let attemptsRun = 0;
     const deadline = Date.now() + HANDSHAKE_TIMEOUT_MS;
     for (let attempt = 1; attempt <= attempts; attempt++) {
       const started = Date.now();
       const remaining = deadline - started;
       if (remaining <= 0) break;
+      attemptsRun = attempt;
       try {
         return await openOpenSSHTunnel(config, sshConfig, username, remaining, onFatal);
       } catch (err) {
         lastErr = err as Error;
-        // An auth/agent failure won't clear on retry — surface it now.
-        if (isSshAuthError(lastErr)) break;
-        const failedFast = Date.now() - started < FAST_RETRY_WINDOW_MS;
-        if (attempt < attempts && failedFast && !(lastErr instanceof TunnelReadinessTimeout)) {
-          console.warn(`[pluk] OpenSSH tunnel attempt ${attempt} failed: ${lastErr.message}. Retrying in 2s…`);
-          await new Promise((r) => setTimeout(r, 2000));
+        if (!isSshRetryableError(lastErr)) throw lastErr;
+        if (attempt < attempts) {
+          const delay = CONNECT_RETRY_DELAYS_MS[attempt - 1]!;
+          if (deadline - Date.now() <= delay) break;
+          console.warn(`[pluk] OpenSSH tunnel attempt ${attempt} failed: ${lastErr.message}. Retrying in ${delay}ms…`);
+          await new Promise((r) => setTimeout(r, delay));
         }
-        else break;
       }
     }
-    throw lastErr ?? new Error("SSH tunnel did not become ready before connect deadline");
+    const error = lastErr ?? new Error("SSH tunnel did not become ready before connect deadline");
+    const agentIssue = config.authType === "agent" && isSshAgentRetryableError(error);
+    const reason = agentIssue
+      ? `1Password is locked / not running, or its approval timed out: ${error.message}`
+      : `last error: ${error.message}`;
+    throw new Error(
+      `SSH connection failed after ${attemptsRun} attempts; gave up after the bounded retry window (${reason}).`
+    );
   }
 
   return new Promise((resolve, reject) => {
