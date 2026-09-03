@@ -1,108 +1,182 @@
 APP       := Pluk
-BUNDLE_ID := com.pluk.app
+BUNDLE_ID := com.desgnspace.pluk
 DIST      := dist
+VERSION   := $(shell cat VERSION 2>/dev/null | tr -d ' \n')
+COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: dev deps server swift-build bundle install zip release publish publish-minor publish-major clean
+.PHONY: dev deps build build-ui bundle bundle-unsigned bundle-signed publish _publish major minor fix check-publish-tools install test lint clean sync-version check-tauri help
 
-# ── Dev ───────────────────────────────────────────────────────────────────────
+# ── Help ──────────────────────────────────────────────────────────────────────
+help:
+	@printf "Rust (Tauri) targets — primary:\n"
+	@printf "  make dev              Run the Rust app in dev (webview -> http://localhost:1420)\n"
+	@printf "  make build            Frontend + cargo build (debug)\n"
+	@printf "  make bundle           Frontend + cargo tauri build (release bundles, unsigned if no identity)\n"
+	@printf "  make bundle-signed    Signed + notarized via 1Password (op run --env-file=.env.1password)\n"
+	@printf "  make bundle-unsigned  Force ad-hoc signing (no identity)\n"
+	@printf "  make publish [major|minor|fix]  Bump version, then universal build, sign, notarize, staple, verify, GitHub release\n"
+	@printf "  make install          Build bundles and install Pluk.app to /Applications (macOS)\n"
+	@printf "  make test             cargo test --workspace\n"
+	@printf "  make lint             cargo clippy + frontend typecheck\n"
+	@printf "  make clean            Remove dist/ and build artefacts\n"
 
+# ── Dev (Rust) ────────────────────────────────────────────────────────────────
 dev:
-	cd swift && swift run
-
-# ── Build ─────────────────────────────────────────────────────────────────────
+	@printf "→ dev: vite on http://localhost:1420, then the Tauri host\n"
+	bun install --cwd ui --silent
+	@bash -c 'bun run --silent --cwd ui dev & UI=$$!; trap "kill $$UI 2>/dev/null" EXIT; until curl -sf http://localhost:1420 >/dev/null; do sleep 0.3; done; cargo run -p pluk-host'
 
 deps:
-	@printf "→ installing pluk deps\n"
-	cd pluk && bun install
+	@printf "→ installing ui deps and Rust deps\n"
+	bun install --cwd ui
+	cargo fetch
 
-server: deps
-	@printf "→ compiling server binary\n"
-	@mkdir -p $(DIST)
-	@# cpu-features ships a native .node addon bun can't bundle; mark it external so it's
-	@# left out of the binary. ssh2 wraps the require in try/catch, so the runtime require
-	@# fails gracefully without it — no node_modules mutation needed.
-	cd pluk && bun build --compile --external cpu-features src/server.ts --outfile ../$(DIST)/pluk-server
-	@chmod +x $(DIST)/pluk-server
-	@codesign --force --sign - $(DIST)/pluk-server
+build-ui:
+	@printf "→ building frontend (ui/dist)\n"
+	bun install --cwd ui --silent
+	bun run --cwd ui build
 
-swift-build:
-	@printf "→ building Swift app\n"
-	cd swift && swift build -c release
+sync-version:
+	@printf "→ syncing version $(VERSION) into Cargo.toml and tauri.conf.json\n"
+	@if [ -z "$(VERSION)" ]; then echo "VERSION file missing"; exit 1; fi
+	@# Update workspace version in Cargo.toml (workspace.package.version)
+	@# Use sed -i '' on macOS, fallback to sed -i on Linux
+	@if sed --version >/dev/null 2>&1; then \
+		sed -i "s/^version = \".*\"/version = \"$(VERSION)\"/" Cargo.toml; \
+	else \
+		sed -i '' "s/^version = \".*\"/version = \"$(VERSION)\"/" Cargo.toml; \
+	fi
+	@# Update tauri.conf.json version via python (jq not guaranteed)
+	@python3 -c "import json, pathlib; p=pathlib.Path('crates/pluk-host/tauri.conf.json'); d=json.loads(p.read_text()); d['version']='$(VERSION)'; p.write_text(json.dumps(d, indent=2)+'\n')"
+	@printf "  Cargo.toml + tauri.conf.json now at $(VERSION)\n"
 
-bundle: server swift-build
-	@v=$$(cat VERSION); \
-	commit=$$(git rev-parse HEAD); \
-	printf "→ assembling Pluk.app v$$v ($$commit)\n"; \
-	rm -rf $(DIST)/$(APP).app; \
-	mkdir -p $(DIST)/$(APP).app/Contents/MacOS; \
-	mkdir -p $(DIST)/$(APP).app/Contents/Resources; \
-	cp swift/.build/release/$(APP) $(DIST)/$(APP).app/Contents/MacOS/; \
-	cp $(DIST)/pluk-server $(DIST)/$(APP).app/Contents/Resources/pluk-server; \
-	chmod +x $(DIST)/$(APP).app/Contents/Resources/pluk-server; \
-	cp swift/AppIcon.icns $(DIST)/$(APP).app/Contents/Resources/AppIcon.icns; \
-	cp swift/Sources/Resources/MenuBarIcon.png $(DIST)/$(APP).app/Contents/Resources/MenuBarIcon.png; \
-	cp -R swift/Sources/Resources/AdapterLogos $(DIST)/$(APP).app/Contents/Resources/AdapterLogos; \
-	sed -e "s/{{VERSION}}/$$v/g" \
-		-e "s/{{COMMIT}}/$$commit/g" \
-		-e "s|{{REPO}}|$(CURDIR)|g" \
-		swift/Info.plist.template \
-		> $(DIST)/$(APP).app/Contents/Info.plist
-ifdef APPLE_IDENTITY
-	@printf "→ signing with $(APPLE_IDENTITY)\n"
-	codesign --deep --force --verify --sign "$(APPLE_IDENTITY)" $(DIST)/$(APP).app
-endif
+build: build-ui
+	@printf "→ cargo build --workspace\n"
+	cargo build --workspace
 
-# ── Install ───────────────────────────────────────────────────────────────────
+# ── Prereq ────────────────────────────────────────────────────────────────────
+check-tauri:
+	@if ! cargo tauri --version >/dev/null 2>&1; then \
+		echo "error: cargo-tauri not found."; \
+		echo "  install it with: cargo install tauri-cli --version \"^2\" --locked"; \
+		echo "  then verify: cargo tauri --version"; \
+		exit 1; \
+	fi
 
+# ── Bundle (Tauri) ───────────────────────────────────────────────────────────
+# Bundling artefacts:
+#   macOS: Pluk.app + Pluk_*.dmg; Linux: .deb + .AppImage (see tauri.conf.json targets).
+#   Signing (macOS): bundle.macOS.signingIdentity in tauri.conf.json is null so
+#   APPLE_SIGNING_IDENTITY from the environment is used. Hardened runtime and
+#   entitlements are declared in tauri.conf.json (entitlements.plist). Notarization
+#   via notarytool is triggered automatically when APPLE_ID + APPLE_PASSWORD +
+#   APPLE_TEAM_ID are set (or API key vars). See .env.1password and bundle-signed.
+#   Unsigned local builds (no Apple ID needed) remain the default — just run make bundle.
+bundle: check-tauri sync-version build-ui
+	@printf "→ bundling $(APP) v$(VERSION) ($(COMMIT)) via Tauri\n"
+	@printf "  macOS artefacts: target/release/bundle/macos/*.app + target/release/bundle/dmg/*.dmg\n"
+	@printf "  signing: APPLE_SIGNING_IDENTITY=\"\$$APPLE_SIGNING_IDENTITY\" (macOS), TAURI_SIGNING_PRIVATE_KEY for updater\n"
+	@printf "  unsigned? make bundle-unsigned (ad-hoc, no secrets)\n"
+	bash scripts/with-secrets.sh cargo tauri build
+
+bundle-unsigned: check-tauri sync-version build-ui
+	@printf "→ bundling without signing (ad-hoc / unsigned)\n"
+	bash scripts/with-secrets.sh env APPLE_SIGNING_IDENTITY="-" cargo tauri build
+
+bundle-signed: check-tauri sync-version build-ui
+	@printf "→ bundling signed + notarized via 1Password\n"
+	@if ! command -v op >/dev/null 2>&1; then \
+		echo "error: 1Password CLI (op) not found."; \
+		echo "  install: https://developer.1password.com/docs/cli/get-started/"; \
+		echo "  then run: op signin && make bundle-signed"; \
+		exit 1; \
+	fi
+	@if [ ! -f .env.1password ]; then \
+		echo "error: .env.1password not found (template .env.1password should be committed)."; \
+		exit 1; \
+	fi
+	bash scripts/with-secrets.sh cargo tauri build
+
+# ── Publish (macOS release) ──────────────────────────────────────────────────
+# Universal (arm64 + x86_64) build via `cargo tauri build --target
+# universal-apple-darwin`, signed + notarized + stapled (Tauri's bundler does
+# this automatically once APPLE_SIGNING_IDENTITY + APPLE_ID + APPLE_PASSWORD +
+# APPLE_TEAM_ID are set), then verified with codesign/spctl/stapler before
+# anything is uploaded. Secrets come from a mounted .env when one exists at
+# the repo root, otherwise scripts/publish.sh resolves .env.1password live via
+# `op run` — see scripts/publish.sh for that precedence and the full build
+# sequence, docs/release-checklist.md for one-time setup and every var.
+check-publish-tools:
+	@command -v gh >/dev/null 2>&1 || { \
+		echo "error: gh CLI not found. install: https://cli.github.com/"; \
+		exit 1; \
+	}
+	@if [ -f .env ]; then \
+		echo "→ secrets: using mounted .env (takes precedence over .env.1password)"; \
+	elif [ -f .env.1password ]; then \
+		command -v op >/dev/null 2>&1 || { \
+			echo "error: 1Password CLI (op) not found (or shadowed by a shell alias)."; \
+			echo "  install: https://developer.1password.com/docs/cli/get-started/"; \
+			exit 1; \
+		}; \
+		op --version >/dev/null 2>&1 || { \
+			echo "error: 'op' does not behave like the 1Password CLI — something else is shadowing it."; \
+			echo "  run: unalias op && type op   # confirm it points at the real 1Password binary"; \
+			exit 1; \
+		}; \
+		op whoami >/dev/null 2>&1 || { \
+			echo "error: not signed in to the 1Password CLI."; \
+			echo "  run: op signin"; \
+			exit 1; \
+		}; \
+		op run --env-file=.env.1password -- true || { \
+			echo "error: a 1Password reference in .env.1password failed to resolve (see error above)."; \
+			echo "  check the \"Pluk-signing\" item exists in the \"DesgnSpace\" vault with every field .env.1password lists"; \
+			exit 1; \
+		}; \
+	else \
+		echo "error: no secrets source found."; \
+		echo "  create .env (cp .env.example .env, fill in from 1Password — or: op inject -i .env.1password -o .env)"; \
+		echo "  or restore .env.1password (template, committed)"; \
+		exit 1; \
+	fi
+
+# `make publish fix` (or minor / major) bumps VERSION first; bare `make publish`
+# asks which. The bump has to land before the version is read into Cargo.toml
+# and tauri.conf.json, so the release runs in a sub-make that re-reads VERSION.
+publish:
+	@bash scripts/bump-version.sh $(filter-out publish,$(MAKECMDGOALS))
+	@$(MAKE) --no-print-directory _publish
+
+major minor fix:
+	@:
+
+_publish: check-tauri check-publish-tools sync-version build-ui
+	@printf "→ publish: universal signed + notarized $(APP) v$(VERSION), verify, GitHub release\n"
+	bash scripts/publish.sh
+
+# ── Install (macOS) ─────────────────────────────────────────────────────────
 install: bundle
 	@printf "→ installing $(APP).app to /Applications\n"
 	@osascript -e 'tell application "$(APP)" to quit' >/dev/null 2>&1 || true
 	@rm -rf "/Applications/$(APP).app"
-	@cp -R "$(DIST)/$(APP).app" "/Applications/$(APP).app"
+	@cp -R "crates/pluk-host/target/release/bundle/macos/$(APP).app" "/Applications/$(APP).app" 2>/dev/null || \
+		cp -R "target/release/bundle/macos/$(APP).app" "/Applications/$(APP).app" 2>/dev/null || \
+		( echo "no bundle found — check dist/bundle or target/release/bundle"; exit 1 )
 	@printf "→ installed /Applications/$(APP).app — launching\n"
-	@open "/Applications/$(APP).app"
+	@open "/Applications/$(APP).app" 2>/dev/null || true
 
-zip: bundle
-	@v=$$(cat VERSION); \
-	cd $(DIST) && zip -qr $(APP)-$$v.zip $(APP).app; \
-	printf "→ $(DIST)/$(APP)-$$v.zip ready\n"
+# ── Test / Lint ─────────────────────────────────────────────────────────────
+test:
+	cargo test --workspace
 
-release: zip
-	@v=$$(cat VERSION); \
-	printf "→ releasing v$$v\n"; \
-	git add VERSION; \
-	git commit -m "chore: release v$$v"; \
-	git tag -a "v$$v" -m "v$$v"; \
-	git push origin HEAD "v$$v"; \
-	gh release create "v$$v" "$(DIST)/$(APP)-$$v.zip" \
-		--title "Pluk v$$v" \
-		--generate-notes
+lint:
+	cargo clippy --workspace -- -D warnings
+	bun run --silent --cwd ui build 2>&1 | head -20
 
-# ── Publish (bump + release) ──────────────────────────────────────────────────
-
-publish:
-	@old=$$(cat VERSION); \
-	IFS=. read -r maj min pat <<< "$$old"; \
-	echo "$$maj.$$min.$$((pat+1))" > VERSION; \
-	printf "→ $$old → $$(cat VERSION)\n"
-	@$(MAKE) --no-print-directory release
-
-publish-minor:
-	@old=$$(cat VERSION); \
-	IFS=. read -r maj min pat <<< "$$old"; \
-	echo "$$maj.$$((min+1)).0" > VERSION; \
-	printf "→ $$old → $$(cat VERSION)\n"
-	@$(MAKE) --no-print-directory release
-
-publish-major:
-	@old=$$(cat VERSION); \
-	IFS=. read -r maj min pat <<< "$$old"; \
-	echo "$$((maj+1)).0.0" > VERSION; \
-	printf "→ $$old → $$(cat VERSION)\n"
-	@$(MAKE) --no-print-directory release
-
-# ── Clean ─────────────────────────────────────────────────────────────────────
-
+# ── Clean ───────────────────────────────────────────────────────────────────
 clean:
 	rm -rf $(DIST)
-	cd swift && swift package clean
+	rm -rf target
+	rm -rf ui/dist
+	rm -rf ui/node_modules/.vite

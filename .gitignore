@@ -2,6 +2,13 @@
 *.swp
 *.swo
 
+# Rust
+/target/
+
+# Node/Bun
+node_modules/
+ui/dist/
+
 .agents/
 skills-lock.json
 .claude/
@@ -11,3 +18,7 @@ dist/*
 
 # Local MCP client config: carries a live endpoint token.
 opencode.jsonc
+
+# Mounted secrets, populated from 1Password — never commit. .env.example and
+# .env.1password (op:// references only, no real values) stay tracked.
+.env

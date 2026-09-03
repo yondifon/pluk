@@ -1,0 +1,177 @@
+/* Design tokens — ported from swift/Sources/DesignSystem.swift
+   Deliberately small: two radii, a spacing scale, one control height,
+   and surface tiers that follow the system appearance. No theme switcher. */
+
+:root {
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-pill: 999px;
+
+  /* Spacing scale */
+  --space-xxs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-xxl: 32px;
+
+  /* Control */
+  --control-height: 22px;
+  --control-target: 28px;
+  --icon-size-md: 16px;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23737373' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4.75 6.5 3.25-3.25 3.25 3.25'/%3E%3Cpath d='m4.75 9.5 3.25 3.25 3.25-3.25'/%3E%3C/svg%3E");
+  --checkbox-size: 16px;
+  --checkbox-border-width: 2px;
+  --checkbox-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 8.5 2.75 2.75L12 5.25'/%3E%3C/svg%3E");
+  --checkbox-dash: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4.5 8h7'/%3E%3C/svg%3E");
+  --focus-width: 3px;
+  --focus-offset: 1px;
+  --disabled-opacity: 0.55;
+  --tracking-label: 0.05em;
+  --z-menu: 60;
+  --resizer-hit-area: 28px;
+  --badge-size: 34px;
+  /* Label columns scale with type so a label keeps its line at any zoom.
+     Settings nested under a tool carry longer labels and redefine
+     --label-column in their own scope. */
+  --label-column: calc(112px * var(--zoom-scale));
+  --settings-label-column: calc(196px * var(--zoom-scale));
+  --number-field-width: calc(96px * var(--zoom-scale));
+  /* Indent that lines a tool's description and settings up with its name. */
+  --tool-indent: calc(var(--checkbox-size) * var(--zoom-scale) + var(--space-sm));
+  --select-max-width: 240px;
+  --search-min-width: 160px;
+  --search-max-width: 320px;
+  --gutter-width: 36px;
+  --empty-max-width: 420px;
+  --modal-small-width: 440px;
+  --modal-small-height: 560px;
+  --modal-large-width: 960px;
+  --modal-large-height: 760px;
+  --modal-header-height: 52px;
+  --modal-sidebar-min: 180px;
+  --toast-width: 356px;
+  --toast-detail-height: 160px;
+  --z-modal: 1000;
+  --z-toast: 1100;
+  --border-accent-width: 2px;
+  --border-width: 1px;
+  --radius-xs: 3px;
+  --sidebar-width: 244px;
+  --sidebar-min-width: 220px;
+  --sidebar-max-width: 320px;
+  --sidebar-small-width: 200px;
+  --sidebar-small-min-width: 180px;
+  --macos-titlebar-inset: 78px;
+  --popover-width: 224px;
+  --popover-height: 360px;
+  --menu-min-width: 200px;
+  --menu-item-height: 32px;
+  --state-min-height: 120px;
+  --badge-fill: #e0e7ff;
+  --badge-label: #4338ca;
+  --success-fill: #f0fdf4;
+  --success-label: #166534;
+  --success-border: #bbf7d0;
+  --danger-fill: #fef2f2;
+  --danger-border: #fecaca;
+  --action-link: #2563eb;
+  --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.14);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.24);
+
+  /* Surfaces — light defaults (overridden by prefers-color-scheme) */
+  --surface-sidebar: #f4f4f4;           /* neutral 0.957 */
+  --surface-content: #fafafa;           /* neutral 0.98 */
+  --surface-panel: #ffffff;             /* neutral 1.0 */
+  --surface-sunken: rgba(0, 0, 0, 0.05);
+  --surface-selection: rgba(0, 0, 0, 0.06);
+  --surface-control: rgba(0, 0, 0, 0.05);
+  --surface-sidebar-label: #383838;     /* neutral 0.22 */
+  --surface-secondary-label: rgba(0, 0, 0, 0.62);
+  --surface-tertiary-label: rgba(0, 0, 0, 0.45);
+  --surface-sidebar-tertiary: rgba(0, 0, 0, 0.38);
+  --surface-label: #1a1a1a;
+  --surface-hover: rgba(0, 0, 0, 0.06);
+  --border-control: rgba(0, 0, 0, 0.14);
+  --border-subtle: rgba(0, 0, 0, 0.10);
+  --action-fill: #1a1a1a;
+  --action-fill-hover: #383838;
+  --action-label: #ffffff;
+  --danger-label: #b42318;
+  --focus-ring: rgba(37, 99, 235, 0.5);
+  --focus-ring: color-mix(in srgb, AccentColor 55%, transparent);
+  --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --accent-label: #4f46e5;
+  --control-accent: #4f46e5;
+  --control-accent-hover: #4338ca;
+  --status-success: #16a34a;
+  --status-danger: #dc2626;
+  --status-warning: #f97316;
+  --status-info: #3b82f6;
+
+  /* Typography — intended faces with system fallback.
+     IBM Plex Sans / Mono are not bundled today; fallback ships. */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Motion — one curve, four budgets. Everything that moves uses these.
+     Opening is deliberate and slower; closing is a response and snaps. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --duration-press: 120ms;
+  --duration-exit: 150ms;
+  --duration-enter: 200ms;
+  --duration-toast: 260ms;
+  /* One revolution of an indeterminate indicator — a loop, not a budget. */
+  --duration-spin: 900ms;
+
+  /* Zoom scale — applied to type only, never as a page transform */
+  --zoom-scale: 1;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-sidebar: #1e1e1e;         /* neutral 0.118 */
+    --surface-content: #262626;         /* neutral 0.15 */
+    --surface-panel: #2e2e2e;           /* neutral 0.18 */
+    --surface-sunken: rgba(255, 255, 255, 0.06);
+    --surface-selection: rgba(255, 255, 255, 0.10);
+    --surface-control: rgba(255, 255, 255, 0.06);
+    --surface-sidebar-label: rgba(255, 255, 255, 0.86);
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23a3a3a3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4.75 6.5 3.25-3.25 3.25 3.25'/%3E%3Cpath d='m4.75 9.5 3.25 3.25 3.25-3.25'/%3E%3C/svg%3E");
+    --surface-secondary-label: rgba(255, 255, 255, 0.68);
+    --surface-tertiary-label: rgba(255, 255, 255, 0.45);
+    --surface-sidebar-tertiary: rgba(255, 255, 255, 0.5);
+    --surface-label: rgba(255, 255, 255, 0.92);
+    --surface-hover: rgba(255, 255, 255, 0.10);
+    --border-control: rgba(255, 255, 255, 0.18);
+    --border-subtle: rgba(255, 255, 255, 0.12);
+    --action-fill: #ffffff;
+    --action-fill-hover: #e5e5e5;
+    --action-label: #1a1a1a;
+    --danger-label: #ff7b72;
+    --focus-ring: rgba(96, 165, 250, 0.55);
+    --focus-ring: color-mix(in srgb, AccentColor 60%, transparent);
+    --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.4);
+    --badge-fill: rgba(99, 102, 241, 0.24);
+    --badge-label: #c7d2fe;
+    --success-fill: rgba(22, 163, 74, 0.18);
+    --success-label: #86efac;
+    --success-border: rgba(74, 222, 128, 0.4);
+    --danger-fill: rgba(220, 38, 38, 0.18);
+    --danger-border: rgba(248, 113, 113, 0.4);
+    --action-link: #93c5fd;
+    --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.6);
+    --accent-label: #a5b4fc;
+    --control-accent: #6366f1;
+    --control-accent-hover: #818cf8;
+    --status-success: #4ade80;
+    --status-danger: #f87171;
+    --status-warning: #fb923c;
+    --status-info: #60a5fa;
+  }
+}
