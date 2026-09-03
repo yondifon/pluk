@@ -22,49 +22,78 @@
   <meta name="twitter:description" content="A macOS menu bar app that turns Postgres, MySQL, and SQLite into local MCP endpoints, so your coding agent can query them without holding your credentials.">
   <meta name="twitter:image" content="https://pluk.desgn.space/og.png">
 
-  <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
-  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0a">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#fffdf5">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/syne-var.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/inter-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
 
-  <main id="main" class="wrap">
-    <p class="brand">
-      <svg class="brand__mark" viewBox="40 200 432 112" aria-hidden="true" focusable="false">
-        <rect x="40" y="232" width="432" height="48" rx="24" fill="currentColor"/>
-        <rect x="148" y="200" width="216" height="112" rx="56" fill="currentColor"/>
-        <circle cx="312" cy="256" r="40" fill="var(--accent)"/>
-      </svg>
-      <span>Pluk</span>
-    </p>
+  <main id="main">
+    <section class="hero">
+      <div class="wrap">
+        <p class="brand">
+          <svg class="brand__mark" viewBox="40 200 432 112" aria-hidden="true" focusable="false">
+            <rect x="40" y="232" width="432" height="48" rx="24" fill="currentColor"/>
+            <rect x="148" y="200" width="216" height="112" rx="56" fill="currentColor"/>
+            <circle cx="312" cy="256" r="40" fill="var(--gold)"/>
+          </svg>
+          <span>Pluk</span>
+        </p>
 
-    <h1>Let your coding agent query your database.</h1>
+        <p class="eyebrow">Open source · Local MCP endpoints</p>
 
-    <p class="lede">A macOS menu bar app that turns Postgres, MySQL, and SQLite into local <a href="https://modelcontextprotocol.io">MCP</a> endpoints. Your credentials stay on your machine.</p>
+        <h1>Let your coding agent query your database.</h1>
 
-    <p class="cta-row">
-      <a class="btn" href="https://github.com/yondifon/pluk/releases/download/v0.1.1/Pluk_0.1.1_universal.dmg">Download for macOS</a>
-      <span class="cta-meta">Version 0.1.1 · Apple Silicon and Intel · macOS 14 or later</span>
-    </p>
+        <p class="lede">A macOS menu bar app that turns Postgres, MySQL, and SQLite into local <a href="https://modelcontextprotocol.io">MCP</a> endpoints. Your credentials stay on your machine.</p>
 
-    <p class="note">macOS today; Windows and Linux are coming. Pluk is open source — <a href="https://github.com/yondifon/pluk">read the code on GitHub</a>.</p>
+        <p class="cta-row">
+          <a class="btn" href="https://github.com/yondifon/pluk/releases/download/v0.1.1/Pluk_0.1.1_universal.dmg">Download for macOS</a>
+          <span class="cta-meta">Version 0.1.1 · Apple Silicon and Intel · macOS 14 or later</span>
+        </p>
 
-    <section class="about" aria-labelledby="about-title">
-      <h2 id="about-title">What it does</h2>
-      <ul>
-        <li>Connect a database once. Pluk gives it a local URL you paste into your coding agent.</li>
-        <li>A read-only policy blocks writes before they reach the database.</li>
-        <li>Every call is recorded on your machine, allowed or blocked.</li>
-        <li>Linear, Sentry, and SSH connect the same way.</li>
-      </ul>
+        <p class="note">macOS today; Windows and Linux are coming. Pluk is open source — <a href="https://github.com/yondifon/pluk">read the code on GitHub</a>.</p>
+      </div>
+    </section>
+
+    <section class="band" aria-labelledby="about-title">
+      <div class="wrap">
+        <h2 id="about-title">What it does</h2>
+        <ul class="grid">
+          <li class="card card--lead">
+            <span class="tag">01</span>
+            <p>Connect a database once. Pluk gives it a local URL you paste into your coding agent.</p>
+          </li>
+          <li class="card">
+            <span class="tag">02</span>
+            <p>A read-only policy blocks writes before they reach the database.</p>
+          </li>
+          <li class="card">
+            <span class="tag">03</span>
+            <p>Every call is recorded on your machine, allowed or blocked.</p>
+          </li>
+          <li class="card card--wide">
+            <span class="tag">04</span>
+            <p>Linear, Sentry, and SSH connect the same way.</p>
+          </li>
+        </ul>
+      </div>
     </section>
   </main>
 
   <footer class="site-footer">
     <div class="wrap">
+      <p class="footer-brand">
+        <svg class="brand__mark" viewBox="40 200 432 112" aria-hidden="true" focusable="false">
+          <rect x="40" y="232" width="432" height="48" rx="24" fill="currentColor"/>
+          <rect x="148" y="200" width="216" height="112" rx="56" fill="currentColor"/>
+          <circle cx="312" cy="256" r="40" fill="var(--gold)"/>
+        </svg>
+        <span>Pluk</span>
+      </p>
       <ul class="footer-links">
         <li><a href="https://github.com/yondifon/pluk">GitHub</a></li>
         <li><a href="https://github.com/yondifon/pluk/tree/main/docs">Documentation</a></li>

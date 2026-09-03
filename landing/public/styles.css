@@ -1,29 +1,44 @@
-:root {
-  --canvas: #ffffff;
-  --ink: #161616;
-  --ink-strong: #000000;
-  --support: rgba(22, 22, 22, 0.72);
-  --meta: rgba(22, 22, 22, 0.62);
-  --hairline: rgba(22, 22, 22, 0.1);
-  --hairline-strong: rgba(22, 22, 22, 0.18);
-  --fill-selection: rgba(22, 22, 22, 0.14);
-  --accent: #e0a23b;
-  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+@font-face {
+  font-family: "Syne";
+  src: url("fonts/syne-var.woff2") format("woff2-variations");
+  font-weight: 400 800;
+  font-display: swap;
 }
 
-/* The same alpha buys more contrast on a dark canvas, so the ink ladder is
-   re-tuned rather than reused. */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --canvas: #0a0a0a;
-    --ink: #fafaf7;
-    --ink-strong: #ffffff;
-    --support: rgba(250, 250, 247, 0.56);
-    --meta: rgba(250, 250, 247, 0.5);
-    --hairline: rgba(250, 250, 247, 0.12);
-    --hairline-strong: rgba(250, 250, 247, 0.2);
-    --fill-selection: rgba(250, 250, 247, 0.2);
-  }
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/inter-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Space Mono";
+  src: url("fonts/space-mono-700.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  --canvas: #fffdf5;
+  --ink: #000000;
+
+  /* Three accents, one job each. Gold is the brand's own hue and carries the
+     mark and the primary action; green fills the single chapter band; blue is
+     focus and appears nowhere else. */
+  --gold: #e0a23b;
+  --green: #88d498;
+  --focus: #2f6fed;
+
+  --border: 3px solid #000;
+  --shadow-sm: 3px 3px 0 0 #000;
+  --shadow: 5px 5px 0 0 #000;
+  --shadow-hover: 8px 8px 0 0 #000;
+  --radius: 0;
+
+  --display: "Syne", "Trebuchet MS", sans-serif;
+  --body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "Space Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 *,
@@ -38,18 +53,18 @@ html {
 
 body {
   margin: 0;
-  font-family: var(--sans);
+  font-family: var(--body);
   font-size: 1.0625rem;
-  line-height: 1.6;
+  line-height: 1.55;
   color: var(--ink);
   background: var(--canvas);
+  text-wrap: pretty;
 }
 
 h1,
 h2 {
   margin: 0;
-  font-weight: 600;
-  text-wrap: balance;
+  font-family: var(--display);
 }
 
 p {
@@ -65,36 +80,36 @@ ul {
 a {
   color: inherit;
   text-decoration: underline;
-  text-decoration-color: var(--hairline-strong);
+  text-decoration-thickness: 2px;
   text-underline-offset: 3px;
-  transition: text-decoration-color 120ms ease;
-}
-
-a:hover {
-  text-decoration-color: currentColor;
 }
 
 ::selection {
-  background: var(--fill-selection);
+  background: var(--gold);
+  color: var(--ink);
 }
 
+/* The ring must be seen against a 3px black border on one side and the
+   off-white canvas on the other, so it clears 3:1 on both. */
 :focus-visible {
-  outline: 2px solid var(--ink);
-  outline-offset: 2px;
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
 }
 
 .skip {
   position: fixed;
-  top: 0.75rem;
-  left: 0.75rem;
+  top: 1rem;
+  left: 1rem;
   z-index: 100;
-  transform: translateY(-200%);
-  background: var(--ink);
-  color: var(--canvas);
-  font-weight: 500;
+  transform: translateY(-250%);
+  background: var(--gold);
+  color: var(--ink);
+  border: var(--border);
+  box-shadow: var(--shadow);
+  font-family: var(--mono);
+  font-weight: 700;
   font-size: 0.9375rem;
-  padding: 0.625rem 1rem;
-  border-radius: 8px;
+  padding: 0.75rem 1.25rem;
   text-decoration: none;
 }
 
@@ -104,125 +119,244 @@ a:hover {
 
 .wrap {
   width: 100%;
-  max-width: 44rem;
+  max-width: 64rem;
   margin-inline: auto;
-  padding-inline: clamp(1.5rem, 5vw, 3rem);
+  padding-inline: clamp(1.25rem, 4vw, 3rem);
 }
 
-main {
-  padding-block: clamp(4.5rem, 14vh, 9rem) clamp(5rem, 12vw, 8rem);
+/* Hero */
+
+.hero {
+  padding-block: clamp(3.5rem, 9vw, 6rem) clamp(4rem, 9vw, 6.5rem);
 }
 
-/* The mark is the page's only visual, so it is the nameplate rather than a
-   second display element competing with the headline. */
 .brand {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  margin-block-end: clamp(2.5rem, 6vw, 4rem);
-  font-weight: 600;
-  font-size: 1.375rem;
-  letter-spacing: -0.01em;
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
 }
 
 .brand__mark {
   display: block;
   width: auto;
-  height: 1.625rem;
-  color: var(--ink);
+  height: 1.75rem;
+  color: currentColor;
+}
+
+.eyebrow {
+  margin-block-start: clamp(2.5rem, 6vw, 4rem);
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 0.8125rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 h1 {
-  font-size: clamp(2.375rem, 1.4rem + 3.6vw, 3.5rem);
-  line-height: 1.05;
-  letter-spacing: -0.022em;
+  margin-block-start: 1.25rem;
+  font-weight: 800;
+  font-size: clamp(2.75rem, 7.6vw, 5.25rem);
+  line-height: 0.95;
+  letter-spacing: -0.035em;
 }
 
 .lede {
-  margin-block-start: 1.5rem;
-  max-width: 34rem;
-  color: var(--support);
+  margin-block-start: 1.75rem;
+  max-width: 46ch;
   font-size: 1.1875rem;
-  line-height: 1.6;
+  line-height: 1.55;
 }
 
 .cta-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.875rem 1.25rem;
-  margin-block-start: clamp(2.5rem, 6vw, 3.5rem);
+  gap: 1.25rem 1.5rem;
+  margin-block-start: 2.5rem;
 }
 
 .btn {
   display: inline-flex;
   align-items: center;
-  background: var(--ink);
-  color: var(--canvas);
-  font-weight: 500;
-  font-size: 1rem;
+  background: var(--gold);
+  color: var(--ink);
+  border: var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 1.0625rem;
   line-height: 1;
-  padding: 0.9375rem 1.75rem;
-  border-radius: 8px;
+  padding: 1.0625rem 1.75rem;
   text-decoration: none;
-  transition: background-color 120ms ease;
+  transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
-.btn:hover {
-  background: var(--ink-strong);
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover {
+    transform: translate(-3px, -3px);
+    box-shadow: var(--shadow-hover);
+  }
+}
+
+.btn:active {
+  transform: translate(5px, 5px);
+  box-shadow: none;
 }
 
 .cta-meta {
-  color: var(--meta);
-  font-size: 0.875rem;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 0.8125rem;
+  line-height: 1.5;
 }
 
 .note {
-  margin-block-start: 1.375rem;
-  max-width: 34rem;
-  color: var(--meta);
-  font-size: 0.9375rem;
-  line-height: 1.6;
+  margin-block-start: 1.75rem;
+  max-width: 46ch;
+  font-size: 1rem;
 }
 
-.about {
-  margin-block-start: clamp(4.5rem, 11vw, 7rem);
+/* The one chapter band: a change of fill and a hard edge, not whitespace. */
+
+.band {
+  background: var(--green);
+  border-top: var(--border);
+  border-bottom: var(--border);
+  padding-block: clamp(3rem, 7vw, 4.5rem) clamp(3.5rem, 8vw, 5rem);
 }
 
-.about h2 {
-  font-size: 1.1875rem;
+h2 {
+  font-weight: 800;
+  font-size: clamp(1.875rem, 4.4vw, 2.75rem);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
 }
 
-.about ul {
+.grid {
   display: grid;
-  gap: 1rem;
-  margin-block-start: 1.5rem;
-  max-width: 34rem;
-  color: var(--support);
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin-block-start: clamp(2rem, 4vw, 2.75rem);
 }
 
-/* The one rule on the page divides chrome from content, so it holds the
-   content column rather than bleeding to the viewport edge. */
+.card {
+  background: var(--canvas);
+  border: var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.5rem;
+}
+
+/* One dominant block, so the chapter has an entry point rather than a wall of
+   equal boxes. */
+.card--lead,
+.card--wide {
+  grid-column: span 2;
+}
+
+.card p {
+  margin-block-start: 1rem;
+  font-size: 1rem;
+}
+
+.card--lead p {
+  font-size: 1.1875rem;
+  line-height: 1.5;
+}
+
+.tag {
+  display: inline-block;
+  background: var(--ink);
+  color: var(--canvas);
+  border: var(--border);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 0.75rem;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  padding: 0.5rem 0.625rem;
+}
+
+/* Footer — the loudest block on the page. */
+
 .site-footer {
-  padding-block-end: 3.5rem;
+  background: var(--ink);
+  color: var(--canvas);
+  padding-block: clamp(3rem, 7vw, 4.5rem) clamp(3rem, 6vw, 4rem);
 }
 
-.site-footer .wrap {
-  padding-block-start: 2.5rem;
-  border-top: 1px solid var(--hairline);
+.footer-brand {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: clamp(3rem, 9vw, 5.5rem);
+  line-height: 0.9;
+  letter-spacing: -0.04em;
+}
+
+.footer-brand .brand__mark {
+  height: clamp(2.25rem, 6.5vw, 4rem);
 }
 
 .footer-links {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 1.75rem;
-  margin-block-end: 1.25rem;
+  gap: 0.5rem 1.5rem;
+  margin-block-start: clamp(2rem, 5vw, 3rem);
+  margin-inline-start: -0.5rem;
+  font-family: var(--mono);
+  font-weight: 700;
   font-size: 0.9375rem;
 }
 
+/* These are standalone links rather than links inside a sentence, so they owe
+   the 24px target rather than taking the inline exception. */
+.footer-links a {
+  display: inline-block;
+  padding: 0.3125rem 0.5rem;
+}
+
 .footer-small {
-  color: var(--meta);
-  font-size: 0.8125rem;
+  margin-block-start: 1.5rem;
+  font-size: 0.875rem;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  a:hover {
+    background: var(--ink);
+    color: var(--canvas);
+    text-decoration-color: transparent;
+  }
+
+  .site-footer a:hover {
+    background: var(--canvas);
+    color: var(--ink);
+  }
+
+  .btn:hover,
+  .skip:hover {
+    background: var(--gold);
+    color: var(--ink);
+  }
+}
+
+@media (max-width: 760px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .card--lead,
+  .card--wide {
+    grid-column: auto;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -232,5 +366,11 @@ h1 {
     transition-duration: 1ms !important;
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
+  }
+
+  /* Colour and border feedback stay; only the movement goes. */
+  .btn:hover,
+  .btn:active {
+    transform: none;
   }
 }
