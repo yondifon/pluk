@@ -5,6 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pluk — database access for coding agents</title>
   <meta name="description" content="Pluk lets coding agents query Postgres, MySQL, and SQLite through local MCP endpoints, with per-integration policies and a local activity log.">
+  <link rel="canonical" href="https://pluk.desgn.space/">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://pluk.desgn.space/">
+  <meta property="og:site_name" content="Pluk">
+  <meta property="og:title" content="Pluk — database access for coding agents">
+  <meta property="og:description" content="Pluk lets coding agents query Postgres, MySQL, and SQLite through local MCP endpoints, with per-integration policies and a local activity log.">
+  <meta property="og:image" content="https://pluk.desgn.space/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Pluk — a toggle switch gating a channel, over the words “Let your coding agent query your database.”">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Pluk — database access for coding agents">
+  <meta name="twitter:description" content="Pluk lets coding agents query Postgres, MySQL, and SQLite through local MCP endpoints, with per-integration policies and a local activity log.">
+  <meta name="twitter:image" content="https://pluk.desgn.space/og.png">
+
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0a">
@@ -17,19 +34,17 @@
   <header class="site-header">
     <nav class="wrap nav" aria-label="Main">
       <a class="brand" href="#top">
-        <svg class="brand__mark" viewBox="0 0 512 512" width="28" height="28" aria-hidden="true" focusable="false">
-          <rect width="512" height="512" rx="90" fill="#161616"/>
-          <rect x="40" y="232" width="432" height="48" rx="24" fill="#FAFAF7"/>
-          <rect x="148" y="206" width="216" height="100" rx="50" fill="#FAFAF7"/>
-          <rect x="164" y="222" width="184" height="68" rx="34" fill="#161616"/>
-          <circle cx="314" cy="256" r="32" fill="#E0A23B"/>
+        <svg class="brand__mark" viewBox="40 200 432 112" aria-hidden="true" focusable="false">
+          <rect x="40" y="232" width="432" height="48" rx="24" fill="currentColor"/>
+          <rect x="148" y="200" width="216" height="112" rx="56" fill="currentColor"/>
+          <circle cx="312" cy="256" r="40" fill="var(--accent)"/>
         </svg>
         <span>Pluk</span>
       </a>
       <ul class="nav__links">
+        <li><a href="#safety">Safety</a></li>
         <li><a href="#how-it-works">How it works</a></li>
         <li><a href="#databases">Databases</a></li>
-        <li><a href="#safety">Safety</a></li>
         <li><a href="#install">Install</a></li>
       </ul>
     </nav>
@@ -45,33 +60,29 @@
           <a class="cta-link" href="#how-it-works">See how it works →</a>
         </p>
 
-        <figure class="flow">
-          <div class="flow__rail">
-            <div class="flow__node">
-              <p class="flow__title">Your coding agent</p>
-              <p class="flow__meta">Codex · opencode · Claude Code · Cursor · Windsurf · Antigravity</p>
-            </div>
-            <div class="wire" aria-hidden="true"></div>
-            <div class="flow__gate">
-              <svg class="flow__toggle" viewBox="40 200 432 112" aria-hidden="true" focusable="false">
-                <rect x="40" y="232" width="432" height="48" rx="24" fill="currentColor"/>
-                <rect x="148" y="200" width="216" height="112" rx="56" fill="currentColor"/>
-                <circle cx="312" cy="256" r="40" fill="var(--accent)"/>
-              </svg>
-              <p class="flow__title">Pluk</p>
-              <p class="flow__meta">menu bar app · <code>localhost:4242</code><br>policy check · activity log</p>
-            </div>
-            <div class="wire" aria-hidden="true"></div>
-            <div class="flow__node">
-              <p class="flow__title">Your database</p>
-              <ul class="flow__list">
-                <li>Postgres — production</li>
-                <li>MySQL</li>
-                <li>SQLite</li>
-              </ul>
-              <p class="flow__meta">other adapters available</p>
-            </div>
+        <figure class="channel">
+          <div class="channel__rail">
+            <span class="channel__wire" aria-hidden="true"></span>
+            <svg class="channel__gate" viewBox="148 200 216 112" aria-hidden="true" focusable="false">
+              <rect x="148" y="200" width="216" height="112" rx="56" fill="currentColor"/>
+              <circle cx="312" cy="256" r="40" fill="var(--accent)"/>
+            </svg>
+            <span class="channel__wire" aria-hidden="true"></span>
           </div>
+          <ol class="channel__legend">
+            <li>
+              <p class="channel__label">Your coding agent</p>
+              <p class="channel__meta">Codex · opencode · Claude Code · Cursor · Windsurf · Antigravity</p>
+            </li>
+            <li>
+              <p class="channel__label">Pluk</p>
+              <p class="channel__meta">Menu bar app on <code>localhost:4242</code> · policy check · activity log</p>
+            </li>
+            <li>
+              <p class="channel__label">Your database</p>
+              <p class="channel__meta">Postgres · MySQL · SQLite · other adapters available</p>
+            </li>
+          </ol>
           <figcaption>The agent calls <code>http://localhost:4242/mcp/&lt;token&gt;</code>. Pluk checks the policy, logs the call, and forwards it through the matching database adapter.</figcaption>
         </figure>
       </div>
@@ -79,6 +90,7 @@
 
     <section class="section" id="safety" aria-labelledby="safety-title">
       <div class="wrap">
+        <p class="chapter-index">Safety</p>
         <div class="chapter-head">
           <h2 id="safety-title">Put a boundary in front of the database.</h2>
           <p class="lede">A raw database credential gives an agent more reach than one query needs. Pluk keeps the broker on your machine and sets the boundary per integration.</p>
@@ -101,14 +113,50 @@
             <p>Each integration gets a bearer URL. Give an agent only the database it needs.</p>
           </div>
         </div>
+
+        <figure class="log">
+          <div class="log__panel">
+            <div class="log__head">
+              <p class="log__head-title">Activity</p>
+              <p class="log__head-meta">my-prod-db · Postgres · read-only</p>
+            </div>
+            <ol class="log__rows">
+              <li class="log__row">
+                <span class="log__verdict">Allowed</span>
+                <span class="log__tool">list_tables</span>
+                <span class="log__detail">14 tables in <code>public</code></span>
+                <span class="log__time">09:41</span>
+              </li>
+              <li class="log__row">
+                <span class="log__verdict">Allowed</span>
+                <span class="log__tool">describe_table</span>
+                <span class="log__detail">orders — 22 columns, 4 indexes</span>
+                <span class="log__time">09:41</span>
+              </li>
+              <li class="log__row">
+                <span class="log__verdict">Allowed</span>
+                <span class="log__tool">query</span>
+                <span class="log__detail">select … from orders — 100 rows, capped</span>
+                <span class="log__time">09:42</span>
+              </li>
+              <li class="log__row log__row--blocked">
+                <span class="log__verdict">Blocked</span>
+                <span class="log__tool">query</span>
+                <span class="log__detail">update statement — this integration is read-only</span>
+                <span class="log__time">09:44</span>
+              </li>
+            </ol>
+          </div>
+          <figcaption>What the agent actually did. The policy decides before a statement reaches the database, and Pluk records the call either way.</figcaption>
+        </figure>
       </div>
     </section>
 
-    <section class="section band" id="how-it-works" aria-labelledby="how-title">
+    <section class="section" id="how-it-works" aria-labelledby="how-title">
       <div class="wrap">
+        <p class="chapter-index">How it works</p>
         <div class="chapter-head">
-          <h2 id="how-title">How it works</h2>
-          <p class="lede">Connect a database once, then give your coding agent its local MCP URL.</p>
+          <h2 id="how-title">Connect a database once. <span class="tone">Then hand your agent its local URL.</span></h2>
         </div>
         <ol class="steps">
           <li>
@@ -138,7 +186,7 @@
         </ol>
 
         <h3 class="subhead">One client entry</h3>
-        <figure class="code code--single">
+        <figure class="code">
           <figcaption>Codex — ~/.codex/config.toml</figcaption>
           <pre><code>[mcp_servers.my-prod-db]
 url = "http://localhost:4242/mcp/&lt;token&gt;"</code></pre>
@@ -148,6 +196,7 @@ url = "http://localhost:4242/mcp/&lt;token&gt;"</code></pre>
 
     <section class="section" id="databases" aria-labelledby="databases-title">
       <div class="wrap">
+        <p class="chapter-index">Databases</p>
         <div class="chapter-head">
           <h2 id="databases-title">Connect the databases you already use.</h2>
           <p class="lede">Postgres, MySQL, and SQLite share Pluk's SQL adapter family and 12-tool set. They differ only in how they connect.</p>
@@ -173,10 +222,11 @@ url = "http://localhost:4242/mcp/&lt;token&gt;"</code></pre>
       </div>
     </section>
 
-    <section class="section band" id="install" aria-labelledby="install-title">
+    <section class="section" id="install" aria-labelledby="install-title">
       <div class="wrap">
+        <p class="chapter-index">Install</p>
         <div class="chapter-head">
-          <h2 id="install-title">Install Pluk.</h2>
+          <h2 id="install-title">Build it on your Mac.</h2>
           <p class="lede">Pluk builds from source on macOS 14 or later. You need Bun, a Swift toolchain, and Make.</p>
         </div>
         <ul class="install-list">
@@ -204,12 +254,10 @@ make install</code></pre>
   <footer class="site-footer">
     <div class="wrap">
       <p class="footer-brand">
-        <svg class="brand__mark" viewBox="0 0 512 512" width="24" height="24" aria-hidden="true" focusable="false">
-          <rect width="512" height="512" rx="90" fill="#161616"/>
-          <rect x="40" y="232" width="432" height="48" rx="24" fill="#FAFAF7"/>
-          <rect x="148" y="206" width="216" height="100" rx="50" fill="#FAFAF7"/>
-          <rect x="164" y="222" width="184" height="68" rx="34" fill="#161616"/>
-          <circle cx="314" cy="256" r="32" fill="#E0A23B"/>
+        <svg class="brand__mark" viewBox="40 200 432 112" aria-hidden="true" focusable="false">
+          <rect x="40" y="232" width="432" height="48" rx="24" fill="currentColor"/>
+          <rect x="148" y="200" width="216" height="112" rx="56" fill="currentColor"/>
+          <circle cx="312" cy="256" r="40" fill="var(--accent)"/>
         </svg>
         <span>Pluk</span>
       </p>
