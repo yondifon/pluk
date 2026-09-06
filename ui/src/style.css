@@ -87,6 +87,8 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 }
 /* The read-only list marks state with a dot where the form has a checkbox. */
 .tools-tab { --tool-indent: calc(var(--space-xs) + var(--space-sm)); }
+.tools-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
+.tools-header > .ui-card-title { margin: 0; }
 .tool-row { display: flex; flex-direction: column; gap: var(--space-xxs); padding: var(--space-md) 0; }
 .tool-row + .tool-row { border-top: var(--border-width) solid var(--border-subtle); }
 .tool-on .tool-dot, .al-dot-allowed { background: var(--status-success); }
