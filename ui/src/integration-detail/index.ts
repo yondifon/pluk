@@ -113,7 +113,12 @@ export function mountIntegrationDetail(
   return {
     updateHealth(next: ConnHealth | null | undefined) {
       currentHealth = next ?? null;
-      render();
+      renderHeader(headerEl, integration, manifest ?? null, currentHealth, testing, {
+        onTest: () => void runTest(),
+        onEdit: actions.onEdit,
+        onDuplicate: actions.onDuplicate,
+        onDelete: actions.onDelete,
+      });
     },
     destroy() {
       logs?.destroy();

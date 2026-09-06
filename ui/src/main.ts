@@ -92,7 +92,11 @@ let groupDraft: GroupDraft | null = null;
 let detailHandle: { destroy: () => void; updateHealth: (next: DetailHealth | null) => void } | null = null;
 let detachDetail: (() => void) | null = null;
 
-type SidebarElement = HTMLElement & { _destroy?: () => void };
+type SidebarElement = HTMLElement & {
+  _destroy?: () => void;
+  _setHealth?: (health: Record<string, Health>) => void;
+  _setSelectedId?: (id: string | null) => void;
+};
 
 function manifestFor(type: string): CatalogManifest | undefined {
   return manifests.find((m) => m.id === type);
@@ -444,9 +448,7 @@ function refreshSidebar(): void {
   if (!shellMounts) return;
   const sidebarWrap = shellMounts.root.querySelector(".shell-sidebar");
   if (sidebarWrap) {
-    (sidebarWrap.firstElementChild as SidebarElement | null)?._destroy?.();
-    sidebarWrap.innerHTML = "";
-    sidebarWrap.appendChild(buildSidebar());
+    (sidebarWrap.firstElementChild as SidebarElement | null)?._setHealth?.(state.health);
   }
 }
 
@@ -507,7 +509,9 @@ let shellMounts: ReturnType<typeof createShell> | null = null;
 
 function select(next: Selection): void {
   selection = next;
-  refresh();
+  const sidebar = shellMounts?.root.querySelector(".shell-sidebar")?.firstElementChild as SidebarElement | null;
+  sidebar?._setSelectedId?.(sidebarSelection());
+  renderDetail(detailEl);
 }
 
 function sidebarSelection(): string | null {
@@ -556,10 +560,8 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
-  // Independent reads, so first paint waits on one round trip.
+
   await Promise.all([loadAdapters(), loadHealth(), loadData()]);
-  // loadData renders as soon as it lands; render again so the paint that
-  // sticks carries the adapter catalog and health too.
   refresh();
 
   setInterval(

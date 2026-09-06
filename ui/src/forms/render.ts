@@ -226,15 +226,28 @@ export function renderToolsSection(
   draft: ConnectionDraft,
   onToggle: (tool: string, enabled: boolean) => void,
   onSettingChange: (tool: string, key: string, value: string) => void,
+  onToggleAll?: (enabled: boolean) => void,
 ): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "ui-card";
+  const header = document.createElement("div");
+  header.className = "tools-header";
   const title = document.createElement("h3");
   title.className = "ui-card-title";
   title.textContent = "Tools";
-  wrap.appendChild(title);
+  header.appendChild(title);
 
   const enabledCount = draft.tools.filter((t) => (draft.toolConfig[t.name]?.enabled ?? t.defaultEnabled)).length;
+  if (onToggleAll && draft.tools.length) {
+    const allOn = enabledCount === draft.tools.length;
+    header.appendChild(
+      createButton(allOn ? "Turn all off" : "Turn all on", {
+        size: "sm",
+        onClick: () => onToggleAll(!allOn),
+      }),
+    );
+  }
+  wrap.appendChild(header);
   const hint = document.createElement("p");
   hint.className = "hint";
   hint.textContent = `${enabledCount} of ${draft.tools.length} on. Enable tools to give the agent more, disable to shrink what it sees.`;
@@ -470,6 +483,13 @@ export function renderIntegrationForm(
       (tool, key, value) => {
         const prev = draft.toolConfig[tool] ?? { enabled: true, settings: {} };
         onDraftChange({ ...draft, toolConfig: { ...draft.toolConfig, [tool]: { ...prev, settings: { ...prev.settings, [key]: value } } } });
+      },
+      (enabled) => {
+        const toolConfig = { ...draft.toolConfig };
+        for (const tool of draft.tools) {
+          toolConfig[tool.name] = { ...(toolConfig[tool.name] ?? { enabled, settings: {} }), enabled };
+        }
+        onDraftChange({ ...draft, toolConfig });
       },
     );
     wrap.appendChild(toolsEl);
