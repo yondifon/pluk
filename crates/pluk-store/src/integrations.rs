@@ -51,9 +51,9 @@ pub struct IntegrationUpdate {
     pub query_policy: Option<Option<String>>,
 }
 
-/// The column list every read shares. A macro rather than a `const` so the
-/// three statements below are string literals: `prepare_cached` keys its cache
-/// on the SQL text, and a literal costs no formatting per call.
+/// The column list every read shares. A macro rather than a `const` keeps the
+/// three statements below string literals, which `prepare_cached` needs: it
+/// keys its cache on the SQL text.
 macro_rules! select_all {
     () => {
         "SELECT id, name, type, config, environment, read_only, query_policy, token, created_at FROM integrations"

@@ -542,9 +542,8 @@ pub mod live {
                     crate::sql_log::record_executed_sql(&sql2, None, None);
                     let res: Result<QueryResult, DriverError> = tokio::select! {
                         r = async {
-                            // `BEGIN READ ONLY` in one statement: the builder
-                            // sends the mode with the BEGIN rather than in a
-                            // second round trip.
+                            // The builder sends the mode with the BEGIN, so the
+                            // read-only transaction opens in one round trip.
                             let tx = client.build_transaction().read_only(true).start().await.map_err(map_query_error)?;
                             let owned = build_pg_params(&params2);
                             let refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = owned.iter().map(|b| b.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();

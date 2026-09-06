@@ -143,7 +143,7 @@ async fn request(
     if let Some(r) = get_runner() {
         return r(method.to_string(), url, query.unwrap_or(Value::Null), body).await;
     }
-    let client = crate::http_client::shared_client()?;
+    let client = crate::http_client::shared()?;
     let mut req = client.request(
         reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET),
         &url,

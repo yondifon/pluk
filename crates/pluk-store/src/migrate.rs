@@ -152,11 +152,10 @@ fn migrate_v1(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-/// Version 2: an index for the retention purge.
+/// Version 2: the index the retention purge reads.
 ///
-/// Both v1 indexes lead with `connection_id` / `group_id`, so
-/// `DELETE FROM query_log WHERE created_at < …` scans the whole table — once
-/// on every open and every fifteen minutes thereafter.
+/// The v1 indexes both lead with `connection_id` / `group_id`, so neither one
+/// serves `DELETE FROM query_log WHERE created_at < …`.
 fn migrate_v2(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(

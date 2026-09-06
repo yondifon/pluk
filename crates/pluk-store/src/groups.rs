@@ -26,8 +26,8 @@ pub struct GroupUpdate {
     pub members: Option<Vec<GroupMember>>,
 }
 
-/// See the note on the matching macro in `integrations.rs`: literals keep the
-/// `prepare_cached` key stable and cost no formatting per call.
+/// The column list every read shares, kept a macro so the statements below
+/// stay string literals for `prepare_cached`.
 macro_rules! select_all {
     () => {
         "SELECT id, name, environment, member_ids, token, created_at FROM groups"

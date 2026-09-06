@@ -284,9 +284,8 @@ impl Store {
     /// most once every fifteen minutes).
     pub fn create_log_entry(&self, draft: LogDraft) -> Result<i64> {
         let conn = self.conn.lock().expect("store lock");
-        // `RETURNING` hands back the written row — including the database's own
-        // `created_at` — in the same statement the activity feed would
-        // otherwise re-read it with.
+        // `RETURNING` yields the stored row, `created_at` default included, so
+        // the activity feed is fed from the write itself.
         let mut stmt = conn.prepare_cached(concat!(
             "INSERT INTO query_log (connection_id, connection_name, sql, verdict, reason, categories, source, group_id, group_name, database)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ",
@@ -363,8 +362,8 @@ impl Store {
         feed.unsubscribe(subscription);
     }
 
-    /// Hand a just-written row to every subscriber. The writer already has the
-    /// row from its `RETURNING` clause, so this reads nothing back.
+    /// Hand a written row to every subscriber. The caller supplies the row its
+    /// own statement returned, so nothing is read back here.
     fn dispatch_activity(&self, row: LogActivity) {
         let feed = self.activity.lock().expect("activity feed");
         if feed.handlers.is_empty() {

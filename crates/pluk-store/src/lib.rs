@@ -73,9 +73,9 @@ impl Store {
         let mut conn = rusqlite::Connection::open(path)?;
         configure(&mut conn)?;
         migrate::run(&mut conn)?;
-        // No purge here: `last_purge` starts unset, so the first log write runs
-        // one. Opening the database is on the app's startup path and the purge
-        // is not worth delaying the window for.
+        // `last_purge` starts unset, so retention runs on the first log write.
+        // Opening the database sits on the app's startup path, and a purge is
+        // not worth delaying the window for.
         Ok(Store {
             conn: Mutex::new(conn),
             last_purge: Mutex::new(None),

@@ -100,7 +100,7 @@ pub async fn slack_request(
         }
     }
 
-    let client = crate::http_client::shared_client()?;
+    let client = crate::http_client::shared()?;
 
     let url = format!("{BASE_URL}/{method}");
     let res = client

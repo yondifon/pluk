@@ -46,7 +46,7 @@ pub async fn linear_graphql(
     if let Some(r) = runner() {
         return r(query.to_string(), variables).await;
     }
-    let client = crate::http_client::shared_client()?;
+    let client = crate::http_client::shared()?;
     let body = serde_json::json!({ "query": query, "variables": variables });
     let res = client
         .post(ENDPOINT)
