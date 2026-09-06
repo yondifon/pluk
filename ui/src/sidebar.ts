@@ -32,7 +32,11 @@ export type SidebarCallbacks = {
   onRetryAdapters: () => void;
 };
 
-type SidebarElement = HTMLElement & { _destroy?: () => void };
+type SidebarElement = HTMLElement & {
+  _destroy?: () => void;
+  _setHealth?: (health: Record<string, Health>) => void;
+  _setSelectedId?: (id: string | null) => void;
+};
 
 export function createSidebar(
   state: SidebarState,
@@ -296,6 +300,7 @@ export function createSidebar(
       for (const g of groups) {
         const row = document.createElement("div");
         row.className = "sidebar-row";
+        row.dataset.id = g.id;
         if (g.id === selectedId) row.classList.add("selected");
          row.setAttribute("role", "button");
          row.setAttribute("aria-label", `${g.name}, group`);
@@ -336,6 +341,7 @@ export function createSidebar(
       for (const c of integrations) {
         const row = document.createElement("div");
         row.className = "sidebar-row";
+        row.dataset.id = c.id;
         if (c.id === selectedId) row.classList.add("selected");
          row.setAttribute("role", "button");
          row.setAttribute("aria-label", `${c.name}, integration`);
@@ -384,6 +390,7 @@ export function createSidebar(
         const health = state.health[c.id];
         const dot = document.createElement("span");
         dot.className = `health-dot ${health ? (health.status === "error" ? "error" : "ok") : "unknown"}`;
+        dot.dataset.healthId = c.id;
         dot.title = health ? (health.status === "error" ? health.error ?? "Connection failing" : "Healthy") : "Not checked";
         dot.setAttribute("aria-label", dot.title);
         row.appendChild(dot);
@@ -429,9 +436,27 @@ export function createSidebar(
   root.append(toolbar, searchRow, list);
 
   // expose helper to update state externally
-  (root as unknown as { _render: () => void })._render = renderList;
+  const sidebar = root as SidebarElement;
+  sidebar._setHealth = (health) => {
+    for (const dot of Array.from(root.querySelectorAll<HTMLElement>("[data-health-id]"))) {
+      const current = health[dot.dataset.healthId ?? ""];
+      const title = current
+        ? current.status === "error"
+          ? current.error ?? "Connection failing"
+          : "Healthy"
+        : "Not checked";
+      dot.className = `health-dot ${current ? (current.status === "error" ? "error" : "ok") : "unknown"}`;
+      dot.title = title;
+      dot.setAttribute("aria-label", title);
+    }
+  };
+  sidebar._setSelectedId = (id) => {
+    for (const row of Array.from(root.querySelectorAll<HTMLElement>(".sidebar-row[data-id]"))) {
+      row.classList.toggle("selected", row.dataset.id === id);
+    }
+  };
 
-  (root as SidebarElement)._destroy = () => {
+  sidebar._destroy = () => {
     window.removeEventListener("keydown", onKeydown);
     if (popover) {
       closePopover?.();
@@ -439,4 +464,3 @@ export function createSidebar(
   };
   return root;
 }
-
