@@ -1,12 +1,12 @@
-import type { AdapterManifest, ConfigFieldDef, ToolDef, ToolState } from "./catalog";
-import { seededState, isVisible } from "./catalog";
+import type { AdapterManifest, ConfigEntry, ConfigFieldDef, ConfigValue, ToolDef, ToolState } from "./catalog";
+import { seededState, isVisible, entriesValue, textValue, visibleFields } from "./catalog";
 
 export type Environment = "production" | "staging" | "development" | "local";
 
 export interface ConnectionDraft {
   name: string;
   type: string;
-  config: Record<string, string>;
+  config: Record<string, ConfigValue>;
   environment: Environment;
   policyKind: string;
   fields: ConfigFieldDef[];
@@ -27,6 +27,16 @@ export function emptyDraft(): ConnectionDraft {
   };
 }
 
+function hydrateEntry(raw: unknown): ConfigEntry {
+  const entry: ConfigEntry = {};
+  if (raw == null || typeof raw !== "object") return entry;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === "boolean") entry[k] = v ? "true" : "false";
+    else if (v != null) entry[k] = String(v);
+  }
+  return entry;
+}
+
 export function draftFromConnection(conn: {
   name: string;
   type: string;
@@ -34,12 +44,11 @@ export function draftFromConnection(conn: {
   environment?: Environment;
   queryPolicy?: string | null;
 }): ConnectionDraft {
-  // Hydrate config blob: values may be string/number/bool -> normalize to string
-  const config: Record<string, string> = {};
+  // Hydrate config blob: scalars normalize to string, arrays stay lists of entries
+  const config: Record<string, ConfigValue> = {};
   for (const [k, v] of Object.entries(conn.config ?? {})) {
-    if (typeof v === "string") config[k] = v;
+    if (Array.isArray(v)) config[k] = v.map(hydrateEntry);
     else if (typeof v === "boolean") config[k] = v ? "true" : "false";
-    else if (typeof v === "number") config[k] = String(v);
     else if (v != null) config[k] = String(v);
   }
   const toolConfig: Record<string, ToolState> = {};
@@ -84,7 +93,7 @@ export function adopt(draft: ConnectionDraft, manifest: AdapterManifest, resetCo
   };
 
   if (resetConfig) {
-    const seededCfg: Record<string, string> = {};
+    const seededCfg: Record<string, ConfigValue> = {};
     for (const f of manifest.configFields) {
       if (f.default != null) seededCfg[f.key] = f.default;
     }
@@ -93,7 +102,7 @@ export function adopt(draft: ConnectionDraft, manifest: AdapterManifest, resetCo
   } else {
     // Seed defaults for empty config keys
     for (const f of manifest.configFields) {
-      if (f.default != null && (next.config[f.key] ?? "") === "") {
+      if (f.default != null && textValue(next.config[f.key]) === "") {
         next.config[f.key] = f.default;
       }
     }
@@ -142,14 +151,35 @@ export function setEnvironment(draft: ConnectionDraft, env: Environment): Connec
   return applyEnvironmentDefaults(next);
 }
 
+/** A required input left empty, with the list entry it belongs to when nested. */
+export interface MissingValue {
+  field: ConfigFieldDef;
+  entry?: { index: number; field: ConfigFieldDef };
+}
+
+export function firstMissingValue(draft: ConnectionDraft): MissingValue | null {
+  for (const f of draft.fields) {
+    if (!isVisible(f, draft.config)) continue;
+    if (f.type === "list") {
+      const entries = entriesValue(draft.config[f.key]);
+      if (f.required && entries.length === 0) return { field: f };
+      for (const [index, entry] of entries.entries()) {
+        for (const sub of visibleFields(f.fields ?? [], entry)) {
+          if (sub.required && (entry[sub.key] ?? "") === "") {
+            return { field: f, entry: { index, field: sub } };
+          }
+        }
+      }
+      continue;
+    }
+    if (f.required && textValue(draft.config[f.key]) === "") return { field: f };
+  }
+  return null;
+}
+
 export function canSave(draft: ConnectionDraft): boolean {
   if (draft.name.trim() === "") return false;
-  for (const f of draft.fields) {
-    if (f.required && isVisible(f, draft.config)) {
-      if ((draft.config[f.key] ?? "") === "") return false;
-    }
-  }
-  return true;
+  return firstMissingValue(draft) == null;
 }
 
 export function splitTools(tools: ToolDef[]): { defaults: ToolDef[]; extras: ToolDef[] } {

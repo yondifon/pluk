@@ -146,6 +146,12 @@ pub fn apply_overrides(
             Some(FieldType::Toggle) => serde_json::Value::Bool(
                 *value == serde_json::Value::Bool(true) || value.as_str() == Some("true"),
             ),
+            // A list is replaced wholesale or not at all: a scalar override
+            // cannot describe its entries, so it inherits instead.
+            Some(FieldType::List) => match value {
+                serde_json::Value::Array(_) => value.clone(),
+                _ => continue,
+            },
             _ => value.clone(),
         };
         coerced.insert(key.clone(), coerced_value);
@@ -286,7 +292,34 @@ mod tests {
             ConfigField::new("team_key", "Team", FieldType::Text),
             ConfigField::new("limit", "Limit", FieldType::Number),
             ConfigField::new("active", "Active", FieldType::Toggle),
+            ConfigField::new("servers", "Servers", FieldType::List).entries(
+                "Server",
+                vec![ConfigField::new("name", "Name", FieldType::Text)],
+            ),
         ]
+    }
+
+    #[test]
+    fn list_overrides_replace_the_whole_list_or_inherit() {
+        let base = integration(serde_json::json!({ "servers": [{ "name": "docs" }] }));
+
+        let replaced = serde_json::json!({ "servers": [{ "name": "search" }] })
+            .as_object()
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            apply_overrides(&base, Some(&replaced), &fields()).config["servers"],
+            serde_json::json!([{ "name": "search" }])
+        );
+
+        let scalar = serde_json::json!({ "servers": "search" })
+            .as_object()
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            apply_overrides(&base, Some(&scalar), &fields()).config["servers"],
+            serde_json::json!([{ "name": "docs" }])
+        );
     }
 
     #[test]

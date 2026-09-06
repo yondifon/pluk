@@ -1,4 +1,18 @@
-export type FieldType = "text" | "password" | "number" | "file" | "select" | "toggle";
+export type FieldType = "text" | "password" | "number" | "file" | "select" | "toggle" | "list";
+
+/** One entry of a list field: its nested fields, keyed by field key. */
+export type ConfigEntry = Record<string, string>;
+
+/** A config value is text, or the entries of a list field. */
+export type ConfigValue = string | ConfigEntry[];
+
+export function textValue(value: ConfigValue | undefined): string {
+  return typeof value === "string" ? value : "";
+}
+
+export function entriesValue(value: ConfigValue | undefined): ConfigEntry[] {
+  return Array.isArray(value) ? value : [];
+}
 
 export interface FieldOption {
   value: string;
@@ -24,6 +38,10 @@ export interface ConfigFieldDef {
   default?: string;
   help?: string;
   danger?: boolean;
+  /** Fields of one entry, for a list field. */
+  fields?: ConfigFieldDef[];
+  /** Singular name of one entry, for a list field. */
+  itemLabel?: string;
 }
 
 export interface ToolDef {
@@ -88,12 +106,12 @@ export function prettyCategory(c: string): string {
   return c.replace(/-/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
-export function isVisible(field: ConfigFieldDef, config: Record<string, string>): boolean {
+export function isVisible(field: ConfigFieldDef, config: Record<string, ConfigValue>): boolean {
   if (!field.showIf) return true;
-  return (config[field.showIf.key] ?? "") === field.showIf.equals;
+  return textValue(config[field.showIf.key]) === field.showIf.equals;
 }
 
-export function visibleFields(fields: ConfigFieldDef[], config: Record<string, string>): ConfigFieldDef[] {
+export function visibleFields(fields: ConfigFieldDef[], config: Record<string, ConfigValue>): ConfigFieldDef[] {
   // Resolve visibility transitively: if a driver field is hidden, its dependents hide too.
   // Simple iterative filter until stable (handles chained conditions).
   let visible = new Set(fields.filter((f) => isVisible(f, config)).map((f) => f.key));

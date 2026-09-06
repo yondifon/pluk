@@ -5,7 +5,7 @@ export interface Integration {
   name: string;
   type: string;
   environment?: Environment;
-  config: Record<string, string>;
+  config: Record<string, string | Array<Record<string, string>>>;
   toolConfig: Record<string, { enabled: boolean; settings: Record<string, string> }>;
   token: string;
   createdAt: string;
@@ -18,6 +18,7 @@ export interface ConfigField {
   type: string;
   secret?: boolean;
   default?: string;
+  itemLabel?: string;
   options?: Array<{ value: string; label: string }>;
 }
 
