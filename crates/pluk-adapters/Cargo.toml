@@ -14,7 +14,11 @@ pluk-core = { path = "../pluk-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 async-trait = "0.1"
-tokio = { version = "1", features = ["rt", "macros", "time", "sync", "fs"] }
+http = "1"
+# Client-side MCP only. pluk-server keeps the server half; the two feature sets
+# are additive in the same rmcp build.
+rmcp = { version = "3.1", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "sync", "fs", "process"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio-util = { version = "0.7", features = ["full"] }
 futures = "0.3"

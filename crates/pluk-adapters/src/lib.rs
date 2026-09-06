@@ -15,6 +15,8 @@ pub mod github_cli;
 mod http_client;
 mod instructions;
 pub mod linear;
+pub mod mcp_client;
+pub mod mcp_pool;
 pub mod mongodb;
 mod projection;
 pub mod redis;
@@ -42,6 +44,8 @@ pub use gate::{
     cancelled_when_message_contains, err, ok, run_gated,
 };
 pub use instructions::{InstructionParts, build_instructions};
+pub use mcp_client::{McpClient, McpUpstream};
+pub use mcp_pool::{McpSessionPool, UpstreamSession, mcp_sessions};
 pub use projection::{
     FieldMap, OnlyError, Preset, ReduceFn, apply_only, only_param_description, only_param_schema,
     only_value, pick_paths,
