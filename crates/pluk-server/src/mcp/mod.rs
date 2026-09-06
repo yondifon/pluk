@@ -1,7 +1,6 @@
-//! The MCP protocol layer: surface building, owner pools, namespacing.
+//! The MCP protocol layer: surface building and owner pools.
 
 pub(crate) mod build;
-pub mod namespace;
 pub mod owner;
 mod surface;
 

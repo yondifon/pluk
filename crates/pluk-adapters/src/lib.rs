@@ -17,7 +17,9 @@ mod instructions;
 pub mod linear;
 pub mod mcp_client;
 pub mod mcp_pool;
+pub mod mcp_proxy;
 pub mod mongodb;
+mod namespace;
 mod projection;
 pub mod redis;
 mod registry;
@@ -46,6 +48,7 @@ pub use gate::{
 pub use instructions::{InstructionParts, build_instructions};
 pub use mcp_client::{McpClient, McpUpstream};
 pub use mcp_pool::{McpSessionPool, UpstreamSession, mcp_sessions};
+pub use namespace::{NamespacedHost, namespace_uri, slug};
 pub use projection::{
     FieldMap, OnlyError, Preset, ReduceFn, apply_only, only_param_description, only_param_schema,
     only_value, pick_paths,

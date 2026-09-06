@@ -14,6 +14,7 @@ export const adapterColors: Record<string, string> = {
   mongodb: "#47a248", // 0.28,0.64,0.28
   slack: "#752e73", // 0.46,0.18,0.45
   spark: "#d95438", // 0.85,0.33,0.22
+  "mcp-proxy": "#8a7fd6",
 };
 
 export function adapterColor(type: string): string {

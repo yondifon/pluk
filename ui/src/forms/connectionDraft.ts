@@ -182,6 +182,19 @@ export function canSave(draft: ConnectionDraft): boolean {
   return firstMissingValue(draft) == null;
 }
 
+/**
+ * Replace the catalog's tool list with the one this integration actually
+ * offers — for a type whose tools only exist once it has connected somewhere.
+ * Saved toggles stand; a tool seen for the first time takes its own default.
+ */
+export function withDiscoveredTools(draft: ConnectionDraft, tools: ToolDef[]): ConnectionDraft {
+  const toolConfig = { ...draft.toolConfig };
+  for (const tool of tools) {
+    if (toolConfig[tool.name] == null) toolConfig[tool.name] = seededState(tool);
+  }
+  return { ...draft, tools, toolConfig };
+}
+
 export function splitTools(tools: ToolDef[]): { defaults: ToolDef[]; extras: ToolDef[] } {
   return {
     defaults: tools.filter((t) => t.defaultEnabled),

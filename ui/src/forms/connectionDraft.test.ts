@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { isVisible, visibleFields } from "./catalog.ts";
 import type { AdapterManifest, ConfigFieldDef } from "./catalog.ts";
-import { emptyDraft, adopt, setEnvironment, canSave, splitTools, draftFromConnection, firstMissingValue } from "./connectionDraft.ts";
+import { emptyDraft, adopt, setEnvironment, canSave, splitTools, draftFromConnection, firstMissingValue, withDiscoveredTools } from "./connectionDraft.ts";
 import { coerceToStored, coerceFromStored, serializeConfig, parseConfig, serializeToolSettings } from "./coercion.ts";
 import { overridableFields, inheritPlaceholder, updateOverride, serializeGroup, groupDraftFrom } from "./groupForm.ts";
 
@@ -240,6 +240,19 @@ describe("default-on and default-off split", () => {
     expect(defaults.length + extras.length).toBe(m.tools.length);
     expect(defaults.map((t) => t.name)).toContain("query");
     expect(extras.map((t) => t.name)).toContain("write_tool");
+  });
+});
+
+describe("tools discovered on connect", () => {
+  it("keeps saved toggles and defaults the tools it has not seen", () => {
+    const draft = adopt(emptyDraft(), makeManifest(), true);
+    const next = withDiscoveredTools({ ...draft, toolConfig: { ...draft.toolConfig, docs__search: { enabled: false, settings: {} } } }, [
+      { name: "docs__search", description: "Search", category: "read", defaultEnabled: true },
+      { name: "docs__deploy", description: "Deploy", category: "write", defaultEnabled: false },
+    ]);
+    expect(next.tools.map((t) => t.name)).toEqual(["docs__search", "docs__deploy"]);
+    expect(next.toolConfig["docs__search"].enabled).toBe(false);
+    expect(next.toolConfig["docs__deploy"].enabled).toBe(false);
   });
 });
 

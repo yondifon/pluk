@@ -7,11 +7,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::namespace::slug;
-use pluk_adapters::{Adapter, AdapterRegistry, ConfigField, FieldType, register_gated};
+use pluk_adapters::{
+    Adapter, AdapterRegistry, ConfigField, FieldType, NamespacedHost, register_gated, slug,
+};
 use pluk_store::{Group, Integration, LogGroup, Store};
 
-use super::namespace::NamespacedHost;
 use super::surface::{Surface, SurfaceBuilder};
 use crate::logging;
 

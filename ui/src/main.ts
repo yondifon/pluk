@@ -14,10 +14,11 @@ import {
   applyEnvironmentDefaults,
   draftFromConnection,
   emptyDraft,
+  withDiscoveredTools,
   type ConnectionDraft,
 } from "./forms/connectionDraft.ts";
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
-import type { AdapterManifest as CatalogManifest, ToolState } from "./forms/catalog.ts";
+import type { AdapterManifest as CatalogManifest, ToolDef, ToolState } from "./forms/catalog.ts";
 import { toast, mountToaster } from "./toast.ts";
 import { mountUpdates } from "./update.ts";
 import { renderLoadingState } from "./primitives.ts";
@@ -335,6 +336,17 @@ function startEditIntegration(id: string): void {
   const manifest = manifestFor(row.type);
   draft = manifest ? { ...adopt(base, manifest, false), toolConfig: row.toolConfig } : base;
   openForm({ kind: "edit-integration", id });
+  void loadIntegrationTools(id);
+}
+
+/** Show the toggles for the tools this integration itself offers, once they
+ *  are known. The catalog's list stands while they load, and if they cannot
+ *  be fetched. */
+async function loadIntegrationTools(id: string): Promise<void> {
+  const tools = await invoke<ToolDef[]>("integration_tools", { id }).catch(() => null);
+  if (!tools || !draft || form?.kind !== "edit-integration" || form.id !== id) return;
+  draft = withDiscoveredTools(draft, tools);
+  renderForm();
 }
 
 function startNewGroup(): void {
