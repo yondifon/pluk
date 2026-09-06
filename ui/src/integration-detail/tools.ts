@@ -1,15 +1,14 @@
 import { isToolEnabled, orderedTools, settingsSummary } from "./logic";
-import type { AdapterManifest, Integration } from "./types";
+import type { Integration, ToolSpec } from "./types";
 
 export function renderTools(
   container: HTMLElement,
   integration: Integration,
-  manifest: AdapterManifest | null | undefined,
+  tools: ToolSpec[],
 ): void {
   container.innerHTML = "";
   container.className = "tools-tab";
 
-  const tools = manifest?.tools ?? [];
   const card = document.createElement("section");
   card.className = "ui-card";
 

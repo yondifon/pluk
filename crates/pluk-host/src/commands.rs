@@ -381,6 +381,29 @@ pub fn list_adapters(state: State<'_, HostState>) -> Vec<AdapterInfo> {
         .collect()
 }
 
+/// The tool list one integration actually exposes, which for an adapter that
+/// discovers its tools on connect is wider than the catalog's.
+#[tauri::command]
+pub async fn integration_tools(
+    state: State<'_, HostState>,
+    id: String,
+) -> CmdResult<Vec<pluk_adapters::ToolSpec>> {
+    let integration = state
+        .store
+        .integration_by_id(&id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Not found".to_string())?;
+    let adapter = state
+        .shared
+        .registry
+        .get(&integration.r#type)
+        .ok_or_else(|| format!("No adapter for type: {}", integration.r#type))?;
+    adapter
+        .tool_specs_for(&integration)
+        .await
+        .map_err(|e| e.message)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HealthEntry {
     pub status: String,

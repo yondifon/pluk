@@ -189,6 +189,7 @@ pub fn run() {
             commands::update_group,
             commands::delete_group,
             commands::list_adapters,
+            commands::integration_tools,
             commands::get_health,
             commands::test_connection,
             commands::get_logs,

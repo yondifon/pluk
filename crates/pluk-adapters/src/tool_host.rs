@@ -108,7 +108,9 @@ pub fn object_schema(properties: Map<String, Value>, required: &[&str]) -> Map<S
 }
 
 /// Where adapters register their surface. Implemented by the server crate.
-pub trait ToolHost {
+/// `Send` because registration may now be awaited, so a host is held across
+/// await points on a multi-threaded runtime.
+pub trait ToolHost: Send {
     fn register_tool(&mut self, registration: ToolRegistration, handler: ToolHandler);
     fn register_prompt(
         &mut self,
@@ -198,15 +200,18 @@ impl ToolHost for PolicyGatedHost<'_> {
 }
 
 /// Register an adapter's surface with its integration's tool policy enforced.
-/// Every endpoint builds its surface through here.
-pub fn register_gated(
+/// Every endpoint builds its surface through here. The catalog is the
+/// integration's own tool set, so a tool discovered on connect is gated by
+/// the same toggles as a type-level one.
+pub async fn register_gated(
     adapter: &dyn crate::adapter::Adapter,
     host: &mut dyn ToolHost,
     conn: &pluk_store::Integration,
     owner_id: &str,
 ) -> Result<(), crate::error::AdapterError> {
-    let mut gated = PolicyGatedHost::new(host, adapter.tool_specs(), conn.query_policy.as_deref());
-    adapter.register(&mut gated, conn, owner_id)
+    let specs = adapter.tool_specs_for(conn).await?;
+    let mut gated = PolicyGatedHost::new(host, &specs, conn.query_policy.as_deref());
+    adapter.register_surface(&mut gated, conn, owner_id).await
 }
 
 #[cfg(test)]
@@ -329,37 +334,44 @@ mod tests {
         }
     }
 
-    fn registered(conn: &Integration) -> Vec<String> {
+    async fn registered(conn: &Integration) -> Vec<String> {
         let mut host = RecordingHost::default();
-        register_gated(&adapter(), &mut host, conn, "").expect("register");
+        register_gated(&adapter(), &mut host, conn, "")
+            .await
+            .expect("register");
         host.tools
     }
 
-    #[test]
-    fn a_fresh_integration_exposes_no_write_or_delete_tool() {
-        assert_eq!(registered(&integration(None)), vec!["list".to_string()]);
+    #[tokio::test]
+    async fn a_fresh_integration_exposes_no_write_or_delete_tool() {
+        assert_eq!(
+            registered(&integration(None)).await,
+            vec!["list".to_string()]
+        );
     }
 
-    #[test]
-    fn the_toggle_decides_what_the_agent_can_reach() {
+    #[tokio::test]
+    async fn the_toggle_decides_what_the_agent_can_reach() {
         let on = r#"{"tools":{"post_message":{"enabled":true}}}"#;
         assert_eq!(
-            registered(&integration(Some(on))),
+            registered(&integration(Some(on))).await,
             vec!["list".to_string(), "post_message".to_string()]
         );
 
         let off = r#"{"tools":{"list":{"enabled":false}}}"#;
-        assert!(registered(&integration(Some(off))).is_empty());
+        assert!(registered(&integration(Some(off))).await.is_empty());
     }
 
-    #[test]
-    fn a_tool_missing_from_the_catalog_is_dropped() {
+    #[tokio::test]
+    async fn a_tool_missing_from_the_catalog_is_dropped() {
         let mut host = RecordingHost::default();
         let undeclared = UngatedAdapter {
             specs: vec![ToolSpec::new("list", "List", "read")],
             registers: vec!["list".into(), "secret_admin".into()],
         };
-        register_gated(&undeclared, &mut host, &integration(None), "").expect("register");
+        register_gated(&undeclared, &mut host, &integration(None), "")
+            .await
+            .expect("register");
         // No catalog entry means no toggle a user could ever switch off.
         assert_eq!(host.tools, vec!["list".to_string()]);
     }
@@ -382,5 +394,99 @@ mod tests {
         }));
         assert_eq!(inner.prompts, vec!["summarize".to_string()]);
         assert_eq!(inner.resources, vec!["schema".to_string()]);
+    }
+
+    /// An adapter with no type-level tools: it learns its surface from the
+    /// integration, the way one fronting upstream servers would.
+    struct DiscoveringAdapter;
+
+    impl DiscoveringAdapter {
+        fn discovered(conn: &Integration) -> Vec<ToolSpec> {
+            conn.config
+                .keys()
+                .map(|name| ToolSpec::new(name.clone(), "…", "write"))
+                .collect()
+        }
+    }
+
+    #[async_trait]
+    impl Adapter for DiscoveringAdapter {
+        fn id(&self) -> &str {
+            "discovering"
+        }
+        fn label(&self) -> &str {
+            "Discovering"
+        }
+        fn category(&self) -> &str {
+            "misc"
+        }
+        fn policy_kind(&self) -> PolicyKind {
+            PolicyKind::Action
+        }
+        fn agent_hint(&self) -> &str {
+            ""
+        }
+        fn tool_specs(&self) -> &[ToolSpec] {
+            &[]
+        }
+        async fn tool_specs_for(&self, conn: &Integration) -> Result<Vec<ToolSpec>, AdapterError> {
+            Ok(Self::discovered(conn))
+        }
+        fn config_fields(&self) -> &[ConfigField] {
+            &[]
+        }
+        async fn test_connection(&self, _conn: &Integration) -> Result<(), AdapterError> {
+            Ok(())
+        }
+        fn instructions(&self, _conn: &Integration) -> String {
+            String::new()
+        }
+        fn register(
+            &self,
+            _host: &mut dyn ToolHost,
+            _conn: &Integration,
+            _owner_id: &str,
+        ) -> Result<(), AdapterError> {
+            Ok(())
+        }
+        async fn register_surface(
+            &self,
+            host: &mut dyn ToolHost,
+            conn: &Integration,
+            _owner_id: &str,
+        ) -> Result<(), AdapterError> {
+            for spec in Self::discovered(conn) {
+                host.register_tool(
+                    ToolRegistration::no_args(spec.name, "…"),
+                    Arc::new(|_| Box::pin(async { crate::gate::ok("ran") })),
+                );
+            }
+            Ok(())
+        }
+    }
+
+    async fn discovered_tools(query_policy: Option<&str>) -> Vec<String> {
+        let mut conn = integration(query_policy);
+        conn.config
+            .insert("upstream__deploy".into(), Value::Bool(true));
+        let mut host = RecordingHost::default();
+        register_gated(&DiscoveringAdapter, &mut host, &conn, "")
+            .await
+            .expect("register");
+        host.tools
+    }
+
+    #[tokio::test]
+    async fn a_discovered_tool_obeys_its_declared_default() {
+        assert!(discovered_tools(None).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_discovered_tool_can_be_switched_on() {
+        let on = r#"{"tools":{"upstream__deploy":{"enabled":true}}}"#;
+        assert_eq!(
+            discovered_tools(Some(on)).await,
+            vec!["upstream__deploy".to_string()]
+        );
     }
 }

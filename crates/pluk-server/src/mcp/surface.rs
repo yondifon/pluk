@@ -26,6 +26,7 @@ use pluk_adapters::{PromptHandler, PromptRole, ResourceHandler, ToolHandler, Too
 const SURFACE_TTL_MS: u64 = 0;
 
 /// One registered tool.
+#[derive(Clone)]
 struct RegisteredTool {
     description: String,
     input_schema: Map<String, Value>,
@@ -34,6 +35,7 @@ struct RegisteredTool {
 }
 
 /// One registered prompt.
+#[derive(Clone)]
 struct RegisteredPrompt {
     description: String,
     args_schema: Option<Map<String, Value>>,
@@ -41,6 +43,7 @@ struct RegisteredPrompt {
 }
 
 /// One registered resource.
+#[derive(Clone)]
 struct RegisteredResource {
     name: String,
     mime_type: String,
@@ -162,7 +165,9 @@ impl SurfaceBuilder {
 }
 
 /// The immutable result of one build. Cheap to serve from: lookups are linear
-/// scans over at most dozens of entries.
+/// scans over at most dozens of entries. Cloneable so one build can back
+/// every service instance the transport spins up for that request.
+#[derive(Clone)]
 pub struct Surface {
     server_name: String,
     instructions: Option<String>,

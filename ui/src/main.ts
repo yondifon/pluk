@@ -6,7 +6,7 @@ import { createShell } from "./shell.ts";
 import { createSidebar, type SidebarState } from "./sidebar.ts";
 import { emptyState, renderEmptyState } from "./emptyStates.ts";
 import { mountIntegrationDetail } from "./integration-detail/index.ts";
-import type { Integration as DetailIntegration, ConnHealth as DetailHealth } from "./integration-detail/types.ts";
+import type { Integration as DetailIntegration, ConnHealth as DetailHealth, ToolSpec } from "./integration-detail/types.ts";
 import { renderGroupDetail } from "./groupDetail.ts";
 import { renderIntegrationForm, renderGroupForm, renderTypeChooser } from "./forms/render.ts";
 import {
@@ -165,6 +165,7 @@ function renderDetail(mount: HTMLElement): void {
           onDuplicate: () => void duplicateIntegration(row.id),
           onDelete: () => void deleteIntegration(row.id),
           onTest: () => testIntegration(row.id),
+          loadTools: () => invoke<ToolSpec[]>("integration_tools", { id: row.id }),
           inject: injectMcpConfig,
         },
       );

@@ -65,7 +65,7 @@ pub fn resolve_owner(
 /// Build the MCP surface for one owner, from current store state. Called on
 /// every protocol request — never cached — so configuration edits and tool
 /// enable/disable take effect immediately.
-pub fn build_owner_surface(
+pub async fn build_owner_surface(
     owner: &Owner,
     store: &Store,
     registry: &AdapterRegistry,
@@ -75,14 +75,14 @@ pub fn build_owner_surface(
         Owner::Integration {
             integration,
             adapter,
-        } => build_integration_surface(adapter.as_ref(), integration.as_ref(), owner_id),
-        Owner::Group { group } => build_group_surface(group, store, registry, owner_id),
+        } => build_integration_surface(adapter.as_ref(), integration.as_ref(), owner_id).await,
+        Owner::Group { group } => build_group_surface(group, store, registry, owner_id).await,
     }
 }
 
 /// A standalone MCP surface for a single integration: its adapter's
 /// instructions, with its full surface registered unnamespaced.
-pub fn build_integration_surface(
+pub async fn build_integration_surface(
     adapter: &dyn Adapter,
     conn: &Integration,
     owner_id: &str,
@@ -90,7 +90,9 @@ pub fn build_integration_surface(
     let mut builder = SurfaceBuilder::default();
     builder.set_server_name(conn.name.clone());
     builder.set_instructions(Some(adapter.instructions(conn)));
-    register_gated(adapter, &mut builder, conn, owner_id).map_err(|e| e.to_string())?;
+    register_gated(adapter, &mut builder, conn, owner_id)
+        .await
+        .map_err(|e| e.to_string())?;
     builder.build()
 }
 
@@ -159,7 +161,7 @@ pub fn apply_overrides(
 /// identically-named tools across members don't collide; per-member overrides
 /// are merged before registration, and the member is tagged so its log rows
 /// record the group that fronted the call.
-pub fn build_group_surface(
+pub async fn build_group_surface(
     group: &Group,
     store: &Store,
     registry: &AdapterRegistry,
@@ -219,6 +221,7 @@ pub fn build_group_surface(
             &member.scoped,
             owner_id,
         )
+        .await
         .map_err(|e| e.to_string())?;
     }
     builder.build()
