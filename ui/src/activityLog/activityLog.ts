@@ -37,6 +37,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   let loadedOlderPage = false;
   let refreshAfterLoad = false;
   let loadError: string | null = null;
+  let searchTimer: number | null = null;
 
   // Live cursor (monotonic)
   let liveCursor = 0;
@@ -407,10 +408,22 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   elSearch.addEventListener("input", () => {
     search = elSearch.value;
     elSearchClear.hidden = !search;
+    updateStats();
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(() => {
+      searchTimer = null;
+      renderList();
+    }, 150);
+  });
+  elSearchClear.addEventListener("click", () => {
+    elSearch.value = "";
+    search = "";
+    elSearchClear.hidden = true;
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = null;
     renderList();
     updateStats();
   });
-  elSearchClear.addEventListener("click", () => { elSearch.value = ""; search = ""; elSearchClear.hidden = true; renderList(); updateStats(); });
   elRange.value = timeRange;
   elRange.addEventListener("change", () => {
     timeRange = elRange.value as TimeRange;
@@ -539,6 +552,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   return {
     destroy() {
       if (pollTimer) clearInterval(pollTimer);
+      if (searchTimer) clearTimeout(searchTimer);
       liveClose?.();
       sentinelObs?.disconnect();
     },
