@@ -26,7 +26,17 @@ pub struct GroupUpdate {
     pub members: Option<Vec<GroupMember>>,
 }
 
-const SELECT_ALL: &str = "SELECT id, name, environment, member_ids, token, created_at FROM groups";
+/// The column list every read shares, kept a macro so the statements below
+/// stay string literals for `prepare_cached`.
+macro_rules! select_all {
+    () => {
+        "SELECT id, name, environment, member_ids, token, created_at FROM groups"
+    };
+}
+
+const SELECT_ORDERED: &str = concat!(select_all!(), " ORDER BY created_at DESC");
+const SELECT_BY_TOKEN: &str = concat!(select_all!(), " WHERE token = ?");
+const SELECT_BY_ID: &str = concat!(select_all!(), " WHERE id = ?");
 
 fn hydrate(row: &Row<'_>) -> rusqlite::Result<Group> {
     let environment: Option<String> = row.get(2)?;
@@ -44,23 +54,21 @@ fn hydrate(row: &Row<'_>) -> rusqlite::Result<Group> {
 impl Store {
     pub fn list_groups(&self) -> Result<Vec<Group>> {
         let conn = self.conn.lock().expect("store lock");
-        let mut stmt = conn.prepare(&format!("{SELECT_ALL} ORDER BY created_at DESC"))?;
+        let mut stmt = conn.prepare_cached(SELECT_ORDERED)?;
         let rows = stmt.query_map([], hydrate)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     pub fn group_by_token(&self, token: &str) -> Result<Option<Group>> {
         let conn = self.conn.lock().expect("store lock");
-        Ok(conn
-            .query_row(&format!("{SELECT_ALL} WHERE token = ?"), [token], hydrate)
-            .optional()?)
+        let mut stmt = conn.prepare_cached(SELECT_BY_TOKEN)?;
+        Ok(stmt.query_row([token], hydrate).optional()?)
     }
 
     pub fn group_by_id(&self, id: &str) -> Result<Option<Group>> {
         let conn = self.conn.lock().expect("store lock");
-        Ok(conn
-            .query_row(&format!("{SELECT_ALL} WHERE id = ?"), [id], hydrate)
-            .optional()?)
+        let mut stmt = conn.prepare_cached(SELECT_BY_ID)?;
+        Ok(stmt.query_row([id], hydrate).optional()?)
     }
 
     /// Resolve members to live integrations, skipping any that vanished,

@@ -73,14 +73,14 @@ impl Store {
         let mut conn = rusqlite::Connection::open(path)?;
         configure(&mut conn)?;
         migrate::run(&mut conn)?;
-        let store = Store {
+        // `last_purge` starts unset, so retention runs on the first log write.
+        // Opening the database sits on the app's startup path, and a purge is
+        // not worth delaying the window for.
+        Ok(Store {
             conn: Mutex::new(conn),
             last_purge: Mutex::new(None),
             activity: Mutex::new(query_log::ActivityFeed::default()),
-        };
-        store.purge_old_logs()?;
-        *store.last_purge.lock().expect("purge clock") = Some(Instant::now());
-        Ok(store)
+        })
     }
 
     /// Open the database at its platform location (`~/.pluk/pluk.db`, or

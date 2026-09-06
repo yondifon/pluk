@@ -143,15 +143,13 @@ async fn request(
     if let Some(r) = get_runner() {
         return r(method.to_string(), url, query.unwrap_or(Value::Null), body).await;
     }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(TIMEOUT_MS))
-        .build()
-        .map_err(|e| AdapterError::new(e.to_string()))?;
+    let client = crate::http_client::shared()?;
     let mut req = client.request(
         reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET),
         &url,
     );
     req = req
+        .timeout(Duration::from_millis(TIMEOUT_MS))
         .header("Authorization", format!("Bearer {}", cfg.token))
         .header("Content-Type", "application/json");
     if let Some(b) = body {

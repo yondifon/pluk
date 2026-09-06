@@ -12,6 +12,7 @@ mod config_field;
 mod error;
 mod gate;
 pub mod github_cli;
+mod http_client;
 mod instructions;
 pub mod linear;
 pub mod mongodb;

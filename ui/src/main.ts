@@ -560,6 +560,7 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
+
   await Promise.all([loadAdapters(), loadHealth(), loadData()]);
   refresh();
 
