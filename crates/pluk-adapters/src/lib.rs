@@ -15,6 +15,7 @@ pub mod github_cli;
 mod http_client;
 mod instructions;
 pub mod linear;
+pub mod mcp_auth;
 pub mod mcp_client;
 pub mod mcp_pool;
 pub mod mcp_proxy;
@@ -46,6 +47,7 @@ pub use gate::{
     cancelled_when_message_contains, err, ok, run_gated,
 };
 pub use instructions::{InstructionParts, build_instructions};
+pub use mcp_auth::NEEDS_SIGN_IN_CODE;
 pub use mcp_client::{McpClient, McpUpstream};
 pub use mcp_pool::{McpSessionPool, UpstreamSession, mcp_sessions};
 pub use namespace::{NamespacedHost, namespace_uri, slug};

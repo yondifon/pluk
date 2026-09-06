@@ -125,6 +125,58 @@ function helpText(id: string, text: string): HTMLElement {
   return el;
 }
 
+/**
+ * The sign-in row's world: which servers are connected, which one the person
+ * is answering in their browser right now, and the two things they can do.
+ * Absent until the connection has been saved — there is nowhere to keep a
+ * sign-in before that.
+ */
+export interface SignIn {
+  connected: Record<string, boolean>;
+  waitingFor: string | null;
+  onConnect: (server: string) => void;
+  onDisconnect: (server: string) => void;
+}
+
+/** The account row of one server the person signs in to. */
+function renderSignInRow(field: ConfigFieldDef, entry: ConfigEntry, rowKey: string, signIn: SignIn | null): HTMLElement {
+  const { row, slot } = settingRow(rowKey, field.label);
+  const server = (entry["name"] ?? "").trim();
+  const status = document.createElement("span");
+  status.className = "hint";
+
+  if (!signIn || !server) {
+    status.textContent = !server
+      ? "Give this server a name first."
+      : "Save this connection, then come back to sign in.";
+    slot.appendChild(status);
+    return row;
+  }
+
+  if (signIn.waitingFor === server) {
+    status.textContent = "Finish signing in the browser window.";
+    slot.appendChild(status);
+    return row;
+  }
+
+  const connected = signIn.connected[server] === true;
+  status.textContent = connected ? "Connected." : "Not connected yet.";
+  slot.append(
+    status,
+    createButton(connected ? "Sign in again" : "Sign in", {
+      size: "sm",
+      onClick: () => signIn.onConnect(server),
+    }),
+  );
+  if (connected) {
+    slot.appendChild(
+      createButton("Disconnect", { size: "sm", onClick: () => signIn.onDisconnect(server) }),
+    );
+  }
+  if (field.help) row.appendChild(helpText(`help-${rowKey}`, field.help));
+  return row;
+}
+
 /** The name of one entry, e.g. `Server 2`. */
 function entryTitle(field: ConfigFieldDef, index: number): string {
   return `${field.itemLabel ?? field.label} ${index + 1}`;
@@ -134,6 +186,7 @@ function renderListField(
   field: ConfigFieldDef,
   entries: ConfigEntry[],
   onChange: (v: ConfigEntry[]) => void,
+  signIn: SignIn | null = null,
 ): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "field-list";
@@ -173,6 +226,10 @@ function renderListField(
     card.appendChild(head);
 
     for (const sub of visibleFields(field.fields ?? [], entry)) {
+      if (sub.type === "signin") {
+        card.appendChild(renderSignInRow(sub, entry, `${field.key}-${index}-${sub.key}`, signIn));
+        continue;
+      }
       const subRow = renderField(sub, entry[sub.key] ?? "", (v) => {
         const next = entries.map((e, i) => (i === index ? { ...e, [sub.key]: textValue(v) } : e));
         onChange(next);
@@ -200,9 +257,10 @@ export function renderField(
   value: ConfigValue,
   onChange: (v: ConfigValue) => void,
   idPrefix?: string,
+  signIn: SignIn | null = null,
 ): HTMLElement {
   if (field.type === "list") {
-    return renderListField(field, entriesValue(value), onChange as (v: ConfigEntry[]) => void);
+    return renderListField(field, entriesValue(value), onChange as (v: ConfigEntry[]) => void, signIn);
   }
   const current = textValue(value);
   const rowKey = idPrefix ? `${idPrefix}-${field.key}` : field.key;
@@ -486,6 +544,7 @@ export function renderIntegrationForm(
   onSave: (d: ConnectionDraft) => void,
   onCancel: () => void,
   onTypeChangeClick?: () => void,
+  signIn: SignIn | null = null,
 ): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "form-body";
@@ -549,7 +608,7 @@ export function renderIntegrationForm(
       for (const f of shown) {
         const row = renderField(f, draft.config[f.key] ?? (f.type === "list" ? [] : ""), (v) => {
           onDraftChange({ ...draft, config: { ...draft.config, [f.key]: v } });
-        });
+        }, undefined, signIn);
         card.appendChild(row);
       }
       wrap.appendChild(card);

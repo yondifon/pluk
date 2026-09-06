@@ -23,13 +23,14 @@ use futures::future::join_all;
 use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
 use serde_json::Value;
 
-use pluk_store::Integration;
+use pluk_store::{Integration, Store};
 
-use crate::adapter::{Adapter, PolicyKind};
+use crate::adapter::{Adapter, ApiRequest, ApiResponse, PolicyKind};
 use crate::config_field::{ConfigField, FieldType, ShowIf};
 use crate::error::AdapterError;
 use crate::gate::{CallTarget, GateMeta, GateOpts, Outcome, RunOutcome, run_gated};
 use crate::instructions::{InstructionParts, build_instructions};
+use crate::mcp_auth::{self, Credentials};
 use crate::mcp_client::McpUpstream;
 use crate::mcp_pool::{UpstreamSession, mcp_sessions};
 use crate::namespace::{NamespacedHost, slug};
@@ -78,14 +79,81 @@ pub fn mcp_proxy_fields() -> Vec<ConfigField> {
                         .required()
                         .placeholder("https://example.com/mcp")
                         .show_if(ShowIf::eq_str("kind", "url")),
+                    ConfigField::new("access", "Access", FieldType::Select)
+                        .options(&[
+                            ("headers", "A token I paste"),
+                            ("signin", "Sign in to the server"),
+                        ])
+                        .default_value(&Value::String("headers".into()))
+                        .show_if(ShowIf::eq_str("kind", "url")),
                     ConfigField::new("headers", "Headers", FieldType::Password)
                         .placeholder("Authorization: Bearer example")
                         .secret()
                         .help("Name: value, separated by commas.")
-                        .show_if(ShowIf::eq_str("kind", "url")),
+                        .show_if(ShowIf::eq_str("access", "headers")),
+                    ConfigField::new("signin", "Account", FieldType::SignIn)
+                        .help("Opens the server's sign-in page in your browser.")
+                        .show_if(ShowIf::eq_str("access", "signin")),
                 ],
             ),
     ]
+}
+
+/// Whether each server the person signs in to is connected right now, by name.
+pub fn sign_in_states(conn: &Integration) -> HashMap<String, bool> {
+    signing_in(conn)
+        .map(|(name, _)| {
+            let connected = mcp_auth::is_signed_in(conn, &name);
+            (name, connected)
+        })
+        .collect()
+}
+
+/// The configured servers that are reached by signing in, with their address.
+fn signing_in(conn: &Integration) -> impl Iterator<Item = (String, String)> + '_ {
+    conn.config
+        .get("servers")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|entry| entry_text(entry, "access").as_deref() == Some("signin"))
+        .filter_map(|entry| Some((entry_text(entry, "name")?, entry_text(entry, "url")?)))
+}
+
+/// Start signing in to one server, returning the address to open in a browser.
+pub async fn begin_sign_in(
+    store: Arc<Store>,
+    conn: &Integration,
+    server: &str,
+) -> Result<String, AdapterError> {
+    let url = signing_in(conn)
+        .find(|(name, _)| name == server)
+        .map(|(_, url)| url)
+        .ok_or_else(|| AdapterError::new("this server is not set up to be signed in to"))?;
+    mcp_auth::start(store, &conn.id, server, &url).await
+}
+
+/// Forget one server's sign-in, and drop the session it was holding open.
+pub fn sign_out(store: Arc<Store>, conn: &Integration, server: &str) -> Result<(), AdapterError> {
+    mcp_auth::forget(store, &conn.id, server)?;
+    mcp_sessions().evict_owner(&conn.id);
+    Ok(())
+}
+
+/// What the browser shows once it comes back from the server's sign-in page.
+fn callback_page(message: &str) -> ApiResponse {
+    let escaped = message.replace('&', "&amp;").replace('<', "&lt;");
+    ApiResponse {
+        status: 200,
+        content_type: Some("text/html; charset=utf-8".into()),
+        body: format!(
+            "<!doctype html><meta charset=\"utf-8\"><title>Pluk</title>\
+             <body style=\"font:16px system-ui;margin:15vh auto;max-width:28rem;text-align:center\">\
+             <p>{escaped}</p><p>You can close this tab and go back to Pluk.</p>"
+        )
+        .into_bytes(),
+    }
 }
 
 /// One configured server: what the user called it, the prefix its tools carry,
@@ -115,11 +183,23 @@ fn pairs(raw: Option<String>, separator: char, assign: char) -> HashMap<String, 
         .collect()
 }
 
-fn upstream_from(entry: &Value) -> Result<McpUpstream, AdapterError> {
+fn upstream_from(
+    entry: &Value,
+    store: &Arc<Store>,
+    conn: &Integration,
+    name: &str,
+) -> Result<McpUpstream, AdapterError> {
     if entry_text(entry, "kind").as_deref() == Some("url") {
+        let url = entry_text(entry, "url")
+            .ok_or_else(|| AdapterError::new("no address is set for it"))?;
+        if entry_text(entry, "access").as_deref() == Some("signin") {
+            return Ok(McpUpstream::SignedInHttp {
+                url,
+                credentials: Credentials::new(store.clone(), &conn.id, name),
+            });
+        }
         return Ok(McpUpstream::Http {
-            url: entry_text(entry, "url")
-                .ok_or_else(|| AdapterError::new("no address is set for it"))?,
+            url,
             headers: pairs(entry_text(entry, "headers"), ',', ':'),
         });
     }
@@ -136,7 +216,7 @@ fn upstream_from(entry: &Value) -> Result<McpUpstream, AdapterError> {
 }
 
 /// The configured servers, each with a prefix unique within the integration.
-fn servers(conn: &Integration) -> Vec<Server> {
+fn servers(store: &Arc<Store>, conn: &Integration) -> Vec<Server> {
     let entries = conn
         .config
         .get("servers")
@@ -157,10 +237,11 @@ fn servers(conn: &Integration) -> Vec<Server> {
             } else {
                 base
             };
+            let upstream = upstream_from(entry, store, conn, &name);
             Server {
                 name,
                 prefix,
-                upstream: upstream_from(entry),
+                upstream,
             }
         })
         .collect()
@@ -169,9 +250,10 @@ fn servers(conn: &Integration) -> Vec<Server> {
 /// Connect to every configured server at once, so one slow server delays only
 /// itself. A live session is served from the pool without reconnecting.
 async fn connect_all(
+    store: &Arc<Store>,
     conn: &Integration,
 ) -> Vec<(Server, Result<Arc<UpstreamSession>, AdapterError>)> {
-    let servers = servers(conn);
+    let servers = servers(store, conn);
     let sessions = join_all(servers.iter().map(|server| async {
         let upstream = server.upstream.as_ref().map_err(Clone::clone)?;
         mcp_sessions()
@@ -316,7 +398,7 @@ impl Adapter for McpProxyAdapter {
         // A server that cannot be reached contributes no tools; the rest still
         // list theirs, so one failure never empties the endpoint.
         let mut specs = Vec::new();
-        for (server, session) in connect_all(conn).await {
+        for (server, session) in connect_all(&self.store, conn).await {
             let Ok(session) = session else { continue };
             specs.extend(
                 session
@@ -332,7 +414,7 @@ impl Adapter for McpProxyAdapter {
         FIELDS.get_or_init(mcp_proxy_fields)
     }
     async fn test_connection(&self, conn: &Integration) -> Result<(), AdapterError> {
-        let results = connect_all(conn).await;
+        let results = connect_all(&self.store, conn).await;
         if results.is_empty() {
             return Err(AdapterError::new("Add a server to connect to."));
         }
@@ -345,6 +427,10 @@ impl Adapter for McpProxyAdapter {
                     server.name,
                     session.tools().len()
                 ),
+                Err(error) if error.has_code(mcp_auth::NEEDS_SIGN_IN_CODE) => {
+                    failed = true;
+                    format!("{} is waiting for you to sign in.", server.name)
+                }
                 Err(error) => {
                     failed = true;
                     format!("{} did not answer: {}", server.name, error.message)
@@ -356,8 +442,21 @@ impl Adapter for McpProxyAdapter {
         }
         Ok(())
     }
+    /// The browser comes back here after the person has answered the server.
+    async fn handle_global_api(&self, request: ApiRequest, path: &str) -> Option<ApiResponse> {
+        if path != mcp_auth::CALLBACK_PATH {
+            return None;
+        }
+        Some(match mcp_auth::complete(&request.url).await {
+            Ok(done) => {
+                mcp_sessions().evict_owner(&done.integration_id);
+                callback_page(&format!("You're signed in to {}.", done.server))
+            }
+            Err(error) => callback_page(&error.message),
+        })
+    }
     fn instructions(&self, conn: &Integration) -> String {
-        let servers = servers(conn);
+        let servers = servers(&self.store, conn);
         let prefixes: Vec<String> = servers
             .iter()
             .map(|server| format!("{}__ for {}", server.prefix, server.name))
@@ -395,7 +494,7 @@ impl Adapter for McpProxyAdapter {
         conn: &Integration,
         _owner_id: &str,
     ) -> Result<(), AdapterError> {
-        for (server, session) in connect_all(conn).await {
+        for (server, session) in connect_all(&self.store, conn).await {
             let (Ok(upstream), Ok(session)) = (&server.upstream, &session) else {
                 continue;
             };
@@ -442,6 +541,13 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// The proxy reads sign-ins out of the store, so its tests need a real one.
+    fn store() -> (tempfile::TempDir, Arc<Store>) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(Store::open(&dir.path().join("pluk.db")).expect("open"));
+        (dir, store)
+    }
+
     fn conn(config: Value) -> Integration {
         Integration {
             id: "proxy".into(),
@@ -469,21 +575,29 @@ mod tests {
 
     #[test]
     fn same_named_servers_get_distinct_prefixes() {
-        let servers = servers(&conn(json!({ "servers": [
-            { "name": "Docs", "command": "docs-mcp" },
-            { "name": "docs", "command": "other-mcp" },
-        ]})));
+        let (_dir, store) = store();
+        let servers = servers(
+            &store,
+            &conn(json!({ "servers": [
+                { "name": "Docs", "command": "docs-mcp" },
+                { "name": "docs", "command": "other-mcp" },
+            ]})),
+        );
         let prefixes: Vec<&str> = servers.iter().map(|s| s.prefix.as_str()).collect();
         assert_eq!(prefixes, ["docs", "docs_2"]);
     }
 
     #[test]
     fn a_server_missing_its_target_carries_the_reason() {
-        let servers = servers(&conn(json!({ "servers": [
-            { "name": "Docs", "kind": "url" },
-            { "name": "Local", "kind": "command", "command": "docs-mcp", "args": "--stdio -v",
-              "env": "TOKEN=abc OTHER=1" },
-        ]})));
+        let (_dir, store) = store();
+        let servers = servers(
+            &store,
+            &conn(json!({ "servers": [
+                { "name": "Docs", "kind": "url" },
+                { "name": "Local", "kind": "command", "command": "docs-mcp", "args": "--stdio -v",
+                  "env": "TOKEN=abc OTHER=1" },
+            ]})),
+        );
         assert_eq!(
             servers[0].upstream.as_ref().unwrap_err().message,
             "no address is set for it"
@@ -499,15 +613,38 @@ mod tests {
 
     #[test]
     fn headers_are_read_as_name_value_pairs() {
-        let servers = servers(&conn(json!({ "servers": [
-            { "name": "Docs", "kind": "url", "url": "https://example.com/mcp",
-              "headers": "Authorization: Bearer abc, X-Team: eng" },
-        ]})));
+        let (_dir, store) = store();
+        let servers = servers(
+            &store,
+            &conn(json!({ "servers": [
+                { "name": "Docs", "kind": "url", "url": "https://example.com/mcp",
+                  "headers": "Authorization: Bearer abc, X-Team: eng" },
+            ]})),
+        );
         let McpUpstream::Http { headers, .. } = servers[0].upstream.as_ref().expect("http") else {
             panic!("expected a web address");
         };
         assert_eq!(headers["Authorization"], "Bearer abc");
         assert_eq!(headers["X-Team"], "eng");
+    }
+
+    #[test]
+    fn pasted_headers_and_signing_in_pick_different_ways_in() {
+        let (_dir, store) = store();
+        let servers = servers(&store, &conn(json!({ "servers": [
+            { "name": "Docs", "kind": "url", "url": "https://example.com/mcp",
+              "access": "headers", "headers": "Authorization: Bearer abc" },
+            { "name": "Mail", "kind": "url", "url": "https://mail.example.com/mcp",
+              "access": "signin" },
+        ]})));
+        assert!(matches!(
+            servers[0].upstream.as_ref().expect("http"),
+            McpUpstream::Http { .. }
+        ));
+        assert!(matches!(
+            servers[1].upstream.as_ref().expect("signed in"),
+            McpUpstream::SignedInHttp { .. }
+        ));
     }
 
     #[test]

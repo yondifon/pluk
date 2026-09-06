@@ -1,4 +1,4 @@
-export type FieldType = "text" | "password" | "number" | "file" | "select" | "toggle" | "list";
+export type FieldType = "text" | "password" | "number" | "file" | "select" | "toggle" | "list" | "signin";
 
 /** One entry of a list field: its nested fields, keyed by field key. */
 export type ConfigEntry = Record<string, string>;

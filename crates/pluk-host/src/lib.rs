@@ -198,6 +198,9 @@ pub fn run() {
             commands::clear_logs,
             commands::cancel_query,
             commands::reload,
+            commands::sign_in_states,
+            commands::start_sign_in,
+            commands::end_sign_in,
             commands::inject_mcp_config,
             commands::list_installed_mcp_clients,
             updater::get_update_state,
@@ -271,7 +274,13 @@ fn build_app_menu<R: tauri::Runtime>(
         &[
             &MenuItem::with_id(app, "zoom_in", "Zoom In", true, Some("CmdOrCtrl+Plus"))?,
             &MenuItem::with_id(app, "zoom_out", "Zoom Out", true, Some("CmdOrCtrl+-"))?,
-            &MenuItem::with_id(app, "zoom_reset", zoom_reset_title, true, Some("CmdOrCtrl+0"))?,
+            &MenuItem::with_id(
+                app,
+                "zoom_reset",
+                zoom_reset_title,
+                true,
+                Some("CmdOrCtrl+0"),
+            )?,
         ],
     )?;
 

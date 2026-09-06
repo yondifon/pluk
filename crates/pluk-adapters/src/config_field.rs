@@ -38,6 +38,9 @@ pub enum FieldType {
     Toggle,
     /// Repeats a nested set of fields; the stored value is an array of objects.
     List,
+    /// Signing in to a service, rather than typing a value. Stores nothing
+    /// itself: what it shows is whether the account is connected.
+    SignIn,
 }
 
 impl FieldType {
@@ -50,6 +53,7 @@ impl FieldType {
             FieldType::Select => "select",
             FieldType::Toggle => "toggle",
             FieldType::List => "list",
+            FieldType::SignIn => "signin",
         }
     }
 }

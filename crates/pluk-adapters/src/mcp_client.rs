@@ -10,7 +10,9 @@
 //! one carries its own `reqwest` client (a different major than the one
 //! [`crate::http_client`] shares) which it deliberately builds without idle
 //! pooling and without redirect following, so custom headers are never replayed
-//! to another host.
+//! to another host. A server the person signs in to instead of pasting a token
+//! for goes through the same HTTP transport behind `rmcp`'s own OAuth client,
+//! which attaches the token and renews it when it is about to expire.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -21,6 +23,7 @@ use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientInfo, Implementation, JsonObject, Tool,
 };
 use rmcp::service::{RoleClient, RunningService};
+use rmcp::transport::auth::AuthClient;
 use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::transport::streamable_http_client::{
     StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
@@ -28,6 +31,7 @@ use rmcp::transport::streamable_http_client::{
 use tokio::process::Command;
 
 use crate::error::AdapterError;
+use crate::mcp_auth::{self, Credentials};
 
 /// How to reach an upstream MCP server.
 #[derive(Debug, Clone)]
@@ -42,6 +46,12 @@ pub enum McpUpstream {
     Http {
         url: String,
         headers: HashMap<String, String>,
+    },
+    /// A streamable-HTTP endpoint the person signs in to instead of pasting a
+    /// token for. The token is fetched, and renewed, per request.
+    SignedInHttp {
+        url: String,
+        credentials: Credentials,
     },
 }
 
@@ -66,6 +76,16 @@ impl McpClient {
                 let config = StreamableHttpClientTransportConfig::with_uri(url.as_str())
                     .custom_headers(parse_headers(headers)?);
                 let transport = StreamableHttpClientTransport::from_config(config);
+                bounded(timeout, client_info().serve(transport), "handshake").await?
+            }
+            McpUpstream::SignedInHttp { url, credentials } => {
+                let Some(manager) = mcp_auth::authorized(url, credentials).await? else {
+                    return Err(AdapterError::new(format!("{url} needs you to sign in"))
+                        .with_code(mcp_auth::NEEDS_SIGN_IN_CODE));
+                };
+                let client = AuthClient::new(reqwest_next::Client::new(), manager);
+                let config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
+                let transport = StreamableHttpClientTransport::with_client(client, config);
                 bounded(timeout, client_info().serve(transport), "handshake").await?
             }
         }
@@ -163,15 +183,21 @@ fn spawn_error(command: &str, error: &std::io::Error) -> AdapterError {
 fn handshake_error(upstream: &McpUpstream, detail: &str) -> AdapterError {
     let target = match upstream {
         McpUpstream::Stdio { command, .. } => command.as_str(),
-        McpUpstream::Http { url, .. } => url.as_str(),
+        McpUpstream::Http { url, .. } | McpUpstream::SignedInHttp { url, .. } => url.as_str(),
     };
     if detail.contains("Auth required") || detail.contains("Insufficient scope") {
+        if matches!(upstream, McpUpstream::SignedInHttp { .. }) {
+            return AdapterError::new(format!("{target} needs you to sign in again"))
+                .with_code(mcp_auth::NEEDS_SIGN_IN_CODE);
+        }
         return AdapterError::new(format!(
             "{target} rejected these credentials — check the token and its scopes"
         ));
     }
-    if matches!(upstream, McpUpstream::Http { .. })
-        && (detail.contains("Io error") || detail.contains("Client error"))
+    if matches!(
+        upstream,
+        McpUpstream::Http { .. } | McpUpstream::SignedInHttp { .. }
+    ) && (detail.contains("Io error") || detail.contains("Client error"))
     {
         return AdapterError::new(format!("{target} could not be reached: {detail}"));
     }
