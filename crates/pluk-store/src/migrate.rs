@@ -20,7 +20,7 @@ use crate::error::{Result, StoreError};
 /// A single migration step: upgrades the database by one version.
 type Step = fn(&mut Connection) -> Result<()>;
 
-const LADDER: &[Step] = &[migrate_v1];
+const LADDER: &[Step] = &[migrate_v1, migrate_v2];
 
 /// Bring `conn` up to the latest version.
 pub(crate) fn run(conn: &mut Connection) -> Result<()> {
@@ -152,6 +152,21 @@ fn migrate_v1(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 2: an index for the retention purge.
+///
+/// Both v1 indexes lead with `connection_id` / `group_id`, so
+/// `DELETE FROM query_log WHERE created_at < …` scans the whole table — once
+/// on every open and every fifteen minutes thereafter.
+fn migrate_v2(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS query_log_created_at_idx ON query_log(created_at);",
+    )?;
+    tx.pragma_update(None, "user_version", 2)?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Columns added to `query_log` over time by the TypeScript ALTER loop. Old
 /// databases may lack any subset; add exactly what is missing and fail loudly
 /// if an ALTER fails for any other reason.
@@ -196,9 +211,9 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         assert_eq!(current_version(&conn).unwrap(), 0);
         run(&mut conn).unwrap();
-        assert_eq!(current_version(&conn).unwrap(), 1);
+        assert_eq!(current_version(&conn).unwrap(), LADDER.len() as u32);
         run(&mut conn).unwrap();
-        assert_eq!(current_version(&conn).unwrap(), 1);
+        assert_eq!(current_version(&conn).unwrap(), LADDER.len() as u32);
     }
 
     /// Build a database the way the current TypeScript code leaves one: its
@@ -299,7 +314,7 @@ mod tests {
         run(&mut conn).unwrap();
 
         // Version stamped, all tail columns completed, new tables created.
-        assert_eq!(current_version(&conn).unwrap(), 1);
+        assert_eq!(current_version(&conn).unwrap(), LADDER.len() as u32);
         let columns: HashSet<String> = columns_of(&conn, "query_log");
         for name in [
             "result_json",
@@ -362,7 +377,7 @@ mod tests {
         drop(store);
         let mut conn = Connection::open(&path).unwrap();
         run(&mut conn).unwrap();
-        assert_eq!(current_version(&conn).unwrap(), 1);
+        assert_eq!(current_version(&conn).unwrap(), LADDER.len() as u32);
         assert_eq!(
             columns_of(&conn, "query_log").len(),
             15,

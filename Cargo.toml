@@ -7,6 +7,12 @@ edition = "2024"
 version = "0.1.1"
 license = "MIT"
 
+[profile.dev.package."*"]
+# Dependencies are compiled once and then reused across dev builds, so
+# optimizing them costs nothing on the edit-compile loop and keeps `make dev`
+# from running SQLite, JSON and TLS unoptimized.
+opt-level = 3
+
 [profile.release]
 strip = true
 lto = true

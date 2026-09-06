@@ -556,9 +556,12 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
-  await loadAdapters();
-  await loadHealth();
-  await loadData();
+  // Independent reads: run them together so first paint waits on one round
+  // trip rather than three.
+  await Promise.all([loadAdapters(), loadHealth(), loadData()]);
+  // loadData renders as soon as it lands; render once more so the first paint
+  // that sticks has the adapter catalog and health in it too.
+  refresh();
 
   setInterval(
     () =>

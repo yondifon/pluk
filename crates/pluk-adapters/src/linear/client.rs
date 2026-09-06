@@ -46,13 +46,11 @@ pub async fn linear_graphql(
     if let Some(r) = runner() {
         return r(query.to_string(), variables).await;
     }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(TIMEOUT_MS))
-        .build()
-        .map_err(|e| AdapterError::new(e.to_string()))?;
+    let client = crate::http_client::shared_client()?;
     let body = serde_json::json!({ "query": query, "variables": variables });
     let res = client
         .post(ENDPOINT)
+        .timeout(Duration::from_millis(TIMEOUT_MS))
         .header("Content-Type", "application/json")
         .header("Authorization", api_key)
         .json(&body)

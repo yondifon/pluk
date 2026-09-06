@@ -51,7 +51,18 @@ pub struct IntegrationUpdate {
     pub query_policy: Option<Option<String>>,
 }
 
-const SELECT_ALL: &str = "SELECT id, name, type, config, environment, read_only, query_policy, token, created_at FROM integrations";
+/// The column list every read shares. A macro rather than a `const` so the
+/// three statements below are string literals: `prepare_cached` keys its cache
+/// on the SQL text, and a literal costs no formatting per call.
+macro_rules! select_all {
+    () => {
+        "SELECT id, name, type, config, environment, read_only, query_policy, token, created_at FROM integrations"
+    };
+}
+
+const SELECT_ORDERED: &str = concat!(select_all!(), " ORDER BY created_at DESC");
+const SELECT_BY_TOKEN: &str = concat!(select_all!(), " WHERE token = ?");
+const SELECT_BY_ID: &str = concat!(select_all!(), " WHERE id = ?");
 
 fn hydrate(row: &Row<'_>) -> rusqlite::Result<Integration> {
     let raw_config: String = row.get(3)?;
@@ -73,23 +84,21 @@ fn hydrate(row: &Row<'_>) -> rusqlite::Result<Integration> {
 impl Store {
     pub fn list_integrations(&self) -> Result<Vec<Integration>> {
         let conn = self.conn.lock().expect("store lock");
-        let mut stmt = conn.prepare(&format!("{SELECT_ALL} ORDER BY created_at DESC"))?;
+        let mut stmt = conn.prepare_cached(SELECT_ORDERED)?;
         let rows = stmt.query_map([], hydrate)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     pub fn integration_by_token(&self, token: &str) -> Result<Option<Integration>> {
         let conn = self.conn.lock().expect("store lock");
-        Ok(conn
-            .query_row(&format!("{SELECT_ALL} WHERE token = ?"), [token], hydrate)
-            .optional()?)
+        let mut stmt = conn.prepare_cached(SELECT_BY_TOKEN)?;
+        Ok(stmt.query_row([token], hydrate).optional()?)
     }
 
     pub fn integration_by_id(&self, id: &str) -> Result<Option<Integration>> {
         let conn = self.conn.lock().expect("store lock");
-        Ok(conn
-            .query_row(&format!("{SELECT_ALL} WHERE id = ?"), [id], hydrate)
-            .optional()?)
+        let mut stmt = conn.prepare_cached(SELECT_BY_ID)?;
+        Ok(stmt.query_row([id], hydrate).optional()?)
     }
 
     pub fn create_integration(&self, input: &IntegrationInput) -> Result<Integration> {

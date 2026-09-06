@@ -100,14 +100,12 @@ pub async fn slack_request(
         }
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(TIMEOUT_MS))
-        .build()
-        .map_err(|e| AdapterError::new(e.to_string()))?;
+    let client = crate::http_client::shared_client()?;
 
     let url = format!("{BASE_URL}/{method}");
     let res = client
         .post(&url)
+        .timeout(Duration::from_millis(TIMEOUT_MS))
         .header("Authorization", format!("Bearer {}", cfg.token))
         .form(&form)
         .send()

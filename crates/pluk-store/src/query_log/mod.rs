@@ -9,6 +9,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use rusqlite::OptionalExtension;
 use rusqlite::types::{ToSql, ToSqlOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -251,8 +252,12 @@ impl ActivityFeed {
     }
 }
 
-const ACTIVITY_COLUMNS: &str = "id, connection_id, connection_name, sql, verdict, reason, categories, source, \
-     group_id, group_name, database, row_count, created_at";
+macro_rules! activity_columns {
+    () => {
+        "id, connection_id, connection_name, sql, verdict, reason, categories, source, \
+         group_id, group_name, database, row_count, created_at"
+    };
+}
 
 fn map_activity(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogActivity> {
     Ok(LogActivity {
@@ -279,9 +284,15 @@ impl Store {
     /// most once every fifteen minutes).
     pub fn create_log_entry(&self, draft: LogDraft) -> Result<i64> {
         let conn = self.conn.lock().expect("store lock");
-        conn.execute(
+        // `RETURNING` hands back the written row — including the database's own
+        // `created_at` — in the same statement the activity feed would
+        // otherwise re-read it with.
+        let mut stmt = conn.prepare_cached(concat!(
             "INSERT INTO query_log (connection_id, connection_name, sql, verdict, reason, categories, source, group_id, group_name, database)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ",
+            activity_columns!(),
+        ))?;
+        let row = stmt.query_row(
             rusqlite::params![
                 draft.connection_id,
                 draft.connection_name,
@@ -294,11 +305,13 @@ impl Store {
                 draft.group.as_ref().map(|g| g.name.as_str()),
                 draft.database,
             ],
+            map_activity,
         )?;
-        let id = conn.last_insert_rowid();
+        drop(stmt);
         drop(conn);
+        let id = row.id;
         self.purge_if_due()?;
-        self.notify_activity(id);
+        self.dispatch_activity(row);
         Ok(id)
     }
 
@@ -309,22 +322,31 @@ impl Store {
         let result_json = update.result.as_ref().map(pack_result);
         let row_count = update.result.as_ref().map(|r| r.rows.len() as i64);
         let conn = self.conn.lock().expect("store lock");
-        conn.execute(
+        let mut stmt = conn.prepare_cached(concat!(
             "UPDATE query_log
              SET sql = COALESCE(?, sql), verdict = ?, reason = ?, result_json = ?, row_count = ?, response_text = ?
-             WHERE id = ?",
-            rusqlite::            params![
-                update.sql,
-                update.verdict.as_str(),
-                update.reason,
-                result_json,
-                row_count,
-                update.response_text.as_deref().map(cap_response),
-                id,
-            ],
-        )?;
+             WHERE id = ? RETURNING ",
+            activity_columns!(),
+        ))?;
+        let row = stmt
+            .query_row(
+                rusqlite::params![
+                    update.sql,
+                    update.verdict.as_str(),
+                    update.reason,
+                    result_json,
+                    row_count,
+                    update.response_text.as_deref().map(cap_response),
+                    id,
+                ],
+                map_activity,
+            )
+            .optional()?;
+        drop(stmt);
         drop(conn);
-        self.notify_activity(id);
+        if let Some(row) = row {
+            self.dispatch_activity(row);
+        }
         Ok(())
     }
 
@@ -341,29 +363,14 @@ impl Store {
         feed.unsubscribe(subscription);
     }
 
-    /// Read one row back in its light activity shape and hand it to every
-    /// subscriber. Best-effort: a read or dispatch failure never fails the
-    /// write that triggered it.
-    fn notify_activity(&self, id: i64) {
-        if id <= 0 {
-            return;
-        }
+    /// Hand a just-written row to every subscriber. The writer already has the
+    /// row from its `RETURNING` clause, so this reads nothing back.
+    fn dispatch_activity(&self, row: LogActivity) {
         let feed = self.activity.lock().expect("activity feed");
         if feed.handlers.is_empty() {
             return;
         }
-        let row = {
-            let conn = self.conn.lock().expect("store lock");
-            conn.query_row(
-                &format!("SELECT {ACTIVITY_COLUMNS} FROM query_log WHERE id = ?"),
-                [id],
-                map_activity,
-            )
-            .ok()
-        };
-        if let Some(row) = row {
-            feed.dispatch(&row);
-        }
+        feed.dispatch(&row);
     }
 
     /// Delete every log entry older than the retention window. Zero or
