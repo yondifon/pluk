@@ -6,13 +6,16 @@ import { renderTabs, type TabId } from "./tabs";
 import { mountActivityLog } from "../activityLog/activityLog";
 import { humanizeHealthError } from "../health";
 import { toast, type PendingToast } from "../toast";
-import type { AdapterManifest, ConnHealth, Integration } from "./types";
+import type { AdapterManifest, ConnHealth, Integration, ToolSpec } from "./types";
 
 export type DetailActions = {
   onEdit: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onTest: () => Promise<{ ok: boolean; error?: string }>;
+  // The tools this integration exposes, which for an adapter that discovers
+  // them on connect is wider than the catalog's list.
+  loadTools?: () => Promise<ToolSpec[]>;
   inject: InjectFn;
 };
 
@@ -35,6 +38,8 @@ export function mountIntegrationDetail(
   let currentHealth: ConnHealth | null | undefined = health ?? null;
   let selectedTab: TabId = "logs";
   let testing = false;
+  let tools: ToolSpec[] | null = null;
+  let toolsRequested = false;
   const logsMount = document.createElement("div");
   logsMount.className = "logs-mount";
   let logs: { destroy: () => void } | null = null;
@@ -103,8 +108,22 @@ export function mountIntegrationDetail(
       const panel = document.createElement("div");
       panel.setAttribute("role", "tabpanel");
        panel.setAttribute("aria-labelledby", "tab-tools");
-      renderTools(panel, integration, manifest ?? null);
+      renderTools(panel, integration, tools ?? manifest?.tools ?? []);
       contentEl.appendChild(panel);
+      void loadTools();
+    }
+  }
+
+  // Discovered tools replace the catalog list once they arrive; a failure
+  // leaves the catalog list standing.
+  async function loadTools(): Promise<void> {
+    if (toolsRequested || !actions.loadTools) return;
+    toolsRequested = true;
+    try {
+      tools = await actions.loadTools();
+      if (selectedTab === "tools") render();
+    } catch {
+      tools = null;
     }
   }
 

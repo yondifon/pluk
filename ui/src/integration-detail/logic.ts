@@ -70,17 +70,28 @@ export function settingsSummary(tool: ToolSpec, toolConfig: Integration["toolCon
 const MASK = "••••••";
 
 export function genericConfigRows(
-  config: Record<string, string>,
+  config: Integration["config"],
   fields: ConfigField[],
 ): Array<[string, string]> {
   const secretKeys = new Set(fields.filter((f) => f.secret).map((f) => f.key));
+  const fieldByKey = new Map(fields.map((f) => [f.key, f] as const));
   return Object.keys(config)
     .sort()
     .map((key) => {
       const pretty = key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-      const value = secretKeys.has(key) ? MASK : config[key];
+      const raw = config[key];
+      const value = secretKeys.has(key)
+        ? MASK
+        : Array.isArray(raw)
+          ? countLabel(raw.length, fieldByKey.get(key)?.itemLabel)
+          : raw;
       return [pretty, value] as [string, string];
     });
+}
+
+function countLabel(count: number, itemLabel: string | undefined): string {
+  const noun = (itemLabel ?? "item").toLowerCase();
+  return count === 1 ? `1 ${noun}` : `${count} ${noun}s`;
 }
 
 export function overviewRows(
@@ -91,7 +102,8 @@ export function overviewRows(
   const secretKeys = new Set(fields.filter((f) => f.secret).map((f) => f.key));
   const masked = (key: string, fallback = "-"): string => {
     if (secretKeys.has(key)) return MASK;
-    return integration.config[key] ?? fallback;
+    const value = integration.config[key];
+    return typeof value === "string" ? value : fallback;
   };
 
   if (integration.type === "sqlite") {

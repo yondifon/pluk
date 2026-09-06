@@ -1,14 +1,14 @@
-//! Group namespacing: slug prefixes for tool/prompt/resource names.
+//! Namespacing: slug prefixes for tool/prompt/resource names.
 //!
-//! A group exposes several integrations through one MCP server. Their
-//! tool/prompt/resource names collide (two SQL DBs both register `query`), so
-//! in group mode each member registers through a [`namespaced`] host that
-//! prefixes every name with a per-member slug. Single-integration endpoints
-//! register on the bare builder and are unaffected.
+//! One endpoint can front several sources whose names collide — two SQL
+//! members of a group both register `query`, two upstream MCP servers both
+//! offer `search`. Each source registers through a [`NamespacedHost`] that
+//! prefixes every name with its slug. Endpoints fronting a single source
+//! register on the bare host and are unaffected.
 //!
 //! Ported from `pluk/src/mcp/namespace.ts`.
 
-use pluk_adapters::ToolHost;
+use crate::tool_host::{PromptHandler, ResourceHandler, ToolHandler, ToolHost, ToolRegistration};
 
 /// Slugify a member name into a tool-name-safe prefix segment.
 pub fn slug(name: &str) -> String {
@@ -59,12 +59,8 @@ impl<'a> NamespacedHost<'a> {
 }
 
 impl ToolHost for NamespacedHost<'_> {
-    fn register_tool(
-        &mut self,
-        registration: pluk_adapters::ToolRegistration,
-        handler: pluk_adapters::ToolHandler,
-    ) {
-        let registration = pluk_adapters::ToolRegistration {
+    fn register_tool(&mut self, registration: ToolRegistration, handler: ToolHandler) {
+        let registration = ToolRegistration {
             name: self.prefix(&registration.name),
             ..registration
         };
@@ -76,7 +72,7 @@ impl ToolHost for NamespacedHost<'_> {
         name: &str,
         description: &str,
         args_schema: Option<serde_json::Map<String, serde_json::Value>>,
-        handler: pluk_adapters::PromptHandler,
+        handler: PromptHandler,
     ) {
         self.inner
             .register_prompt(&self.prefix(name), description, args_schema, handler);
@@ -88,7 +84,7 @@ impl ToolHost for NamespacedHost<'_> {
         uri: &str,
         mime_type: &str,
         description: Option<&str>,
-        handler: pluk_adapters::ResourceHandler,
+        handler: ResourceHandler,
     ) {
         let uri = namespace_uri(&self.ns, uri);
         self.inner
@@ -99,7 +95,6 @@ impl ToolHost for NamespacedHost<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pluk_adapters::{PromptHandler, ResourceHandler, ToolHandler};
     use std::sync::Arc;
 
     #[derive(Default)]
@@ -108,11 +103,7 @@ mod tests {
     }
 
     impl ToolHost for RecordingHost {
-        fn register_tool(
-            &mut self,
-            registration: pluk_adapters::ToolRegistration,
-            _handler: ToolHandler,
-        ) {
+        fn register_tool(&mut self, registration: ToolRegistration, _handler: ToolHandler) {
             self.calls.push(format!("tool:{}", registration.name));
         }
 
@@ -155,10 +146,7 @@ mod tests {
         let mut fake = RecordingHost::default();
         {
             let mut host = NamespacedHost::new(&mut fake, "metrics_db");
-            host.register_tool(
-                pluk_adapters::ToolRegistration::no_args("query", "Q"),
-                noop_tool(),
-            );
+            host.register_tool(ToolRegistration::no_args("query", "Q"), noop_tool());
             host.register_prompt(
                 "summarize_schema",
                 "S",

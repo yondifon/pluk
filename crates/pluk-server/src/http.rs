@@ -28,6 +28,7 @@ use crate::mcp::{build_owner_surface, resolve_owner};
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/adapters", get(adapters_catalog))
+        .route("/api/integrations/{id}/tools", get(integration_tools))
         .route("/api/integrations/{id}/test", post(test_integration))
         .route("/api/reload", post(reload))
         .route("/api/events", get(events))
@@ -65,6 +66,31 @@ async fn adapters_catalog(State(state): State<AppState>) -> Response {
         })
         .collect();
     json_response(StatusCode::OK, serde_json::json!({ "adapters": adapters }))
+}
+
+/// GET /api/integrations/:id/tools — the tool list this integration actually
+/// exposes. Matches the catalog for most types; for one that discovers its
+/// tools on connect, this is the only place the real list appears.
+async fn integration_tools(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let Some(integration) = state.store.integration_by_id(&id).ok().flatten() else {
+        return json_response(
+            StatusCode::NOT_FOUND,
+            serde_json::json!({ "error": "Not found" }),
+        );
+    };
+    let Some(adapter) = state.registry.get(&integration.r#type) else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "error": format!("No adapter for type: {}", integration.r#type) }),
+        );
+    };
+    match adapter.tool_specs_for(&integration).await {
+        Ok(tools) => json_response(StatusCode::OK, serde_json::json!({ "tools": tools })),
+        Err(error) => json_response(
+            StatusCode::BAD_GATEWAY,
+            serde_json::json!({ "error": error.message }),
+        ),
+    }
 }
 
 /// POST /api/integrations/:id/test — run the integration's connection test and
@@ -341,18 +367,15 @@ async fn mcp(
     let owner_id = owner.owner_id().to_string();
     state.owners.open_owner(&owner_id);
 
-    let app_state = state.clone();
-    let token_for_factory = token;
-    // Stateless serving: the factory runs per protocol request, so the surface
-    // always reflects current config (tool toggles included).
+    // The surface is built once per request and handed to the transport's
+    // service factory, which is synchronous and so cannot await discovery.
+    // Config edits and tool toggles still land on the next request.
+    let surface = match build_owner_surface(&owner, &state.store, &state.registry).await {
+        Ok(surface) => surface,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
     let service = StreamableHttpService::new(
-        move || {
-            let owner = resolve_owner(&app_state.store, &app_state.registry, &token_for_factory)
-                .map_err(std::io::Error::other)?
-                .ok_or_else(|| std::io::Error::other("owner vanished"))?;
-            build_owner_surface(&owner, &app_state.store, &app_state.registry)
-                .map_err(std::io::Error::other)
-        },
+        move || Ok(surface.clone()),
         state.sessions.clone(),
         crate::ServerConfig::mcp_transport_config(),
     );

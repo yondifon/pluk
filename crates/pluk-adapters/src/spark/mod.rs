@@ -1626,7 +1626,9 @@ mod tests {
         };
 
         let mut host = CollectingHost::default();
-        crate::register_gated(adapter.as_ref(), &mut host, &conn, "").expect("register");
+        crate::register_gated(adapter.as_ref(), &mut host, &conn, "")
+            .await
+            .expect("register");
         let handler = host
             .handlers
             .remove("email_action")

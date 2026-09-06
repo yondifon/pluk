@@ -27,7 +27,8 @@ export function canSaveGroup(draft: GroupDraft): boolean {
 
 export function overridableFields(manifest: AdapterManifest | undefined): ConfigFieldDef[] {
   if (!manifest) return [];
-  return manifest.configFields.filter((f) => !(f.secret ?? false));
+  // A list can't be expressed in a single override input, so it always inherits.
+  return manifest.configFields.filter((f) => !(f.secret ?? false) && f.type !== "list");
 }
 
 export function inheritPlaceholder(

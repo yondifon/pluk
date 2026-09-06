@@ -14,8 +14,15 @@ pluk-core = { path = "../pluk-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 async-trait = "0.1"
-tokio = { version = "1", features = ["rt", "macros", "time", "sync", "fs"] }
+http = "1"
+# Client-side MCP only. pluk-server keeps the server half; the two feature sets
+# are additive in the same rmcp build.
+rmcp = { version = "3.1", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "auth"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "sync", "fs", "process"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# The reqwest major `rmcp` builds against, needed to hand its OAuth client a
+# transport of the type its own trait impl covers.
+reqwest_next = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls"] }
 tokio-util = { version = "0.7", features = ["full"] }
 futures = "0.3"
 regex = "1"

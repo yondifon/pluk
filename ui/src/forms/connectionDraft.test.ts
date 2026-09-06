@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { isVisible, visibleFields } from "./catalog.ts";
 import type { AdapterManifest, ConfigFieldDef } from "./catalog.ts";
-import { emptyDraft, adopt, setEnvironment, canSave, splitTools } from "./connectionDraft.ts";
+import { emptyDraft, adopt, setEnvironment, canSave, splitTools, draftFromConnection, firstMissingValue, withDiscoveredTools } from "./connectionDraft.ts";
 import { coerceToStored, coerceFromStored, serializeConfig, parseConfig, serializeToolSettings } from "./coercion.ts";
 import { overridableFields, inheritPlaceholder, updateOverride, serializeGroup, groupDraftFrom } from "./groupForm.ts";
 
@@ -243,6 +243,19 @@ describe("default-on and default-off split", () => {
   });
 });
 
+describe("tools discovered on connect", () => {
+  it("keeps saved toggles and defaults the tools it has not seen", () => {
+    const draft = adopt(emptyDraft(), makeManifest(), true);
+    const next = withDiscoveredTools({ ...draft, toolConfig: { ...draft.toolConfig, docs__search: { enabled: false, settings: {} } } }, [
+      { name: "docs__search", description: "Search", category: "read", defaultEnabled: true },
+      { name: "docs__deploy", description: "Deploy", category: "write", defaultEnabled: false },
+    ]);
+    expect(next.tools.map((t) => t.name)).toEqual(["docs__search", "docs__deploy"]);
+    expect(next.toolConfig["docs__search"].enabled).toBe(false);
+    expect(next.toolConfig["docs__deploy"].enabled).toBe(false);
+  });
+});
+
 describe("override inheritance and secret filtering", () => {
   it("overridableFields excludes secret fields", () => {
     const m = makeManifest();
@@ -296,5 +309,46 @@ describe("environment picker copy not leaking internals", () => {
     // This is a design-check, not runtime: field labels come from catalog verbatim.
     const m = makeManifest();
     expect(m.configFields[0].label).toBe("Host");
+  });
+});
+
+describe("repeatable list fields", () => {
+  const listField: ConfigFieldDef = {
+    key: "servers",
+    label: "Servers",
+    type: "list",
+    itemLabel: "Server",
+    required: true,
+    fields: [
+      { key: "name", label: "Name", type: "text", required: true },
+      { key: "url", label: "URL", type: "text" },
+    ],
+  };
+
+  function draftWithServers(servers: Array<Record<string, string>>) {
+    return { ...emptyDraft(), name: "Proxy", fields: [listField], config: { servers } };
+  }
+
+  it("keeps entries as objects through hydration", () => {
+    const hydrated = draftFromConnection({
+      name: "Proxy",
+      type: "mcp-proxy",
+      config: { servers: [{ name: "docs", url: "https://a" }], label: "x" },
+    });
+    expect(hydrated.config.servers).toEqual([{ name: "docs", url: "https://a" }]);
+    expect(hydrated.config.label).toBe("x");
+  });
+
+  it("blocks save and names the entry missing a required value", () => {
+    const draft = draftWithServers([{ name: "docs" }, { url: "https://b" }]);
+    expect(canSave(draft)).toBe(false);
+    const missing = firstMissingValue(draft);
+    expect(missing?.entry?.index).toBe(1);
+    expect(missing?.entry?.field.key).toBe("name");
+  });
+
+  it("requires at least one entry, then saves", () => {
+    expect(canSave(draftWithServers([]))).toBe(false);
+    expect(canSave(draftWithServers([{ name: "docs" }]))).toBe(true);
   });
 });

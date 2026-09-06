@@ -15,10 +15,22 @@ use tokio_util::sync::CancellationToken;
 
 type CloseHook = Arc<dyn Fn(&str) + Send + Sync>;
 
-#[derive(Default)]
 pub struct OwnerPool {
     aborts: Mutex<HashMap<String, CancellationToken>>,
     hooks: Mutex<Vec<CloseHook>>,
+}
+
+impl Default for OwnerPool {
+    fn default() -> Self {
+        let pool = OwnerPool {
+            aborts: Mutex::new(HashMap::new()),
+            hooks: Mutex::new(Vec::new()),
+        };
+        pool.on_owner_close(Arc::new(|owner_id| {
+            pluk_adapters::mcp_pool::evict_owner(owner_id)
+        }));
+        pool
+    }
 }
 
 impl OwnerPool {

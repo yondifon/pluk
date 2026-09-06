@@ -1,7 +1,7 @@
-import type { AdapterManifest, ConfigFieldDef, ToolDef } from "./catalog.ts";
-import { visibleFields, groupedFields } from "./catalog.ts";
+import type { AdapterManifest, ConfigEntry, ConfigFieldDef, ConfigValue, ToolDef } from "./catalog.ts";
+import { visibleFields, groupedFields, entriesValue, textValue } from "./catalog.ts";
 import type { ConnectionDraft, Environment } from "./connectionDraft.ts";
-import { canSave, setEnvironment, splitTools } from "./connectionDraft.ts";
+import { canSave, firstMissingValue, setEnvironment, splitTools } from "./connectionDraft.ts";
 import type { GroupDraft } from "./groupForm.ts";
 import { overridableFields, inheritPlaceholder, canSaveGroup } from "./groupForm.ts";
 import { createIcon } from "../icon";
@@ -125,11 +125,149 @@ function helpText(id: string, text: string): HTMLElement {
   return el;
 }
 
-export function renderField(field: ConfigFieldDef, value: string, onChange: (v: string) => void): HTMLElement {
-  const { row, slot, controlId } = settingRow(field.key, field.required ? `${field.label} *` : field.label);
+/**
+ * The sign-in row's world: which servers are connected, which one the person
+ * is answering in their browser right now, and the two things they can do.
+ * Absent until the connection has been saved — there is nowhere to keep a
+ * sign-in before that.
+ */
+export interface SignIn {
+  connected: Record<string, boolean>;
+  waitingFor: string | null;
+  onConnect: (server: string) => void;
+  onDisconnect: (server: string) => void;
+}
+
+/** The account row of one server the person signs in to. */
+function renderSignInRow(field: ConfigFieldDef, entry: ConfigEntry, rowKey: string, signIn: SignIn | null): HTMLElement {
+  const { row, slot } = settingRow(rowKey, field.label);
+  const server = (entry["name"] ?? "").trim();
+  const status = document.createElement("span");
+  status.className = "hint";
+
+  if (!signIn || !server) {
+    status.textContent = !server
+      ? "Give this server a name first."
+      : "Save this connection, then come back to sign in.";
+    slot.appendChild(status);
+    return row;
+  }
+
+  if (signIn.waitingFor === server) {
+    status.textContent = "Finish signing in the browser window.";
+    slot.appendChild(status);
+    return row;
+  }
+
+  const connected = signIn.connected[server] === true;
+  status.textContent = connected ? "Connected." : "Not connected yet.";
+  slot.append(
+    status,
+    createButton(connected ? "Sign in again" : "Sign in", {
+      size: "sm",
+      onClick: () => signIn.onConnect(server),
+    }),
+  );
+  if (connected) {
+    slot.appendChild(
+      createButton("Disconnect", { size: "sm", onClick: () => signIn.onDisconnect(server) }),
+    );
+  }
+  if (field.help) row.appendChild(helpText(`help-${rowKey}`, field.help));
+  return row;
+}
+
+/** The name of one entry, e.g. `Server 2`. */
+function entryTitle(field: ConfigFieldDef, index: number): string {
+  return `${field.itemLabel ?? field.label} ${index + 1}`;
+}
+
+function renderListField(
+  field: ConfigFieldDef,
+  entries: ConfigEntry[],
+  onChange: (v: ConfigEntry[]) => void,
+  signIn: SignIn | null = null,
+): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "field-list";
+  wrap.dataset.fieldKey = field.key;
+
+  const heading = document.createElement("div");
+  heading.className = "inspector-label";
+  heading.textContent = field.required ? `${field.label} *` : field.label;
+  wrap.appendChild(heading);
+  if (field.help) wrap.appendChild(helpText(`help-${field.key}`, field.help));
+
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "Nothing added yet.";
+    wrap.appendChild(empty);
+  }
+
+  entries.forEach((entry, index) => {
+    const card = document.createElement("div");
+    card.className = "field-list-entry";
+    card.setAttribute("role", "group");
+    card.setAttribute("aria-label", entryTitle(field, index));
+
+    const head = document.createElement("div");
+    head.className = "field-list-head";
+    const title = document.createElement("span");
+    title.textContent = entryTitle(field, index);
+    head.append(
+      title,
+      createButton("Remove", {
+        size: "sm",
+        ariaLabel: `Remove ${entryTitle(field, index).toLowerCase()}`,
+        onClick: () => onChange(entries.filter((_, i) => i !== index)),
+      }),
+    );
+    card.appendChild(head);
+
+    for (const sub of visibleFields(field.fields ?? [], entry)) {
+      if (sub.type === "signin") {
+        card.appendChild(renderSignInRow(sub, entry, `${field.key}-${index}-${sub.key}`, signIn));
+        continue;
+      }
+      const subRow = renderField(sub, entry[sub.key] ?? "", (v) => {
+        const next = entries.map((e, i) => (i === index ? { ...e, [sub.key]: textValue(v) } : e));
+        onChange(next);
+      }, `${field.key}-${index}`);
+      subRow.dataset.fieldKey = `${field.key}[${index}].${sub.key}`;
+      card.appendChild(subRow);
+    }
+    wrap.appendChild(card);
+  });
+
+  const add = createButton(`Add ${(field.itemLabel ?? field.label).toLowerCase()}`, {
+    size: "sm",
+    onClick: () => {
+      const seeded: ConfigEntry = {};
+      for (const sub of field.fields ?? []) if (sub.default != null) seeded[sub.key] = sub.default;
+      onChange([...entries, seeded]);
+    },
+  });
+  wrap.appendChild(add);
+  return wrap;
+}
+
+export function renderField(
+  field: ConfigFieldDef,
+  value: ConfigValue,
+  onChange: (v: ConfigValue) => void,
+  idPrefix?: string,
+  signIn: SignIn | null = null,
+): HTMLElement {
+  if (field.type === "list") {
+    return renderListField(field, entriesValue(value), onChange as (v: ConfigEntry[]) => void, signIn);
+  }
+  const current = textValue(value);
+  const rowKey = idPrefix ? `${idPrefix}-${field.key}` : field.key;
+  const { row, slot, controlId } = settingRow(rowKey, field.required ? `${field.label} *` : field.label);
   row.dataset.fieldKey = field.key;
 
-  const help = field.help ? helpText(`help-${field.key}`, field.help) : null;
+  const help = field.help ? helpText(`help-${rowKey}`, field.help) : null;
   const describe = (el: HTMLElement) => { if (help) el.setAttribute("aria-describedby", help.id); };
 
   switch (field.type) {
@@ -137,7 +275,7 @@ export function renderField(field: ConfigFieldDef, value: string, onChange: (v: 
       const input = document.createElement("input");
       input.type = "checkbox";
       input.id = controlId;
-      input.checked = value === "true";
+      input.checked = current === "true";
       describe(input);
       input.addEventListener("change", () => onChange(input.checked ? "true" : "false"));
       slot.appendChild(input);
@@ -153,7 +291,7 @@ export function renderField(field: ConfigFieldDef, value: string, onChange: (v: 
         o.value = opt.value;
         o.textContent = opt.label;
         o.title = opt.label;
-        if (opt.value === value) o.selected = true;
+        if (opt.value === current) o.selected = true;
         sel.appendChild(o);
       }
       sel.addEventListener("change", () => {
@@ -169,7 +307,7 @@ export function renderField(field: ConfigFieldDef, value: string, onChange: (v: 
       text.type = "text";
       text.id = controlId;
       text.placeholder = field.placeholder ?? "";
-      text.value = value;
+      text.value = current;
       text.className = "field-input mono";
       describe(text);
       text.addEventListener("input", () => onChange(text.value));
@@ -196,7 +334,7 @@ export function renderField(field: ConfigFieldDef, value: string, onChange: (v: 
       input.type = "number";
       input.id = controlId;
       input.placeholder = field.placeholder ?? "";
-      input.value = value;
+      input.value = current;
       input.className = "field-input mono field-number";
       input.inputMode = "numeric";
       input.step = "1";
@@ -210,7 +348,7 @@ export function renderField(field: ConfigFieldDef, value: string, onChange: (v: 
       input.type = field.type === "password" ? "password" : "text";
       input.id = controlId;
       input.placeholder = field.placeholder ?? (field.type === "password" ? "••••••" : "");
-      input.value = value;
+      input.value = current;
       input.className = "field-input mono";
       describe(input);
       input.addEventListener("input", () => onChange(input.value));
@@ -406,6 +544,7 @@ export function renderIntegrationForm(
   onSave: (d: ConnectionDraft) => void,
   onCancel: () => void,
   onTypeChangeClick?: () => void,
+  signIn: SignIn | null = null,
 ): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "form-body";
@@ -467,9 +606,9 @@ export function renderIntegrationForm(
        const h = document.createElement("h3"); h.className = "ui-card-title"; h.textContent = group;
       card.appendChild(h);
       for (const f of shown) {
-        const row = renderField(f, draft.config[f.key] ?? "", (v) => {
+        const row = renderField(f, draft.config[f.key] ?? (f.type === "list" ? [] : ""), (v) => {
           onDraftChange({ ...draft, config: { ...draft.config, [f.key]: v } });
-        });
+        }, undefined, signIn);
         card.appendChild(row);
       }
       wrap.appendChild(card);
@@ -508,15 +647,23 @@ export function renderIntegrationForm(
       onSave(draft);
       return;
     }
-    const invalid = visibleFields(draft.fields, draft.config).find((field) => field.required && (draft.config[field.key] ?? "") === "");
-    const invalidRow = invalid ? wrap.querySelector<HTMLElement>(`[data-field-key="${invalid.key}"]`) : null;
-    const control = invalidRow?.querySelector<HTMLElement>("input, select");
-    if (control) {
-      control.setAttribute("aria-invalid", "true");
-      control.focus();
-      if (!invalidRow?.querySelector(".field-error")) {
-        const error = document.createElement("div"); error.className = "field-error"; error.setAttribute("role", "alert"); error.textContent = `${invalid?.label ?? "This field"} is required.`; invalidRow?.appendChild(error);
-      }
+    const missing = firstMissingValue(draft);
+    if (!missing) return;
+    const key = missing.entry ? `${missing.field.key}[${missing.entry.index}].${missing.entry.field.key}` : missing.field.key;
+    const invalidRow = wrap.querySelector<HTMLElement>(`[data-field-key="${CSS.escape(key)}"]`);
+    if (!invalidRow) return;
+    const label = missing.entry ? missing.entry.field.label : missing.field.label;
+    const message = missing.entry
+      ? `${entryTitle(missing.field, missing.entry.index)}: ${label} is required.`
+      : `${label} is required.`;
+    const control = invalidRow.querySelector<HTMLElement>("input, select");
+    if (control) markMissing(control, invalidRow, message);
+    else if (!invalidRow.querySelector(".field-error")) {
+      const error = document.createElement("div");
+      error.className = "field-error";
+      error.setAttribute("role", "alert");
+      error.textContent = `Add at least one ${(missing.field.itemLabel ?? missing.field.label).toLowerCase()} to continue.`;
+      invalidRow.appendChild(error);
     }
   });
   footer.append(cancel, save);

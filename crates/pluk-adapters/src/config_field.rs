@@ -36,6 +36,11 @@ pub enum FieldType {
     File,
     Select,
     Toggle,
+    /// Repeats a nested set of fields; the stored value is an array of objects.
+    List,
+    /// Signing in to a service, rather than typing a value. Stores nothing
+    /// itself: what it shows is whether the account is connected.
+    SignIn,
 }
 
 impl FieldType {
@@ -47,6 +52,8 @@ impl FieldType {
             FieldType::File => "file",
             FieldType::Select => "select",
             FieldType::Toggle => "toggle",
+            FieldType::List => "list",
+            FieldType::SignIn => "signin",
         }
     }
 }
@@ -129,6 +136,12 @@ pub struct ConfigField {
     pub danger: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
+    /// Fields of one entry of a [`FieldType::List`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<ConfigField>,
+    /// Singular name of one entry, e.g. `Server`.
+    #[serde(rename = "itemLabel", skip_serializing_if = "Option::is_none")]
+    pub item_label: Option<String>,
 }
 
 impl ConfigField {
@@ -147,7 +160,17 @@ impl ConfigField {
             file_types: Vec::new(),
             danger: false,
             help: None,
+            fields: Vec::new(),
+            item_label: None,
         }
+    }
+
+    /// Describe one entry of a [`FieldType::List`]: what to call it and the
+    /// fields it holds.
+    pub fn entries(mut self, item_label: impl Into<String>, fields: Vec<ConfigField>) -> Self {
+        self.item_label = Some(item_label.into());
+        self.fields = fields;
+        self
     }
 
     pub fn group(mut self, group: impl Into<String>) -> Self {

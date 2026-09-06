@@ -6,18 +6,19 @@ import { createShell } from "./shell.ts";
 import { createSidebar, type SidebarState } from "./sidebar.ts";
 import { emptyState, renderEmptyState } from "./emptyStates.ts";
 import { mountIntegrationDetail } from "./integration-detail/index.ts";
-import type { Integration as DetailIntegration, ConnHealth as DetailHealth } from "./integration-detail/types.ts";
+import type { Integration as DetailIntegration, ConnHealth as DetailHealth, ToolSpec } from "./integration-detail/types.ts";
 import { renderGroupDetail } from "./groupDetail.ts";
-import { renderIntegrationForm, renderGroupForm, renderTypeChooser } from "./forms/render.ts";
+import { renderIntegrationForm, renderGroupForm, renderTypeChooser, type SignIn } from "./forms/render.ts";
 import {
   adopt,
   applyEnvironmentDefaults,
   draftFromConnection,
   emptyDraft,
+  withDiscoveredTools,
   type ConnectionDraft,
 } from "./forms/connectionDraft.ts";
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
-import type { AdapterManifest as CatalogManifest, ToolState } from "./forms/catalog.ts";
+import type { AdapterManifest as CatalogManifest, ToolDef, ToolState } from "./forms/catalog.ts";
 import { toast, mountToaster } from "./toast.ts";
 import { mountUpdates } from "./update.ts";
 import { renderLoadingState } from "./primitives.ts";
@@ -88,6 +89,10 @@ let form: FormState | null = null;
 let formModal: { close: () => void; setTitle: (text: string) => void; content: HTMLElement } | null = null;
 let formHost: HTMLElement | null = null;
 let draft: ConnectionDraft | null = null;
+/** Which servers of the integration being edited are signed in, and which one
+    the person is answering in their browser right now. */
+let signedIn: Record<string, boolean> = {};
+let signingInTo: string | null = null;
 let groupDraft: GroupDraft | null = null;
 let detailHandle: { destroy: () => void; updateHealth: (next: DetailHealth | null) => void } | null = null;
 let detachDetail: (() => void) | null = null;
@@ -165,6 +170,7 @@ function renderDetail(mount: HTMLElement): void {
           onDuplicate: () => void duplicateIntegration(row.id),
           onDelete: () => void deleteIntegration(row.id),
           onTest: () => testIntegration(row.id),
+          loadTools: () => invoke<ToolSpec[]>("integration_tools", { id: row.id }),
           inject: injectMcpConfig,
         },
       );
@@ -281,6 +287,7 @@ function buildForm(current: FormState): HTMLElement {
         current.kind === "new-integration"
           ? () => openForm({ kind: "choose-integration-type" })
           : undefined,
+        current.kind === "edit-integration" ? signInFor(current.id) : null,
       );
     }
     case "new-group":
@@ -311,6 +318,64 @@ function buildForm(current: FormState): HTMLElement {
 
 // ── Actions ──────────────────────────────────────────────────────────────────
 
+function signInFor(id: string): SignIn {
+  return {
+    connected: signedIn,
+    waitingFor: signingInTo,
+    onConnect: (server) => void signIn(id, server),
+    onDisconnect: (server) => void signOut(id, server),
+  };
+}
+
+/** Send the person to the server's own sign-in page, then watch for the
+    connection their browser leaves behind. */
+async function signIn(id: string, server: string): Promise<void> {
+  try {
+    await invoke("start_sign_in", { id, server });
+  } catch (error) {
+    toast.error("Pluk could not start the sign-in", { description: String(error) });
+    return;
+  }
+  signingInTo = server;
+  renderForm();
+  // The browser has the person now; the connection only shows up here once
+  // they come back, so watch for it and give up after five minutes.
+  for (let waited = 0; waited < 300; waited += 2) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (signingInTo !== server || !editing(id)) return;
+    await loadSignInStates(id);
+    if (signedIn[server]) {
+      signingInTo = null;
+      renderForm();
+      toast.success(`Connected to ${server}.`);
+      return;
+    }
+  }
+  signingInTo = null;
+  renderForm();
+}
+
+/** Whether this integration is still the one open in the form. */
+function editing(id: string): boolean {
+  return form?.kind === "edit-integration" && form.id === id;
+}
+
+async function signOut(id: string, server: string): Promise<void> {
+  try {
+    await invoke("end_sign_in", { id, server });
+  } catch (error) {
+    toast.error(`Pluk could not disconnect ${server}`, { description: String(error) });
+    return;
+  }
+  await loadSignInStates(id);
+  renderForm();
+}
+
+async function loadSignInStates(id: string): Promise<void> {
+  const states = await invoke<Record<string, boolean>>("sign_in_states", { id }).catch(() => null);
+  if (states && editing(id)) signedIn = states;
+}
+
 function startNewIntegration(): void {
   draft = null;
   openForm({ kind: "choose-integration-type" });
@@ -333,7 +398,21 @@ function startEditIntegration(id: string): void {
   });
   const manifest = manifestFor(row.type);
   draft = manifest ? { ...adopt(base, manifest, false), toolConfig: row.toolConfig } : base;
+  signedIn = {};
+  signingInTo = null;
   openForm({ kind: "edit-integration", id });
+  void loadIntegrationTools(id);
+  void loadSignInStates(id).then(renderForm);
+}
+
+/** Show the toggles for the tools this integration itself offers, once they
+ *  are known. The catalog's list stands while they load, and if they cannot
+ *  be fetched. */
+async function loadIntegrationTools(id: string): Promise<void> {
+  const tools = await invoke<ToolDef[]>("integration_tools", { id }).catch(() => null);
+  if (!tools || !draft || form?.kind !== "edit-integration" || form.id !== id) return;
+  draft = withDiscoveredTools(draft, tools);
+  renderForm();
 }
 
 function startNewGroup(): void {

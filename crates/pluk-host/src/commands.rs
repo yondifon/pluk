@@ -107,11 +107,15 @@ pub struct IntegrationJson {
 
 impl From<pluk_store::Integration> for IntegrationJson {
     fn from(i: pluk_store::Integration) -> Self {
+        // Tokens an integration signed in for are never handed to the window,
+        // so a save built from what it holds cannot drop them.
+        let mut config = i.config;
+        config.remove(pluk_adapters::mcp_auth::CREDENTIALS_KEY);
         Self {
             id: i.id,
             name: i.name,
             r#type: i.r#type,
-            config: i.config,
+            config,
             environment: i.environment.map(|e| e.as_str().to_string()),
             tool_config: pluk_store::parse_query_policy(i.query_policy.as_deref())
                 .map(|p| p.tools)
@@ -209,7 +213,9 @@ pub fn update_integration(
     let update = pluk_store::IntegrationUpdate {
         name: payload.name,
         r#type: payload.r#type,
-        config: payload.config,
+        config: payload
+            .config
+            .map(|config| keep_sign_ins(&state, &id, config)),
         environment: payload
             .environment
             .as_deref()
@@ -222,6 +228,26 @@ pub fn update_integration(
         .update_integration(&id, &update)
         .map(|o| o.map(IntegrationJson::from))
         .map_err(|e| e.to_string())
+}
+
+/// Carry the stored sign-ins over a save: the window never sees them, so the
+/// config it sends back cannot contain them.
+fn keep_sign_ins(
+    state: &State<'_, HostState>,
+    id: &str,
+    mut config: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let key = pluk_adapters::mcp_auth::CREDENTIALS_KEY;
+    let stored = state
+        .store
+        .integration_by_id(id)
+        .ok()
+        .flatten()
+        .and_then(|stored| stored.config.get(key).cloned());
+    if let Some(stored) = stored {
+        config.insert(key.to_string(), stored);
+    }
+    config
 }
 
 #[tauri::command]
@@ -379,6 +405,29 @@ pub fn list_adapters(state: State<'_, HostState>) -> Vec<AdapterInfo> {
             config_fields: a.config_fields().to_vec(),
         })
         .collect()
+}
+
+/// The tool list one integration actually exposes, which for an adapter that
+/// discovers its tools on connect is wider than the catalog's.
+#[tauri::command]
+pub async fn integration_tools(
+    state: State<'_, HostState>,
+    id: String,
+) -> CmdResult<Vec<pluk_adapters::ToolSpec>> {
+    let integration = state
+        .store
+        .integration_by_id(&id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Not found".to_string())?;
+    let adapter = state
+        .shared
+        .registry
+        .get(&integration.r#type)
+        .ok_or_else(|| format!("No adapter for type: {}", integration.r#type))?;
+    adapter
+        .tool_specs_for(&integration)
+        .await
+        .map_err(|e| e.message)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -673,6 +722,62 @@ pub fn list_installed_mcp_clients() -> Vec<String> {
         .collect()
 }
 
+/// Which of an integration's servers the person is signed in to, by name.
+/// Empty for every integration that has none.
+#[tauri::command]
+pub fn sign_in_states(
+    state: State<'_, HostState>,
+    id: String,
+) -> CmdResult<std::collections::HashMap<String, bool>> {
+    let integration = integration_of(&state, &id)?;
+    Ok(pluk_adapters::mcp_proxy::sign_in_states(&integration))
+}
+
+/// Open the server's sign-in page in the person's browser.
+#[tauri::command]
+pub async fn start_sign_in(
+    state: State<'_, HostState>,
+    id: String,
+    server: String,
+) -> CmdResult<()> {
+    let integration = integration_of(&state, &id)?;
+    let url = pluk_adapters::mcp_proxy::begin_sign_in(state.store.clone(), &integration, &server)
+        .await
+        .map_err(|e| e.message)?;
+    open_in_browser(&url)
+}
+
+/// Forget one server's sign-in.
+#[tauri::command]
+pub fn end_sign_in(state: State<'_, HostState>, id: String, server: String) -> CmdResult<()> {
+    let integration = integration_of(&state, &id)?;
+    pluk_adapters::mcp_proxy::sign_out(state.store.clone(), &integration, &server)
+        .map_err(|e| e.message)
+}
+
+fn integration_of(state: &State<'_, HostState>, id: &str) -> CmdResult<pluk_store::Integration> {
+    state
+        .store
+        .integration_by_id(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Not found".to_string())
+}
+
+/// Hand a web address to whatever opens links on this platform. Nothing but an
+/// address the app itself just built is ever passed here.
+fn open_in_browser(url: &str) -> CmdResult<()> {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener)
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "Pluk could not open your browser.".to_string())
+}
+
 #[tauri::command]
 pub fn reload(state: State<'_, HostState>, owner_id: Option<String>) -> usize {
     let owners = state.shared.owners.clone();
@@ -691,16 +796,17 @@ pub fn steps_json() -> serde_json::Value {
 #[cfg(test)]
 mod inject_command_tests {
     use super::*;
+    use serde_json::Value;
     use std::fs;
     use std::sync::Mutex;
-    use serde_json::Value;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     const URL: &str = "http://localhost:4242/mcp/tok";
 
     fn read_json(path: &std::path::Path) -> Value {
-        serde_json::from_str(&fs::read_to_string(path).expect("config written")).expect("valid json")
+        serde_json::from_str(&fs::read_to_string(path).expect("config written"))
+            .expect("valid json")
     }
 
     #[test]
@@ -727,7 +833,11 @@ mod inject_command_tests {
     fn project_scope_keeps_servers_already_in_the_file() {
         let repo = tempfile::tempdir().unwrap();
         let path = repo.path().join("opencode.json");
-        fs::write(&path, r#"{"theme":"dark","mcp":{"other":{"type":"local"}}}"#).unwrap();
+        fs::write(
+            &path,
+            r#"{"theme":"dark","mcp":{"other":{"type":"local"}}}"#,
+        )
+        .unwrap();
 
         inject_mcp_config(
             "opencode".to_string(),

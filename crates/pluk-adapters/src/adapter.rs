@@ -99,9 +99,18 @@ pub trait Adapter: Send + Sync {
     fn policy_kind(&self) -> PolicyKind;
     /// Shown in the UI beside the MCP URL.
     fn agent_hint(&self) -> &str;
-    /// The fixed tool set, published once for the catalog/UI. Each tool is
-    /// individually toggled on/off and may carry its own settings.
+    /// The type-level tool set, published once for the catalog/UI. Each tool
+    /// is individually toggled on/off and may carry its own settings.
     fn tool_specs(&self) -> &[ToolSpec];
+
+    /// The tool set one integration actually exposes. Defaults to the
+    /// type-level [`Adapter::tool_specs`]; an adapter whose surface is only
+    /// known once connected discovers it here instead.
+    async fn tool_specs_for(&self, conn: &Integration) -> Result<Vec<ToolSpec>, AdapterError> {
+        let _ = conn;
+        Ok(self.tool_specs().to_vec())
+    }
+
     /// The form schema served verbatim to the frontend (definitions only —
     /// never secret values).
     fn config_fields(&self) -> &[ConfigField];
@@ -151,4 +160,16 @@ pub trait Adapter: Send + Sync {
         conn: &Integration,
         owner_id: &str,
     ) -> Result<(), AdapterError>;
+
+    /// The awaited registration entry point every endpoint goes through.
+    /// Defaults to the synchronous [`Adapter::register`]; an adapter that has
+    /// to reach a service before it knows its surface overrides this one.
+    async fn register_surface(
+        &self,
+        host: &mut dyn ToolHost,
+        conn: &Integration,
+        owner_id: &str,
+    ) -> Result<(), AdapterError> {
+        self.register(host, conn, owner_id)
+    }
 }
