@@ -1,5 +1,11 @@
 import { test, expect, afterAll } from "bun:test";
-import { withSshApprovalRetry, SSH_PENDING_CODE } from "./pending.js";
+import {
+  isSshAgentRetryableError,
+  isSshFatalError,
+  isSshRetryableError,
+  withSshApprovalRetry,
+  SSH_PENDING_CODE,
+} from "./pending.js";
 
 // Intercept setTimeout so tests don't incur real retry delays.
 const realSetTimeout = globalThis.setTimeout;
@@ -129,4 +135,24 @@ test("alternating DENIED/PENDING/DENIED exhausts retries and reports correctly",
   expect(i).toBe(3);
   expect((err as Error & { code?: string }).code).toBe("SSH_AGENT_DENIED");
   expect((err as Error).message).toMatch(/retried 2 times/);
+});
+
+test("agent states retry while host and policy failures fail fast", () => {
+  for (const message of [
+    "SSH_AGENT_UNREACHABLE",
+    "signing failed: agent refused operation",
+    "communication with agent failed",
+  ]) {
+    expect(isSshAgentRetryableError(new Error(message))).toBe(true);
+    expect(isSshRetryableError(new Error(message))).toBe(true);
+  }
+  for (const message of [
+    "Host key verification failed.",
+    "Could not resolve hostname missing.example: unknown host",
+    "channel open failed: administratively prohibited",
+    "Permission denied (publickey).",
+  ]) {
+    expect(isSshFatalError(new Error(message))).toBe(true);
+    expect(isSshRetryableError(new Error(message))).toBe(false);
+  }
 });

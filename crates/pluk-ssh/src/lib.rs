@@ -17,8 +17,9 @@ pub use openssh::{
 };
 pub use pending::{
     SSH_CONNECT_WAIT_MS, SSH_PENDING_CODE, SSH_PENDING_MAX_REPORTS, SSH_STALLED_CODE,
-    clear_connect_episode, connect_wait_error, is_ssh_auth_error, is_ssh_pending, is_ssh_stalled,
-    is_transient_ssh_error, record_connect_failure_msg, ssh_pending_error, ssh_stalled_error,
-    start_connect_attempt,
+    clear_connect_episode, connect_wait_error, is_ssh_agent_retryable_error, is_ssh_auth_error,
+    is_ssh_fatal_error, is_ssh_host_verification_error, is_ssh_pending, is_ssh_policy_error,
+    is_ssh_retryable_error, is_ssh_stalled, is_transient_ssh_error, record_connect_failure_msg,
+    ssh_pending_error, ssh_stalled_error, start_connect_attempt,
 };
 pub use tunnel::open_ssh_tunnel;

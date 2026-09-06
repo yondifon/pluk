@@ -83,19 +83,56 @@ pub fn record_connect_failure_str(key: &str, msg: &str) {
     record_connect_failure_msg(key, msg.to_string(), None);
 }
 
-/// Auth and agent failures are deterministic — must break out immediately rather than retry.
+/// Authentication failures after the agent is available are deterministic.
 pub fn is_ssh_auth_error(err_msg: &str) -> bool {
     let lower = err_msg.to_ascii_lowercase();
     lower.contains("permission denied")
-        || lower.contains("communication with agent failed")
-        || lower.contains("signing failed")
         || lower.contains("publickey")
         || lower.contains("no supported authentication")
         || lower.contains("authentication failed")
         || lower.contains("too many authentication failures")
+}
+
+pub fn is_ssh_host_verification_error(err_msg: &str) -> bool {
+    let lower = err_msg.to_ascii_lowercase();
+    lower.contains("host key verification failed")
+        || lower.contains("remote host identification has changed")
+        || lower.contains("could not resolve hostname")
+        || lower.contains("name or service not known")
+        || lower.contains("nodename nor servname provided")
+        || lower.contains("unknown host")
+}
+
+pub fn is_ssh_policy_error(err_msg: &str) -> bool {
+    let lower = err_msg.to_ascii_lowercase();
+    lower.contains("administratively prohibited")
+        || lower.contains("channel open failed: prohibited")
+        || lower.contains("operation not permitted")
+}
+
+/// A 1Password agent can be reachable but unable to answer while its app is
+/// locked or an approval prompt is pending. Those states clear without a
+/// configuration change and deserve a bounded retry.
+pub fn is_ssh_agent_retryable_error(err_msg: &str) -> bool {
+    let lower = err_msg.to_ascii_lowercase();
+    lower.contains("communication with agent failed")
+        || lower.contains("signing failed")
+        || lower.contains("agent refused operation")
         || lower.contains("ssh key agent")
         || lower.contains("ssh_agent_unreachable")
         || lower.contains("agent unreachable")
+        || lower.contains("could not connect to agent")
+        || lower.contains("approval")
+}
+
+pub fn is_ssh_fatal_error(err_msg: &str) -> bool {
+    is_ssh_auth_error(err_msg)
+        || is_ssh_host_verification_error(err_msg)
+        || is_ssh_policy_error(err_msg)
+}
+
+pub fn is_ssh_retryable_error(err_msg: &str) -> bool {
+    !is_ssh_fatal_error(err_msg) || is_ssh_agent_retryable_error(err_msg)
 }
 
 pub fn is_ssh_auth_error_obj(err: &dyn std::error::Error) -> bool {
@@ -238,9 +275,34 @@ mod tests {
         assert!(is_ssh_auth_error(
             "No supported authentication methods available"
         ));
-        assert!(is_ssh_auth_error("SSH_AGENT_UNREACHABLE"));
+        assert!(!is_ssh_auth_error("SSH_AGENT_UNREACHABLE"));
         assert!(!is_ssh_auth_error("connection timed out"));
         assert!(!is_ssh_auth_error("tunnel did not become ready"));
+    }
+
+    #[test]
+    fn transient_agent_states_retry() {
+        for message in [
+            "SSH_AGENT_UNREACHABLE",
+            "signing failed: agent refused operation",
+            "communication with agent failed",
+        ] {
+            assert!(is_ssh_agent_retryable_error(message));
+            assert!(is_ssh_retryable_error(message));
+        }
+    }
+
+    #[test]
+    fn host_and_policy_failures_do_not_retry() {
+        for message in [
+            "Host key verification failed.",
+            "Could not resolve hostname missing.example: unknown host",
+            "channel open failed: administratively prohibited",
+            "Permission denied (publickey).",
+        ] {
+            assert!(is_ssh_fatal_error(message));
+            assert!(!is_ssh_retryable_error(message));
+        }
     }
 
     #[test]

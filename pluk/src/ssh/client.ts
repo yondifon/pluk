@@ -8,6 +8,9 @@ import {
   SSH_CONNECT_WAIT_MS,
   clearConnectEpisode,
   connectWaitError,
+  isSshAgentRetryableError,
+  isSshFatalError,
+  isSshRetryableError,
   isSshStalled,
   recordConnectFailure,
 } from "./pending.js";
@@ -21,6 +24,7 @@ import { agentUnreachableError, resolveLiveAgent } from "./agent.js";
 import type { SSHConfigEntry } from "./config.js";
 
 const READY_TIMEOUT_MS = 180_000;
+const CONNECT_RETRY_DELAYS_MS = [2_000, 4_000, 8_000] as const;
 
 export interface SSHParams {
   host: string;
@@ -56,13 +60,19 @@ function parseableKey(path: string, passphrase?: string): Buffer | null {
   return ok ? data : null;
 }
 
-export async function connectSSH(p: SSHParams): Promise<Client> {
+async function connectSSHAttempt(p: SSHParams, timeoutMs: number): Promise<Client> {
   if (!p.host) throw new Error("SSH host is missing. Set it in the integration config.");
 
   // Probe up front for an agent socket that can actually sign (see ssh/agent.ts);
   // a dead socket can neither sign nor pop an approval prompt, so it is never
   // offered as an auth method.
   const liveAgent = p.authType === "password" ? undefined : await resolveLiveAgent(p.host);
+  const markAgentPending = (err: Error): Error & { sshAgentPending?: boolean } => {
+    if (p.authType === "agent" && liveAgent?.probe.state === "mute") {
+      (err as Error & { sshAgentPending?: boolean }).sshAgentPending = true;
+    }
+    return err as Error & { sshAgentPending?: boolean };
+  };
 
   return new Promise((resolve, reject) => {
 
@@ -84,17 +94,17 @@ export async function connectSSH(p: SSHParams): Promise<Client> {
     };
 
     const connectTimer = setTimeout(() => {
-      fail(new Error(`Couldn't reach ${host}:${port} within ${Math.round(READY_TIMEOUT_MS / 1000)}s — check the host, port, and any SSH proxy (cloudflared).`));
-    }, READY_TIMEOUT_MS + 10_000);
+      fail(markAgentPending(new Error(`Couldn't reach ${host}:${port} within ${Math.round(timeoutMs / 1000)}s — check the host, port, and any SSH proxy (cloudflared).`)));
+    }, timeoutMs);
 
     client.on("ready", () => { if (!settled) { settled = true; clearTimeout(connectTimer); resolve(client); } });
-    client.on("error", (err) => fail(err));
+    client.on("error", (err) => fail(markAgentPending(err)));
 
     const cfg: ConnectConfig = {
       host,
       port,
       username,
-      readyTimeout: READY_TIMEOUT_MS,
+      readyTimeout: timeoutMs,
       keepaliveInterval: 30_000,
       keepaliveCountMax: 3,
     };
@@ -131,6 +141,44 @@ export async function connectSSH(p: SSHParams): Promise<Client> {
 
     client.connect(cfg);
   });
+}
+
+export async function connectSSH(p: SSHParams): Promise<Client> {
+  const started = Date.now();
+  const deadline = started + READY_TIMEOUT_MS;
+  let lastError: Error | undefined;
+  let attemptsRun = 0;
+
+  for (let attempt = 1; attempt <= CONNECT_RETRY_DELAYS_MS.length + 1; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    attemptsRun = attempt;
+    try {
+      return await connectSSHAttempt(p, remaining);
+    } catch (err) {
+      const error = err as Error & { sshAgentPending?: boolean; code?: string };
+      if (isSshFatalError(error) && !error.sshAgentPending) throw error;
+      lastError = error;
+      if (!isSshRetryableError(error)) throw error;
+      if (attempt > CONNECT_RETRY_DELAYS_MS.length) break;
+
+      const delay = CONNECT_RETRY_DELAYS_MS[attempt - 1]!;
+      if (deadline - Date.now() <= delay) break;
+      console.warn(`[pluk] SSH connection attempt ${attempt} failed: ${error.message}. Retrying in ${delay}ms…`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+
+  const error = lastError ?? new Error("SSH connection deadline expired");
+  const errorCode = (error as Error & { code?: string }).code;
+  const agentIssue = p.authType === "agent" &&
+    (errorCode === "SSH_AGENT_UNREACHABLE" || isSshAgentRetryableError(error));
+  const reason = agentIssue
+    ? `1Password is locked / not running, or its approval timed out: ${error.message}`
+    : `last error: ${error.message}`;
+  throw new Error(
+    `SSH connection failed after ${attemptsRun} attempts over ${Math.round((Date.now() - started) / 1000)}s; gave up after the bounded retry window (${reason}).`
+  );
 }
 
 interface Entry {
