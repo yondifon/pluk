@@ -405,8 +405,7 @@ function ruleList(
   key: string,
   label: string,
   rules: string[],
-  placeholder: string,
-  help: string | undefined,
+  text: { placeholder: string; help?: string; error?: string },
   onChange: (next: string[]) => void,
 ): HTMLElement {
   const { row, slot, controlId } = settingRow(key, label);
@@ -415,20 +414,35 @@ function ruleList(
   box.rows = 3;
   box.spellcheck = false;
   box.className = "field-input mono rule-list";
-  box.placeholder = placeholder;
+  box.placeholder = text.placeholder;
   box.value = rules.join("\n");
   box.addEventListener("change", () => onChange(parseRules(box.value)));
   slot.appendChild(box);
-  if (help) {
+  if (text.help) {
     box.setAttribute("aria-describedby", `${controlId}-help`);
-    row.appendChild(helpText(`${controlId}-help`, help));
+    row.appendChild(helpText(`${controlId}-help`, text.help));
+  }
+  if (text.error) {
+    box.setAttribute("aria-invalid", "true");
+    const message = document.createElement("div");
+    message.className = "field-error";
+    message.setAttribute("role", "alert");
+    message.textContent = text.error;
+    row.appendChild(message);
   }
   return row;
+}
+
+/** The first rule Pluk cannot save, and which list holds it. */
+export interface RuleProblem {
+  list: "allow" | "deny";
+  message: string;
 }
 
 export function renderApprovalsSection(
   approvals: Approvals,
   onChange: (next: Approvals) => void,
+  problem?: RuleProblem | null,
 ): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "ui-card";
@@ -444,8 +458,15 @@ export function renderApprovalsSection(
   wrap.appendChild(hint);
 
   wrap.appendChild(
-    ruleList("approvals-allow", "Always allow", approvals.allow, "git pull*", undefined, (allow) =>
-      onChange({ ...approvals, allow }),
+    ruleList(
+      "approvals-allow",
+      "Always allow",
+      approvals.allow,
+      {
+        placeholder: "git pull*",
+        error: problem?.list === "allow" ? problem.message : undefined,
+      },
+      (allow) => onChange({ ...approvals, allow }),
     ),
   );
   wrap.appendChild(
@@ -453,8 +474,11 @@ export function renderApprovalsSection(
       "approvals-deny",
       "Never allow",
       approvals.deny,
-      "rm -rf *",
-      "Wins over Always allow.",
+      {
+        placeholder: "rm -rf *",
+        help: "Wins over Always allow.",
+        error: problem?.list === "deny" ? problem.message : undefined,
+      },
       (deny) => onChange({ ...approvals, deny }),
     ),
   );
@@ -485,6 +509,7 @@ export function renderIntegrationForm(
   onSave: (d: ConnectionDraft) => void,
   onCancel: () => void,
   onTypeChangeClick?: () => void,
+  ruleProblem?: RuleProblem | null,
 ): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "form-body";
@@ -575,7 +600,11 @@ export function renderIntegrationForm(
   }
 
   wrap.appendChild(
-    renderApprovalsSection(draft.approvals, (approvals) => onDraftChange({ ...draft, approvals })),
+    renderApprovalsSection(
+      draft.approvals,
+      (approvals) => onDraftChange({ ...draft, approvals }),
+      ruleProblem,
+    ),
   );
 
   const footer = document.createElement("div");

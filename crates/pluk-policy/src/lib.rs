@@ -22,7 +22,7 @@ pub mod keywords;
 pub mod policy;
 pub mod tool_config;
 
-pub use approval::{Approvals, RuleVerdict, literal_rule};
+pub use approval::{Approvals, RuleList, RuleProblem, RuleVerdict, is_valid_rule, literal_rule};
 pub use action::{
     ActionCategory, ActionPolicy, action_allowed, action_policy_description, parse_action_policy,
 };

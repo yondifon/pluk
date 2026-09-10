@@ -24,6 +24,45 @@ pub enum RuleVerdict {
     Unmatched,
 }
 
+/// One of the two lists a rule can sit in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleList {
+    Allow,
+    Deny,
+}
+
+impl RuleList {
+    /// What the Edit screen calls this list.
+    fn label(self) -> &'static str {
+        match self {
+            RuleList::Allow => "Always allow",
+            RuleList::Deny => "Never allow",
+        }
+    }
+}
+
+/// A rule that is not a pattern Pluk can match.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleProblem {
+    pub list: RuleList,
+    /// What to tell whoever wrote it.
+    pub message: String,
+}
+
+/// glob's own wording, in words the person who wrote the rule can act on.
+fn plain_reason(error: &glob::PatternError) -> &'static str {
+    match error.msg {
+        "invalid range pattern" => "a [ … ] group is not closed properly",
+        "recursive wildcards must form a single path component"
+        | "wildcards are either regular `*` or recursive `**`" => {
+            "** is not a pattern here — use a single *"
+        }
+        other => other,
+    }
+}
+
 /// One integration's approval settings.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Approvals {
@@ -57,6 +96,14 @@ impl Approvals {
         *self == Approvals::default()
     }
 
+    /// Check every rule compiles. A rule that does not is refused at the point
+    /// it is written, because a saved one would sit in the list looking active
+    /// while matching nothing.
+    pub fn validate(&self) -> Result<(), RuleProblem> {
+        check_rules(RuleList::Allow, &self.allow)?;
+        check_rules(RuleList::Deny, &self.deny)
+    }
+
     /// Match `subject` against the rules. Patterns that do not compile are
     /// skipped, so one typo cannot take the whole list down — and cannot
     /// silently widen it either, since a broken allow rule matches nothing.
@@ -70,6 +117,33 @@ impl Approvals {
         }
         RuleVerdict::Unmatched
     }
+}
+
+fn check_rules(list: RuleList, rules: &[String]) -> Result<(), RuleProblem> {
+    for raw in rules {
+        let rule = raw.trim();
+        if rule.is_empty() {
+            continue;
+        }
+        if let Err(error) = Pattern::new(rule) {
+            return Err(RuleProblem {
+                list,
+                message: format!(
+                    "{}: “{rule}” is not a pattern Pluk can match — {}. \
+                     Fix or remove it to save.",
+                    list.label(),
+                    plain_reason(&error)
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Whether one rule is a pattern that can be stored.
+pub fn is_valid_rule(rule: &str) -> bool {
+    let rule = rule.trim();
+    !rule.is_empty() && Pattern::new(rule).is_ok()
 }
 
 fn matches_any(patterns: &[String], subject: &str) -> bool {
@@ -162,6 +236,57 @@ mod tests {
     #[test]
     fn blank_rules_are_ignored() {
         assert_eq!(rules(&["", "   "], &[]).verdict("ls"), RuleVerdict::Unmatched);
+    }
+
+    #[test]
+    fn valid_rules_pass() {
+        let approvals = rules(&["git pull*", "docker*logs*", "[a-z]*"], &["rm -rf *"]);
+        assert!(approvals.validate().is_ok());
+    }
+
+    #[test]
+    fn a_rule_that_does_not_compile_is_refused_with_its_list_and_its_text() {
+        let problem = rules(&[], &["rm [a-"]).validate().expect_err("refused");
+        assert_eq!(problem.list, RuleList::Deny);
+        assert!(problem.message.contains("Never allow"), "{}", problem.message);
+        assert!(problem.message.contains("rm [a-"), "{}", problem.message);
+        assert!(
+            problem.message.contains("[ … ] group is not closed"),
+            "{}",
+            problem.message
+        );
+
+        let problem = rules(&["docker**logs"], &[]).validate().expect_err("refused");
+        assert_eq!(problem.list, RuleList::Allow);
+        assert!(problem.message.contains("Always allow"), "{}", problem.message);
+        assert!(problem.message.contains("use a single *"), "{}", problem.message);
+    }
+
+    #[test]
+    fn the_allow_list_is_checked_before_the_deny_list() {
+        let problem = rules(&["x[]y"], &["rm [a-"]).validate().expect_err("refused");
+        assert_eq!(problem.list, RuleList::Allow);
+    }
+
+    #[test]
+    fn blank_lines_are_not_rules() {
+        assert!(rules(&["", "   "], &[]).validate().is_ok());
+        assert!(!is_valid_rule(""));
+        assert!(!is_valid_rule("   "));
+    }
+
+    #[test]
+    fn every_always_allow_rule_is_one_that_can_be_stored() {
+        for command in [
+            "grep -r 'a*b' /srv",
+            "ls [",
+            "find . -name '*.log'",
+            "echo ]",
+            "docker ps --format {{.Names}}",
+        ] {
+            let rule = literal_rule(command);
+            assert!(is_valid_rule(&rule), "{command:?} produced {rule:?}");
+        }
     }
 
     #[test]

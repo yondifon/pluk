@@ -46,6 +46,27 @@ describe("approval rules", () => {
     expect(seen.allow).toEqual(["git pull*", "docker ps"]);
   });
 
+  test("a rule the host refuses is shown beside the list that holds it", () => {
+    const approvals = { ask: true, allow: [] as string[], deny: ["rm [a-"] };
+    const section = renderApprovalsSection(approvals, () => {}, {
+      list: "deny",
+      message: "Never allow: “rm [a-” is not a pattern Pluk can match — a [ … ] group is not closed properly. Fix or remove it to save.",
+    });
+    const deny = section.querySelector<HTMLTextAreaElement>("#control-approvals-deny")!;
+    const allow = section.querySelector<HTMLTextAreaElement>("#control-approvals-allow")!;
+    const error = section.querySelector<HTMLElement>(".field-error")!;
+    expect(error.textContent).toContain("rm [a-");
+    expect(error.getAttribute("role")).toBe("alert");
+    expect(deny.closest(".inspector-row")?.contains(error)).toBe(true);
+    expect(deny.getAttribute("aria-invalid")).toBe("true");
+    expect(allow.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  test("no rule problem leaves both lists unflagged", () => {
+    const section = renderApprovalsSection({ ask: true, allow: [], deny: [] }, () => {});
+    expect(section.querySelector(".field-error")).toBeNull();
+  });
+
   test("asking can be turned off", () => {
     let seen = { ask: true, allow: [] as string[], deny: [] as string[] };
     const section = renderApprovalsSection(seen, (next) => {

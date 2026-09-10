@@ -353,8 +353,14 @@ async fn resolve_guard(
             None
         }
         crate::confirm::ConfirmChoice::Always => {
-            let _ =
-                store.allow_command(&target.connection_id, &pluk_policy::literal_rule(subject));
+            let stored = store
+                .allow_command(&target.connection_id, &pluk_policy::literal_rule(subject))
+                .unwrap_or(false);
+            // Nothing written means the answer would be forgotten on the next
+            // call, so it holds for the rest of this run instead.
+            if !stored {
+                crate::confirm::allow_for_session(&target.connection_id, subject);
+            }
             None
         }
     }

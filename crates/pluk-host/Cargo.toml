@@ -14,6 +14,7 @@ tauri = { version = "2.11", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = { version = "2.10", optional = true }
 pluk-core = { path = "../pluk-core" }
+pluk-policy = { path = "../pluk-policy" }
 pluk-store = { path = "../pluk-store" }
 pluk-adapters = { path = "../pluk-adapters" }
 pluk-server = { path = "../pluk-server" }

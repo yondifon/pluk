@@ -166,7 +166,13 @@ impl Store {
 
     /// Add one rule to an integration's allow list, keeping everything else
     /// in the policy blob as it was. A rule already there is not repeated.
+    ///
+    /// `false` means nothing was written: the integration is gone, or the rule
+    /// is not a pattern that would match anything once stored.
     pub fn allow_command(&self, id: &str, rule: &str) -> Result<bool> {
+        if !pluk_policy::is_valid_rule(rule) {
+            return Ok(false);
+        }
         let Some(current) = self.integration_by_id(id)? else {
             return Ok(false);
         };
@@ -186,5 +192,49 @@ impl Store {
     pub fn delete_integration(&self, id: &str) -> Result<bool> {
         let conn = self.conn.lock().expect("store lock");
         Ok(conn.execute("DELETE FROM integrations WHERE id = ?", [id])? > 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::testing::temp_store;
+    use crate::{IntegrationInput, codec::parse_query_policy};
+
+    fn allow_list(store: &crate::Store, id: &str) -> Vec<String> {
+        let stored = store.integration_by_id(id).expect("read").expect("row");
+        parse_query_policy(stored.query_policy.as_deref())
+            .unwrap_or_default()
+            .approvals
+            .allow
+    }
+
+    #[test]
+    fn allowing_a_command_appends_it_once() {
+        let (_dir, store) = temp_store();
+        let conn = store
+            .create_integration(&IntegrationInput::new("Prod", "ssh"))
+            .expect("integration");
+
+        assert!(store.allow_command(&conn.id, "systemctl status api").unwrap());
+        assert!(store.allow_command(&conn.id, "systemctl status api").unwrap());
+        assert_eq!(allow_list(&store, &conn.id), ["systemctl status api"]);
+    }
+
+    #[test]
+    fn a_rule_that_would_match_nothing_is_never_written() {
+        let (_dir, store) = temp_store();
+        let conn = store
+            .create_integration(&IntegrationInput::new("Prod", "ssh"))
+            .expect("integration");
+
+        assert!(!store.allow_command(&conn.id, "rm [a-").unwrap());
+        assert!(!store.allow_command(&conn.id, "   ").unwrap());
+        assert!(allow_list(&store, &conn.id).is_empty());
+    }
+
+    #[test]
+    fn an_integration_that_is_gone_writes_nothing() {
+        let (_dir, store) = temp_store();
+        assert!(!store.allow_command("missing", "ls -la").unwrap());
     }
 }
