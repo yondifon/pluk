@@ -4002,7 +4002,7 @@ dependencies = [
 
 [[package]]
 name = "pluk-adapters"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "bson",
@@ -4031,7 +4031,7 @@ dependencies = [
 
 [[package]]
 name = "pluk-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
  "serde",
@@ -4042,7 +4042,7 @@ dependencies = [
 
 [[package]]
 name = "pluk-db"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4068,8 +4068,9 @@ dependencies = [
 
 [[package]]
 name = "pluk-host"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
+ "async-trait",
  "axum",
  "objc2",
  "objc2-app-kit",
@@ -4090,8 +4091,9 @@ dependencies = [
 
 [[package]]
 name = "pluk-policy"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
+ "glob",
  "regex",
  "serde",
  "serde_json",
@@ -4100,7 +4102,7 @@ dependencies = [
 
 [[package]]
 name = "pluk-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -4122,7 +4124,7 @@ dependencies = [
 
 [[package]]
 name = "pluk-ssh"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "futures",
@@ -4137,9 +4139,10 @@ dependencies = [
 
 [[package]]
 name = "pluk-store"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "pluk-core",
+ "pluk-policy",
  "rusqlite",
  "serde",
  "serde_json",

@@ -3,6 +3,25 @@ import { seededState, isVisible } from "./catalog";
 
 export type Environment = "production" | "staging" | "development" | "local";
 
+/** Hand-written rules, and whether a refused call asks before it is turned down. */
+export interface Approvals {
+  ask: boolean;
+  allow: string[];
+  deny: string[];
+}
+
+export function emptyApprovals(): Approvals {
+  return { ask: true, allow: [], deny: [] };
+}
+
+/** One rule per line, blank lines dropped. */
+export function parseRules(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+}
+
 export interface ConnectionDraft {
   name: string;
   type: string;
@@ -12,6 +31,7 @@ export interface ConnectionDraft {
   fields: ConfigFieldDef[];
   tools: ToolDef[];
   toolConfig: Record<string, ToolState>;
+  approvals: Approvals;
 }
 
 export function emptyDraft(): ConnectionDraft {
@@ -24,6 +44,7 @@ export function emptyDraft(): ConnectionDraft {
     fields: [],
     tools: [],
     toolConfig: {},
+    approvals: emptyApprovals(),
   };
 }
 
@@ -43,9 +64,18 @@ export function draftFromConnection(conn: {
     else if (v != null) config[k] = String(v);
   }
   const toolConfig: Record<string, ToolState> = {};
+  let approvals = emptyApprovals();
   if (conn.queryPolicy) {
     try {
-      const parsed = JSON.parse(conn.queryPolicy) as { tools?: Record<string, { enabled?: boolean; settings?: Record<string, unknown> }> };
+      const parsed = JSON.parse(conn.queryPolicy) as {
+        tools?: Record<string, { enabled?: boolean; settings?: Record<string, unknown> }>;
+        approvals?: { ask?: boolean; allow?: string[]; deny?: string[] };
+      };
+      approvals = {
+        ask: parsed.approvals?.ask ?? true,
+        allow: parsed.approvals?.allow ?? [],
+        deny: parsed.approvals?.deny ?? [],
+      };
       for (const [name, entry] of Object.entries(parsed.tools ?? {})) {
         const settings: Record<string, string> = {};
         for (const [sk, sv] of Object.entries(entry.settings ?? {})) {
@@ -69,6 +99,7 @@ export function draftFromConnection(conn: {
     fields: [],
     tools: [],
     toolConfig,
+    approvals,
   };
 }
 
@@ -90,6 +121,7 @@ export function adopt(draft: ConnectionDraft, manifest: AdapterManifest, resetCo
     }
     next.config = seededCfg;
     next.toolConfig = {};
+    next.approvals = emptyApprovals();
   } else {
     // Seed defaults for empty config keys
     for (const f of manifest.configFields) {

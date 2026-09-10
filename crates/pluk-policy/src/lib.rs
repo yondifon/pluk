@@ -10,6 +10,7 @@
 //! and `pluk/src/db/dbName.ts`.
 
 pub mod action;
+pub mod approval;
 pub mod ast;
 pub mod category;
 pub mod classify;
@@ -21,6 +22,7 @@ pub mod keywords;
 pub mod policy;
 pub mod tool_config;
 
+pub use approval::{Approvals, RuleVerdict, literal_rule};
 pub use action::{
     ActionCategory, ActionPolicy, action_allowed, action_policy_description, parse_action_policy,
 };

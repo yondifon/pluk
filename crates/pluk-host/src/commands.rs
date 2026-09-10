@@ -101,21 +101,23 @@ pub struct IntegrationJson {
     pub environment: Option<String>,
     /// Per-tool enablement and settings, lifted out of the `query_policy` blob.
     pub tool_config: std::collections::BTreeMap<String, pluk_store::ToolPolicy>,
+    /// The rules deciding what runs without asking, and whether to ask at all.
+    pub approvals: pluk_store::Approvals,
     pub token: String,
     pub created_at: String,
 }
 
 impl From<pluk_store::Integration> for IntegrationJson {
     fn from(i: pluk_store::Integration) -> Self {
+        let policy = pluk_store::parse_query_policy(i.query_policy.as_deref());
         Self {
             id: i.id,
             name: i.name,
             r#type: i.r#type,
             config: i.config,
             environment: i.environment.map(|e| e.as_str().to_string()),
-            tool_config: pluk_store::parse_query_policy(i.query_policy.as_deref())
-                .map(|p| p.tools)
-                .unwrap_or_default(),
+            tool_config: policy.clone().map(|p| p.tools).unwrap_or_default(),
+            approvals: policy.map(|p| p.approvals).unwrap_or_default(),
             token: i.token,
             created_at: i.created_at,
         }
@@ -182,6 +184,8 @@ pub struct UpdateIntegrationPayload {
     pub environment: Option<String>,
     /// Per-tool enablement; absent leaves the stored policy untouched.
     pub tool_config: Option<std::collections::BTreeMap<String, pluk_store::ToolPolicy>>,
+    /// Allow and deny rules; absent leaves the stored ones untouched.
+    pub approvals: Option<pluk_store::Approvals>,
 }
 
 #[tauri::command]
@@ -192,19 +196,23 @@ pub fn update_integration(
 ) -> CmdResult<Option<IntegrationJson>> {
     // Fold tool settings back into the policy blob, keeping the sibling keys
     // the other writers store there.
-    let query_policy = match payload.tool_config {
-        Some(tools) => {
-            let stored = state
-                .store
-                .integration_by_id(&id)
-                .map_err(|e| e.to_string())?;
-            let mut policy = stored
-                .and_then(|i| pluk_store::parse_query_policy(i.query_policy.as_deref()))
-                .unwrap_or_default();
+    let query_policy = if payload.tool_config.is_some() || payload.approvals.is_some() {
+        let stored = state
+            .store
+            .integration_by_id(&id)
+            .map_err(|e| e.to_string())?;
+        let mut policy = stored
+            .and_then(|i| pluk_store::parse_query_policy(i.query_policy.as_deref()))
+            .unwrap_or_default();
+        if let Some(tools) = payload.tool_config {
             policy.tools = tools;
-            Some(Some(pluk_store::serialize_query_policy(&policy)))
         }
-        None => None,
+        if let Some(approvals) = payload.approvals {
+            policy.approvals = approvals;
+        }
+        Some(Some(pluk_store::serialize_query_policy(&policy)))
+    } else {
+        None
     };
     let update = pluk_store::IntegrationUpdate {
         name: payload.name,

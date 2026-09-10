@@ -7,6 +7,7 @@ export interface Integration {
   environment?: Environment;
   config: Record<string, string>;
   toolConfig: Record<string, { enabled: boolean; settings: Record<string, string> }>;
+  approvals?: { ask: boolean; allow: string[]; deny: string[] };
   token: string;
   createdAt: string;
   readOnly?: boolean;

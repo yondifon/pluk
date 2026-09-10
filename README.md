@@ -113,6 +113,10 @@ Every integration carries its own policy, and all access is recorded in a local 
 - **MongoDB** — reading documents and inspecting collections is on; inserting, updating and deleting stay off until you turn them on. Queries that run server-side JavaScript or write into another collection are refused, an update or delete needs a filter, and one read returns at most 1000 documents.
 - **Linear** (and other API adapters) — a coarse read/write policy. Read-only blocks mutating actions (create issue, comment); read & write allows them.
 
+When a call the policy refuses arrives, Pluk asks before turning it down: a small window opens on top of whatever you are doing, names the integration, shows the exact command or statement, and offers **Allow once**, **Allow until Pluk quits**, **Always allow** and **Don't run**. No answer within a minute and nothing runs.
+
+Each integration also carries its own **Always allow** and **Never allow** lists, edited from its Edit screen. One glob pattern per line, matched against the whole command — `*` stands for any text, `?` for one character. **Never allow** wins over **Always allow**, and a command matching neither is left to the adapter's own policy. **Always allow** in the confirm window appends that exact command to the list. Turn **Ask me first** off and a refused call is simply turned down.
+
 ### SSH and Cloudflare Access
 
 Pluk reads `~/.ssh/config`. Hosts with a `ProxyCommand` use the system `ssh` client for forwarding, which supports Cloudflare Access and your existing SSH agent / keychain setup:

@@ -657,6 +657,7 @@ pub fn register_sql_server(
         .unwrap_or_else(|| "development".to_string());
     let conn_id = conn.id.clone();
     let via_group = conn.via_group.clone();
+    let approvals = crate::gate::approvals_for(conn);
 
     // prompt/resource registration (always)
     {
@@ -815,6 +816,7 @@ pub fn register_sql_server(
         let conn_env_q = conn_env.clone();
         let conn_id_q = conn_id.clone();
         let via_group_q = via_group.clone();
+        let approvals_q = approvals.clone();
         let policy_desc_q = policy_desc.clone();
         let supports_db_q = supports_db;
 
@@ -833,6 +835,7 @@ pub fn register_sql_server(
                 let conn_env = conn_env_q.clone();
                 let conn_id = conn_id_q.clone();
                 let via_group = via_group_q.clone();
+                let approvals = approvals_q.clone();
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let sql = obj.get("sql").or_else(|| obj.get("query")).and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -949,12 +952,11 @@ pub fn register_sql_server(
                         .precheck({
                             let sql = sql.clone();
                             let pinned = pinned.clone();
+                            move || switch_block(&sql, pinned.as_ref())
+                        })
+                        .guard(approvals, conn_type.clone(), {
                             let verdict = verdict.clone();
-                            move || {
-                                if let Some(b) = switch_block(&sql, pinned.as_ref()) { return Some(b); }
-                                if !verdict.ok { return Some(verdict.reason.clone().unwrap_or_else(|| "blocked".into())); }
-                                None
-                            }
+                            move || policy_block(&verdict)
                         })
                         .classify_error(cancelled_when_message_contains("cancelled"))
                         .on_error({
@@ -1206,6 +1208,8 @@ pub fn register_sql_server(
         props.insert("only".into(), only_param_schema(&[]));
         let schema = object_schema(props, &[]);
         let conn_eq = conn.clone();
+        let approvals_eq = approvals.clone();
+        let conn_type_eq = conn_type.clone();
         let pinned_eq = pinned.clone();
         let policy_eq = policy.clone();
         let dialect_eq = dialect;
@@ -1225,6 +1229,8 @@ pub fn register_sql_server(
                 let dialect = dialect_eq;
                 let store = store_eq.clone();
                 let audit = audit_eq.clone();
+                let approvals = approvals_eq.clone();
+                let conn_type = conn_type_eq.clone();
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let sql = obj
@@ -1278,7 +1284,7 @@ pub fn register_sql_server(
                             Ok(Outcome::ran(text))
                         },
                         GateOpts::default()
-                            .precheck(move || policy_block(&verdict))
+                            .guard(approvals, conn_type.clone(), move || policy_block(&verdict))
                             .format_error(|e, _| format_sql_error(e)),
                     )
                     .await
@@ -1811,6 +1817,8 @@ pub fn register_sql_server(
         let conn_id_eq2 = conn_id.clone();
         let conn_name_eq2 = conn_name.clone();
         let via_for_export = via_group.clone();
+        let approvals_ex = approvals.clone();
+        let conn_type_ex = conn_type.clone();
         host.register_tool(
             ToolRegistration { name: "export_query".into(), description: "Run a SQL query and save results to a local CSV or JSON file".into(), input_schema: schema, annotations: Map::new() },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
@@ -1824,6 +1832,8 @@ pub fn register_sql_server(
                 let conn_id = conn_id_eq2.clone();
                 let conn_name = conn_name_eq2.clone();
                 let via_group = via_for_export.clone();
+                let approvals = approvals_ex.clone();
+                let conn_type = conn_type_ex.clone();
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let sql = obj.get("sql").or_else(|| obj.get("query")).and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -1911,12 +1921,11 @@ pub fn register_sql_server(
                         .precheck({
                             let sql = sql.clone();
                             let pinned = pinned.clone();
+                            move || switch_block(&sql, pinned.as_ref())
+                        })
+                        .guard(approvals, conn_type.clone(), {
                             let verdict = verdict.clone();
-                            move || {
-                                if let Some(b)=switch_block(&sql, pinned.as_ref()) { return Some(b); }
-                                if !verdict.ok { return Some(verdict.reason.clone().unwrap_or_else(|| "blocked".into())); }
-                                None
-                            }
+                            move || policy_block(&verdict)
                         })
                         .classify_error(cancelled_when_message_contains("cancelled"))
                         .format_error(|e, v| if v==pluk_store::Verdict::Cancelled { format!("Cancelled: {}", e.message) } else { format_sql_error(e) })
@@ -1975,6 +1984,7 @@ pub fn register_sql_server(
         let dialect_rsq = dialect;
         let cancels_rsq = cancels.clone();
         let conn_id_rsq = conn_id.clone();
+        let approvals_rsq = approvals.clone();
         let conn_name_rsq = conn_name.clone();
         let conn_env_rsq = conn_env.clone();
         let conn_type_rsq = conn_type.clone();
@@ -1993,6 +2003,7 @@ pub fn register_sql_server(
                 let conn_env = conn_env_rsq.clone();
                 let conn_type = conn_type_rsq.clone();
                 let via_group = via_group.clone();
+                let approvals = approvals_rsq.clone();
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -2074,12 +2085,11 @@ pub fn register_sql_server(
                         .precheck({
                             let sql = sql.clone();
                             let pinned = pinned.clone();
+                            move || switch_block(&sql, pinned.as_ref())
+                        })
+                        .guard(approvals, conn_type.clone(), {
                             let verdict = verdict.clone();
-                            move || {
-                                if let Some(b)=switch_block(&sql, pinned.as_ref()) { return Some(b); }
-                                if !verdict.ok { return Some(verdict.reason.clone().unwrap_or_else(|| "blocked".into())); }
-                                None
-                            }
+                            move || policy_block(&verdict)
                         })
                         .classify_error(cancelled_when_message_contains("cancelled"))
                         .format_error(|e, v| if v==pluk_store::Verdict::Cancelled { format!("Cancelled: {}", e.message) } else { format_sql_error(e) })

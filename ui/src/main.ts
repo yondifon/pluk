@@ -14,6 +14,7 @@ import {
   applyEnvironmentDefaults,
   draftFromConnection,
   emptyDraft,
+  type Approvals,
   type ConnectionDraft,
 } from "./forms/connectionDraft.ts";
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
@@ -45,6 +46,7 @@ type HostIntegration = {
   config: Record<string, unknown>;
   environment: string | null;
   toolConfig: Record<string, ToolState>;
+  approvals: Approvals;
   token: string;
   createdAt: string;
 };
@@ -114,6 +116,7 @@ function toDetailIntegration(row: HostIntegration): DetailIntegration {
     environment: (row.environment ?? undefined) as DetailIntegration["environment"],
     config,
     toolConfig: row.toolConfig,
+    approvals: row.approvals,
     token: row.token,
     createdAt: row.createdAt,
   };
@@ -332,7 +335,8 @@ function startEditIntegration(id: string): void {
     environment: (row.environment ?? "development") as Environment,
   });
   const manifest = manifestFor(row.type);
-  draft = manifest ? { ...adopt(base, manifest, false), toolConfig: row.toolConfig } : base;
+  const stored = { toolConfig: row.toolConfig, approvals: row.approvals };
+  draft = manifest ? { ...adopt(base, manifest, false), ...stored } : { ...base, ...stored };
   openForm({ kind: "edit-integration", id });
 }
 
@@ -359,6 +363,7 @@ async function saveIntegration(saved: ConnectionDraft): Promise<void> {
     config: saved.config,
     environment: saved.environment,
     toolConfig: saved.toolConfig,
+    approvals: saved.approvals,
   };
   const editing = form?.kind === "edit-integration" ? form.id : null;
   try {

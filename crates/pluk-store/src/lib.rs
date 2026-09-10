@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use pluk_core::platform;
 
 pub use codec::{
-    QueryPolicy, ToolPolicy, parse_config, parse_members, parse_query_policy, serialize_config,
+    Approvals, QueryPolicy, ToolPolicy, parse_config, parse_members, parse_query_policy, serialize_config,
     serialize_members, serialize_query_policy,
 };
 pub use error::{Result, StoreError};

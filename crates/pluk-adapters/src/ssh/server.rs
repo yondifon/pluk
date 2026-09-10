@@ -35,6 +35,15 @@ fn saved_commands_map() -> FieldMap {
         .with_preset("location", Preset::paths(&["working_dir"]))
 }
 
+/// Why the command policy refuses this command, when it does.
+fn command_block(command: &str) -> Option<String> {
+    let verdict = evaluate_command(command);
+    if verdict.ok {
+        return None;
+    }
+    Some(verdict.reason.unwrap_or_else(|| "blocked".into()))
+}
+
 pub fn ssh_instructions(conn: &Integration) -> String {
     build_instructions(
         &conn.name,
@@ -192,14 +201,9 @@ pub fn register_ssh_server(
                         Err(reason) => return err(format!("Blocked: {}", reason)),
                     };
                     let detail = if let Some(ref wd)=working_dir { format!("[{}] {}", wd, trimmed) } else { trimmed.clone() };
-                    let verdict = evaluate_command(&trimmed);
                     let final_command = if let Some(wd)=working_dir.clone() { format!("cd {} && {}", quote_dir(&wd), trimmed) } else { trimmed.clone() };
-                    if !verdict.ok {
-                        let reason = verdict.reason.unwrap_or_else(|| "blocked".into());
-                        let draft = pluk_store::LogDraft { connection_id: conn.id.clone(), connection_name: conn.name.clone(), sql: final_command.clone(), verdict: pluk_store::Verdict::Blocked, categories: Some("command".into()), reason: Some(reason.clone()), source: Some("run_command".into()), group: conn.via_group.clone(), database: None };
-                        let _=store.create_log_entry(draft);
-                        return err(format!("Blocked: {}", reason));
-                    }
+                    let approvals = crate::gate::approvals_for(&conn);
+                    let checked = trimmed.clone();
                     let timeout_ms = timeout.map(|t| t*1000);
                     let target = CallTarget { connection_id: conn.id.clone(), connection_name: conn.name.clone(), group: conn.via_group.clone() };
                     let meta = GateMeta { category: "command".into(), action: "run_command".into(), detail, database: None, command: Some(final_command.clone()) };
@@ -220,7 +224,7 @@ pub fn register_ssh_server(
                                 Err(e) => Err(crate::error::AdapterError::new(e.message).with_code(e.code.unwrap_or_default())),
                             }
                         }
-                    }, GateOpts::default().format_error(|e,_| humanize_ssh_error(e))).await
+                    }, GateOpts::default().guard(approvals, "SSH", move || command_block(&checked)).format_error(|e,_| humanize_ssh_error(e))).await
                 })
             })
         );
@@ -252,6 +256,7 @@ pub fn register_ssh_server(
                         Ok(wd) => wd,
                         Err(reason) => return err(format!("Blocked: {}", reason)),
                     };
+                    let approvals = crate::gate::approvals_for(&conn);
                     let mut sections: Vec<String> = Vec::new();
                     let mut any_error = false;
                     for (i, cmd_val) in commands.iter().enumerate() {
@@ -259,15 +264,6 @@ pub fn register_ssh_server(
                         let trimmed = cmd.trim().to_string();
                         if trimmed.is_empty() { sections.push(format!("$ {}\nError: empty command.", cmd)); any_error=true; if stop_on_error { break; } else { continue; } }
                         let final_cmd = if let Some(ref wd)=working_dir { format!("cd {} && {}", quote_dir(wd), trimmed) } else { trimmed.clone() };
-                        let verdict = evaluate_command(&trimmed);
-                        if !verdict.ok {
-                            let reason = verdict.reason.unwrap_or_else(|| "blocked".into());
-                            sections.push(format!("$ {}\nBlocked: {}", cmd, reason));
-                            any_error=true;
-                            if stop_on_error { let skipped = commands.len()-i-1; if skipped>0 { sections.push(format!("[stopped on error — {} command(s) not run]", skipped)); } break; }
-                            continue;
-                        }
-                        // run via gate
                         let detail = if let Some(ref wd)=working_dir { format!("[{}] {}", wd, cmd) } else { cmd.clone() };
                         let target = CallTarget { connection_id: conn.id.clone(), connection_name: conn.name.clone(), group: conn.via_group.clone() };
                         let meta = GateMeta { category: "command".into(), action: "run_batch".into(), detail, database: None, command: Some(final_cmd.clone()) };
@@ -275,6 +271,8 @@ pub fn register_ssh_server(
                         let owner_clone = owner.clone();
                         let final_clone = final_cmd.clone();
                         let store_clone = store.clone();
+                        let approvals = approvals.clone();
+                        let checked = trimmed.clone();
                         let res = run_gated(&store_clone, &target, meta, move |_log_id| {
                             let conn = conn_clone.clone();
                             let _owner = owner_clone.clone();
@@ -292,7 +290,7 @@ pub fn register_ssh_server(
                                     Err(e) => Err(crate::error::AdapterError::new(e.message).with_code(e.code.unwrap_or_default())),
                                 }
                             }
-                        }, GateOpts::default().format_error(|e,_| humanize_ssh_error(e))).await;
+                        }, GateOpts::default().guard(approvals, "SSH", move || command_block(&checked)).format_error(|e,_| humanize_ssh_error(e))).await;
                         sections.push(format!("$ {}\n{}", cmd, text_of(&res)));
                         if res.is_error { any_error=true; if stop_on_error { let skipped = commands.len()-i-1; if skipped>0 { sections.push(format!("[stopped on error — {} command(s) not run]", skipped)); } break; } }
                     }
@@ -314,17 +312,11 @@ pub fn register_ssh_server(
                 let owner = owner_c.clone();
                 let store = store_c.clone();
                 Box::pin(async move {
+                    let approvals = crate::gate::approvals_for(&conn);
                     let mut sections: Vec<String> = Vec::new();
                     let mut any_error=false;
                     for (label, cmd) in DEBUG_SNAPSHOT {
                         let final_cmd = cmd.to_string();
-                        let verdict = evaluate_command(&final_cmd);
-                        if !verdict.ok {
-                            let reason = verdict.reason.unwrap_or_else(|| "blocked".into());
-                            sections.push(format!("## {} — `{}`\nBlocked: {}", label, cmd, reason));
-                            any_error=true;
-                            continue;
-                        }
                         let detail = format!("{} — {}", label, cmd);
                         let target = CallTarget { connection_id: conn.id.clone(), connection_name: conn.name.clone(), group: conn.via_group.clone() };
                         let meta = GateMeta { category: "command".into(), action: "debug_snapshot".into(), detail, database: None, command: Some(final_cmd.clone()) };
@@ -332,6 +324,8 @@ pub fn register_ssh_server(
                         let owner_clone = owner.clone();
                         let final_clone = final_cmd.clone();
                         let store_clone = store.clone();
+                        let approvals = approvals.clone();
+                        let checked = final_cmd.clone();
                         let res = run_gated(&store_clone, &target, meta, move |_log_id| {
                             let conn = conn_clone.clone();
                             let _owner = owner_clone.clone();
@@ -349,7 +343,7 @@ pub fn register_ssh_server(
                                     Err(e) => Err(crate::error::AdapterError::new(e.message).with_code(e.code.unwrap_or_default())),
                                 }
                             }
-                        }, GateOpts::default().format_error(|e,_| humanize_ssh_error(e))).await;
+                        }, GateOpts::default().guard(approvals, "SSH", move || command_block(&checked)).format_error(|e,_| humanize_ssh_error(e))).await;
                         if res.is_error { any_error=true; }
                         sections.push(format!("## {} — `{}`\n{}", label, cmd, text_of(&res)));
                     }

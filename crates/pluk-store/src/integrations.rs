@@ -164,6 +164,25 @@ impl Store {
         self.integration_by_id(id)
     }
 
+    /// Add one rule to an integration's allow list, keeping everything else
+    /// in the policy blob as it was. A rule already there is not repeated.
+    pub fn allow_command(&self, id: &str, rule: &str) -> Result<bool> {
+        let Some(current) = self.integration_by_id(id)? else {
+            return Ok(false);
+        };
+        let mut policy = crate::codec::parse_query_policy(current.query_policy.as_deref())
+            .unwrap_or_default();
+        if policy.approvals.allow.iter().any(|r| r == rule) {
+            return Ok(true);
+        }
+        policy.approvals.allow.push(rule.to_string());
+        let update = IntegrationUpdate {
+            query_policy: Some(Some(crate::codec::serialize_query_policy(&policy))),
+            ..Default::default()
+        };
+        Ok(self.update_integration(id, &update)?.is_some())
+    }
+
     pub fn delete_integration(&self, id: &str) -> Result<bool> {
         let conn = self.conn.lock().expect("store lock");
         Ok(conn.execute("DELETE FROM integrations WHERE id = ?", [id])? > 0)

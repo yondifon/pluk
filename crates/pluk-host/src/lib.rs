@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod confirm;
 pub mod frame;
 pub mod server;
 #[cfg(target_os = "macos")]
@@ -56,7 +57,9 @@ pub fn run() {
         z.state().reset_title()
     };
     let activity_store = store.clone();
+    let confirm_registry = registry.clone();
     tauri::Builder::default()
+        .manage(crate::confirm::ConfirmState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(host_state)
@@ -64,6 +67,13 @@ pub fn run() {
             app.manage(Updater::new(UpdaterConfig::from_plugins(
                 &app.config().plugins,
             )));
+            // A call the policy refuses is put to the user before it is refused.
+            pluk_adapters::set_prompter(std::sync::Arc::new(
+                crate::confirm::WindowPrompter::new(
+                    app.handle().clone(),
+                    confirm_registry.clone(),
+                ),
+            ));
             // Every written log row reaches the window as it happens, so the
             // activity log needs no polling.
             let activity_app = app.handle().clone();
@@ -202,9 +212,16 @@ pub fn run() {
             updater::get_update_state,
             updater::check_for_updates,
             updater::install_update,
+            confirm::confirm_question,
+            confirm::confirm_answer,
+            confirm::confirm_answer_window,
         ])
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+            // Only the main window survives its close button; the confirm
+            // window is meant to go away once it is answered.
+            if let WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == "main"
+            {
                 api.prevent_close();
                 hide_window(window.app_handle());
             }

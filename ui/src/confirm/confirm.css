@@ -1,0 +1,91 @@
+@import "../tokens.css";
+@import "../typography.css";
+@import "../primitives.css";
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.confirm-body {
+  background: var(--surface-content);
+  color: var(--surface-label);
+  font-family: var(--font-sans);
+  color-scheme: light dark;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#confirm {
+  height: 100%;
+}
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  height: 100%;
+  box-sizing: border-box;
+  padding: var(--space-xl) var(--space-lg) var(--space-lg);
+}
+
+.confirm-source {
+  display: flex;
+  gap: var(--space-xs);
+  align-items: baseline;
+  color: var(--surface-secondary-label);
+}
+
+.confirm-title {
+  margin: 0;
+  font-size: calc(var(--type-title) * var(--zoom-scale));
+  font-weight: 600;
+}
+
+.confirm-command {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-sm);
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: calc(var(--type-caption) * var(--zoom-scale));
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.confirm-reason,
+.confirm-countdown {
+  margin: 0;
+  color: var(--surface-secondary-label);
+  font-size: calc(var(--type-caption) * var(--zoom-scale));
+}
+
+.confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  justify-content: flex-end;
+}
+
+.confirm-actions .ui-button {
+  flex: 1 1 auto;
+}
+
+.confirm-closed {
+  justify-content: center;
+  text-align: center;
+}
+
+.confirm-actions .ui-button:disabled {
+  opacity: var(--disabled-opacity);
+}
