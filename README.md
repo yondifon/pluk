@@ -115,7 +115,7 @@ Every integration carries its own policy, and all access is recorded in a local 
 
 When a call the policy refuses arrives, Pluk asks before turning it down: a small window opens on top of whatever you are doing, names the integration, shows the exact command or statement, and offers **Allow once**, **Allow until Pluk quits**, **Always allow** and **Don't run**. No answer within a minute and nothing runs.
 
-Each integration also carries its own **Always allow** and **Never allow** lists, edited from its Edit screen. One glob pattern per line, matched against the whole command — `*` stands for any text, `?` for one character. **Never allow** wins over **Always allow**, and a command matching neither is left to the adapter's own policy. **Always allow** in the confirm window appends that exact command to the list. Turn **Ask me first** off and a refused call is simply turned down.
+Each integration also carries its own **Always allow** and **Never allow** lists, edited from its Edit screen. One glob pattern per line, matched against the whole command — `*` stands for any text, `?` for one character. **Never allow** wins over **Always allow**, and a command matching neither is left to the adapter's own policy. **Always allow** in the confirm window appends that exact command to the list. A pattern Pluk cannot read is refused when you save, named next to the list holding it, so no rule ever sits there looking active while matching nothing. Turn **Ask me first** off and a refused call is simply turned down.
 
 ### SSH and Cloudflare Access
 

@@ -8,7 +8,12 @@ import { emptyState, renderEmptyState } from "./emptyStates.ts";
 import { mountIntegrationDetail } from "./integration-detail/index.ts";
 import type { Integration as DetailIntegration, ConnHealth as DetailHealth } from "./integration-detail/types.ts";
 import { renderGroupDetail } from "./groupDetail.ts";
-import { renderIntegrationForm, renderGroupForm, renderTypeChooser } from "./forms/render.ts";
+import {
+  renderIntegrationForm,
+  renderGroupForm,
+  renderTypeChooser,
+  type RuleProblem,
+} from "./forms/render.ts";
 import {
   adopt,
   applyEnvironmentDefaults,
@@ -90,6 +95,8 @@ let form: FormState | null = null;
 let formModal: { close: () => void; setTitle: (text: string) => void; content: HTMLElement } | null = null;
 let formHost: HTMLElement | null = null;
 let draft: ConnectionDraft | null = null;
+/** The rule the host refused on the last save attempt, shown beside its list. */
+let ruleProblem: RuleProblem | null = null;
 let groupDraft: GroupDraft | null = null;
 let detailHandle: { destroy: () => void; updateHealth: (next: DetailHealth | null) => void } | null = null;
 let detachDetail: (() => void) | null = null;
@@ -214,6 +221,7 @@ const FORM_FOCUSABLE = "input, select, textarea, button";
 
 function openForm(next: FormState): void {
   form = next;
+  ruleProblem = null;
   if (!formModal) {
     formHost = document.createElement("div");
     formModal = openModal({
@@ -277,6 +285,7 @@ function buildForm(current: FormState): HTMLElement {
         manifestFor(pending.type),
         (next) => {
           draft = next;
+          ruleProblem = null;
           renderForm();
         },
         (saved) => void saveIntegration(saved),
@@ -284,6 +293,7 @@ function buildForm(current: FormState): HTMLElement {
         current.kind === "new-integration"
           ? () => openForm({ kind: "choose-integration-type" })
           : undefined,
+        ruleProblem,
       );
     }
     case "new-group":
@@ -367,6 +377,13 @@ async function saveIntegration(saved: ConnectionDraft): Promise<void> {
   };
   const editing = form?.kind === "edit-integration" ? form.id : null;
   try {
+    ruleProblem = await invoke<RuleProblem | null>("check_approval_rules", {
+      approvals: saved.approvals,
+    });
+    if (ruleProblem) {
+      renderForm();
+      return;
+    }
     if (editing) {
       await invoke("update_integration", { id: editing, payload });
     } else {

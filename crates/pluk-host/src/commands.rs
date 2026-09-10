@@ -188,32 +188,50 @@ pub struct UpdateIntegrationPayload {
     pub approvals: Option<pluk_store::Approvals>,
 }
 
+/// Fold tool settings and approval rules back into the policy blob, keeping the
+/// sibling keys the other writers store there. Absent means "leave as stored";
+/// the outer `None` leaves the whole column alone.
+///
+/// A rule that is not a pattern Pluk can match stops the save: stored, it would
+/// sit in the list looking active while matching nothing.
+fn merged_policy(
+    stored: Option<&str>,
+    tool_config: Option<std::collections::BTreeMap<String, pluk_store::ToolPolicy>>,
+    approvals: Option<pluk_store::Approvals>,
+) -> CmdResult<Option<Option<String>>> {
+    if tool_config.is_none() && approvals.is_none() {
+        return Ok(None);
+    }
+    let mut policy = pluk_store::parse_query_policy(stored).unwrap_or_default();
+    if let Some(tools) = tool_config {
+        policy.tools = tools;
+    }
+    if let Some(approvals) = approvals {
+        approvals.validate().map_err(|problem| problem.message)?;
+        policy.approvals = approvals;
+    }
+    Ok(Some(Some(pluk_store::serialize_query_policy(&policy))))
+}
+
+/// The first rule the Edit screen cannot save, so it can be shown beside the
+/// list that holds it.
+#[tauri::command]
+pub fn check_approval_rules(approvals: pluk_store::Approvals) -> Option<pluk_policy::RuleProblem> {
+    approvals.validate().err()
+}
+
 #[tauri::command]
 pub fn update_integration(
     state: State<'_, HostState>,
     id: String,
     payload: UpdateIntegrationPayload,
 ) -> CmdResult<Option<IntegrationJson>> {
-    // Fold tool settings back into the policy blob, keeping the sibling keys
-    // the other writers store there.
-    let query_policy = if payload.tool_config.is_some() || payload.approvals.is_some() {
-        let stored = state
-            .store
-            .integration_by_id(&id)
-            .map_err(|e| e.to_string())?;
-        let mut policy = stored
-            .and_then(|i| pluk_store::parse_query_policy(i.query_policy.as_deref()))
-            .unwrap_or_default();
-        if let Some(tools) = payload.tool_config {
-            policy.tools = tools;
-        }
-        if let Some(approvals) = payload.approvals {
-            policy.approvals = approvals;
-        }
-        Some(Some(pluk_store::serialize_query_policy(&policy)))
-    } else {
-        None
-    };
+    let stored = state
+        .store
+        .integration_by_id(&id)
+        .map_err(|e| e.to_string())?
+        .and_then(|i| i.query_policy);
+    let query_policy = merged_policy(stored.as_deref(), payload.tool_config, payload.approvals)?;
     let update = pluk_store::IntegrationUpdate {
         name: payload.name,
         r#type: payload.r#type,
@@ -822,5 +840,55 @@ mod inject_command_tests {
 
         assert!(err.contains("Couldn't parse the existing config"));
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
+    }
+}
+
+#[cfg(test)]
+mod approval_rule_tests {
+    use super::*;
+    use pluk_store::Approvals;
+
+    fn rules(allow: &[&str], deny: &[&str]) -> Approvals {
+        Approvals {
+            ask: true,
+            allow: allow.iter().map(|s| s.to_string()).collect(),
+            deny: deny.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn valid_rules_are_folded_in_beside_the_tool_switches() {
+        let stored = r#"{"tools":{"query":{"enabled":true}}}"#;
+        let saved = merged_policy(Some(stored), None, Some(rules(&["git pull*"], &["rm *"])))
+            .expect("saves")
+            .expect("policy set")
+            .expect("policy text");
+        let policy = pluk_store::parse_query_policy(Some(&saved)).expect("parses");
+        assert_eq!(policy.approvals.allow, vec!["git pull*".to_string()]);
+        assert_eq!(policy.approvals.deny, vec!["rm *".to_string()]);
+        assert!(policy.tools["query"].enabled, "tool switches survive");
+    }
+
+    #[test]
+    fn a_rule_that_does_not_compile_stops_the_save() {
+        let stored = r#"{"tools":{},"approvals":{"ask":true,"allow":[],"deny":["rm -rf *"]}}"#;
+        let error = merged_policy(Some(stored), None, Some(rules(&[], &["rm [a-"])))
+            .expect_err("refused");
+        assert!(error.contains("Never allow"), "{error}");
+        assert!(error.contains("rm [a-"), "{error}");
+        assert!(error.contains("[ … ] group is not closed"), "{error}");
+    }
+
+    #[test]
+    fn a_save_that_touches_neither_leaves_the_column_alone() {
+        assert_eq!(merged_policy(Some("{}"), None, None).expect("saves"), None);
+    }
+
+    #[test]
+    fn the_edit_screen_is_told_which_list_holds_the_bad_rule() {
+        assert_eq!(check_approval_rules(rules(&["ok*"], &["also-ok*"])), None);
+        let problem = check_approval_rules(rules(&["x[]y"], &[])).expect("a problem");
+        assert_eq!(problem.list, pluk_policy::RuleList::Allow);
+        assert!(problem.message.contains("Always allow"), "{}", problem.message);
     }
 }

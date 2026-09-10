@@ -192,6 +192,7 @@ pub fn run() {
             commands::get_integration,
             commands::create_integration,
             commands::update_integration,
+            commands::check_approval_rules,
             commands::delete_integration,
             commands::list_groups,
             commands::get_group,
