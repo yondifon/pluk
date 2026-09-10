@@ -1,4 +1,5 @@
 import { isToolEnabled, orderedTools, settingsSummary } from "./logic";
+import { renderApprovals } from "./approvals";
 import type { AdapterManifest, Integration } from "./types";
 
 export function renderTools(
@@ -8,6 +9,15 @@ export function renderTools(
 ): void {
   container.innerHTML = "";
   container.className = "tools-tab";
+  renderToolList(container, integration, manifest);
+  renderApprovals(container, integration);
+}
+
+function renderToolList(
+  container: HTMLElement,
+  integration: Integration,
+  manifest: AdapterManifest | null | undefined,
+): void {
 
   const tools = manifest?.tools ?? [];
   const card = document.createElement("section");

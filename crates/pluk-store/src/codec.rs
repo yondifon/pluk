@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+pub use pluk_policy::Approvals;
+
 use crate::models::{Config, GroupMember};
 
 /// Parse a `config` blob. Malformed or non-object JSON becomes `{}`, matching
@@ -40,6 +42,10 @@ pub fn serialize_config(config: &Config) -> String {
 pub struct QueryPolicy {
     #[serde(default)]
     pub tools: BTreeMap<String, ToolPolicy>,
+    /// Hand-written allow and deny rules, and whether a refused call asks
+    /// before it is turned down.
+    #[serde(default, skip_serializing_if = "Approvals::is_unset")]
+    pub approvals: Approvals,
     /// Any sibling keys written by future versions, preserved on round trip.
     #[serde(flatten)]
     pub extra: Map<String, serde_json::Value>,

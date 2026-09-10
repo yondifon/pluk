@@ -454,6 +454,8 @@ fn tool_handler(
     tool: &MongoTool,
 ) -> ToolHandler {
     let target = CallTarget::from(conn);
+    let approvals = crate::gate::approvals_for(conn);
+    let kind = conn.r#type.clone();
     let name = tool.name;
     let category = tool.category;
     let detail = tool.detail;
@@ -464,6 +466,8 @@ fn tool_handler(
         let store = store.clone();
         let target = target.clone();
         let accessor = accessor.clone();
+        let approvals = approvals.clone();
+        let kind = kind.clone();
         let meta = GateMeta::new(category, name, detail(&args));
         let checked = args.clone();
         Box::pin(async move {
@@ -485,7 +489,7 @@ fn tool_handler(
                         ..Default::default()
                     }))
                 },
-                GateOpts::default().precheck(move || check(&checked)),
+                GateOpts::default().guard(approvals, kind, move || check(&checked)),
             )
             .await
         })

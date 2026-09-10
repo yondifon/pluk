@@ -1,7 +1,8 @@
 import type { AdapterManifest, ConfigFieldDef, ToolDef } from "./catalog.ts";
 import { visibleFields, groupedFields } from "./catalog.ts";
 import type { ConnectionDraft, Environment } from "./connectionDraft.ts";
-import { canSave, setEnvironment, splitTools } from "./connectionDraft.ts";
+import { canSave, parseRules, setEnvironment, splitTools } from "./connectionDraft.ts";
+import type { Approvals } from "./connectionDraft.ts";
 import type { GroupDraft } from "./groupForm.ts";
 import { overridableFields, inheritPlaceholder, canSaveGroup } from "./groupForm.ts";
 import { createIcon } from "../icon";
@@ -399,6 +400,84 @@ function renderSettingRow(
   return row;
 }
 
+/** One rule list: a label, a text box holding one pattern per line. */
+function ruleList(
+  key: string,
+  label: string,
+  rules: string[],
+  placeholder: string,
+  help: string | undefined,
+  onChange: (next: string[]) => void,
+): HTMLElement {
+  const { row, slot, controlId } = settingRow(key, label);
+  const box = document.createElement("textarea");
+  box.id = controlId;
+  box.rows = 3;
+  box.spellcheck = false;
+  box.className = "field-input mono rule-list";
+  box.placeholder = placeholder;
+  box.value = rules.join("\n");
+  box.addEventListener("change", () => onChange(parseRules(box.value)));
+  slot.appendChild(box);
+  if (help) {
+    box.setAttribute("aria-describedby", `${controlId}-help`);
+    row.appendChild(helpText(`${controlId}-help`, help));
+  }
+  return row;
+}
+
+export function renderApprovalsSection(
+  approvals: Approvals,
+  onChange: (next: Approvals) => void,
+): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "ui-card";
+  const title = document.createElement("h3");
+  title.className = "ui-card-title";
+  title.textContent = "What the agent may run";
+  wrap.appendChild(title);
+
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent =
+    "One pattern per line, matched against the whole command. * stands for any text, ? for one character.";
+  wrap.appendChild(hint);
+
+  wrap.appendChild(
+    ruleList("approvals-allow", "Always allow", approvals.allow, "git pull*", undefined, (allow) =>
+      onChange({ ...approvals, allow }),
+    ),
+  );
+  wrap.appendChild(
+    ruleList(
+      "approvals-deny",
+      "Never allow",
+      approvals.deny,
+      "rm -rf *",
+      "Wins over Always allow.",
+      (deny) => onChange({ ...approvals, deny }),
+    ),
+  );
+
+  const ask = settingRow("approvals-ask", "Ask me first");
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox";
+  toggle.id = ask.controlId;
+  toggle.checked = approvals.ask;
+  toggle.setAttribute("aria-describedby", "approvals-ask-help");
+  toggle.addEventListener("change", () => onChange({ ...approvals, ask: toggle.checked }));
+  ask.slot.appendChild(toggle);
+  ask.row.appendChild(
+    helpText(
+      "approvals-ask-help",
+      "When neither list matches, Pluk asks you before refusing. Off means it refuses straight away.",
+    ),
+  );
+  wrap.appendChild(ask.row);
+
+  return wrap;
+}
+
 export function renderIntegrationForm(
   draft: ConnectionDraft,
   manifest: AdapterManifest | undefined,
@@ -494,6 +573,10 @@ export function renderIntegrationForm(
     );
     wrap.appendChild(toolsEl);
   }
+
+  wrap.appendChild(
+    renderApprovalsSection(draft.approvals, (approvals) => onDraftChange({ ...draft, approvals })),
+  );
 
   const footer = document.createElement("div");
   footer.className = "form-footer";

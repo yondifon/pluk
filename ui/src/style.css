@@ -50,6 +50,9 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .field-input, .field-select { width: 100%; box-sizing: border-box; min-height: var(--control-target); padding: var(--space-xs) var(--space-sm); border: var(--border-width) solid var(--border-control); border-radius: var(--radius-sm); background: var(--surface-panel); color: var(--surface-label); font: inherit; font-size: calc(var(--type-callout) * var(--zoom-scale)); }
 .field-select { appearance: none; max-width: var(--select-max-width); padding-right: calc(var(--space-lg) + var(--space-xs)); background-image: var(--select-chevron); background-repeat: no-repeat; background-position: right var(--space-xs) center; background-size: var(--space-lg) var(--space-lg); }
 .field-input::placeholder { color: var(--surface-tertiary-label); }
+/* A rule list is typed a line at a time, so its box fills the column and grows. */
+.field-slot:has(> .rule-list) { align-items: stretch; }
+.rule-list { min-height: calc(var(--control-target) * 2); padding: var(--space-xs) var(--space-sm); resize: vertical; line-height: 1.5; }
 .member-form-label { display: flex; align-items: center; gap: var(--space-sm); min-height: var(--control-target); }
 .form-footer, .client-controls, .al-actions { display: flex; align-items: center; gap: var(--space-sm); }
 .client-controls label { color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }

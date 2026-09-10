@@ -205,8 +205,22 @@ pub type ClassifyErrorFn = Box<dyn Fn(&AdapterError) -> Verdict + Send>;
 pub type OnErrorFn = Box<dyn Fn(&AdapterError) + Send>;
 pub type FormatErrorFn = Box<dyn Fn(&AdapterError, Verdict) -> String + Send>;
 
+/// A policy check whose refusal the owner can overturn.
+///
+/// The integration's own rules are consulted first — a deny rule refuses
+/// outright, an allow rule lets the call through — and only an unmatched call
+/// reaches `check`. A refusal from `check` is what opens the confirm window.
+pub struct Guard {
+    pub approvals: pluk_policy::Approvals,
+    /// The integration's type, which whoever asks turns into a label.
+    pub kind: String,
+    pub check: PrecheckFn,
+}
+
 #[derive(Default)]
 pub struct GateOpts {
+    /// The refusable policy check for this call.
+    pub guard: Option<Guard>,
     /// Pre-flight permission check. A returned reason blocks the call before
     /// any pending entry is written.
     pub precheck: Option<PrecheckFn>,
@@ -230,6 +244,21 @@ impl GateOpts {
 
     pub fn precheck(mut self, precheck: impl FnOnce() -> Option<String> + Send + 'static) -> Self {
         self.precheck = Some(Box::new(precheck));
+        self
+    }
+
+    /// Attach the refusable policy check.
+    pub fn guard(
+        mut self,
+        approvals: pluk_policy::Approvals,
+        kind: impl Into<String>,
+        check: impl FnOnce() -> Option<String> + Send + 'static,
+    ) -> Self {
+        self.guard = Some(Guard {
+            approvals,
+            kind: kind.into(),
+            check: Box::new(check),
+        });
         self
     }
 
@@ -273,6 +302,63 @@ pub fn cancelled_when_message_contains(
     }
 }
 
+
+/// The approval rules stored on an integration.
+pub fn approvals_for(conn: &pluk_store::Integration) -> pluk_policy::Approvals {
+    pluk_store::parse_query_policy(conn.query_policy.as_deref())
+        .map(|policy| policy.approvals)
+        .unwrap_or_default()
+}
+
+/// Refused because a rule the owner wrote covers it.
+const DENIED_BY_RULE: &str =
+    "the \"Never allow\" rules for this integration cover it.";
+
+/// Run the guard: the owner's rules first, then the adapter's own policy, then
+/// the question — and act on the answer. A returned reason blocks the call.
+async fn resolve_guard(
+    store: &Store,
+    target: &CallTarget,
+    meta: &GateMeta,
+    subject: &str,
+    guard: Guard,
+) -> Option<String> {
+    use pluk_policy::RuleVerdict;
+    match guard.approvals.verdict(subject) {
+        RuleVerdict::Denied => return Some(DENIED_BY_RULE.to_string()),
+        RuleVerdict::Allowed => return None,
+        RuleVerdict::Unmatched => {}
+    }
+    let reason = (guard.check)()?;
+    if !guard.approvals.ask || !crate::confirm::has_prompter() {
+        return Some(reason);
+    }
+    if crate::confirm::allowed_for_session(&target.connection_id, subject) {
+        return None;
+    }
+    let choice = crate::confirm::ask(crate::confirm::ConfirmRequest {
+        integration_id: target.connection_id.clone(),
+        integration_name: target.connection_name.clone(),
+        integration_kind: guard.kind.clone(),
+        tool: meta.action.clone(),
+        command: subject.to_string(),
+        reason: reason.clone(),
+    })
+    .await;
+    match choice {
+        crate::confirm::ConfirmChoice::Deny => Some(format!("{reason}. It was not approved.")),
+        crate::confirm::ConfirmChoice::Once => None,
+        crate::confirm::ConfirmChoice::Session => {
+            crate::confirm::allow_for_session(&target.connection_id, subject);
+            None
+        }
+        crate::confirm::ConfirmChoice::Always => {
+            let _ =
+                store.allow_command(&target.connection_id, &pluk_policy::literal_rule(subject));
+            None
+        }
+    }
+}
 
 /// Assemble a draft carrying everything one call records up front.
 fn draft_for(
@@ -320,8 +406,13 @@ where
 {
     let recorded_sql = meta.command.clone().unwrap_or_else(|| meta.detail.clone());
 
-    // A precheck block never writes a pending row.
-    if let Some(block) = opts.precheck.and_then(|precheck| precheck()) {
+    // A block before the call never writes a pending row.
+    let blocked = match (opts.precheck.and_then(|precheck| precheck()), opts.guard) {
+        (Some(block), _) => Some(block),
+        (None, Some(guard)) => resolve_guard(store, target, &meta, &recorded_sql, guard).await,
+        (None, None) => None,
+    };
+    if let Some(block) = blocked {
         let draft = draft_for(
             target,
             &recorded_sql,
@@ -784,6 +875,213 @@ mod tests {
             "{}",
             result.text()
         );
+    }
+
+    /// The confirm path is process-global, so these tests take turns.
+    fn confirm_turn() -> std::sync::MutexGuard<'static, ()> {
+        static TURN: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+        TURN.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    struct Answering {
+        choice: crate::confirm::ConfirmChoice,
+        asked: Arc<Mutex<Vec<crate::confirm::ConfirmRequest>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::confirm::ConfirmPrompter for Answering {
+        async fn ask(
+            &self,
+            request: crate::confirm::ConfirmRequest,
+        ) -> crate::confirm::ConfirmChoice {
+            self.asked.lock().unwrap().push(request);
+            self.choice
+        }
+    }
+
+    fn attach(
+        choice: crate::confirm::ConfirmChoice,
+    ) -> Arc<Mutex<Vec<crate::confirm::ConfirmRequest>>> {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        crate::confirm::set_prompter(Arc::new(Answering {
+            choice,
+            asked: asked.clone(),
+        }));
+        crate::confirm::clear_session_allowances();
+        asked
+    }
+
+    fn rules(allow: &[&str], deny: &[&str], ask: bool) -> pluk_policy::Approvals {
+        pluk_policy::Approvals {
+            ask,
+            allow: allow.iter().map(|s| s.to_string()).collect(),
+            deny: deny.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    async fn guarded(
+        store: &Store,
+        command: &str,
+        approvals: pluk_policy::Approvals,
+        block: Option<&'static str>,
+    ) -> ToolResult {
+        run_gated(
+            store,
+            &target(),
+            GateMeta::new("command", "run_command", command),
+            |_| async { Ok(Outcome::ran("ran")) },
+            GateOpts::default().guard(approvals, "ssh", move || block.map(str::to_string)),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn an_allow_rule_overrides_the_adapter_policy() {
+        let _turn = confirm_turn();
+        let (_dir, store) = temp_store();
+        let asked = attach(crate::confirm::ConfirmChoice::Deny);
+        let result = guarded(
+            &store,
+            "rm -rf /tmp/cache",
+            rules(&["rm -rf /tmp/*"], &[], true),
+            Some("command not allowed"),
+        )
+        .await;
+
+        assert!(!result.is_error);
+        assert_eq!(result.text(), "ran");
+        assert!(asked.lock().unwrap().is_empty(), "an allowed call asks nobody");
+        assert_eq!(single_entry(&store).await.verdict, "allowed");
+        crate::confirm::clear_prompter();
+    }
+
+    #[tokio::test]
+    async fn a_deny_rule_beats_an_allow_rule_and_never_asks() {
+        let _turn = confirm_turn();
+        let (_dir, store) = temp_store();
+        let asked = attach(crate::confirm::ConfirmChoice::Always);
+        let result = guarded(&store, "rm -rf /", rules(&["rm *"], &["rm -rf /*"], true), None).await;
+
+        assert!(result.is_error);
+        assert!(result.text().starts_with("Blocked:"), "{}", result.text());
+        assert!(asked.lock().unwrap().is_empty(), "a denied call asks nobody");
+        assert_eq!(single_entry(&store).await.verdict, "blocked");
+        crate::confirm::clear_prompter();
+    }
+
+    #[tokio::test]
+    async fn an_unmatched_call_the_adapter_allows_runs_without_asking() {
+        let _turn = confirm_turn();
+        let (_dir, store) = temp_store();
+        let asked = attach(crate::confirm::ConfirmChoice::Deny);
+        let result = guarded(&store, "ls -la", rules(&[], &[], true), None).await;
+
+        assert!(!result.is_error);
+        assert!(asked.lock().unwrap().is_empty());
+        crate::confirm::clear_prompter();
+    }
+
+    #[tokio::test]
+    async fn a_refused_call_asks_and_runs_when_allowed_once() {
+        let _turn = confirm_turn();
+        let (_dir, store) = temp_store();
+        let asked = attach(crate::confirm::ConfirmChoice::Once);
+        let result = guarded(&store, "shutdown now", rules(&[], &[], true), Some("not allowed")).await;
+
+        assert!(!result.is_error);
+        let seen = asked.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].command, "shutdown now");
+        assert_eq!(seen[0].tool, "run_command");
+        assert_eq!(seen[0].reason, "not allowed");
+        assert_eq!(seen[0].integration_name, "Main DB");
+        crate::confirm::clear_prompter();
+    }
+
+    #[tokio::test]
+    async fn a_refused_call_stays_refused_when_the_answer_is_no() {
+        let _turn = confirm_turn();
+        let (_dir, store) = temp_store();
+        attach(crate::confirm::ConfirmChoice::Deny);
+        let result = guarded(&store, "shutdown now", rules(&[], &[], true), Some("not allowed")).await;
+
+        assert!(result.is_error);
+        assert!(result.text().contains("not allowed"), "{}", result.text());
+        assert_eq!(single_entry(&store).await.verdict, "blocked");
+        crate::confirm::clear_prompter();
+    }
+
+    #[tokio::test]
+    async fn asking_switched_off_refuses_without_a_question() {
+        let _turn = confirm_turn();
+        let (_dir, store) = temp_store();
+        let asked = attach(crate::confirm::ConfirmChoice::Once);
+        let result = guarded(&store, "shutdown now", rules(&[], &[], false), Some("not allowed")).await;
+
+        assert!(result.is_error);
+        assert_eq!(result.text(), "Blocked: not allowed");
+        assert!(asked.lock().unwrap().is_empty());
+        crate::confirm::clear_prompter();
+    }
+
+    #[tokio::test]
+    async fn allowing_for_the_session_stops_the_second_question() {
+        let _turn = confirm_turn();
+        let (_dir, store) = temp_store();
+        let asked = attach(crate::confirm::ConfirmChoice::Session);
+        for _ in 0..2 {
+            let result = guarded(&store, "shutdown now", rules(&[], &[], true), Some("not allowed")).await;
+            assert!(!result.is_error);
+        }
+        assert_eq!(asked.lock().unwrap().len(), 1);
+        crate::confirm::clear_prompter();
+    }
+
+    #[tokio::test]
+    async fn always_allow_writes_the_command_into_the_allow_list() {
+        let _turn = confirm_turn();
+        let (_dir, store) = temp_store();
+        attach(crate::confirm::ConfirmChoice::Always);
+        let conn = store
+            .create_integration(&pluk_store::IntegrationInput::new("Prod", "ssh"))
+            .expect("integration");
+        let target = CallTarget::new(conn.id.as_str(), "Prod");
+
+        let result = run_gated(
+            &store,
+            &target,
+            GateMeta::new("command", "run_command", "systemctl restart api"),
+            |_| async { Ok(Outcome::ran("ran")) },
+            GateOpts::default().guard(rules(&[], &[], true), "ssh", || {
+                Some("not allowed".to_string())
+            }),
+        )
+        .await;
+        assert!(!result.is_error);
+
+        let stored = store
+            .integration_by_id(&conn.id)
+            .expect("read")
+            .expect("row");
+        let approvals = approvals_for(&stored);
+        assert_eq!(approvals.allow, vec!["systemctl restart api".to_string()]);
+        assert_eq!(
+            approvals.verdict("systemctl restart api"),
+            pluk_policy::RuleVerdict::Allowed
+        );
+        crate::confirm::clear_prompter();
+    }
+
+    #[tokio::test]
+    async fn with_nobody_to_ask_the_refusal_stands() {
+        let _turn = confirm_turn();
+        let (_dir, store) = temp_store();
+        crate::confirm::clear_prompter();
+        let result = guarded(&store, "shutdown now", rules(&[], &[], true), Some("not allowed")).await;
+        assert!(result.is_error);
+        assert_eq!(result.text(), "Blocked: not allowed");
     }
 
     #[test]

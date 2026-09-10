@@ -8,6 +8,7 @@
 
 mod action;
 mod adapter;
+pub mod confirm;
 mod config_field;
 mod error;
 mod gate;
@@ -37,9 +38,12 @@ pub use action::{
 pub use adapter::{Adapter, ApiRequest, ApiResponse, PolicyKind};
 pub use config_field::{ConfigField, FieldType, SelectOption, ShowIf, normalize_scalar};
 pub use error::{AdapterError, SSH_CONNECT_PENDING_CODE};
+pub use confirm::{
+    ANSWER_WINDOW, ConfirmChoice, ConfirmPrompter, ConfirmRequest, set_prompter,
+};
 pub use gate::{
-    CallTarget, GateMeta, GateOpts, Outcome, RunOutcome, TextContent, ToolResult,
-    cancelled_when_message_contains, err, ok, run_gated,
+    CallTarget, GateMeta, GateOpts, Guard, Outcome, RunOutcome, TextContent, ToolResult,
+    approvals_for, cancelled_when_message_contains, err, ok, run_gated,
 };
 pub use instructions::{InstructionParts, build_instructions};
 pub use projection::{
