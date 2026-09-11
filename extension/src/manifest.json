@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Lets Pluk read and post on X in a Chrome window you are signed in to.",
   "minimum_chrome_version": "116",
-  "permissions": ["alarms", "scripting", "storage", "tabs"],
+  "permissions": ["alarms", "debugger", "scripting", "storage", "tabs"],
   "host_permissions": ["http://127.0.0.1/*"],
   "optional_host_permissions": [
     "<all_urls>",

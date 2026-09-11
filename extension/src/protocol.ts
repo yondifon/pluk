@@ -151,6 +151,8 @@ export interface SubmissionPayload {
   readonly draftId: string;
   readonly postId: string;
   readonly text: string;
+  /** Attach a screenshot and the page's HTML to the job when it fails. */
+  readonly debug?: true;
 }
 
 export interface ComposePayload {
@@ -166,6 +168,8 @@ export interface PostSubmissionPayload {
   readonly text: string;
   /** The posts to send, in order. More than one makes a thread. */
   readonly parts: readonly string[];
+  /** Attach a screenshot and the page's HTML to the job when it fails. */
+  readonly debug?: true;
 }
 
 // `post` and `reply` requests never reach the extension as commands: Pluk
@@ -768,7 +772,8 @@ function parseCommandPayload(
   }
   if (action === "submit_post") {
     if (
-      !hasOnlyKeys(value, ["kind", "draftId", "text", "parts"]) ||
+      !hasOnlyKeys(value, ["kind", "draftId", "text", "parts"], ["debug"]) ||
+      !isDebugFlag(value.debug) ||
       value.kind !== "post_submission" ||
       !isIdentifier(value.draftId) ||
       !isString(value.text, MAX_TEXT_LENGTH) ||
@@ -783,6 +788,7 @@ function parseCommandPayload(
         draftId: value.draftId,
         text: value.text,
         parts: value.parts,
+        ...(value.debug === true ? { debug: true } : {}),
       },
     };
   }
@@ -801,7 +807,8 @@ function parseCommandPayload(
   }
   if (action === "submit_reply") {
     if (
-      !hasOnlyKeys(value, ["kind", "draftId", "postId", "text"]) ||
+      !hasOnlyKeys(value, ["kind", "draftId", "postId", "text"], ["debug"]) ||
+      !isDebugFlag(value.debug) ||
       value.kind !== "submission" ||
       !isIdentifier(value.draftId) ||
       !isIdentifier(value.postId) ||
@@ -816,6 +823,7 @@ function parseCommandPayload(
         draftId: value.draftId,
         postId: value.postId,
         text: value.text,
+        ...(value.debug === true ? { debug: true } : {}),
       },
     };
   }
@@ -823,6 +831,10 @@ function parseCommandPayload(
     return invalid("This command does not accept a payload.");
   }
   return { ok: true, value: { kind: "empty" } };
+}
+
+function isDebugFlag(value: unknown): boolean {
+  return value === undefined || typeof value === "boolean";
 }
 
 /** The posts of a thread on the wire: one to 25 bounded strings. */

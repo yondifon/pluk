@@ -34,6 +34,31 @@ const SCREENSHOT_ACTIONS = new Set<Action>(["capture"]);
 // that invites a retry. The window is never brought forward for it: posting
 // happens behind whatever the owner is doing.
 const SUBMIT_ACTIONS = new Set<Action>(["submit_reply", "submit_post"]);
+const MAX_DEBUG_HTML_BYTES = 2 * 1024 * 1024;
+const MAX_TRUSTED_CLICKS = 25;
+
+function trustedClickRequest(
+  result: DriverPageResult,
+): { readonly x: number; readonly y: number } | null {
+  const click = result.trustedClick;
+  if (
+    isRecord(click) &&
+    typeof click.x === "number" &&
+    typeof click.y === "number" &&
+    Number.isFinite(click.x) &&
+    Number.isFinite(click.y)
+  ) {
+    return { x: click.x, y: click.y };
+  }
+  return null;
+}
+
+function wantsDebug(payload: CommandEnvelope["payload"]): boolean {
+  return (
+    (payload.kind === "submission" || payload.kind === "post_submission") &&
+    payload.debug === true
+  );
+}
 
 interface TabState {
   readonly tabId: number;
@@ -140,13 +165,29 @@ export class BrowserExecutor {
         "The page changed while it was being prepared. Try again.",
       );
     }
-    const page = await this.readDriverPage(
-      context,
-      driver,
-      makeDriverScriptOptions(command, targetUrl.value),
-      targetUrl.value,
-      command.platform,
-    );
+    const readPage = async () => {
+      try {
+        return await this.readDriverPage(
+          context,
+          driver,
+          makeDriverScriptOptions(command, targetUrl.value),
+          targetUrl.value,
+          command.platform,
+        );
+      } catch (error) {
+        if (wantsDebug(command.payload) && error instanceof BrowserExecutionError) {
+          const notes = await this.attachDebug(context, command.jobId, sink);
+          throw new BrowserExecutionError(
+            error.code,
+            `${error.message} Debug: ${notes.join("; ")}`.slice(0, 512),
+          );
+        }
+        throw error;
+      }
+    };
+    const page = SUBMIT_ACTIONS.has(command.action)
+      ? await this.withWindowInFront(context, readPage)
+      : await readPage();
     let extractArtifactId: string;
     let screenshotArtifactId: string | undefined;
     try {
@@ -184,6 +225,121 @@ export class BrowserExecutor {
       extractArtifactId,
       ...(screenshotArtifactId === undefined ? {} : { screenshotArtifactId }),
     };
+  }
+
+  /** A real click, delivered through the browser rather than the page, for
+   * controls that ignore or mistrust scripted events. The debugger stays
+   * attached only for the press. */
+  private async trustedClick(
+    tabId: number,
+    point: { readonly x: number; readonly y: number },
+  ): Promise<void> {
+    const target = { tabId };
+    // `debugger` is a reserved word, so the namespace cannot be declared
+    // alongside the others in chrome.d.ts and is typed through this lookup.
+    const api = (chrome as unknown as { debugger: chrome.DebuggerApi }).debugger;
+    try {
+      await api.attach(target, "1.3");
+    } catch (error) {
+      throw mapChromeFailure(
+        error,
+        "Chrome would not let Pluk press the control on the page.",
+      );
+    }
+    try {
+      for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+        await api.sendCommand(target, "Input.dispatchMouseEvent", {
+          type,
+          x: point.x,
+          y: point.y,
+          button: "left",
+          clickCount: 1,
+        });
+      }
+    } catch (error) {
+      throw mapChromeFailure(
+        error,
+        "Chrome did not deliver the press to the page.",
+      );
+    } finally {
+      await api.detach(target).catch(() => undefined);
+    }
+  }
+
+  /** What the page looked like when it refused: a screenshot and its HTML,
+   * attached to the job for the owner to read. Best effort, and never in
+   * the way of the failure itself. */
+  private async attachDebug(
+    context: AutomationContext,
+    jobId: string,
+    sink: ArtifactSink,
+  ): Promise<string[]> {
+    const reason = (error: unknown) =>
+      error instanceof Error ? error.message : String(error);
+    const screenshot = chrome.tabs
+      .captureVisibleTab(context.windowId, { format: "png" })
+      .then(decodePngDataUrl)
+      .then((png) => sink.upload(jobId, "screenshot", "image/png", png))
+      .then(() => "screenshot attached")
+      .catch((error) => `screenshot failed (${reason(error)})`);
+    const readPage = () =>
+      chrome.scripting.executeScript({
+        target: { tabId: context.tabId },
+        func: () => ({
+          href: window.location.href,
+          html: document.documentElement.outerHTML,
+          trace: sessionStorage.getItem("wande:trace") ?? "",
+        }),
+        args: [],
+      });
+    const html = readPage()
+      .catch(() => delay(1_500).then(readPage))
+      .then(async (results) => {
+        const page = results[0]?.result;
+        if (!page || typeof page.html !== "string") {
+          throw new Error("page returned no markup");
+        }
+        const encoder = new TextEncoder();
+        await sink.upload(
+          jobId,
+          "extract",
+          "text/plain",
+          encoder.encode(`${page.href}\n${page.trace}`),
+        );
+        return sink.upload(
+          jobId,
+          "extract",
+          "text/html",
+          encoder.encode(page.html).slice(0, MAX_DEBUG_HTML_BYTES),
+        );
+      })
+      .then(() => "html attached")
+      .catch((error) => `html failed (${reason(error)})`);
+    return Promise.all([screenshot, html]);
+  }
+
+  /** X drives its composer from animation frames, which Chrome pauses while
+   * the tab is covered. A submit gets the window in front for exactly as long
+   * as it takes, then hands the front back. */
+  private async withWindowInFront<T>(
+    context: AutomationContext,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      await chrome.windows.update(context.windowId, { focused: true });
+    } catch (error) {
+      throw mapChromeFailure(
+        error,
+        "Chrome could not bring the dedicated window forward.",
+      );
+    }
+    try {
+      return await work();
+    } finally {
+      await chrome.windows
+        .update(context.windowId, { focused: false })
+        .catch(() => undefined);
+    }
   }
 
   private async ensureAutomationContext(
@@ -382,6 +538,7 @@ export class BrowserExecutor {
     readonly title: string;
   }> {
     const deadline = Date.now() + NAVIGATION_TIMEOUT_MS;
+    let trustedClicks = 0;
     while (Date.now() < deadline) {
       let results: readonly chrome.scripting.InjectionResult<DriverPageResult>[];
       try {
@@ -392,7 +549,9 @@ export class BrowserExecutor {
         });
       } catch (error) {
         if (SUBMIT_ACTIONS.has(options.action)) {
-          throw uncertainSubmissionError();
+          throw uncertainSubmissionError(
+            error instanceof Error ? error.message : String(error),
+          );
         }
         throw mapChromeFailure(
           error,
@@ -402,7 +561,9 @@ export class BrowserExecutor {
       const result = parseDriverPageResult(results[0]?.result);
       if (result === null) {
         if (SUBMIT_ACTIONS.has(options.action)) {
-          throw uncertainSubmissionError();
+          throw uncertainSubmissionError(
+            `the page script returned ${JSON.stringify(results[0]?.result).slice(0, 300)}`,
+          );
         }
         throw new BrowserExecutionError(
           "site_markup_changed",
@@ -410,6 +571,19 @@ export class BrowserExecutor {
         );
       }
       if (result.state === "waiting") {
+        const click = trustedClickRequest(result);
+        if (click && SUBMIT_ACTIONS.has(options.action)) {
+          trustedClicks += 1;
+          if (trustedClicks > MAX_TRUSTED_CLICKS) {
+            throw new BrowserExecutionError(
+              "site_markup_changed",
+              `The ${platform} page kept asking for more clicks than a thread can need. Nothing was submitted.`,
+            );
+          }
+          await this.trustedClick(context.tabId, click);
+          await delay(400);
+          continue;
+        }
         await delay(100);
         continue;
       }
@@ -660,10 +834,11 @@ function driverFailure(result: DriverPageResult): BrowserExecutionError {
   }
 }
 
-function uncertainSubmissionError(): BrowserExecutionError {
+function uncertainSubmissionError(detail?: string): BrowserExecutionError {
+  const reason = detail ? ` Chrome reported: ${detail.slice(0, 300)}` : "";
   return new BrowserExecutionError(
     "submission_unknown",
-    "This may have gone through, but Pluk could not confirm it. Check before trying again; Pluk did not retry.",
+    `This may have gone through, but Pluk could not confirm it. Check before trying again; Pluk did not retry.${reason}`,
   );
 }
 

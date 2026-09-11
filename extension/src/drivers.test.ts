@@ -8,11 +8,20 @@ interface FixtureNode {
   querySelector(selector: string): FixtureNode | null;
   querySelectorAll(selector: string): readonly FixtureNode[];
   getAttribute(name: string): string | null;
+  closest(selector: string): FixtureNode | null;
+  contains(other: FixtureNode): boolean;
+  getBoundingClientRect(): {
+    readonly left: number;
+    readonly top: number;
+    readonly width: number;
+    readonly height: number;
+  };
   dispatchEvent(event: {
     readonly type?: string;
     readonly key?: string;
     readonly metaKey?: boolean;
     readonly ctrlKey?: boolean;
+    readonly shiftKey?: boolean;
     readonly clipboardData?: { getData(format: string): string };
   }): boolean;
 }
@@ -25,6 +34,7 @@ class HarnessKeyboardEvent {
   readonly key: string;
   readonly metaKey: boolean;
   readonly ctrlKey: boolean;
+  readonly shiftKey: boolean;
 
   constructor(
     type: string,
@@ -32,12 +42,14 @@ class HarnessKeyboardEvent {
       readonly key?: string;
       readonly metaKey?: boolean;
       readonly ctrlKey?: boolean;
+      readonly shiftKey?: boolean;
     },
   ) {
     this.type = type;
     this.key = init.key ?? "";
     this.metaKey = init.metaKey ?? false;
     this.ctrlKey = init.ctrlKey ?? false;
+    this.shiftKey = init.shiftKey ?? false;
   }
 }
 
@@ -86,11 +98,26 @@ function node(
     getAttribute(name) {
       return this.attributes[name] ?? null;
     },
+    closest() {
+      return null;
+    },
+    getBoundingClientRect() {
+      return { left: 10, top: 20, width: 30, height: 40 };
+    },
+    contains(other) {
+      return (
+        other === this ||
+        Object.values(this.selectors).some((list) =>
+          list.some((child) => child.contains(other)),
+        )
+      );
+    },
     dispatchEvent(event: {
       readonly type?: string;
       readonly key?: string;
       readonly metaKey?: boolean;
       readonly ctrlKey?: boolean;
+      readonly shiftKey?: boolean;
       readonly clipboardData?: { getData(format: string): string };
     }) {
       if (event.type === "paste" && fixturePasteSink) {
@@ -99,6 +126,7 @@ function node(
       if (
         event.type === "keydown" &&
         event.key === "Enter" &&
+        event.shiftKey !== true &&
         (event.metaKey === true || event.ctrlKey === true)
       ) {
         fixtureSubmitSink?.();
@@ -654,6 +682,7 @@ test("pastes the exact text in one event when X ignores execCommand input", asyn
       readonly key?: string;
       readonly metaKey?: boolean;
       readonly ctrlKey?: boolean;
+      readonly shiftKey?: boolean;
       readonly clipboardData?: { getData(format: string): string };
     }) => {
       if (event.type === "paste") {
@@ -667,6 +696,7 @@ test("pastes the exact text in one event when X ignores execCommand input", asyn
       if (
         event.type === "keydown" &&
         event.key === "Enter" &&
+        event.shiftKey !== true &&
         (event.metaKey === true || event.ctrlKey === true)
       ) {
         fixtureSubmitSink?.();
@@ -928,7 +958,7 @@ test("submits an X post immediately", async () => {
   expect(submitClicks).toBe(1);
 });
 
-test("a thread adds one editor per part with the plus button and posts all", async () => {
+test("a thread asks for a real press of the plus, then fills the new editor and posts all", async () => {
   let submitClicks = 0;
   let addClicks = 0;
   const typed: string[] = [];
@@ -946,13 +976,26 @@ test("a thread adds one editor per part with the plus button and posts all", asy
       },
     });
   }
-  const { scope } = makeComposerScope(first, submitButton, {
+  makeComposerScope(first, submitButton, {
     '[data-testid="addButton"]': [addButton],
   });
+  const page: Record<string, readonly FixtureNode[]> = {
+    '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
+    '[data-testid="tweetTextarea_0"]': [first],
+    '[data-testid="addButton"]': [addButton],
+    '[role="alert"], [data-testid="toast"]': [toast],
+  };
+  // The new editor appears in its own block with the toolbar, not inside
+  // the first post's box.
+  const secondScope = node("", {}, {
+    '[data-testid="tweetTextarea_1"]': [second],
+    '[data-testid="tweetButtonInline"]': [submitButton],
+    '[data-testid="tweetButton"]': [submitButton],
+  });
+  Object.defineProperty(second, "parentElement", { configurable: true, value: secondScope });
   Object.defineProperty(addButton, "click", {
     value: () => {
       addClicks += 1;
-      (scope.selectors as Record<string, readonly FixtureNode[]>)['[data-testid="tweetTextarea_1"]'] = [second];
     },
   });
   Object.defineProperty(submitButton, "click", {
@@ -968,11 +1011,7 @@ test("a thread adds one editor per part with the plus button and posts all", asy
     "Compose",
     "X",
     "https://x.com/compose/post",
-    {
-      '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
-      '[data-testid="tweetTextarea_0"]': [first],
-      '[role="alert"], [data-testid="toast"]': [toast],
-    },
+    page,
     (_commandId, _showUi, value) => {
       typed.push(value ?? "");
       if (active) {
@@ -981,16 +1020,21 @@ test("a thread adds one editor per part with the plus button and posts all", asy
       return true;
     },
   );
-  const result = await runXPage({
-    action: "submit_post",
+  const options = {
+    action: "submit_post" as const,
     targetUrl: "https://x.com/compose/post",
     text: "One.\n\nTwo.",
     parts: ["One.", "Two."],
-  });
+  };
+  const paused = await runXPage(options);
+  expect(paused).toMatchObject({ state: "waiting", trustedClick: { x: 25, y: 40 } });
+  expect(typed).toEqual(["One."]);
+  page['[data-testid="tweetTextarea_1"]'] = [second];
+  const result = await runXPage(options);
   restore();
   expect(result).toMatchObject({ state: "submission_succeeded", postedId: "777" });
   expect(typed).toEqual(["One.", "Two."]);
-  expect(addClicks).toBe(1);
+  expect(addClicks).toBe(0);
   expect(submitClicks).toBe(1);
 });
 

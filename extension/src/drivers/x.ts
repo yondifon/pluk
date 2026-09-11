@@ -246,15 +246,27 @@ export function runXPage(
     return null;
   };
 
-  const composerScope = (): Element | null => {
-    const anchors = Array.from(
-      document.querySelectorAll('[data-testid="tweetTextarea_0"]'),
+  // The tightest box holding both an editor and its Post button. In a
+  // thread X moves the toolbar to the newest post, so the anchor is the
+  // editor the button should sit with.
+  // The compose route opens a modal over the home timeline, and the timeline
+  // has a composer of its own with the same test ids, so the modal wins and
+  // every composer lookup stays inside whichever region holds the editor.
+  const inModal = (element: Element): boolean =>
+    element.closest('[aria-modal="true"]') !== null;
+  const composerRoot = (scope: Element): ParentNode =>
+    scope.closest('[aria-modal="true"]') ?? document;
+
+  const composerScope = (
+    editorSelector = '[data-testid="tweetTextarea_0"]',
+  ): Element | null => {
+    const anchors = Array.from(document.querySelectorAll(editorSelector)).sort(
+      (left, right) => Number(inModal(right)) - Number(inModal(left)),
     );
     for (const anchor of anchors) {
       let candidate = anchor.parentElement;
       while (candidate) {
-        const hasEditor =
-          candidate.querySelector('[data-testid="tweetTextarea_0"]') !== null;
+        const hasEditor = candidate.querySelector(editorSelector) !== null;
         const hasSubmitButton =
           candidate.querySelector('[data-testid="tweetButtonInline"]') !==
             null ||
@@ -325,6 +337,38 @@ export function runXPage(
     }
     selection.removeAllRanges();
     selection.addRange(range);
+  };
+
+  // A step log that outlives a page reload, read back by debug capture.
+  const trace = (step: string): void => {
+    try {
+      const soFar = sessionStorage.getItem("wande:trace") ?? "";
+      sessionStorage.setItem("wande:trace", `${soFar}${Date.now()} ${step}\n`);
+    } catch {
+      // Storage refused; the trace is only a diagnostic.
+    }
+  };
+
+  // The plus that belongs to this editor: the nearest ancestor holding both
+  // is the editor's own composer. Anything higher up is another composer's
+  // control, or the timeline's own plus.
+  const addButtonFor = (editor: Element): Element | null => {
+    const candidates = Array.from(
+      document.querySelectorAll('[data-testid="addButton"]'),
+    ).filter((candidate) => !isDisabled(candidate));
+    let container: Element | null = editor.parentElement;
+    while (container) {
+      const own = candidates.filter((candidate) => container?.contains(candidate));
+      if (own.length > 0) {
+        trace(`plus candidates: ${candidates.length}, own: ${own.length}`);
+        return own[own.length - 1] ?? null;
+      }
+      if (container.getAttribute("aria-modal") === "true") {
+        return null;
+      }
+      container = container.parentElement;
+    }
+    return null;
   };
 
   const emit = (element: Element, event: Event): void => {
@@ -495,10 +539,16 @@ export function runXPage(
       return !editor || editorText(editor) === "" ? notification : null;
     }, 15_000);
 
-  const unsupportedComposer = (scope: Element): DriverPageResult | null => {
+  // A poll, or a thread already sitting in the composer when a single post
+  // was asked for, is content Pluk did not write and will not send.
+  const unsupportedComposer = (
+    scope: Element,
+    partCount = 1,
+  ): DriverPageResult | null => {
     const hasUnsupportedContent =
       scope.querySelector('[data-testid="pollOptions"]') !== null ||
-      scope.querySelector('[data-testid="tweetTextarea_1"]') !== null;
+      (partCount === 1 &&
+        scope.querySelector('[data-testid="tweetTextarea_1"]') !== null);
     if (!hasUnsupportedContent) {
       return null;
     }
@@ -611,41 +661,71 @@ export function runXPage(
         "The confirmed X compose page is not the visible target. Nothing was submitted.",
       );
     }
-    const scope = await waitFor(() => composerScope(), 3_000);
-    if (!scope || !options.text) {
+    const firstScope = await waitFor(() => composerScope(), 3_000);
+    if (!firstScope || !options.text) {
       return failure(
         "unsupported",
         "X did not expose the confirmed post editor. Nothing was submitted.",
       );
     }
-    const unsupported = unsupportedComposer(scope);
+    const parts = options.parts?.length ? options.parts : [options.text];
+    const unsupported = unsupportedComposer(firstScope, parts.length);
     if (unsupported) {
       return unsupported;
     }
-    const parts = options.parts?.length ? options.parts : [options.text];
+    try {
+      sessionStorage.removeItem("wande:trace");
+    } catch {
+      // Storage refused; the trace is only a diagnostic.
+    }
+    trace(`start ${parts.length} part(s) at ${window.location.href}`);
     // Each part gets its own editor: the first is already open, every next
-    // one is added with X's plus button and waited for before it is typed.
+    // one is added with X's plus button, which lands in a sibling block
+    // outside the first post's box, so it is waited for on the whole page.
     let composer: Element | null = null;
+    let scope: Element = firstScope;
     for (const [index, part] of parts.entries()) {
       if (index > 0) {
-        const addButton = scope.querySelector('[data-testid="addButton"]');
-        if (!addButton || isDisabled(addButton)) {
+        // X honours only a real press of its plus, so the page script hands
+        // the button's position back and is run again once the extension
+        // has clicked it through the browser. Every earlier part is found
+        // already typed on that second pass.
+        const typedEditor: Element = composer ?? scope;
+        const selector = `[data-testid="tweetTextarea_${index}"]`;
+        composer = composerRoot(typedEditor).querySelector(selector);
+        if (!composer) {
+          const addButton = await waitFor(
+            () => addButtonFor(typedEditor),
+            3_000,
+          );
+          if (!addButton) {
+            return failure(
+              "unsupported",
+              `X did not offer to add post ${index + 1} of the thread. Nothing was submitted.`,
+            );
+          }
+          const rect = addButton.getBoundingClientRect();
+          trace(`asking for a real click on the plus for post ${index + 1}`);
+          return {
+            state: "waiting",
+            trustedClick: {
+              x: rect.left + rect.width / 2,
+              y: rect.top + rect.height / 2,
+            },
+          };
+        }
+        scope = (await waitFor(() => composerScope(selector), 3_000)) ?? scope;
+      } else {
+        composer = await waitFor(
+          () => scope.querySelector('[data-testid="tweetTextarea_0"]'),
+          5_000,
+        );
+        if (!composer) {
           return failure(
             "unsupported",
-            `X did not offer to add post ${index + 1} of the thread. Nothing was submitted.`,
+            "X did not expose the confirmed post editor. Nothing was submitted.",
           );
         }
-        (addButton as HTMLElement).click();
-      }
-      const selector = `[data-testid="tweetTextarea_${index}"]`;
-      composer = await waitFor(() => scope.querySelector(selector), 3_000);
-      if (!composer) {
-        return failure(
-          "unsupported",
-          index === 0
-            ? "X did not expose the confirmed post editor. Nothing was submitted."
-            : `X did not open an editor for post ${index + 1} of the thread. Nothing was submitted.`,
-        );
       }
       if (
         editorText(composer) !== clean(part) &&
@@ -662,6 +742,7 @@ export function runXPage(
           "X rejected the post text in the confirmed editor. Nothing was submitted.",
         );
       }
+      trace(`typed part ${index + 1}`);
     }
     if (!composer) {
       return failure(
@@ -681,6 +762,7 @@ export function runXPage(
       );
     }
     const previousNotifications = notificationTexts();
+    trace("submit shortcut");
     dispatchSubmitShortcut(composer);
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     const nothingHappened =
@@ -688,6 +770,7 @@ export function runXPage(
       notificationTexts().length === previousNotifications.length &&
       composerSubmitButton(scope) !== null;
     if (nothingHappened) {
+      trace("submit click");
       (submitButton as HTMLElement).click();
     }
     const evidence = await waitForSubmissionEvidence(

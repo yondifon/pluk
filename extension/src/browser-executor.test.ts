@@ -21,7 +21,7 @@ let tab: MockTab = {
 let captureVisibleTabImpl: () => Promise<string> = () =>
   Promise.resolve("data:image/png;base64,AA==");
 let captureVisibleTabCalls = 0;
-let windowFocusCalls: number[] = [];
+let windowFocusCalls: boolean[] = [];
 let windowFocused = false;
 let executeScriptImpl: (targetUrl: string) => DriverPageResult = (
   targetUrl,
@@ -76,9 +76,9 @@ const mockChrome = {
       tabs: [{ id: tab.id, windowId: tab.windowId, active: tab.active }],
     }),
     update: async (id: number, properties: { readonly focused?: boolean }) => {
-      if (properties.focused === true) {
-        windowFocused = true;
-        windowFocusCalls.push(id);
+      if (properties.focused !== undefined) {
+        windowFocused = properties.focused;
+        windowFocusCalls.push(properties.focused);
       }
       return {
         id,
@@ -211,7 +211,7 @@ test("capture still attaches a screenshot", async () => {
   expect(result.screenshotArtifactId).toBe("screenshot-artifact");
 });
 
-test("submit_reply stays in the background and succeeds without a screenshot even when capture would fail", async () => {
+test("submit_reply brings the window forward only while it runs and succeeds without a screenshot even when capture would fail", async () => {
   captureVisibleTabImpl = () => Promise.reject(new Error("quota exceeded"));
   const executor = new BrowserExecutor();
   const sink = makeSink();
@@ -233,7 +233,7 @@ test("submit_reply stays in the background and succeeds without a screenshot eve
   };
   const submission = await executor.run(submitCommand, sink);
   expect(captureVisibleTabCalls).toBe(0);
-  expect(windowFocusCalls).toEqual([]);
+  expect(windowFocusCalls).toEqual([true, false]);
   expect(submission).not.toHaveProperty("screenshotArtifactId");
 });
 

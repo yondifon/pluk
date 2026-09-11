@@ -132,6 +132,19 @@ declare namespace chrome {
     ): Promise<string>;
   }
 
+  interface DebuggerTarget {
+    readonly tabId?: number;
+  }
+  interface DebuggerApi {
+    attach(target: DebuggerTarget, requiredVersion: string): Promise<void>;
+    detach(target: DebuggerTarget): Promise<void>;
+    sendCommand(
+      target: DebuggerTarget,
+      method: string,
+      commandParams?: Record<string, unknown>,
+    ): Promise<unknown>;
+  }
+
   namespace windows {
     type WindowType = "normal" | "popup" | "panel" | "app" | "devtools";
     type WindowState = "normal" | "minimized" | "maximized" | "fullscreen";
