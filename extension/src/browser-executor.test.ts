@@ -211,33 +211,10 @@ test("capture still attaches a screenshot", async () => {
   expect(result.screenshotArtifactId).toBe("screenshot-artifact");
 });
 
-test("reply and submit_reply succeed without a screenshot even when capture would fail", async () => {
+test("submit_reply focuses the window and succeeds without a screenshot even when capture would fail", async () => {
   captureVisibleTabImpl = () => Promise.reject(new Error("quota exceeded"));
-  executeScriptImpl = (targetUrl) => ({
-    state: "ready",
-    kind: "reply_draft",
-    url: targetUrl,
-    title: "Post / X",
-    postId: "42",
-    targetExcerpt: "Visible post",
-    text: "Thanks for sharing this.",
-    visibleAccountIdentity: "@owner",
-  });
   const executor = new BrowserExecutor();
   const sink = makeSink();
-
-  const draftCommand: CommandEnvelope = {
-    ...makeCommand("reply", "https://x.com/status/42"),
-    payload: {
-      kind: "reply",
-      postId: "42",
-      text: "Thanks for sharing this.",
-    },
-  };
-  const draft = await executor.run(draftCommand, sink);
-  expect(captureVisibleTabCalls).toBe(0);
-  expect(windowFocusCalls).toEqual([]);
-  expect(draft).not.toHaveProperty("screenshotArtifactId");
 
   executeScriptImpl = (targetUrl) => ({
     state: "submission_succeeded",
@@ -252,8 +229,6 @@ test("reply and submit_reply succeed without a screenshot even when capture woul
       draftId: "draft-1",
       postId: "42",
       text: "Thanks for sharing this.",
-      visibleAccountIdentity: "@owner",
-      targetExcerpt: "Visible post",
     },
   };
   const submission = await executor.run(submitCommand, sink);
@@ -288,7 +263,6 @@ test("a pre-submit failure stays a failure instead of becoming uncertain", async
       kind: "post_submission",
       draftId: "draft-1",
       text: "Do not send",
-      visibleAccountIdentity: "@owner",
     },
   };
 

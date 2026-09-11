@@ -63,6 +63,12 @@ body {
   user-select: text;
 }
 
+.confirm-post {
+  font-family: var(--font-sans);
+  font-size: calc(var(--type-body) * var(--zoom-scale));
+  line-height: 1.45;
+}
+
 .confirm-reason,
 .confirm-countdown {
   margin: 0;

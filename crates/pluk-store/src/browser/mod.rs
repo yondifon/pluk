@@ -2,10 +2,9 @@
 //! reservations.
 //!
 //! The tables live in `pluk.db` alongside everything else Pluk records, and
-//! evolve through the same `user_version` ladder. A draft is written only by
-//! a successful `post` or `reply`, and only `consume_draft`
-//! turns one into a submission job — that is where the publish boundary is
-//! enforced.
+//! evolve through the same `user_version` ladder. A `post` or `reply` request
+//! writes a draft and touches nothing else; only `consume_draft` turns one
+//! into a submission job — that is where the publish boundary is enforced.
 
 pub mod schedule;
 
@@ -23,14 +22,14 @@ pub const DEFAULT_JOB_TTL_MS: i64 = 2 * 60 * 1000;
 
 pub const MAX_JOBS: i64 = 1_000;
 pub const MAX_ARTIFACTS: i64 = 2_000;
-/// How long a written post waits on a person before it expires unposted.
+/// How long a requested post waits on a person before it expires unposted.
 /// Longer than a job's own expiry on purpose: a page that stalls for two
 /// minutes is broken, but a person who takes two minutes to answer is not.
 pub const DRAFT_TTL_MS: i64 = 10 * 60 * 1000;
 
-// A reservation's post text lives on its draft, and the draft is gone once its
-// job is pruned, so the join stays outer and the text can come back empty.
-const SELECT_RESERVATION: &str = "SELECT browser_schedule_reservations.id, browser_schedule_reservations.draft_id, browser_schedule_reservations.account_identity, browser_schedule_reservations.scheduled_at, browser_schedule_reservations.status, browser_schedule_reservations.created_at, browser_schedule_reservations.committed_at, browser_schedule_reservations.released_at, browser_drafts.text FROM browser_schedule_reservations LEFT JOIN browser_drafts ON browser_drafts.id = browser_schedule_reservations.draft_id";
+// A reservation's post text lives on its draft, and the draft is pruned once
+// it has settled, so the join stays outer and the text can come back empty.
+const SELECT_RESERVATION: &str = "SELECT browser_schedule_reservations.id, browser_schedule_reservations.draft_id, browser_schedule_reservations.scheduled_at, browser_schedule_reservations.status, browser_schedule_reservations.created_at, browser_schedule_reservations.committed_at, browser_schedule_reservations.released_at, browser_drafts.text FROM browser_schedule_reservations LEFT JOIN browser_drafts ON browser_drafts.id = browser_schedule_reservations.draft_id";
 
 #[derive(Debug)]
 pub enum BrowserError {
@@ -84,14 +83,11 @@ pub struct ArtifactBody {
 #[serde(rename_all = "camelCase")]
 pub struct Draft {
     pub id: String,
-    pub job_id: String,
     pub platform: String,
     pub kind: String,
     pub target_url: String,
     pub post_id: Option<String>,
-    pub target_excerpt: String,
     pub text: String,
-    pub visible_account_identity: String,
     pub status: String,
     pub created_at: i64,
     pub confirmed_at: Option<i64>,
@@ -115,7 +111,6 @@ impl Draft {
 pub struct ScheduleReservation {
     pub id: String,
     pub draft_id: String,
-    pub account_identity: String,
     pub scheduled_at: i64,
     pub status: String,
     pub created_at: i64,
@@ -175,20 +170,15 @@ pub struct JobInput<'a> {
     pub ttl_ms: i64,
 }
 
-/// The draft a successful `reply` or `post` produced. Nothing
-/// is public until the draft is confirmed.
+/// A post or reply an agent asked for, validated by the protocol layer.
+/// Nothing reaches the page until the draft is confirmed; `post_id` is what
+/// makes it a reply.
 #[derive(Clone, Debug)]
-pub enum DraftInput<'a> {
-    Reply {
-        post_id: &'a str,
-        target_excerpt: &'a str,
-        text: &'a str,
-        visible_account_identity: &'a str,
-    },
-    Post {
-        text: &'a str,
-        visible_account_identity: &'a str,
-    },
+pub struct DraftInput<'a> {
+    pub platform: &'a str,
+    pub target_url: &'a str,
+    pub post_id: Option<&'a str>,
+    pub text: &'a str,
 }
 
 #[derive(Clone, Debug)]
@@ -202,7 +192,6 @@ pub struct JobCompletion<'a> {
     pub outcome: &'a str,
     pub result: Option<&'a Value>,
     pub error: Option<&'a ProtocolErrorView>,
-    pub draft: Option<&'a DraftInput<'a>>,
     pub now: i64,
 }
 
@@ -247,6 +236,66 @@ impl BrowserStore<'_> {
         self.expire_drafts(now)?;
         self.expire_queued(now)?;
         Ok(())
+    }
+
+    /// The waiting draft that already says exactly this, if there is one, so
+    /// asking twice never produces two posts.
+    pub fn find_pending_draft(
+        &mut self,
+        input: &DraftInput<'_>,
+        now: i64,
+    ) -> Result<Option<Draft>, BrowserError> {
+        self.expire_drafts(now)?;
+        self.conn
+            .query_row(
+                "SELECT id, platform, kind, target_url, post_id, text, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE status = 'pending' AND platform = ? AND target_url = ? AND post_id IS ? AND text = ? ORDER BY created_at DESC LIMIT 1",
+                params![input.platform, input.target_url, input.post_id, input.text],
+                read_draft_row,
+            )
+            .optional()?
+            .map(to_draft)
+            .transpose()
+            .map_err(BrowserError::from)
+    }
+
+    /// Whether a post is on its way into the page right now: confirmed to go
+    /// out immediately and not yet landed. One goes at a time.
+    pub fn submission_in_flight(&mut self, now: i64) -> Result<bool, BrowserError> {
+        self.expire_queued(now)?;
+        self.conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM browser_jobs WHERE action IN ('submit_post', 'submit_reply') AND status IN ('queued', 'running') AND NOT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE browser_schedule_reservations.draft_id = browser_jobs.draft_id AND browser_schedule_reservations.status = 'reserved' AND browser_schedule_reservations.scheduled_at > ?))",
+                [now],
+                |row| row.get(0),
+            )
+            .map_err(BrowserError::from)
+    }
+
+    /// Write a post that is waiting on a person. Nothing is sent to the
+    /// browser until someone confirms it.
+    pub fn create_draft(
+        &mut self,
+        input: &DraftInput<'_>,
+        now: i64,
+    ) -> Result<Draft, BrowserError> {
+        self.expire_drafts(now)?;
+        self.prune_drafts()?;
+        let id = Uuid::new_v4().to_string();
+        let kind = if input.post_id.is_some() {
+            "reply"
+        } else {
+            "post"
+        };
+        self.conn.execute(
+            "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+            params![id, input.platform, kind, input.target_url, input.post_id, input.text, now],
+        )?;
+        self.get_draft_row(&id)?
+            .map(to_draft)
+            .transpose()?
+            .ok_or_else(|| {
+                BrowserError::InvalidData("Created draft could not be read back.".to_owned())
+            })
     }
 
     pub fn create_job(&mut self, request: &JobInput<'_>, now: i64) -> Result<Job, BrowserError> {
@@ -322,27 +371,14 @@ impl BrowserStore<'_> {
         if status != "running" || stored_command_id != completion.command_id {
             return Ok(Completion { accepted: false });
         }
-        let draft_id = match completion.draft {
-            Some(draft) => Some(self.insert_draft(completion.id, draft, completion.now)?),
-            None => self
-                .conn
-                .query_row(
-                    "SELECT draft_id FROM browser_jobs WHERE id = ?",
-                    [completion.id],
-                    |row| row.get(0),
-                )
-                .optional()?
-                .flatten(),
-        };
         self.conn.execute(
-            "UPDATE browser_jobs SET status = ?, finished_at = ?, error_code = ?, error_message = ?, result_json = ?, draft_id = ? WHERE id = ? AND command_id = ? AND status = 'running'",
+            "UPDATE browser_jobs SET status = ?, finished_at = ?, error_code = ?, error_message = ?, result_json = ? WHERE id = ? AND command_id = ? AND status = 'running'",
             params![
                 completion.outcome,
                 completion.now,
                 completion.error.map(|value| value.code.as_str()),
                 completion.error.map(|value| value.message.as_str()),
                 completion.result.map(Value::to_string),
-                draft_id,
                 completion.id,
                 completion.command_id,
             ],
@@ -443,16 +479,15 @@ impl BrowserStore<'_> {
                 ));
             }
             let settings = self.get_schedule_settings()?;
-            let latest_scheduled_at =
-                self.latest_schedule_for_account(&draft.visible_account_identity, now)?;
+            let latest_scheduled_at = self.latest_schedule_for_platform(&draft.platform, now)?;
             let scheduled_at = next_slot(now, latest_scheduled_at, &settings)
                 .map_err(|error| BrowserError::InvalidData(error.to_string()))?;
             self.conn.execute(
-                "INSERT INTO browser_schedule_reservations (id, draft_id, account_identity, scheduled_at, status, created_at) VALUES (?, ?, ?, ?, 'reserved', ?)",
+                "INSERT INTO browser_schedule_reservations (id, draft_id, platform, scheduled_at, status, created_at) VALUES (?, ?, ?, ?, 'reserved', ?)",
                 params![
                     Uuid::new_v4().to_string(),
                     draft.id,
-                    draft.visible_account_identity,
+                    draft.platform,
                     scheduled_at,
                     now,
                 ],
@@ -466,7 +501,6 @@ impl BrowserStore<'_> {
                 "kind": "post_submission",
                 "draftId": draft.id,
                 "text": draft.text,
-                "visibleAccountIdentity": draft.visible_account_identity,
             });
             ("submit_post", payload)
         } else {
@@ -477,8 +511,6 @@ impl BrowserStore<'_> {
                     "draftId": draft.id,
                     "postId": draft.post_id,
                     "text": draft.text,
-                    "visibleAccountIdentity": draft.visible_account_identity,
-                    "targetExcerpt": if draft.target_excerpt.is_empty() { None } else { Some(draft.target_excerpt.clone()) },
                 }),
             )
         };
@@ -618,7 +650,7 @@ impl BrowserStore<'_> {
     pub fn list_pending_drafts(&mut self, now: i64) -> Result<Vec<Draft>, BrowserError> {
         self.expire_drafts(now)?;
         let mut statement = self.conn.prepare(
-            "SELECT id, job_id, platform, kind, target_url, post_id, target_excerpt, text, visible_account_identity, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE status = 'pending' ORDER BY created_at DESC",
+            "SELECT id, platform, kind, target_url, post_id, text, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE status = 'pending' ORDER BY created_at DESC",
         )?;
         let rows = statement.query_map([], read_draft_row)?;
         rows.map(|row| Ok(to_draft(row?)?)).collect()
@@ -851,20 +883,20 @@ impl BrowserStore<'_> {
 
     fn get_draft_row(&self, id: &str) -> Result<Option<DraftRow>, BrowserError> {
         self.conn.query_row(
-            "SELECT id, job_id, platform, kind, target_url, post_id, target_excerpt, text, visible_account_identity, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE id = ?",
+            "SELECT id, platform, kind, target_url, post_id, text, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE id = ?",
             [id],
             read_draft_row,
         ).optional().map_err(BrowserError::from)
     }
 
-    fn latest_schedule_for_account(
+    fn latest_schedule_for_platform(
         &self,
-        account_identity: &str,
+        platform: &str,
         now: i64,
     ) -> Result<Option<i64>, BrowserError> {
         let has_uncertain: bool = self.conn.query_row(
-            "SELECT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE account_identity = ? AND status = 'unknown')",
-            [account_identity],
+            "SELECT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE platform = ? AND status = 'unknown')",
+            [platform],
             |row| row.get(0),
         )?;
         if has_uncertain {
@@ -872,8 +904,8 @@ impl BrowserStore<'_> {
         }
         self.conn
             .query_row(
-                "SELECT MAX(scheduled_at) FROM browser_schedule_reservations WHERE account_identity = ? AND status IN ('reserved', 'committed') AND scheduled_at > ?",
-                params![account_identity, now],
+                "SELECT MAX(scheduled_at) FROM browser_schedule_reservations WHERE platform = ? AND status IN ('reserved', 'committed') AND scheduled_at > ?",
+                params![platform, now],
                 |row| row.get(0),
             )
             .map_err(BrowserError::from)
@@ -891,43 +923,6 @@ impl BrowserStore<'_> {
             )
             .optional()
             .map_err(BrowserError::from)
-    }
-
-    fn insert_draft(
-        &self,
-        job_id: &str,
-        draft: &DraftInput<'_>,
-        now: i64,
-    ) -> Result<String, BrowserError> {
-        let (platform, target_url): (String, String) = self.conn.query_row(
-            "SELECT platform, target_url FROM browser_jobs WHERE id = ?",
-            [job_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        let (kind, post_id, target_excerpt, text, visible_account_identity) = match draft {
-            DraftInput::Reply {
-                post_id,
-                target_excerpt,
-                text,
-                visible_account_identity,
-            } => (
-                "reply",
-                Some(*post_id),
-                *target_excerpt,
-                *text,
-                *visible_account_identity,
-            ),
-            DraftInput::Post {
-                text,
-                visible_account_identity,
-            } => ("post", None, "", *text, *visible_account_identity),
-        };
-        let id = Uuid::new_v4().to_string();
-        self.conn.execute(
-            "INSERT INTO browser_drafts (id, job_id, platform, kind, target_url, post_id, target_excerpt, text, visible_account_identity, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
-            params![id, job_id, platform, kind, target_url, post_id, target_excerpt, text, visible_account_identity, now],
-        )?;
-        Ok(id)
     }
 
     fn update_submission_status(
@@ -1013,6 +1008,29 @@ impl BrowserStore<'_> {
         Ok(())
     }
 
+    /// Drop settled drafts whose submission job is gone too, so the table does
+    /// not grow with every post ever asked for.
+    fn prune_drafts(&self) -> Result<(), BrowserError> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM browser_drafts", [], |row| row.get(0))?;
+        if count < self.max_jobs {
+            return Ok(());
+        }
+        let remove = count - self.max_jobs + 1;
+        self.conn.execute(
+            "DELETE FROM browser_drafts WHERE id IN (SELECT id FROM browser_drafts WHERE status NOT IN ('pending', 'confirmed') AND NOT EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.draft_id = browser_drafts.id) ORDER BY created_at ASC LIMIT ?)",
+            [remove],
+        )?;
+        let after: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM browser_drafts", [], |row| row.get(0))?;
+        if after >= self.max_jobs {
+            return Err(BrowserError::Full);
+        }
+        Ok(())
+    }
+
     fn prune_jobs(&self) -> Result<(), BrowserError> {
         let count: i64 = self
             .conn
@@ -1022,7 +1040,7 @@ impl BrowserStore<'_> {
         }
         let remove = count - self.max_jobs + 1;
         self.conn.execute(
-            "DELETE FROM browser_jobs WHERE id IN (SELECT browser_jobs.id FROM browser_jobs WHERE status IN ('succeeded', 'failed', 'expired', 'unknown') AND NOT EXISTS (SELECT 1 FROM browser_drafts WHERE browser_drafts.job_id = browser_jobs.id AND browser_drafts.status IN ('pending', 'confirmed')) ORDER BY created_at ASC LIMIT ?)",
+            "DELETE FROM browser_jobs WHERE id IN (SELECT browser_jobs.id FROM browser_jobs WHERE status IN ('succeeded', 'failed', 'expired', 'unknown') AND NOT EXISTS (SELECT 1 FROM browser_drafts WHERE browser_drafts.id = browser_jobs.draft_id AND browser_drafts.status = 'confirmed') ORDER BY created_at ASC LIMIT ?)",
             [remove],
         )?;
         let after: i64 = self
@@ -1073,14 +1091,11 @@ struct JobRow {
 
 struct DraftRow {
     id: String,
-    job_id: String,
     platform: String,
     kind: String,
     target_url: String,
     post_id: Option<String>,
-    target_excerpt: String,
     text: String,
-    visible_account_identity: String,
     status: String,
     created_at: i64,
     confirmed_at: Option<i64>,
@@ -1112,19 +1127,16 @@ fn read_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRow> {
 fn read_draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
     Ok(DraftRow {
         id: row.get(0)?,
-        job_id: row.get(1)?,
-        platform: row.get(2)?,
-        kind: row.get(3)?,
-        target_url: row.get(4)?,
-        post_id: row.get(5)?,
-        target_excerpt: row.get(6)?,
-        text: row.get(7)?,
-        visible_account_identity: row.get(8)?,
-        status: row.get(9)?,
-        created_at: row.get(10)?,
-        confirmed_at: row.get(11)?,
-        submitted_at: row.get(12)?,
-        scheduled_at: row.get(13)?,
+        platform: row.get(1)?,
+        kind: row.get(2)?,
+        target_url: row.get(3)?,
+        post_id: row.get(4)?,
+        text: row.get(5)?,
+        status: row.get(6)?,
+        created_at: row.get(7)?,
+        confirmed_at: row.get(8)?,
+        submitted_at: row.get(9)?,
+        scheduled_at: row.get(10)?,
     })
 }
 
@@ -1143,14 +1155,11 @@ fn read_artifact(row: &rusqlite::Row<'_>) -> rusqlite::Result<Artifact> {
 fn to_draft(row: DraftRow) -> rusqlite::Result<Draft> {
     Ok(Draft {
         id: row.id,
-        job_id: row.job_id,
         platform: row.platform,
         kind: row.kind,
         target_url: row.target_url,
         post_id: row.post_id,
-        target_excerpt: row.target_excerpt,
         text: row.text,
-        visible_account_identity: row.visible_account_identity,
         status: row.status,
         created_at: row.created_at,
         confirmed_at: row.confirmed_at,
@@ -1163,13 +1172,12 @@ fn read_schedule_reservation(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedu
     Ok(ScheduleReservation {
         id: row.get(0)?,
         draft_id: row.get(1)?,
-        account_identity: row.get(2)?,
-        scheduled_at: row.get(3)?,
-        status: row.get(4)?,
-        created_at: row.get(5)?,
-        committed_at: row.get(6)?,
-        released_at: row.get(7)?,
-        text: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+        scheduled_at: row.get(2)?,
+        status: row.get(3)?,
+        created_at: row.get(4)?,
+        committed_at: row.get(5)?,
+        released_at: row.get(6)?,
+        text: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
     })
 }
 
@@ -1189,46 +1197,31 @@ mod tests {
         Store::open(&directory.path().join("pluk.db")).unwrap()
     }
 
-    fn compose<'a>(payload: &'a Value) -> JobInput<'a> {
-        JobInput {
-            platform: "x",
-            action: "post",
-            target_url: "https://x.com/compose/post",
-            payload,
-            ttl_ms: DEFAULT_JOB_TTL_MS,
-        }
+    fn prepare_post_draft(store: &mut BrowserStore<'_>, text: &str, now: i64) -> Draft {
+        store
+            .create_draft(
+                &DraftInput {
+                    platform: "x",
+                    target_url: "https://x.com/compose/post",
+                    post_id: None,
+                    text,
+                },
+                now,
+            )
+            .unwrap()
     }
 
-    fn prepare_post_draft(store: &mut BrowserStore<'_>, text: &str, now: i64) -> Draft {
-        let payload = serde_json::json!({"kind": "compose", "text": text});
-        let job = store.create_job(&compose(&payload), now).unwrap();
-        store.claim_next(now).unwrap();
+    fn prepare_reply_draft(store: &mut BrowserStore<'_>, text: &str, now: i64) -> Draft {
         store
-            .complete_job(JobCompletion {
-                id: &job.id,
-                command_id: &job.command_id,
-                outcome: "succeeded",
-                result: Some(&serde_json::json!({"kind": "post_draft"})),
-                error: None,
-                draft: Some(&DraftInput::Post {
+            .create_draft(
+                &DraftInput {
+                    platform: "x",
+                    target_url: "https://x.com/status/42",
+                    post_id: Some("42"),
                     text,
-                    visible_account_identity: "@owner",
-                }),
+                },
                 now,
-            })
-            .unwrap();
-        let draft_id = store
-            .get_job(&job.id, now)
-            .unwrap()
-            .unwrap()
-            .draft_id
-            .unwrap();
-        store
-            .get_draft_row(&draft_id)
-            .unwrap()
-            .map(to_draft)
-            .transpose()
-            .unwrap()
+            )
             .unwrap()
     }
 
@@ -1259,97 +1252,102 @@ mod tests {
     }
 
     #[test]
+    fn a_draft_waits_in_pluk_and_no_job_is_queued_for_it() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        let draft = prepare_reply_draft(&mut store, "Exact reply", 100);
+        assert_eq!(draft.kind, "reply");
+        assert_eq!(draft.post_id.as_deref(), Some("42"));
+        assert_eq!(draft.status, "pending");
+        assert!(store.claim_next(100).unwrap().is_none());
+        assert!(!draft.can_queue());
+    }
+
+    #[test]
+    fn asking_for_the_same_post_twice_finds_the_one_already_waiting() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        let input = DraftInput {
+            platform: "x",
+            target_url: "https://x.com/compose/post",
+            post_id: None,
+            text: "Same words",
+        };
+        assert!(store.find_pending_draft(&input, 100).unwrap().is_none());
+        let first = store.create_draft(&input, 100).unwrap();
+        assert_eq!(
+            store.find_pending_draft(&input, 101).unwrap().unwrap().id,
+            first.id
+        );
+        let other = DraftInput { text: "Other words", ..input };
+        assert!(store.find_pending_draft(&other, 101).unwrap().is_none());
+        store.cancel_draft(&first.id, 102).unwrap();
+        assert!(store.find_pending_draft(&input, 103).unwrap().is_none());
+    }
+
+    #[test]
+    fn one_post_goes_out_at_a_time() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        assert!(!store.submission_in_flight(100).unwrap());
+        let now_post = prepare_post_draft(&mut store, "Now", 100);
+        store.consume_draft(&now_post.id, 100, false).unwrap().unwrap();
+        assert!(store.submission_in_flight(100).unwrap());
+        let dispatched = store.claim_next(100).unwrap().unwrap();
+        assert!(store.submission_in_flight(100).unwrap());
+        store
+            .complete_job(JobCompletion {
+                id: &dispatched.id,
+                command_id: &dispatched.command_id,
+                outcome: "succeeded",
+                result: Some(&serde_json::json!({
+                    "kind": "submission",
+                    "platform": "x",
+                    "postedId": "1",
+                    "postedUrl": "https://x.com/owner/status/1"
+                })),
+                error: None,
+                now: 200,
+            })
+            .unwrap();
+        assert!(!store.submission_in_flight(200).unwrap());
+
+        let later = prepare_post_draft(&mut store, "Later", 200);
+        store.consume_draft(&later.id, 200, true).unwrap().unwrap();
+        assert!(
+            !store.submission_in_flight(200).unwrap(),
+            "a post holding a queue slot is not going out yet"
+        );
+    }
+
+    #[test]
     fn confirmation_is_consumed_once() {
         let directory = tempdir().unwrap();
         let database = open(&directory);
         let mut store = database.browser();
-        let payload = serde_json::json!({"kind": "reply", "postId": "42", "text": "Exact reply"});
-        let job = store
-            .create_job(
-                &JobInput {
-                    platform: "x",
-                    action: "reply",
-                    target_url: "https://x.com/status/42",
-                    payload: &payload,
-                    ttl_ms: DEFAULT_JOB_TTL_MS,
-                },
-                100,
-            )
-            .unwrap();
-        store.claim_next(100).unwrap();
-        let completion = store
-            .complete_job(JobCompletion {
-                id: &job.id,
-                command_id: &job.command_id,
-                outcome: "succeeded",
-                result: Some(&serde_json::json!({"kind": "reply_draft"})),
-                error: None,
-                draft: Some(&DraftInput::Reply {
-                    post_id: "42",
-                    target_excerpt: "",
-                    text: "Exact reply",
-                    visible_account_identity: "@owner",
-                }),
-                now: 100,
-            })
-            .unwrap();
-        let draft_id = store
-            .get_job(&job.id, 100)
-            .unwrap()
-            .unwrap()
-            .draft_id
-            .unwrap();
-        assert!(completion.accepted);
-        assert!(store.consume_draft(&draft_id, 100, true).unwrap().is_some());
-        assert!(store.consume_draft(&draft_id, 100, true).unwrap().is_none());
+        let draft = prepare_reply_draft(&mut store, "Exact reply", 100);
+        let submission = store.consume_draft(&draft.id, 100, true).unwrap().unwrap();
+        assert_eq!(submission.job.action, "submit_reply");
+        assert_eq!(submission.job.payload["postId"], "42");
+        assert_eq!(submission.job.payload["text"], "Exact reply");
+        assert!(submission.draft.scheduled_at.is_none());
+        assert!(store.consume_draft(&draft.id, 100, true).unwrap().is_none());
     }
 
     #[test]
     fn dispatched_submission_is_not_retried_after_restart() {
         let directory = tempdir().unwrap();
-        let payload = serde_json::json!({"kind": "reply", "postId": "42", "text": "Exact reply"});
         let (draft_id, dispatched_id) = {
             let database = open(&directory);
             let mut store = database.browser();
-            let preparation = store
-                .create_job(
-                    &JobInput {
-                        platform: "x",
-                        action: "reply",
-                        target_url: "https://x.com/status/42",
-                        payload: &payload,
-                        ttl_ms: DEFAULT_JOB_TTL_MS,
-                    },
-                    100,
-                )
-                .unwrap();
-            store.claim_next(100).unwrap();
-            store
-                .complete_job(JobCompletion {
-                    id: &preparation.id,
-                    command_id: &preparation.command_id,
-                    outcome: "succeeded",
-                    result: Some(&serde_json::json!({"kind": "reply_draft"})),
-                    error: None,
-                    draft: Some(&DraftInput::Reply {
-                        post_id: "42",
-                        target_excerpt: "Original post",
-                        text: "Exact reply",
-                        visible_account_identity: "@owner",
-                    }),
-                    now: 100,
-                })
-                .unwrap();
-            let draft_id = store
-                .get_job(&preparation.id, 100)
-                .unwrap()
-                .unwrap()
-                .draft_id
-                .unwrap();
-            let submission = store.consume_draft(&draft_id, 100, true).unwrap().unwrap();
+            let draft = prepare_reply_draft(&mut store, "Exact reply", 100);
+            let submission = store.consume_draft(&draft.id, 100, true).unwrap().unwrap();
             let dispatched = store.claim_next(100).unwrap().unwrap();
             assert_eq!(dispatched.id, submission.job.id);
-            (draft_id, dispatched.id)
+            (draft.id, dispatched.id)
         };
 
         let database = open(&directory);
@@ -1371,33 +1369,13 @@ mod tests {
         let directory = tempdir().unwrap();
         let database = open(&directory);
         let mut store = database.browser();
-        let payload = serde_json::json!({"kind": "compose", "text": "Exact post text"});
-        let job = store.create_job(&compose(&payload), 100).unwrap();
-        assert_eq!(job.target_url, "https://x.com/compose/post");
-        store.claim_next(100).unwrap();
-        let completion = store
-            .complete_job(JobCompletion {
-                id: &job.id,
-                command_id: &job.command_id,
-                outcome: "succeeded",
-                result: Some(&serde_json::json!({"kind": "post_draft"})),
-                error: None,
-                draft: Some(&DraftInput::Post {
-                    text: "Exact post text",
-                    visible_account_identity: "@owner",
-                }),
-                now: 100,
-            })
-            .unwrap();
-        assert!(completion.accepted);
-        let draft_id = store
-            .get_job(&job.id, 100)
-            .unwrap()
-            .unwrap()
-            .draft_id
-            .unwrap();
+        let draft = prepare_post_draft(&mut store, "Exact post text", 100);
+        assert_eq!(draft.target_url, "https://x.com/compose/post");
+        let draft_id = draft.id;
         let submission = store.consume_draft(&draft_id, 100, true).unwrap().unwrap();
         assert_eq!(submission.job.action, "submit_post");
+        assert_eq!(submission.job.target_url, "https://x.com/compose/post");
+        assert_eq!(submission.job.draft_id.as_deref(), Some(draft_id.as_str()));
         assert!(submission.job.payload.get("postId").is_none());
         assert!(submission.job.payload.get("scheduledAt").is_none());
         assert_eq!(
@@ -1430,7 +1408,6 @@ mod tests {
                     "postedUrl": "https://x.com/owner/status/999"
                 })),
                 error: None,
-                draft: None,
                 now: 200,
             })
             .unwrap();
@@ -1518,7 +1495,10 @@ mod tests {
         let released = store.cancel_scheduled(&draft.id, 200).unwrap().unwrap();
 
         assert_eq!(released.status, "released");
-        assert_eq!(store.get_draft(&draft.id).unwrap().unwrap().status, "cancelled");
+        assert_eq!(
+            store.get_draft(&draft.id).unwrap().unwrap().status,
+            "cancelled"
+        );
         assert!(store.claim_next(slot).unwrap().is_none());
         assert!(store.cancel_scheduled(&draft.id, 300).unwrap().is_none());
     }
@@ -1557,7 +1537,7 @@ mod tests {
     }
 
     #[test]
-    fn uncertain_post_submission_blocks_the_same_account() {
+    fn uncertain_post_submission_blocks_the_queue() {
         let directory = tempdir().unwrap();
         let database = open(&directory);
         let mut store = database.browser();

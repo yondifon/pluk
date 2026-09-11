@@ -4,9 +4,7 @@ import {
   canonicalizeTargetUrl,
   MAX_EXTRACT_BYTES,
   MAX_SCREENSHOT_BYTES,
-  isPostChoice,
   type Platform,
-  type PostChoice,
   type ResultData,
 } from "./protocol";
 import { getSiteDriver } from "./drivers";
@@ -20,28 +18,21 @@ import {
   readAutomationContext,
   writeAutomationContext,
 } from "./state";
-import { type PostPrompt, postPromptScript } from "./post-prompt";
 
 const NAVIGATION_TIMEOUT_MS = 20_000;
 const CAPTURE_INTERVAL_MS = 500;
 const MAX_RESULT_TEXT_LENGTH = 8_000;
 
 // Only the explicit "capture" tool touches captureVisibleTab. Every other
-// action, including reply/submit_reply, returns DOM text only, so
-// a missing or failed screenshot grant can never block reading or replying.
+// action, the submissions included, returns DOM text only, so a missing or
+// failed screenshot grant can never block reading or posting.
 const SCREENSHOT_ACTIONS = new Set<Action>(["capture"]);
 
-// Both submit actions publish a real side effect on a single click. Any
-// uncertainty past that click (a Chrome failure, an unparsable result) must
-// surface as "unknown", never as a clean failure that invites a retry.
+// Both submit actions type the confirmed text into X's editor and publish it
+// on a single click. Any uncertainty past that click (a Chrome failure, an
+// unparsable result) must surface as "unknown", never as a clean failure
+// that invites a retry. Typing into the editor also needs the window focused.
 const SUBMIT_ACTIONS = new Set<Action>(["submit_reply", "submit_post"]);
-// post types the exact text into X's editor, so its window needs focus
-// for the same reason a submit does.
-const FOCUS_ACTIONS = new Set<Action>([
-  "submit_reply",
-  "submit_post",
-  "post",
-]);
 
 interface TabState {
   readonly tabId: number;
@@ -66,7 +57,6 @@ interface ArtifactSink {
 
 export type BrowserErrorCode =
   | "artifact_upload_failed"
-  | "account_mismatch"
   | "account_unverified"
   | "browser_unavailable"
   | "capture_discarded"
@@ -105,39 +95,6 @@ export class BrowserExecutor {
       () => undefined,
     );
     return next;
-  }
-
-  /**
-   * Draw Pluk's question over the page the post was written into.
-   *
-   * Deliberately outside the command chain: the owner may take minutes, and
-   * nothing else should wait on them. Anything that goes wrong — no tab, the
-   * tab navigated, Chrome refused — is not an answer, so the post is left
-   * waiting rather than sent or thrown away.
-   */
-  async askAboutPost(prompt: PostPrompt): Promise<PostChoice> {
-    const context = await readAutomationContext();
-    if (context === null) {
-      console.error("[wande] no automation tab to ask in; post left waiting");
-      return "later";
-    }
-    let results: readonly chrome.scripting.InjectionResult<PostChoice>[];
-    try {
-      results = await chrome.scripting.executeScript({
-        target: { tabId: context.tabId },
-        func: postPromptScript,
-        args: [prompt],
-      });
-    } catch (error) {
-      console.error("[wande] could not draw the prompt:", error);
-      return "later";
-    }
-    const choice = results[0]?.result;
-    if (!isPostChoice(choice)) {
-      console.error("[wande] prompt returned no answer:", choice);
-      return "later";
-    }
-    return choice;
   }
 
   private async execute(
@@ -364,7 +321,7 @@ export class BrowserExecutor {
           "Chrome could not navigate the automation tab.",
         );
       }
-      if (FOCUS_ACTIONS.has(action)) {
+      if (SUBMIT_ACTIONS.has(action)) {
         try {
           await chrome.windows.update(context.windowId, { focused: true });
         } catch (error) {
@@ -642,14 +599,6 @@ function makeDriverScriptOptions(
   command: CommandEnvelope,
   targetUrl: string,
 ): DriverScriptOptions {
-  if (command.payload.kind === "reply") {
-    return {
-      action: command.action,
-      targetUrl,
-      postId: command.payload.postId,
-      text: command.payload.text,
-    };
-  }
   if (command.payload.kind === "read_post") {
     return {
       action: command.action,
@@ -663,20 +612,10 @@ function makeDriverScriptOptions(
       targetUrl,
       postId: command.payload.postId,
       text: command.payload.text,
-      targetExcerpt: command.payload.targetExcerpt,
-      visibleAccountIdentity: command.payload.visibleAccountIdentity,
     };
-  }
-  if (command.payload.kind === "compose") {
-    return { action: command.action, targetUrl, text: command.payload.text };
   }
   if (command.payload.kind === "post_submission") {
-    return {
-      action: command.action,
-      targetUrl,
-      text: command.payload.text,
-      visibleAccountIdentity: command.payload.visibleAccountIdentity,
-    };
+    return { action: command.action, targetUrl, text: command.payload.text };
   }
   return { action: command.action, targetUrl };
 }
@@ -693,7 +632,6 @@ function parseDriverPageResult(value: unknown): DriverPageResult | null {
     "target_not_found",
     "account_unverified",
     "target_mismatch",
-    "account_mismatch",
     "submission_succeeded",
     "submission_unknown",
   ]);
@@ -719,8 +657,6 @@ function driverFailure(result: DriverPageResult): BrowserExecutionError {
       return new BrowserExecutionError("account_unverified", message);
     case "target_mismatch":
       return new BrowserExecutionError("target_mismatch", message);
-    case "account_mismatch":
-      return new BrowserExecutionError("account_mismatch", message);
     case "submission_unknown":
       return new BrowserExecutionError("submission_unknown", message);
     default:

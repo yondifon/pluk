@@ -216,6 +216,29 @@ fn format_clock(value: i64) -> Result<String, ScheduleError> {
     Ok(format!("{:02}:{:02}", value / 60, value % 60))
 }
 
+/// When a slot goes out, in the owner's own clock: "today at 15:40",
+/// "tomorrow at 09:10", or "on 2026-09-14 at 09:10". Falls back to the epoch
+/// when local time cannot be read.
+pub fn describe_slot(scheduled_at: i64, now: i64) -> String {
+    let (Ok(slot), Ok(today)) = (local_datetime_at(scheduled_at), local_datetime_at(now)) else {
+        return format!("at epoch {scheduled_at}");
+    };
+    let clock = format!("{:02}:{:02}", slot.hour, slot.minute);
+    let same_day = |a: LocalDateTime, b: LocalDateTime| {
+        a.year == b.year && a.month == b.month && a.day == b.day
+    };
+    if same_day(slot, today) {
+        return format!("today at {clock}");
+    }
+    if same_day(slot, next_day(today)) {
+        return format!("tomorrow at {clock}");
+    }
+    format!(
+        "on {:04}-{:02}-{:02} at {clock}",
+        slot.year, slot.month, slot.day
+    )
+}
+
 #[derive(Clone, Copy, Debug)]
 struct LocalDateTime {
     year: i32,

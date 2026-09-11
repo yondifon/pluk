@@ -231,45 +231,6 @@ export function runXPage(
     }
   };
 
-  const draft = async (): Promise<DriverPageResult> => {
-    if (!account) {
-      return failure(
-        "account_unverified",
-        "Pluk could not tell which X account is signed in. Open the account menu in that Chrome window and try again.",
-      );
-    }
-    const target = requestedPostId ? await awaitPost(requestedPostId) : undefined;
-    if (!requestedPostId || !target || targetUrlPostId !== target.postId) {
-      return failure(
-        "target_not_found",
-        "The requested X post was not visible. No reply draft was created.",
-      );
-    }
-    const replyButton = Array.from(
-      document.querySelectorAll('article[data-testid="tweet"], article'),
-    )
-      .find((article) => postIdFromNode(article) === target.postId)
-      ?.querySelector(
-        '[data-testid="reply"], button[aria-label*="Reply" i], [role="button"][aria-label*="Reply" i]',
-      );
-    if (!replyButton) {
-      return failure(
-        "unsupported",
-        "This X page did not expose a reply control for the requested post. No draft was created.",
-      );
-    }
-    return {
-      state: "ready",
-      kind: "reply_draft",
-      ...page,
-      targetUrl: options.targetUrl,
-      postId: target.postId,
-      targetExcerpt: target.excerpt,
-      text: options.text ?? "",
-      visibleAccountIdentity: account,
-    };
-  };
-
   const waitFor = async (
     read: () => Element | null,
     timeoutMs: number,
@@ -547,14 +508,16 @@ export function runXPage(
     );
   };
 
+  // A submission is the one visit the page gets: confirm the signed-in
+  // account and the target, type the confirmed text, and send it.
   const submit = async (): Promise<DriverPageResult> => {
-    const account = await awaitAccount();
-    if (!account || account !== options.visibleAccountIdentity) {
+    if (!(await awaitAccount())) {
       return failure(
-        "account_mismatch",
-        "The visible X account changed after confirmation. Nothing was submitted.",
+        "account_unverified",
+        "Pluk could not tell which X account is signed in. Open the account menu in that Chrome window and try again; nothing was submitted.",
       );
     }
+    const target = requestedPostId ? await awaitPost(requestedPostId) : undefined;
     if (
       !requestedPostId ||
       !target ||
@@ -563,13 +526,7 @@ export function runXPage(
     ) {
       return failure(
         "target_mismatch",
-        "The confirmed X post is no longer the exact visible target. Nothing was submitted.",
-      );
-    }
-    if (!options.targetExcerpt || target.excerpt !== options.targetExcerpt) {
-      return failure(
-        "target_mismatch",
-        "The confirmed X post text changed after confirmation. Nothing was submitted.",
+        "The confirmed X post is not the visible target. Nothing was submitted.",
       );
     }
     const article = Array.from(
@@ -641,66 +598,17 @@ export function runXPage(
         );
   };
 
-  const draftCompose = async (): Promise<DriverPageResult> => {
-    if (!account) {
+  const submitCompose = async (): Promise<DriverPageResult> => {
+    if (!(await awaitAccount())) {
       return failure(
         "account_unverified",
-        "Pluk could not tell which X account is signed in. Open the account menu in that Chrome window and try again.",
-      );
-    }
-    if (!/^\/compose\/post\/?$/u.test(path)) {
-      return failure(
-        "target_not_found",
-        "The X compose page was not visible. No post draft was created.",
-      );
-    }
-    const scope = await waitFor(() => composerScope(), 3_000);
-    if (!scope) {
-      return failure(
-        "unsupported",
-        "This X page did not expose a compose editor. No draft was created.",
-      );
-    }
-    const unsupported = unsupportedComposer(scope);
-    if (unsupported) {
-      return unsupported;
-    }
-    const text = options.text ?? "";
-    const composer = scope.querySelector('[data-testid="tweetTextarea_0"]');
-    if (!composer) {
-      return failure(
-        "unsupported",
-        "This X page did not expose a compose editor. No draft was created.",
-      );
-    }
-    if (!(await typeComposerText(composer, text))) {
-      return failure(
-        "unsupported",
-        "X did not accept the post text. Check the visible composer and try again; no draft was created.",
-      );
-    }
-    return {
-      state: "ready",
-      kind: "post_draft",
-      ...page,
-      targetUrl: options.targetUrl,
-      text,
-      visibleAccountIdentity: account,
-    };
-  };
-
-  const submitCompose = async (): Promise<DriverPageResult> => {
-    const account = await awaitAccount();
-    if (!account || account !== options.visibleAccountIdentity) {
-      return failure(
-        "account_mismatch",
-        "The visible X account changed after confirmation. Nothing was submitted.",
+        "Pluk could not tell which X account is signed in. Open the account menu in that Chrome window and try again; nothing was submitted.",
       );
     }
     if (window.location.href !== options.targetUrl) {
       return failure(
         "target_mismatch",
-        "The confirmed X compose page is no longer the exact visible target. Nothing was submitted.",
+        "The confirmed X compose page is not the visible target. Nothing was submitted.",
       );
     }
     const scope = await waitFor(() => composerScope(), 3_000);
@@ -817,14 +725,8 @@ export function runXPage(
     };
   }
 
-  if (options.action === "reply") {
-    return draft();
-  }
   if (options.action === "submit_reply") {
     return submit();
-  }
-  if (options.action === "post") {
-    return draftCompose();
   }
   if (options.action === "submit_post") {
     return submitCompose();

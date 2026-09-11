@@ -127,7 +127,6 @@ test("accepts immediate X post submission payloads without a schedule", () => {
       kind: "post_submission",
       draftId: "draft-1",
       text: "Hello from Wande",
-      visibleAccountIdentity: "@owner",
     },
   };
   expect(parseCommandEnvelope(envelope)).toMatchObject({

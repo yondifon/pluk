@@ -10,7 +10,6 @@ let posts: WandePosts;
 function waitingPost(overrides: Partial<WandePosts["waiting"][number]> = {}) {
   return {
     id: "draft-1",
-    account: "@pluk",
     text: "First line\nSecond line",
     replyingTo: null,
     expiresAt: NOW + 90_000,
@@ -23,7 +22,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   calls = [];
-  posts = { chromeConnected: true, waiting: [], queued: [] };
+  posts = { chromeConnected: true, sending: false, waiting: [], queued: [] };
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
     core: {
       invoke: async (cmd: string, args?: Record<string, unknown>) => {
@@ -83,6 +82,17 @@ describe("the posts waiting on a person", () => {
     destroy();
   });
 
+  test("while a post is going out, the next one can only join the queue", async () => {
+    posts.sending = true;
+    posts.waiting = [waitingPost()];
+    const { root, destroy } = await mount();
+    expect([...root.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Add to queue", "Discard"]);
+    expect(root.querySelector(".wande-post-note")!.textContent).toBe(
+      "A post is going out now. The next one can wait in the queue.",
+    );
+    destroy();
+  });
+
   test("a post that runs out of time stays on screen saying so", async () => {
     posts.waiting = [waitingPost({ expiresAt: NOW + 2000 })];
     const { root, destroy } = await mount();
@@ -99,7 +109,7 @@ describe("the posts waiting on a person", () => {
 describe("the posts going out later", () => {
   test("each slot shows when it goes out, how it ended, and can be taken back", async () => {
     posts.queued = [
-      { id: "draft-2", account: "@pluk", text: "Later", scheduledAt: NOW + 3_600_000, status: "reserved" },
+      { id: "draft-2", text: "Later", scheduledAt: NOW + 3_600_000, status: "reserved" },
     ];
     const { root, destroy } = await mount();
     expect(root.querySelector(".wande-post-slot")!.textContent).toBe(slotLabel(NOW + 3_600_000, NOW));
@@ -114,7 +124,7 @@ describe("the posts going out later", () => {
 
   test("a slot that already went out offers nothing to cancel", async () => {
     posts.queued = [
-      { id: "draft-3", account: "@pluk", text: "Gone", scheduledAt: NOW - 60_000, status: "committed" },
+      { id: "draft-3", text: "Gone", scheduledAt: NOW - 60_000, status: "committed" },
     ];
     const { root, destroy } = await mount();
     expect(root.querySelectorAll(".wande-post .hint")[0].textContent).toBe("Posted");

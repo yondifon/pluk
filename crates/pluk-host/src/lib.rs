@@ -61,6 +61,7 @@ pub fn run() {
     let confirm_registry = registry.clone();
     tauri::Builder::default()
         .manage(crate::confirm::ConfirmState::default())
+        .manage(crate::wande::PostQuestions::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(host_state)
@@ -74,6 +75,10 @@ pub fn run() {
                     app.handle().clone(),
                     confirm_registry.clone(),
                 ),
+            ));
+            // A post an agent asks for is put to the user the moment it lands.
+            pluk_browser::set_post_prompter(std::sync::Arc::new(
+                crate::wande::WindowPostPrompter::new(app.handle().clone()),
             ));
             // Every written log row reaches the window as it happens, so the
             // activity log needs no polling.
@@ -206,6 +211,8 @@ pub fn run() {
             wande::send_wande_post,
             wande::discard_wande_post,
             wande::cancel_queued_wande_post,
+            wande::wande_question,
+            wande::wande_answer,
             commands::get_health,
             commands::test_connection,
             commands::get_logs,

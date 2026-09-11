@@ -8,7 +8,6 @@ export type DriverPageState =
   | "target_not_found"
   | "account_unverified"
   | "target_mismatch"
-  | "account_mismatch"
   | "submission_succeeded"
   | "submission_unknown";
 
@@ -17,8 +16,6 @@ export interface DriverScriptOptions {
   readonly targetUrl: string;
   readonly postId?: string;
   readonly text?: string;
-  readonly visibleAccountIdentity?: string;
-  readonly targetExcerpt?: string;
 }
 
 export interface DriverPageResult {

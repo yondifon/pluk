@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   countdownText,
+  postCountdownText,
   renderClosed,
   renderConfirm,
+  renderPost,
   type ConfirmChoice,
   type ConfirmQuestion,
+  type PostChoice,
 } from "./view";
 
 function question(): ConfirmQuestion {
@@ -73,5 +76,43 @@ describe("the confirm window", () => {
     renderClosed(root, "This request has closed.", "Nothing ran. The agent can ask again.");
     expect(root.querySelector(".confirm-title")?.textContent).toBe("This request has closed.");
     expect(root.querySelector(".confirm-actions")).toBeNull();
+  });
+});
+
+describe("the post window", () => {
+  test("shows the exact text and the three answers, Post now first to the keyboard", () => {
+    const root = document.createElement("div");
+    const answers: PostChoice[] = [];
+    renderPost(
+      root,
+      { draftId: "d1", text: "Hello\nworld", replyingTo: null, canQueue: true, closesAt: Date.now() + 60_000 },
+      (choice) => answers.push(choice),
+    );
+    expect(root.querySelector(".confirm-title")?.textContent).toBe("Post this?");
+    expect(root.querySelector(".confirm-post")?.textContent).toBe("Hello\nworld");
+    const buttons = [...root.querySelectorAll<HTMLButtonElement>(".confirm-actions .ui-button")];
+    expect(buttons.map((b) => b.textContent)).toEqual(["Discard", "Add to queue", "Post now"]);
+    buttons[2].click();
+    expect(answers).toEqual(["postNow"]);
+  });
+
+  test("a reply names what it answers and cannot be queued", () => {
+    const root = document.createElement("div");
+    renderPost(
+      root,
+      { draftId: "d2", text: "Thanks", replyingTo: "https://x.com/a/status/1", canQueue: false, closesAt: Date.now() },
+      () => {},
+    );
+    expect(root.querySelector(".confirm-title")?.textContent).toBe("Send this reply?");
+    expect(root.querySelector(".confirm-reason")?.textContent).toBe("Replying to https://x.com/a/status/1");
+    expect([...root.querySelectorAll(".confirm-actions .ui-button")].map((b) => b.textContent)).toEqual([
+      "Discard",
+      "Post now",
+    ]);
+  });
+
+  test("the countdown says nothing goes out on its own", () => {
+    expect(postCountdownText(95)).toBe("Nothing is posted until you say so. 1:35 left, then it expires.");
+    expect(postCountdownText(0)).toBe("Time is up. Nothing was posted.");
   });
 });

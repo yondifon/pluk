@@ -7,7 +7,6 @@
 //! that was issued before anything is stored. A queued post waits for its
 //! reserved slot, so the pump also arms a wake-up timer.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -23,7 +22,6 @@ use serde_json::{Map, Value, json};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, sleep};
 use url::Url;
@@ -31,21 +29,20 @@ use uuid::Uuid;
 
 use pluk_store::browser::schedule::ScheduleSettings;
 use pluk_store::browser::{
-    ArtifactBody, BrowserError, Completion, DRAFT_TTL_MS, Draft, DraftInput, Job, JobCompletion,
-    JobInput, ProtocolErrorView, ScheduleReservation,
+    ArtifactBody, BrowserError, Completion, Draft, DraftInput, Job, JobCompletion, JobInput,
+    ProtocolErrorView, ScheduleReservation,
 };
 use pluk_store::{LogDraft, LogUpdate, Store, Verdict};
 
 use crate::catalog::{catalog_value, find_tool};
 use crate::prompt::{PostChoice, PostPrompt};
 use crate::protocol::{
-    Action, CommandInput, CreateJobRequest, DraftData, ExtensionCapability, ExtensionMessage,
+    Action, CommandInput, CreateJobRequest, ExtensionCapability, ExtensionMessage,
     HEARTBEAT_INTERVAL_MS, MAX_BODY_BYTES, MAX_CLOCK_SKEW_MS, MAX_EXTRACT_BYTES, MAX_ID_LENGTH,
     MAX_MESSAGE_BYTES, MAX_SCREENSHOT_BYTES, MAX_URL_LENGTH, PROTOCOL_VERSION, Platform,
-    ProtocolError, ResultMessage, canonicalize_target_url, is_allowed_extension_origin, make_ask,
+    ProtocolError, ResultMessage, canonicalize_target_url, is_allowed_extension_origin,
     make_command, make_heartbeat, make_heartbeat_ack, make_ready_envelope, parse_command_envelope,
-    parse_create_job_request, parse_extension_message, parse_post_draft_data,
-    parse_reply_draft_data,
+    parse_create_job_request, parse_extension_message,
 };
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -80,7 +77,6 @@ pub struct BrowserState {
     token: Arc<String>,
     port: u16,
     extension_origin: Option<String>,
-    questions: Arc<Mutex<HashMap<String, oneshot::Sender<PostChoice>>>>,
     /// Timers are armed from Tauri command handlers too, and those run on a
     /// blocking thread with no runtime of their own, so the one this state
     /// was built on is carried along rather than looked up at spawn time.
@@ -135,7 +131,6 @@ impl BrowserState {
             token: Arc::new(token),
             port,
             extension_origin,
-            questions: Arc::new(Mutex::new(HashMap::new())),
             runtime,
             #[cfg(test)]
             test_now: Arc::new(Mutex::new(None)),
@@ -168,8 +163,26 @@ impl BrowserState {
     }
 
     /// Publish a waiting draft, or give it the next queue slot.
+    ///
+    /// Only one post goes out at a time: while one is on its way into the
+    /// page, another can take a queue slot but not go now.
     pub fn confirm_draft(&self, draft_id: &str, schedule: bool) -> Result<(), BridgeError> {
+        if !schedule && self.sending()? {
+            return Err(BridgeError::with_status(
+                "busy",
+                "Another post is going out. Add this one to the queue, or wait for it to land.",
+                409,
+            ));
+        }
         confirm_draft_value(self, draft_id, schedule).map(|_| ())
+    }
+
+    /// Whether a post is on its way into the page right now.
+    pub fn sending(&self) -> Result<bool, BridgeError> {
+        self.store
+            .browser()
+            .submission_in_flight(self.now())
+            .map_err(BridgeError::from)
     }
 
     /// Drop a draft before it is confirmed.
@@ -190,75 +203,6 @@ impl BrowserState {
             .cancel_scheduled(draft_id, self.now())
             .map_err(BridgeError::from)?;
         released.map(|_| ()).ok_or_else(already_consumed)
-    }
-
-    /// Put a written post to the owner, drawn over the page it was written
-    /// into, and wait for what they say.
-    ///
-    /// The extension is the only thing that can answer, and only by naming a
-    /// question this issued. No answer — Chrome gone, tab closed, overlay
-    /// dismissed, nobody looking — is [`PostChoice::Later`], which leaves the
-    /// post waiting in the app.
-    async fn ask_about(&self, prompt: PostPrompt) -> PostChoice {
-        let question_id = Uuid::new_v4().to_string();
-        let (answer, wait) = oneshot::channel();
-        let now = self.now();
-        let ask = make_ask(&question_id, &prompt, now, now + DRAFT_TTL_MS);
-        // Registered before it is sent: the overlay can answer the instant it
-        // lands, and an answer with nowhere to go would be lost.
-        self.questions
-            .lock()
-            .expect("questions")
-            .insert(question_id.clone(), answer);
-        if !self.send_to_extension(ask.to_string()) {
-            self.questions
-                .lock()
-                .expect("questions")
-                .remove(&question_id);
-            return PostChoice::Later;
-        }
-        let answered =
-            tokio::time::timeout(Duration::from_millis(DRAFT_TTL_MS.max(0) as u64), wait).await;
-        self.questions
-            .lock()
-            .expect("questions")
-            .remove(&question_id);
-        match answered {
-            Ok(Ok(choice)) => choice,
-            _ => PostChoice::Later,
-        }
-    }
-
-    /// Hand one message to the paired extension. `false` when there is none.
-    fn send_to_extension(&self, message: String) -> bool {
-        self.lock_queue().is_ok_and(|queue| {
-            queue
-                .connection
-                .as_ref()
-                .is_some_and(|connection| connection.sender.send(message).is_ok())
-        })
-    }
-
-    /// Settle the one question this answer names. An answer for a question
-    /// that is not open — already answered, timed out, never issued — is
-    /// dropped rather than applied to whatever is waiting now.
-    fn handle_answer(&self, answer: crate::protocol::AnswerMessage) {
-        let now = self.now();
-        if answer.expires_at <= now
-            || answer.issued_at < now - MAX_CLOCK_SKEW_MS
-            || answer.issued_at > now + MAX_CLOCK_SKEW_MS
-        {
-            return;
-        }
-        let Some(sender) = self
-            .questions
-            .lock()
-            .expect("questions")
-            .remove(&answer.question_id)
-        else {
-            return;
-        };
-        let _ = sender.send(PostChoice::from_wire(&answer.choice));
     }
 
     /// Whether the paired extension is connected right now.
@@ -340,6 +284,77 @@ impl BrowserState {
             Ok(Some(integration)) => (integration.id, integration.name),
             _ => (LOG_CONNECTION_ID.to_owned(), LOG_CONNECTION_NAME.to_owned()),
         }
+    }
+
+    /// Start what a caller asked for. A post or reply becomes a draft waiting
+    /// on a person in Pluk and touches no page; everything else becomes a job
+    /// for the browser.
+    ///
+    /// The same post asked for twice is the one draft already waiting, so a
+    /// caller that lost the first answer cannot line up a duplicate.
+    fn start(&self, request: &CreateJobRequest) -> Result<Value, BridgeError> {
+        if !matches!(request.action, Action::Post | Action::Reply) {
+            return self.create_job(request).map(|job| json!({ "job": job }));
+        }
+        let input = DraftInput {
+            platform: request.platform.as_str(),
+            target_url: &request.target_url,
+            post_id: request.payload.get("postId").and_then(Value::as_str),
+            text: request
+                .payload
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        };
+        let now = self.now();
+        let mut browser = self.store.browser();
+        if let Some(waiting) = browser
+            .find_pending_draft(&input, now)
+            .map_err(BridgeError::from)?
+        {
+            return Ok(json!({ "draft": waiting }));
+        }
+        let draft = browser
+            .create_draft(&input, now)
+            .map_err(BridgeError::from)?;
+        drop(browser);
+        self.ask_about(draft.clone());
+        Ok(json!({ "draft": draft }))
+    }
+
+    /// Put a new post to the owner straight away, in its own task so the
+    /// caller gets its draft back at once.
+    ///
+    /// Their answer is what publishes. No answer leaves it pending, which is
+    /// exactly where the app's Waiting list picks it up.
+    fn ask_about(&self, draft: Draft) {
+        let state = self.clone();
+        self.runtime.spawn(async move {
+            let outcome = match crate::prompt::ask(PostPrompt::from_draft(&draft)).await {
+                PostChoice::PostNow => state.confirm_draft(&draft.id, false),
+                PostChoice::Queue => state.confirm_draft(&draft.id, true),
+                PostChoice::Discard => state.discard_draft(&draft.id),
+                PostChoice::Later => return,
+            };
+            if let Err(error) = outcome {
+                state.log_answer_failure(&draft, &error);
+            }
+        });
+    }
+
+    /// An answer that could not be carried out is the one thing the owner
+    /// cannot see from the window, so it goes in the activity log.
+    fn log_answer_failure(&self, draft: &Draft, error: &BridgeError) {
+        let (connection_id, connection_name) = self.log_connection();
+        let mut entry = LogDraft::new(
+            connection_id,
+            connection_name,
+            format!("{}.{} {}", draft.platform, draft.kind, draft.target_url),
+        )
+        .with_verdict(Verdict::Error)
+        .with_source("post_answer");
+        entry.reason = Some(error.message.clone());
+        let _ = self.store.create_log_entry(entry);
     }
 
     fn create_job(&self, request: &CreateJobRequest) -> Result<Job, BridgeError> {
@@ -652,17 +667,15 @@ impl BrowserState {
             return;
         }
         active.timer.abort();
-        let (status, result_data, error, draft) = self.validate_result(&active.job, &result);
+        let (status, result_data, error) = self.validate_result(&active.job, &result);
         let job_id = active.job.id.clone();
         let command_id = active.job.command_id.clone();
-        let draft = draft.as_ref().map(store_draft);
         let completion = self.store.browser().complete_job(JobCompletion {
             id: &job_id,
             command_id: &command_id,
             outcome: status,
             result: result_data.as_ref(),
             error: error.as_ref(),
-            draft: draft.as_ref(),
             now: self.now(),
         });
         match completion {
@@ -682,76 +695,14 @@ impl BrowserState {
         }
         drop(queue);
         self.log_job(&job_id);
-        self.ask_about_written_post(&job_id);
         self.pump();
-    }
-
-    /// A post that was just written is put to the owner straight away, in its
-    /// own task so the queue keeps moving while they read it.
-    ///
-    /// Their answer is what publishes. No answer leaves it pending, which is
-    /// exactly where the app's Waiting list picks it up.
-    fn ask_about_written_post(&self, job_id: &str) {
-        let Some(draft) = self.written_post(job_id) else {
-            return;
-        };
-        let state = self.clone();
-        self.runtime
-            .spawn(async move { state.answer_written_post(draft).await });
-    }
-
-    /// Put one written post to the owner and carry out what they say.
-    ///
-    /// No answer is not a refusal and not a send: the post is left exactly as
-    /// it was, still pending, still listed in the app for them to pick up.
-    async fn answer_written_post(&self, draft: Draft) {
-        let outcome = match self.ask_about(PostPrompt::from_draft(&draft)).await {
-            PostChoice::PostNow => self.confirm_draft(&draft.id, false),
-            PostChoice::Queue => self.confirm_draft(&draft.id, true),
-            PostChoice::Discard => self.discard_draft(&draft.id),
-            PostChoice::Later => return,
-        };
-        if let Err(error) = outcome {
-            self.log_answer_failure(&draft, &error);
-        }
-    }
-
-    /// The draft this job just produced, when it produced one and it is still
-    /// waiting on someone.
-    fn written_post(&self, job_id: &str) -> Option<Draft> {
-        let mut browser = self.store.browser();
-        let draft_id = browser.get_job(job_id, self.now()).ok()??.draft_id?;
-        browser
-            .get_draft(&draft_id)
-            .ok()?
-            .filter(|draft| draft.status == "pending")
-    }
-
-    /// An answer that could not be carried out is the one thing the owner
-    /// cannot see from the modal, so it goes in the activity log.
-    fn log_answer_failure(&self, draft: &Draft, error: &BridgeError) {
-        let (connection_id, connection_name) = self.log_connection();
-        let mut entry = LogDraft::new(
-            connection_id,
-            connection_name,
-            format!("{}.{} {}", draft.platform, draft.kind, draft.target_url),
-        )
-        .with_verdict(Verdict::Error)
-        .with_source("post_answer");
-        entry.reason = Some(error.message.clone());
-        let _ = self.store.create_log_entry(entry);
     }
 
     fn validate_result(
         &self,
         job: &Job,
         result: &ResultMessage,
-    ) -> (
-        &'static str,
-        Option<Value>,
-        Option<ProtocolErrorView>,
-        Option<DraftData>,
-    ) {
+    ) -> (&'static str, Option<Value>, Option<ProtocolErrorView>) {
         if !result.succeeded {
             let error = result.error.clone().unwrap_or(ProtocolError {
                 code: "invalid_result".to_owned(),
@@ -772,66 +723,6 @@ impl BrowserState {
                     code: error.code,
                     message: error.message,
                 }),
-                None,
-            );
-        }
-        if job.action == Action::Reply.as_str() {
-            let Some(draft) =
-                parse_reply_draft_data(result.data.as_ref(), Some(&job.target_url)).ok()
-            else {
-                return (
-                    "failed",
-                    None,
-                    Some(ProtocolErrorView {
-                        code: "invalid_result".to_owned(),
-                        message: "The browser extension returned a result that did not match the command.".to_owned(),
-                    }),
-                    None,
-                );
-            };
-            let Some(payload) = job.payload.as_object() else {
-                return ("failed", None, Some(invalid_result()), None);
-            };
-            let matches = draft.target_url == job.target_url
-                && payload.get("postId").and_then(Value::as_str) == Some(draft.post_id.as_str())
-                && payload.get("text").and_then(Value::as_str) == Some(draft.text.as_str());
-            if !matches {
-                return ("failed", None, Some(invalid_result()), None);
-            }
-            return (
-                "succeeded",
-                result.data.clone(),
-                None,
-                Some(DraftData::Reply(draft)),
-            );
-        }
-        if job.action == Action::Post.as_str() {
-            let Some(draft) =
-                parse_post_draft_data(result.data.as_ref(), Some(&job.target_url)).ok()
-            else {
-                return (
-                    "failed",
-                    None,
-                    Some(ProtocolErrorView {
-                        code: "invalid_result".to_owned(),
-                        message: "The browser extension returned a result that did not match the command.".to_owned(),
-                    }),
-                    None,
-                );
-            };
-            let Some(payload) = job.payload.as_object() else {
-                return ("failed", None, Some(invalid_result()), None);
-            };
-            let matches = draft.target_url == job.target_url
-                && payload.get("text").and_then(Value::as_str) == Some(draft.text.as_str());
-            if !matches {
-                return ("failed", None, Some(invalid_result()), None);
-            }
-            return (
-                "succeeded",
-                result.data.clone(),
-                None,
-                Some(DraftData::Post(draft)),
             );
         }
         if job.action == Action::SubmitPost.as_str() {
@@ -864,10 +755,10 @@ impl BrowserState {
                             .is_some_and(|(_, value)| value == posted_id)
                 });
             if !valid {
-                return ("unknown", None, Some(invalid_result()), None);
+                return ("unknown", None, Some(invalid_result()));
             }
         }
-        ("succeeded", result.data.clone(), None, None)
+        ("succeeded", result.data.clone(), None)
     }
 
     fn queue_snapshot(&self) -> Result<Value, BridgeError> {
@@ -990,8 +881,8 @@ impl BrowserState {
 /// Everything but `/wande/healthz` needs the Pluk ID as a Bearer token, and
 /// every request is pinned to the loopback host and an allowed origin.
 ///
-/// Nothing here publishes. A written post is confirmed by the owner answering
-/// in Pluk's own window, so no route reachable with the Pluk ID can send one.
+/// Nothing here publishes. A requested post is confirmed by the owner in
+/// Pluk's own window, so no route reachable with the Pluk ID can send one.
 pub fn router(state: BrowserState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
@@ -1022,22 +913,6 @@ pub fn router(state: BrowserState) -> Router {
         .route("/extension/ws", get(http_extension_ws))
         .layer(DefaultBodyLimit::max(MAX_SCREENSHOT_BYTES))
         .with_state(state)
-}
-
-/// Bridge the protocol's draft shape to what the store writes.
-fn store_draft(draft: &DraftData) -> DraftInput<'_> {
-    match draft {
-        DraftData::Reply(reply) => DraftInput::Reply {
-            post_id: &reply.post_id,
-            target_excerpt: &reply.target_excerpt,
-            text: &reply.text,
-            visible_account_identity: &reply.visible_account_identity,
-        },
-        DraftData::Post(post) => DraftInput::Post {
-            text: &post.text,
-            visible_account_identity: &post.visible_account_identity,
-        },
-    }
 }
 
 fn schedule_snapshot(state: &BrowserState) -> Result<Value, BridgeError> {
@@ -1242,8 +1117,8 @@ async fn http_create_job(
         Ok(request) => request,
         Err(error) => return api_error(StatusCode::BAD_REQUEST, error.code, &error.message),
     };
-    match state.create_job(&request) {
-        Ok(job) => api_json(StatusCode::ACCEPTED, json!({ "job": job })),
+    match state.start(&request) {
+        Ok(started) => api_json(StatusCode::ACCEPTED, started),
         Err(error) => bridge_error_response(error),
     }
 }
@@ -1302,8 +1177,8 @@ async fn http_invoke_tool(
         Ok(request) => request,
         Err(error) => return api_error(StatusCode::BAD_REQUEST, error.code, &error.message),
     };
-    match state.create_job(&request) {
-        Ok(job) => api_json(StatusCode::ACCEPTED, json!({ "job": job })),
+    match state.start(&request) {
+        Ok(started) => api_json(StatusCode::ACCEPTED, started),
         Err(error) => bridge_error_response(error),
     }
 }
@@ -1621,7 +1496,6 @@ async fn handle_socket(state: BrowserState, mut socket: WebSocket, connection_id
                         let _ = socket.send(Message::Text(Utf8Bytes::from(make_heartbeat_ack(&heartbeat.nonce, current).to_string()))).await;
                     }
                     ExtensionMessage::Result(result) => state.handle_result(&connection_id, result),
-                    ExtensionMessage::Answer(answer) => state.handle_answer(answer),
                     ExtensionMessage::Hello(_) => break,
                 }
             }
@@ -1968,16 +1842,6 @@ mod tests {
             .unwrap();
     }
 
-    async fn next_message(socket: &mut TestSocket, kind: &str) -> Value {
-        loop {
-            let message = socket.next().await.unwrap().unwrap();
-            let value: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
-            if value["type"] == kind {
-                return value;
-            }
-        }
-    }
-
     async fn next_command(socket: &mut TestSocket) -> Value {
         loop {
             let message = socket.next().await.unwrap().unwrap();
@@ -2005,7 +1869,15 @@ mod tests {
             }),
         )
         .await;
-        socket
+        // Paired means registered: a test that moves the clock before the
+        // hello lands would see it refused as expired.
+        for _ in 0..200 {
+            if fixture.state.extension_connected() {
+                return socket;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("the extension never paired");
     }
 
     async fn wait_for_status(state: &BrowserState, job_id: &str, status: &str) -> Job {
@@ -2150,8 +2022,7 @@ mod tests {
             payload: json!({
                 "kind": "post_submission",
                 "draftId": "draft-1",
-                "text": "Exact post text",
-                "visibleAccountIdentity": "@owner"
+                "text": "Exact post text"
             }),
             status: "running".to_owned(),
             created_at: 1_000,
@@ -2179,14 +2050,13 @@ mod tests {
             error: None,
         };
 
-        let (status, data, error, draft) = fixture.state.validate_result(&job, &result);
+        let (status, data, error) = fixture.state.validate_result(&job, &result);
         assert_eq!(status, "succeeded");
         assert_eq!(
             data.as_ref().and_then(|value| value.get("kind")),
             Some(&json!("submission"))
         );
         assert!(error.is_none());
-        assert!(draft.is_none());
     }
 
     #[test]
@@ -2209,37 +2079,28 @@ mod tests {
         assert!(parse_published_resolution(&json!({"published": "true"})).is_none());
     }
 
-    /// What a dismissed overlay does to a written post, and what an answer
-    /// does. Driven through the real socket, because the overlay's answer has
-    /// no other way in.
+    /// Asking for a post writes it down in Pluk and sends nothing to the
+    /// browser. Only a person confirming it produces the one command that
+    /// fills the composer and submits.
     #[tokio::test]
-    async fn a_dismissed_overlay_keeps_the_post_waiting_and_only_an_answer_sends_it() {
+    async fn a_requested_post_waits_in_pluk_until_someone_sends_it() {
         let fixture = Fixture::start().await;
         let state = &fixture.state;
-        let mut socket = pair(&fixture, &["post", "submit_post"]).await;
+        let mut socket = pair(&fixture, &["submit_post"]).await;
 
-        let compose_job = state
-            .create_job(&job_request(json!({
+        let started = state
+            .start(&job_request(json!({
                 "platform": "x", "action": "post", "payload": { "text": "Only if you say so" }
             })))
             .unwrap();
-        let command = next_command(&mut socket).await;
-        send(&mut socket, json!({
-            "version":1,"type":"result","jobId":compose_job.id,"commandId":compose_job.command_id,
-            "issuedAt":now_millis(),"expiresAt":command["expiresAt"],"outcome":"succeeded",
-            "data":{"kind":"post_draft","text":"Only if you say so","visibleAccountIdentity":"@owner"}
-        })).await;
-        let composed = wait_for_status(state, &compose_job.id, "succeeded").await;
-        let draft_id = composed.draft_id.expect("compose produced no post");
+        assert!(
+            started.get("job").is_none(),
+            "a post request is not a browser job"
+        );
+        let draft_id = started["draft"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(started["draft"]["status"], "pending");
+        assert_eq!(started["draft"]["text"], "Only if you say so");
 
-        let written = || {
-            state
-                .store
-                .browser()
-                .get_draft(&draft_id)
-                .unwrap()
-                .expect("the post should still exist")
-        };
         let waiting = || -> Vec<String> {
             state
                 .pending_drafts()
@@ -2248,100 +2109,101 @@ mod tests {
                 .map(|draft| draft.id)
                 .collect()
         };
-
-        // The question goes out over the same socket, carrying what the
-        // owner has to see — and nothing that identifies the post.
-        let ask = next_message(&mut socket, "ask").await;
-        assert_eq!(ask["account"], "@owner");
-        assert_eq!(ask["text"], "Only if you say so");
-        assert_eq!(ask["canQueue"], true);
-        assert!(
-            ask.get("draftId").is_none(),
-            "the page is never told which post this is"
-        );
-        let question_id = ask["questionId"].as_str().unwrap().to_owned();
-
-        let answer = |choice: &str, question: &str| {
-            let now = now_millis();
-            json!({
-                "version":1,"type":"answer","questionId":question,"choice":choice,
-                "issuedAt":now,"expiresAt":now + 60_000
-            })
-        };
-
-        // An answer naming a question nobody asked is dropped, not applied to
-        // whatever happens to be open.
-        send(
-            &mut socket,
-            answer("postNow", "00000000-0000-4000-8000-000000000000"),
-        )
-        .await;
-        // A dismissal is not an answer: nothing sent, nothing discarded.
-        send(&mut socket, answer("later", &question_id)).await;
-        for _ in 0..40 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        assert_eq!(written().status, "pending");
         assert!(waiting().contains(&draft_id));
-        assert_eq!(
-            state.get_job(&compose_job.id).unwrap().unwrap().status,
-            "succeeded",
-            "the call that wrote it stays succeeded either way"
+        assert!(
+            state
+                .store
+                .browser()
+                .list_jobs(10, state.now())
+                .unwrap()
+                .is_empty(),
+            "nothing was queued for the browser"
         );
 
-        // The post is still answerable afterwards, from the panel in the app.
         state.confirm_draft(&draft_id, false).unwrap();
-        assert_eq!(written().status, "confirmed");
         assert!(!waiting().contains(&draft_id));
-        assert_eq!(next_command(&mut socket).await["action"], "submit_post");
+        let command = next_command(&mut socket).await;
+        assert_eq!(command["action"], "submit_post");
+        assert_eq!(command["payload"]["draftId"], draft_id);
+        assert_eq!(command["payload"]["text"], "Only if you say so");
+        assert!(command["payload"].get("visibleAccountIdentity").is_none());
     }
 
-    /// The other half: an answer, and only an answer, publishes.
+    /// The same words asked for twice are one waiting post, and while one
+    /// post is going out another can only take a queue slot.
     #[tokio::test]
-    async fn the_owners_answer_is_what_sends_a_post() {
+    async fn a_repeated_request_reuses_the_waiting_post_and_only_one_goes_out_at_a_time() {
         let fixture = Fixture::start().await;
         let state = &fixture.state;
-        let mut socket = pair(&fixture, &["post", "submit_post"]).await;
+        let mut socket = pair(&fixture, &["submit_post"]).await;
+        let request = || {
+            job_request(json!({
+                "platform": "x", "action": "post", "payload": { "text": "Once" }
+            }))
+        };
 
-        let compose_job = state
-            .create_job(&job_request(json!({
-                "platform": "x", "action": "post", "payload": { "text": "Send it" }
+        let first = state.start(&request()).unwrap();
+        let again = state.start(&request()).unwrap();
+        assert_eq!(first["draft"]["id"], again["draft"]["id"]);
+        assert_eq!(state.pending_drafts().unwrap().len(), 1);
+        let first_id = first["draft"]["id"].as_str().unwrap().to_owned();
+
+        let second = state
+            .start(&job_request(json!({
+                "platform": "x", "action": "post", "payload": { "text": "Twice" }
             })))
             .unwrap();
-        let command = next_command(&mut socket).await;
-        send(&mut socket, json!({
-            "version":1,"type":"result","jobId":compose_job.id,"commandId":compose_job.command_id,
-            "issuedAt":now_millis(),"expiresAt":command["expiresAt"],"outcome":"succeeded",
-            "data":{"kind":"post_draft","text":"Send it","visibleAccountIdentity":"@owner"}
-        })).await;
-        let composed = wait_for_status(state, &compose_job.id, "succeeded").await;
-        let draft_id = composed.draft_id.expect("compose produced no post");
+        let second_id = second["draft"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(state.pending_drafts().unwrap().len(), 2);
 
-        let ask = next_message(&mut socket, "ask").await;
-        let now = now_millis();
-        send(
-            &mut socket,
-            json!({
-                "version":1,"type":"answer","questionId":ask["questionId"],"choice":"postNow",
-                "issuedAt":now,"expiresAt":now + 60_000
-            }),
-        )
-        .await;
-
-        assert_eq!(next_command(&mut socket).await["action"], "submit_post");
+        state.confirm_draft(&first_id, false).unwrap();
+        assert!(state.sending().unwrap());
+        let refused = state.confirm_draft(&second_id, false).unwrap_err();
+        assert_eq!(refused.code, "busy");
         assert_eq!(
             state
                 .store
                 .browser()
-                .get_draft(&draft_id)
+                .get_draft(&second_id)
                 .unwrap()
                 .unwrap()
                 .status,
-            "confirmed"
+            "pending",
+            "a refused send leaves the post waiting"
         );
+        state.confirm_draft(&second_id, true).unwrap();
+
+        let command = next_command(&mut socket).await;
+        assert_eq!(command["payload"]["draftId"], first_id);
     }
 
-    // Full compose -> confirm -> submit lifecycle for a new X post, through
+    /// A reply carries the post it answers, and nothing read from the page.
+    #[tokio::test]
+    async fn a_requested_reply_becomes_one_submit_command_when_confirmed() {
+        let fixture = Fixture::start().await;
+        let state = &fixture.state;
+        let mut socket = pair(&fixture, &["submit_reply"]).await;
+
+        let started = state
+            .start(&job_request(json!({
+                "platform": "x", "action": "reply", "targetUrl": "https://x.com/owner/status/42",
+                "payload": { "postId": "42", "text": "Thanks for this." }
+            })))
+            .unwrap();
+        let draft_id = started["draft"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(started["draft"]["kind"], "reply");
+        assert_eq!(started["draft"]["postId"], "42");
+
+        state.confirm_draft(&draft_id, false).unwrap();
+        let command = next_command(&mut socket).await;
+        assert_eq!(command["action"], "submit_reply");
+        assert_eq!(command["targetUrl"], "https://x.com/owner/status/42");
+        assert_eq!(command["payload"]["postId"], "42");
+        assert_eq!(command["payload"]["text"], "Thanks for this.");
+        assert!(command["payload"].get("targetExcerpt").is_none());
+    }
+
+    // Full request -> confirm -> submit lifecycle for a new X post, through
     // the real dispatch loop and draft-consumption path. Also proves that
     // confirming the same draft twice is refused, so a retried confirm can
     // never publish the same post again.
@@ -2349,28 +2211,15 @@ mod tests {
     async fn server_fixture_composes_and_submits_a_post_without_duplication() {
         let fixture = Fixture::start().await;
         let state = &fixture.state;
-        let mut socket = pair(&fixture, &["post", "submit_post"]).await;
+        let mut socket = pair(&fixture, &["submit_post"]).await;
 
-        let compose_job = state
-            .create_job(&job_request(json!({
+        let started = state
+            .start(&job_request(json!({
                 "platform": "x", "action": "post", "payload": { "text": "Exact post text" }
             })))
             .unwrap();
-        let compose_command = next_command(&mut socket).await;
-        assert_eq!(compose_command["action"], "post");
-        assert_eq!(compose_command["targetUrl"], "https://x.com/compose/post");
-        assert_eq!(compose_command["payload"]["text"], "Exact post text");
-        send(&mut socket, json!({
-            "version":1,"type":"result","jobId":compose_job.id,"commandId":compose_job.command_id,
-            "issuedAt":now_millis(),"expiresAt":compose_command["expiresAt"],"outcome":"succeeded",
-            "data":{
-                "kind":"post_draft",
-                "text":"Exact post text",
-                "visibleAccountIdentity":"@owner"
-            }
-        })).await;
-        let composed = wait_for_status(state, &compose_job.id, "succeeded").await;
-        let draft_id = composed.draft_id.expect("post job did not produce a draft");
+        let draft_id = started["draft"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(started["draft"]["targetUrl"], "https://x.com/compose/post");
 
         let creation = confirm_draft_value(state, &draft_id, true).unwrap();
         assert_eq!(creation["job"]["action"], "submit_post");
@@ -2696,9 +2545,14 @@ mod tests {
         )
         .await;
         assert_eq!(prepared.status(), reqwest::StatusCode::ACCEPTED);
-        let prepared_job: Value = prepared.json().await.unwrap();
-        assert_eq!(prepared_job["job"]["action"], "reply");
-        assert_eq!(prepared_job["job"]["targetUrl"], "https://x.com/status/42");
+        let prepared: Value = prepared.json().await.unwrap();
+        assert_eq!(prepared["draft"]["kind"], "reply");
+        assert_eq!(prepared["draft"]["status"], "pending");
+        assert_eq!(prepared["draft"]["targetUrl"], "https://x.com/status/42");
+        assert!(
+            prepared.get("job").is_none(),
+            "a reply request is not a browser job"
+        );
 
         // Submissions are reached only by confirming a draft.
         assert_eq!(

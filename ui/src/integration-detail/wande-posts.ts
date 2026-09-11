@@ -9,8 +9,8 @@ const TICK_MS = 1000;
 
 export interface WaitingPost {
   id: string;
-  account: string;
   text: string;
+  /** The post this one replies to, when it is a reply. */
   replyingTo: string | null;
   expiresAt: number;
   canQueue: boolean;
@@ -18,7 +18,6 @@ export interface WaitingPost {
 
 export interface QueuedPost {
   id: string;
-  account: string;
   text: string;
   scheduledAt: number;
   status: string;
@@ -26,6 +25,8 @@ export interface QueuedPost {
 
 export interface WandePosts {
   chromeConnected: boolean;
+  /** A post is going out right now, so the next one can only be queued. */
+  sending: boolean;
   waiting: WaitingPost[];
   queued: QueuedPost[];
 }
@@ -85,11 +86,12 @@ function cardTitle(id: string, text: string): HTMLElement {
 }
 
 /**
- * The two lists behind Wande's half of publishing: what has been written and
- * is waiting on a person, and what is holding a slot in the queue.
+ * The two lists behind Wande's half of publishing: what has been asked for
+ * and is waiting on a person, and what is holding a slot in the queue.
  *
- * Nothing here writes a post on its own. Sending one is always a click, and a
- * post that runs out of time stays on screen saying so rather than vanishing.
+ * Nothing here posts on its own. Sending one is always a click — that click
+ * is what fills the composer in Chrome and submits — and a post that runs out
+ * of time stays on screen saying so rather than vanishing.
  */
 export function mountWandePosts(container: HTMLElement): { destroy: () => void } {
   container.innerHTML = "";
@@ -106,6 +108,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
   let loaded = false;
   let unreachable = false;
   let chromeConnected = true;
+  let sending = false;
   let waiting: WaitingPost[] = [];
   let queued: QueuedPost[] = [];
   let expired: WaitingPost[] = [];
@@ -131,6 +134,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
       waiting = posts.waiting.filter((post) => !gone.has(post.id));
       queued = posts.queued;
       chromeConnected = posts.chromeConnected;
+      sending = posts.sending;
       unreachable = false;
     } catch {
       if (!alive) return;
@@ -147,6 +151,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
       loaded,
       unreachable,
       chromeConnected,
+      sending,
       busy,
       waiting.map((post) => post.id),
       expired.map((post) => post.id),
@@ -220,11 +225,10 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
     render();
   }
 
-  function postBody(post: { account: string; text: string; replyingTo?: string | null }): HTMLElement {
+  function postBody(post: { text: string; replyingTo?: string | null }): HTMLElement {
     const body = document.createElement("div");
     body.className = "wande-post-body";
-    body.appendChild(line(post.account, "wande-post-account"));
-    if (post.replyingTo) body.appendChild(line(`Replying to “${post.replyingTo}”`, "hint"));
+    if (post.replyingTo) body.appendChild(line(`Replying to ${post.replyingTo}`, "hint"));
     body.appendChild(line(post.text, "wande-post-text"));
     return body;
   }
@@ -242,10 +246,14 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
     countdowns.set(post.id, { element: left, expiresAt: post.expiresAt });
     const actions = document.createElement("div");
     actions.className = "wande-post-actions";
+    // One post goes out at a time: while one is on its way, the next can
+    // only take a queue slot.
     const buttons = [
-      createButton("Post now", { variant: "primary", size: "sm", onClick: () => postNow(post) }),
+      ...(sending
+        ? []
+        : [createButton("Post now", { variant: "primary", size: "sm", onClick: () => postNow(post) })]),
       ...(post.canQueue
-        ? [createButton("Add to queue", { variant: "secondary", size: "sm", onClick: () => addToQueue(post) })]
+        ? [createButton("Add to queue", { variant: sending ? "primary" : "secondary", size: "sm", onClick: () => addToQueue(post) })]
         : []),
       createButton("Discard", { variant: "secondary", size: "sm", onClick: () => discard(post) }),
     ];
@@ -312,6 +320,11 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
       pending.setAttribute("role", "status");
       waitingCard.appendChild(pending);
       return;
+    }
+    if (sending && waiting.length) {
+      const inFlight = line("A post is going out now. The next one can wait in the queue.", "wande-post-note");
+      inFlight.setAttribute("role", "status");
+      waitingCard.appendChild(inFlight);
     }
     if (!chromeConnected && waiting.length) {
       const offline = line("Chrome isn’t connected. Paste your Pluk ID into Wande in Chrome first.", "wande-post-note");

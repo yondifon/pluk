@@ -22,8 +22,6 @@ export const MAX_ENVELOPE_TTL_MS = MAX_JOB_TTL_MS;
 export const MAX_TEXT_LENGTH = 4_000;
 export const MAX_URL_LENGTH = 2_048;
 export const MAX_ID_LENGTH = 256;
-export const MAX_ACCOUNT_IDENTITY_LENGTH = 256;
-export const MAX_TARGET_EXCERPT_LENGTH = 1_000;
 export const MAX_RESULT_TEXT_LENGTH = 8_000;
 export const HEARTBEAT_INTERVAL_MS = 20_000;
 
@@ -65,9 +63,7 @@ export const DRIVER_CONTRACTS: Record<
       "read_trends",
       "refresh",
       "capture",
-      "reply",
       "submit_reply",
-      "post",
       "submit_post",
     ],
   },
@@ -154,8 +150,6 @@ export interface SubmissionPayload {
   readonly draftId: string;
   readonly postId: string;
   readonly text: string;
-  readonly visibleAccountIdentity: string;
-  readonly targetExcerpt?: string;
 }
 
 export interface ComposePayload {
@@ -167,15 +161,15 @@ export interface PostSubmissionPayload {
   readonly kind: "post_submission";
   readonly draftId: string;
   readonly text: string;
-  readonly visibleAccountIdentity: string;
 }
 
+// `post` and `reply` requests never reach the extension as commands: Pluk
+// holds them as drafts until the owner confirms, and only the submit
+// actions are dispatched.
 export type CommandPayload =
   | EmptyPayload
-  | ReplyPayload
   | ReadPostPayload
   | SubmissionPayload
-  | ComposePayload
   | PostSubmissionPayload;
 
 export interface CreateJobRequest {
@@ -225,22 +219,6 @@ export interface ResultEnvelope {
   readonly error?: ProtocolError;
 }
 
-export interface ReplyDraftData {
-  readonly kind: "reply_draft";
-  readonly targetUrl: string;
-  readonly postId: string;
-  readonly targetExcerpt: string;
-  readonly text: string;
-  readonly visibleAccountIdentity: string;
-}
-
-export interface PostDraftData {
-  readonly kind: "post_draft";
-  readonly targetUrl: string;
-  readonly text: string;
-  readonly visibleAccountIdentity: string;
-}
-
 export interface ExtensionCapability {
   readonly platform: Platform;
   readonly capabilities: readonly Action[];
@@ -274,48 +252,13 @@ export interface HeartbeatAckEnvelope {
 export type ExtensionMessage =
   | ExtensionHelloEnvelope
   | HeartbeatEnvelope
-  | ResultEnvelope
-  | AnswerEnvelope;
+  | ResultEnvelope;
 
 export type ServerMessage =
   | ReadyEnvelope
   | CommandEnvelope
   | HeartbeatEnvelope
-  | HeartbeatAckEnvelope
-  | AskEnvelope;
-
-/** The four answers the overlay offers. Nothing else is an answer. */
-export const CHOICES = ["postNow", "queue", "discard", "later"] as const;
-export type PostChoice = (typeof CHOICES)[number];
-
-/**
- * Pluk asking the owner about a post that has just been written.
- *
- * It carries what they have to see and nothing more — no identifier for the
- * post itself, so an answer can only ever name the question it came from.
- */
-export interface AskEnvelope {
-  readonly version: typeof PROTOCOL_VERSION;
-  readonly type: "ask";
-  readonly questionId: string;
-  readonly account: string;
-  readonly text: string;
-  readonly replyingTo: string | null;
-  readonly canQueue: boolean;
-  /** When the overlay should give up, in epoch milliseconds. */
-  readonly closesAt: number;
-  readonly issuedAt: number;
-  readonly expiresAt: number;
-}
-
-export interface AnswerEnvelope {
-  readonly version: typeof PROTOCOL_VERSION;
-  readonly type: "answer";
-  readonly questionId: string;
-  readonly choice: PostChoice;
-  readonly issuedAt: number;
-  readonly expiresAt: number;
-}
+  | HeartbeatAckEnvelope;
 
 export interface ReadyEnvelope {
   readonly version: typeof PROTOCOL_VERSION;
@@ -367,15 +310,6 @@ function isString(value: unknown, maxLength: number): value is string {
     value.length > 0 &&
     value.length <= maxLength &&
     !hasControlCharacter(value)
-  );
-}
-
-function isSingleLineString(
-  value: unknown,
-  maxLength: number,
-): value is string {
-  return (
-    isString(value, maxLength) && !value.includes("\n") && !value.includes("\r")
   );
 }
 
@@ -814,45 +748,15 @@ function parseCommandPayload(
   if (!isRecord(value)) {
     return invalid("Command payload must be an object.");
   }
-  if (action === "reply") {
-    if (
-      !hasOnlyKeys(value, ["kind", "postId", "text"]) ||
-      value.kind !== "reply" ||
-      !isIdentifier(value.postId) ||
-      !isString(value.text, MAX_TEXT_LENGTH)
-    ) {
-      return invalid("Reply command payload is invalid.");
-    }
-    return {
-      ok: true,
-      value: { kind: "reply", postId: value.postId, text: value.text },
-    };
-  }
-  if (action === "post") {
-    if (
-      !hasOnlyKeys(value, ["kind", "text"]) ||
-      value.kind !== "compose" ||
-      !isString(value.text, MAX_TEXT_LENGTH)
-    ) {
-      return invalid("Post command payload is invalid.");
-    }
-    return { ok: true, value: { kind: "compose", text: value.text } };
+  if (action === "post" || action === "reply") {
+    return invalid("Posts and replies are dispatched only as submissions.");
   }
   if (action === "submit_post") {
     if (
-      !hasOnlyKeys(value, [
-        "kind",
-        "draftId",
-        "text",
-        "visibleAccountIdentity",
-      ]) ||
+      !hasOnlyKeys(value, ["kind", "draftId", "text"]) ||
       value.kind !== "post_submission" ||
       !isIdentifier(value.draftId) ||
-      !isString(value.text, MAX_TEXT_LENGTH) ||
-      !isSingleLineString(
-        value.visibleAccountIdentity,
-        MAX_ACCOUNT_IDENTITY_LENGTH,
-      )
+      !isString(value.text, MAX_TEXT_LENGTH)
     ) {
       return invalid("Post submission command payload is invalid.");
     }
@@ -862,7 +766,6 @@ function parseCommandPayload(
         kind: "post_submission",
         draftId: value.draftId,
         text: value.text,
-        visibleAccountIdentity: value.visibleAccountIdentity,
       },
     };
   }
@@ -881,21 +784,11 @@ function parseCommandPayload(
   }
   if (action === "submit_reply") {
     if (
-      !hasOnlyKeys(
-        value,
-        ["kind", "draftId", "postId", "text", "visibleAccountIdentity"],
-        ["targetExcerpt"],
-      ) ||
+      !hasOnlyKeys(value, ["kind", "draftId", "postId", "text"]) ||
       value.kind !== "submission" ||
       !isIdentifier(value.draftId) ||
       !isIdentifier(value.postId) ||
-      !isString(value.text, MAX_TEXT_LENGTH) ||
-      !isSingleLineString(
-        value.visibleAccountIdentity,
-        MAX_ACCOUNT_IDENTITY_LENGTH,
-      ) ||
-      (value.targetExcerpt !== undefined &&
-        !isString(value.targetExcerpt, MAX_TARGET_EXCERPT_LENGTH))
+      !isString(value.text, MAX_TEXT_LENGTH)
     ) {
       return invalid("Submission command payload is invalid.");
     }
@@ -906,10 +799,6 @@ function parseCommandPayload(
         draftId: value.draftId,
         postId: value.postId,
         text: value.text,
-        visibleAccountIdentity: value.visibleAccountIdentity,
-        ...(value.targetExcerpt === undefined
-          ? {}
-          : { targetExcerpt: value.targetExcerpt }),
       },
     };
   }
@@ -967,90 +856,6 @@ function parseResultData(value: unknown): ValidationResult<ResultData> {
     return invalid("Result data contains an unsupported scheduling field.");
   }
   return { ok: true, value: { kind: value.kind, ...value } };
-}
-
-export function parseReplyDraftData(
-  value: unknown,
-  fallbackTargetUrl?: string,
-): ValidationResult<ReplyDraftData> {
-  if (
-    !isRecord(value) ||
-    !hasOnlyKeys(
-      value,
-      ["kind", "postId", "text", "visibleAccountIdentity"],
-      ["targetUrl", "targetExcerpt", "url", "title", "extractArtifactId"],
-    ) ||
-    value.kind !== "reply_draft" ||
-    (!isString(value.targetUrl, MAX_URL_LENGTH) &&
-      fallbackTargetUrl === undefined) ||
-    (value.targetUrl !== undefined &&
-      !isString(value.targetUrl, MAX_URL_LENGTH)) ||
-    (value.targetExcerpt !== undefined &&
-      !isString(value.targetExcerpt, MAX_TARGET_EXCERPT_LENGTH)) ||
-    !isIdentifier(value.postId) ||
-    !isString(value.text, MAX_TEXT_LENGTH) ||
-    !isSingleLineString(
-      value.visibleAccountIdentity,
-      MAX_ACCOUNT_IDENTITY_LENGTH,
-    )
-  ) {
-    return invalid(
-      "Reply draft needs a post ID, exact text, and visible account identity.",
-    );
-  }
-  return {
-    ok: true,
-    value: {
-      kind: "reply_draft",
-      targetUrl:
-        value.targetUrl === undefined
-          ? (fallbackTargetUrl as string)
-          : value.targetUrl,
-      postId: value.postId,
-      targetExcerpt:
-        value.targetExcerpt === undefined ? "" : value.targetExcerpt,
-      text: value.text,
-      visibleAccountIdentity: value.visibleAccountIdentity,
-    },
-  };
-}
-
-export function parsePostDraftData(
-  value: unknown,
-  fallbackTargetUrl?: string,
-): ValidationResult<PostDraftData> {
-  if (
-    !isRecord(value) ||
-    !hasOnlyKeys(
-      value,
-      ["kind", "text", "visibleAccountIdentity"],
-      ["targetUrl", "url", "title", "extractArtifactId"],
-    ) ||
-    value.kind !== "post_draft" ||
-    (!isString(value.targetUrl, MAX_URL_LENGTH) &&
-      fallbackTargetUrl === undefined) ||
-    (value.targetUrl !== undefined &&
-      !isString(value.targetUrl, MAX_URL_LENGTH)) ||
-    !isString(value.text, MAX_TEXT_LENGTH) ||
-    !isSingleLineString(
-      value.visibleAccountIdentity,
-      MAX_ACCOUNT_IDENTITY_LENGTH,
-    )
-  ) {
-    return invalid("Post draft needs exact text and visible account identity.");
-  }
-  return {
-    ok: true,
-    value: {
-      kind: "post_draft",
-      targetUrl:
-        value.targetUrl === undefined
-          ? (fallbackTargetUrl as string)
-          : value.targetUrl,
-      text: value.text,
-      visibleAccountIdentity: value.visibleAccountIdentity,
-    },
-  };
 }
 
 function parseCapabilities(
@@ -1134,9 +939,6 @@ export function parseServerMessage(
   if (value.type === "heartbeat_ack") {
     return parseHeartbeatAckMessage(value);
   }
-  if (value.type === "ask") {
-    return parseAskMessage(value);
-  }
   return invalid("Message type is not supported.");
 }
 
@@ -1171,58 +973,6 @@ function parseHelloMessage(
       type: "hello",
       extensionVersion: value.extensionVersion,
       capabilities: capabilities.value,
-      issuedAt: times.issuedAt,
-      expiresAt: times.expiresAt,
-    },
-  };
-}
-
-const CHOICE_SET = new Set<string>(CHOICES);
-
-export function isPostChoice(value: unknown): value is PostChoice {
-  return typeof value === "string" && CHOICE_SET.has(value);
-}
-
-function parseAskMessage(
-  value: Record<string, unknown>,
-): ValidationResult<AskEnvelope> {
-  if (
-    !hasOnlyKeys(value, [
-      "version",
-      "type",
-      "questionId",
-      "account",
-      "text",
-      "replyingTo",
-      "canQueue",
-      "closesAt",
-      "issuedAt",
-      "expiresAt",
-    ]) ||
-    !isIdentifier(value.questionId) ||
-    !isString(value.account, MAX_TEXT_LENGTH) ||
-    !isString(value.text, MAX_TEXT_LENGTH) ||
-    (value.replyingTo !== null && !isString(value.replyingTo, MAX_TEXT_LENGTH)) ||
-    typeof value.canQueue !== "boolean" ||
-    !isTimestamp(value.closesAt)
-  ) {
-    return invalid("Ask message has an unsupported shape.");
-  }
-  const times = parseEnvelopeTimes(value);
-  if (!times) {
-    return invalid("Ask message has an unsupported shape.");
-  }
-  return {
-    ok: true,
-    value: {
-      version: PROTOCOL_VERSION,
-      type: "ask",
-      questionId: value.questionId,
-      account: value.account,
-      text: value.text,
-      replyingTo: value.replyingTo as string | null,
-      canQueue: value.canQueue,
-      closesAt: value.closesAt,
       issuedAt: times.issuedAt,
       expiresAt: times.expiresAt,
     },
@@ -1522,21 +1272,6 @@ export function makeReadyEnvelope(
       hostnames: DRIVER_CONTRACTS[platform].hostnames,
       capabilities: DRIVER_CONTRACTS[platform].capabilities,
     })),
-    issuedAt: now,
-    expiresAt: now + HEARTBEAT_INTERVAL_MS,
-  };
-}
-
-export function makeAnswerEnvelope(
-  questionId: string,
-  choice: PostChoice,
-  now: number,
-): AnswerEnvelope {
-  return {
-    version: PROTOCOL_VERSION,
-    type: "answer",
-    questionId,
-    choice,
     issuedAt: now,
     expiresAt: now + HEARTBEAT_INTERVAL_MS,
   };

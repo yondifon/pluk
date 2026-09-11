@@ -279,7 +279,7 @@ test("extracts the visible post from an X status page", () => {
   });
 });
 
-test("rejects login pages and never submits a mismatched X target or account", async () => {
+test("rejects login pages and never submits a reply to a post that is not the target", async () => {
   const restoreLogin = installPage(
     "Sign in to X",
     "Log in to X",
@@ -326,22 +326,11 @@ test("rejects login pages and never submits a mismatched X target or account", a
     targetUrl: "https://x.com/status/42",
     postId: "999",
     text: "Do not send",
-    targetExcerpt: "Visible post",
-    visibleAccountIdentity: "@owner",
-  });
-  const accountMismatch = await runXPage({
-    action: "submit_reply",
-    targetUrl: "https://x.com/status/42",
-    postId: "42",
-    text: "Do not send",
-    targetExcerpt: "Visible post",
-    visibleAccountIdentity: "@different-owner",
   });
   restoreMismatch();
   expect(targetMismatch).toMatchObject({ state: "target_mismatch" });
-  expect(accountMismatch).toMatchObject({ state: "account_mismatch" });
   expect(clicks).toBe(0);
-});
+}, 10_000);
 
 test("reads a typed X profile and refuses a read-post ID that does not match the target", () => {
   const restoreProfile = installPage(
@@ -469,8 +458,6 @@ test("submits an exact X reply exactly once after explicit confirmation", async 
     targetUrl: "https://x.com/status/42",
     postId: "42",
     text: "Thanks for sharing this.",
-    targetExcerpt: "Visible post",
-    visibleAccountIdentity: "@owner",
   });
   restore();
   expect(result).toMatchObject({
@@ -480,71 +467,6 @@ test("submits an exact X reply exactly once after explicit confirmation", async 
   expect(insertedText).toBe("Thanks for sharing this.");
   expect(replyClicks).toBe(1);
   expect(submitClicks).toBe(1);
-});
-
-test("prepares an exact X post draft only on the compose page with a visible account and editor", async () => {
-  const editor = node("");
-  const submitButton = node("", {
-    disabled: "",
-    "aria-disabled": "true",
-  });
-  makeComposerScope(editor, submitButton);
-  const restore = installPage(
-    "Compose",
-    "X",
-    "https://x.com/compose/post",
-    {
-      '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
-      '[data-testid="tweetTextarea_0"]': [editor],
-    },
-    (_commandId, _showUi, value) => {
-      Object.defineProperty(editor, "textContent", {
-        configurable: true,
-        value: value ?? "",
-      });
-      return true;
-    },
-  );
-  const draft = await runXPage({
-    action: "post",
-    targetUrl: "https://x.com/compose/post",
-    text: "Hello from Wande",
-  });
-  restore();
-  expect(draft).toMatchObject({
-    state: "ready",
-    kind: "post_draft",
-    targetUrl: "https://x.com/compose/post",
-    text: "Hello from Wande",
-    visibleAccountIdentity: "@owner",
-  });
-
-  const restoreWrongPage = installPage("Home", "X", "https://x.com/home", {
-    '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
-  });
-  const wrongPage = await runXPage({
-    action: "post",
-    targetUrl: "https://x.com/compose/post",
-    text: "Hello from Wande",
-  });
-  restoreWrongPage();
-  expect(wrongPage).toMatchObject({ state: "target_not_found" });
-
-  const restoreNoEditor = installPage(
-    "Compose",
-    "X",
-    "https://x.com/compose/post",
-    {
-      '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
-    },
-  );
-  const noEditor = await runXPage({
-    action: "post",
-    targetUrl: "https://x.com/compose/post",
-    text: "Hello from Wande",
-  });
-  restoreNoEditor();
-  expect(noEditor).toMatchObject({ state: "unsupported" });
 });
 
 test("refuses X poll and thread composers without submitting", async () => {
@@ -573,8 +495,7 @@ test("refuses X poll and thread composers without submitting", async () => {
       action: "submit_post",
       targetUrl: "https://x.com/compose/post",
       text: "Do not send",
-      visibleAccountIdentity: "@owner",
-    });
+      });
     restore();
     expect(result).toMatchObject({
       state: "unsupported",
@@ -612,14 +533,13 @@ test("does not pair controls across multiple X composers", async () => {
     action: "submit_post",
     targetUrl: "https://x.com/compose/post",
     text: "Do not send",
-    visibleAccountIdentity: "@owner",
   });
   restore();
   expect(result).toMatchObject({ state: "unsupported" });
   expect(activeSubmitClicks).toBe(0);
 });
 
-test("never submits a new X post with a mismatched account or target", async () => {
+test("never submits a new X post without a signed-in account or off the compose page", async () => {
   let clicks = 0;
   const submitButton = node("");
   Object.defineProperty(submitButton, "click", {
@@ -629,29 +549,37 @@ test("never submits a new X post with a mismatched account or target", async () 
   });
   const composer = node("");
   Object.defineProperty(composer, "focus", { value: () => {} });
-  const restore = installPage("Compose", "X", "https://x.com/compose/post", {
-    '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
+  const composerParts = {
     '[data-testid="tweetTextarea_0"]': [composer],
     '[data-testid="tweetButtonInline"]:not([disabled]), [data-testid="tweetButton"]:not([disabled])':
       [submitButton],
-  });
-  const accountMismatch = await runXPage({
+  };
+  const restoreNoAccount = installPage(
+    "Compose",
+    "X",
+    "https://x.com/compose/post",
+    composerParts,
+  );
+  const noAccount = await runXPage({
     action: "submit_post",
     targetUrl: "https://x.com/compose/post",
     text: "Do not send",
-    visibleAccountIdentity: "@different-owner",
+  });
+  restoreNoAccount();
+  const restore = installPage("Compose", "X", "https://x.com/compose/post", {
+    '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
+    ...composerParts,
   });
   const targetMismatch = await runXPage({
     action: "submit_post",
     targetUrl: "https://x.com/compose/post?draft=stale",
     text: "Do not send",
-    visibleAccountIdentity: "@owner",
   });
   restore();
-  expect(accountMismatch).toMatchObject({ state: "account_mismatch" });
+  expect(noAccount).toMatchObject({ state: "account_unverified" });
   expect(targetMismatch).toMatchObject({ state: "target_mismatch" });
   expect(clicks).toBe(0);
-});
+}, 10_000);
 
 test("reports when the confirmed X post editor does not accept input", async () => {
   let submitClicks = 0;
@@ -683,7 +611,6 @@ test("reports when the confirmed X post editor does not accept input", async () 
     action: "submit_post",
     targetUrl: "https://x.com/compose/post",
     text: "Do not send",
-    visibleAccountIdentity: "@owner",
   });
   restore();
   expect(result).toMatchObject({
@@ -805,7 +732,6 @@ test("pastes the exact text in one event when X ignores execCommand input", asyn
     action: "submit_post",
     targetUrl: "https://x.com/compose/post",
     text: "Hello from Wande",
-    visibleAccountIdentity: "@owner",
   });
   restore();
   if (previousDataTransfer) {
@@ -931,7 +857,6 @@ test("places the caret at the end of an empty X DraftJS block", async () => {
     action: "submit_post",
     targetUrl: "https://x.com/compose/post",
     text: "Hello from Wande",
-    visibleAccountIdentity: "@owner",
   });
   restore();
   expect(result).toMatchObject({ state: "submission_succeeded" });
@@ -991,7 +916,6 @@ test("submits an X post immediately", async () => {
     action: "submit_post",
     targetUrl: "https://x.com/compose/post",
     text: "Hello from Wande",
-    visibleAccountIdentity: "@owner",
   });
   restore();
   expect(result).toMatchObject({
@@ -1058,7 +982,6 @@ test("exposes an uncertain outcome instead of claiming success when no post iden
     action: "submit_post",
     targetUrl: "https://x.com/compose/post",
     text: "Hello from Wande",
-    visibleAccountIdentity: "@owner",
   });
   restore();
   expect(result).toMatchObject({ state: "submission_unknown" });

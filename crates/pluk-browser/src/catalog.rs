@@ -53,12 +53,12 @@ const ACTIONS: [(Action, &str, &str); 9] = [
     ),
     (
         Action::Reply,
-        "Reply to an exact post ID with exact text. The user approves it before it is sent.",
+        "Reply to an exact post ID with exact text. It waits in Pluk until the user sends it; no page is touched before then.",
         WRITE,
     ),
     (
         Action::Post,
-        "Post exact text. Always the compose box; no target URL accepted. The user approves it before it is sent, now or into the queue.",
+        "Post exact text. Always the compose box; no target URL accepted. It waits in Pluk until the user sends it now or queues it; no page is touched before then.",
         WRITE,
     ),
 ];

@@ -12,8 +12,6 @@ pub const DEFAULT_JOB_TTL_MS: i64 = 2 * 60 * 1000;
 pub const MAX_TEXT_LENGTH: usize = 4_000;
 pub const MAX_URL_LENGTH: usize = 2_048;
 pub const MAX_ID_LENGTH: usize = 256;
-pub const MAX_ACCOUNT_IDENTITY_LENGTH: usize = 256;
-pub const MAX_TARGET_EXCERPT_LENGTH: usize = 1_000;
 pub const HEARTBEAT_INTERVAL_MS: i64 = 20_000;
 pub const MAX_CLOCK_SKEW_MS: i64 = 30_000;
 
@@ -104,28 +102,6 @@ pub struct CreateJobRequest {
     pub ttl_ms: i64,
 }
 
-#[derive(Clone, Debug)]
-pub struct ReplyDraftData {
-    pub target_url: String,
-    pub post_id: String,
-    pub target_excerpt: String,
-    pub text: String,
-    pub visible_account_identity: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct PostDraftData {
-    pub target_url: String,
-    pub text: String,
-    pub visible_account_identity: String,
-}
-
-#[derive(Clone, Debug)]
-pub enum DraftData {
-    Reply(ReplyDraftData),
-    Post(PostDraftData),
-}
-
 pub(crate) struct CommandInput<'a> {
     pub job_id: &'a str,
     pub command_id: &'a str,
@@ -179,18 +155,6 @@ pub enum ExtensionMessage {
     Hello(HelloMessage),
     Heartbeat(HeartbeatMessage),
     Result(ResultMessage),
-    Answer(AnswerMessage),
-}
-
-/// What the owner said about a post, carried back from the overlay the
-/// extension drew on the page. `choice` is checked against the four the
-/// overlay offers; anything else is refused before it reaches a draft.
-#[derive(Clone, Debug)]
-pub struct AnswerMessage {
-    pub question_id: String,
-    pub choice: String,
-    pub issued_at: i64,
-    pub expires_at: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -611,10 +575,8 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
     if action == Action::SubmitPost {
-        if !has_only_keys(
-            object,
-            &["kind", "draftId", "text", "visibleAccountIdentity"],
-        ) || object.get("kind").and_then(Value::as_str) != Some("post_submission")
+        if !has_only_keys(object, &["kind", "draftId", "text"])
+            || object.get("kind").and_then(Value::as_str) != Some("post_submission")
             || !object
                 .get("draftId")
                 .and_then(Value::as_str)
@@ -623,27 +585,14 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
                 .get("text")
                 .and_then(Value::as_str)
                 .is_some_and(|value| is_string(value, MAX_TEXT_LENGTH))
-            || !object
-                .get("visibleAccountIdentity")
-                .and_then(Value::as_str)
-                .is_some_and(|value| is_single_line_string(value, MAX_ACCOUNT_IDENTITY_LENGTH))
         {
             return Err(invalid("Post submission command payload is invalid."));
         }
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
     if action == Action::SubmitReply {
-        if !has_only_keys(
-            object,
-            &[
-                "kind",
-                "draftId",
-                "postId",
-                "text",
-                "visibleAccountIdentity",
-                "targetExcerpt",
-            ],
-        ) || object.get("kind").and_then(Value::as_str) != Some("submission")
+        if !has_only_keys(object, &["kind", "draftId", "postId", "text"])
+            || object.get("kind").and_then(Value::as_str) != Some("submission")
             || !object
                 .get("draftId")
                 .and_then(Value::as_str)
@@ -656,15 +605,6 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
                 .get("text")
                 .and_then(Value::as_str)
                 .is_some_and(|value| is_string(value, MAX_TEXT_LENGTH))
-            || !object
-                .get("visibleAccountIdentity")
-                .and_then(Value::as_str)
-                .is_some_and(|value| is_single_line_string(value, MAX_ACCOUNT_IDENTITY_LENGTH))
-            || (object.get("targetExcerpt").is_some()
-                && !object
-                    .get("targetExcerpt")
-                    .and_then(Value::as_str)
-                    .is_some_and(|value| is_string(value, MAX_TARGET_EXCERPT_LENGTH)))
         {
             return Err(invalid("Submission command payload is invalid."));
         }
@@ -694,7 +634,6 @@ pub fn parse_extension_message(value: &Value) -> ValidationResult<ExtensionMessa
         Some("hello") => parse_hello(object).map(ExtensionMessage::Hello),
         Some("heartbeat") => parse_heartbeat(object).map(ExtensionMessage::Heartbeat),
         Some("result") => parse_result(object).map(ExtensionMessage::Result),
-        Some("answer") => parse_answer(object).map(ExtensionMessage::Answer),
         _ => Err(invalid("Message type is not supported.")),
     }
 }
@@ -721,49 +660,6 @@ fn parse_hello(object: &Map<String, Value>) -> ValidationResult<HelloMessage> {
     let (issued_at, expires_at) = parse_envelope_times(object)?;
     Ok(HelloMessage {
         capabilities,
-        issued_at,
-        expires_at,
-    })
-}
-
-/// The four answers the overlay can give. Kept here so the wire word is
-/// validated in the same place every other envelope field is.
-const CHOICES: [&str; 4] = ["postNow", "queue", "discard", "later"];
-
-fn parse_answer(object: &Map<String, Value>) -> ValidationResult<AnswerMessage> {
-    if !has_only_keys(
-        object,
-        &[
-            "version",
-            "type",
-            "questionId",
-            "choice",
-            "issuedAt",
-            "expiresAt",
-        ],
-    ) || !object
-        .get("questionId")
-        .and_then(Value::as_str)
-        .is_some_and(is_identifier)
-        || !object
-            .get("choice")
-            .and_then(Value::as_str)
-            .is_some_and(|choice| CHOICES.contains(&choice))
-    {
-        return Err(invalid("Answer message has an unsupported shape."));
-    }
-    let (issued_at, expires_at) = parse_envelope_times(object)?;
-    Ok(AnswerMessage {
-        question_id: object
-            .get("questionId")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
-        choice: object
-            .get("choice")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
         issued_at,
         expires_at,
     })
@@ -1019,126 +915,6 @@ pub fn canonicalize_target_url(value: &str, platform: Platform) -> ValidationRes
     Ok(url.to_string())
 }
 
-pub fn parse_reply_draft_data(
-    value: Option<&Value>,
-    fallback_target_url: Option<&str>,
-) -> ValidationResult<ReplyDraftData> {
-    let object = value.and_then(Value::as_object).ok_or_else(|| {
-        invalid("Reply draft needs a post ID, exact text, and visible account identity.")
-    })?;
-    if !has_only_keys(
-        object,
-        &[
-            "kind",
-            "targetUrl",
-            "targetExcerpt",
-            "postId",
-            "text",
-            "visibleAccountIdentity",
-            "url",
-            "title",
-            "extractArtifactId",
-        ],
-    ) || object.get("kind").and_then(Value::as_str) != Some("reply_draft")
-    {
-        return Err(invalid(
-            "Reply draft needs a post ID, exact text, and visible account identity.",
-        ));
-    }
-    let target_url = object
-        .get("targetUrl")
-        .and_then(Value::as_str)
-        .or(fallback_target_url)
-        .filter(|value| is_string(value, MAX_URL_LENGTH))
-        .ok_or_else(|| {
-            invalid("Reply draft needs a post ID, exact text, and visible account identity.")
-        })?;
-    let post_id = object
-        .get("postId")
-        .and_then(Value::as_str)
-        .filter(|value| is_identifier(value))
-        .ok_or_else(|| {
-            invalid("Reply draft needs a post ID, exact text, and visible account identity.")
-        })?;
-    let text = object
-        .get("text")
-        .and_then(Value::as_str)
-        .filter(|value| is_string(value, MAX_TEXT_LENGTH))
-        .ok_or_else(|| {
-            invalid("Reply draft needs a post ID, exact text, and visible account identity.")
-        })?;
-    let identity = object
-        .get("visibleAccountIdentity")
-        .and_then(Value::as_str)
-        .filter(|value| is_single_line_string(value, MAX_ACCOUNT_IDENTITY_LENGTH))
-        .ok_or_else(|| {
-            invalid("Reply draft needs a post ID, exact text, and visible account identity.")
-        })?;
-    let excerpt = object
-        .get("targetExcerpt")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !is_string(excerpt, MAX_TARGET_EXCERPT_LENGTH) && !excerpt.is_empty() {
-        return Err(invalid(
-            "Reply draft needs a post ID, exact text, and visible account identity.",
-        ));
-    }
-    Ok(ReplyDraftData {
-        target_url: target_url.to_owned(),
-        post_id: post_id.to_owned(),
-        target_excerpt: excerpt.to_owned(),
-        text: text.to_owned(),
-        visible_account_identity: identity.to_owned(),
-    })
-}
-
-pub fn parse_post_draft_data(
-    value: Option<&Value>,
-    fallback_target_url: Option<&str>,
-) -> ValidationResult<PostDraftData> {
-    let object = value
-        .and_then(Value::as_object)
-        .ok_or_else(|| invalid("Post draft needs exact text and visible account identity."))?;
-    if !has_only_keys(
-        object,
-        &[
-            "kind",
-            "targetUrl",
-            "text",
-            "visibleAccountIdentity",
-            "url",
-            "title",
-            "extractArtifactId",
-        ],
-    ) || object.get("kind").and_then(Value::as_str) != Some("post_draft")
-    {
-        return Err(invalid(
-            "Post draft needs exact text and visible account identity.",
-        ));
-    }
-    let target_url = object
-        .get("targetUrl")
-        .and_then(Value::as_str)
-        .or(fallback_target_url)
-        .filter(|value| is_string(value, MAX_URL_LENGTH))
-        .ok_or_else(|| invalid("Post draft needs exact text and visible account identity."))?;
-    let text = object
-        .get("text")
-        .and_then(Value::as_str)
-        .filter(|value| is_string(value, MAX_TEXT_LENGTH))
-        .ok_or_else(|| invalid("Post draft needs exact text and visible account identity."))?;
-    let identity = object
-        .get("visibleAccountIdentity")
-        .and_then(Value::as_str)
-        .filter(|value| is_single_line_string(value, MAX_ACCOUNT_IDENTITY_LENGTH))
-        .ok_or_else(|| invalid("Post draft needs exact text and visible account identity."))?;
-    Ok(PostDraftData {
-        target_url: target_url.to_owned(),
-        text: text.to_owned(),
-        visible_account_identity: identity.to_owned(),
-    })
-}
-
 pub fn make_ready_envelope(connection_id: &str, now: i64) -> Value {
     let capabilities = [
         Action::Inspect,
@@ -1148,9 +924,7 @@ pub fn make_ready_envelope(connection_id: &str, now: i64) -> Value {
         Action::ReadTrends,
         Action::Refresh,
         Action::Capture,
-        Action::Reply,
         Action::SubmitReply,
-        Action::Post,
         Action::SubmitPost,
     ]
     .map(Action::as_str);
@@ -1164,32 +938,6 @@ pub fn make_ready_envelope(connection_id: &str, now: i64) -> Value {
             "hostnames": hostnames(Platform::X),
             "capabilities": capabilities,
         }],
-        "issuedAt": now,
-        "expiresAt": now + HEARTBEAT_INTERVAL_MS,
-    })
-}
-
-/// The question the extension draws over the page it just wrote into.
-///
-/// It carries what the owner has to see and nothing else — no draft id, so a
-/// tampered answer cannot name a different post, and no job id, so the page
-/// learns nothing about the work behind it. `closesAt` is when the overlay
-/// should give up; the envelope's own expiry is only about this message.
-pub fn make_ask(
-    question_id: &str,
-    prompt: &crate::prompt::PostPrompt,
-    now: i64,
-    closes_at: i64,
-) -> Value {
-    json!({
-        "version": PROTOCOL_VERSION,
-        "type": "ask",
-        "questionId": question_id,
-        "account": prompt.account,
-        "text": prompt.text,
-        "replyingTo": prompt.replying_to,
-        "canQueue": prompt.can_queue,
-        "closesAt": closes_at,
         "issuedAt": now,
         "expiresAt": now + HEARTBEAT_INTERVAL_MS,
     })
@@ -1267,10 +1015,6 @@ fn is_string(value: &str, max_length: usize) -> bool {
             let code = character as u32;
             (code < 0x20 && code != 0x09 && code != 0x0a && code != 0x0d) || code == 0x7f
         })
-}
-
-fn is_single_line_string(value: &str, max_length: usize) -> bool {
-    is_string(value, max_length) && !value.contains('\n') && !value.contains('\r')
 }
 
 fn number_as_i64(value: &Value) -> Result<i64, ()> {
@@ -1476,8 +1220,7 @@ mod tests {
             "payload": {
                 "kind": "post_submission",
                 "draftId": "draft-1",
-                "text": "Hello",
-                "visibleAccountIdentity": "@owner"
+                "text": "Hello"
             }
         });
         assert!(parse_command_envelope(&envelope).is_ok());

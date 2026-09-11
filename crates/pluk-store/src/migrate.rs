@@ -197,14 +197,11 @@ fn migrate_v3(conn: &mut Connection) -> Result<()> {
 
         CREATE TABLE IF NOT EXISTS browser_drafts (
             id TEXT PRIMARY KEY,
-            job_id TEXT NOT NULL REFERENCES browser_jobs(id) ON DELETE CASCADE,
             platform TEXT NOT NULL,
             kind TEXT NOT NULL CHECK (kind IN ('reply', 'post')),
             target_url TEXT NOT NULL,
             post_id TEXT,
-            target_excerpt TEXT NOT NULL DEFAULT '',
             text TEXT NOT NULL,
-            visible_account_identity TEXT NOT NULL,
             status TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'submitted', 'failed', 'unknown', 'cancelled', 'expired')),
             created_at INTEGER NOT NULL,
             confirmed_at INTEGER,
@@ -224,14 +221,14 @@ fn migrate_v3(conn: &mut Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS browser_schedule_reservations (
             id TEXT PRIMARY KEY,
             draft_id TEXT NOT NULL UNIQUE REFERENCES browser_drafts(id) ON DELETE CASCADE,
-            account_identity TEXT NOT NULL,
+            platform TEXT NOT NULL,
             scheduled_at INTEGER NOT NULL,
             status TEXT NOT NULL CHECK (status IN ('reserved', 'committed', 'released', 'unknown')),
             created_at INTEGER NOT NULL,
             committed_at INTEGER,
             released_at INTEGER
         );
-        CREATE INDEX IF NOT EXISTS browser_schedule_reservations_account_idx ON browser_schedule_reservations (account_identity, status, scheduled_at);
+        CREATE INDEX IF NOT EXISTS browser_schedule_reservations_platform_idx ON browser_schedule_reservations (platform, status, scheduled_at);
 
         CREATE TABLE IF NOT EXISTS browser_artifacts (
             id TEXT PRIMARY KEY,

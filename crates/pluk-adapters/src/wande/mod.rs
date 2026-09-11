@@ -13,7 +13,9 @@
 //! The tools published at the MCP endpoint are the catalog's, one for one.
 //! A call does not run the browser itself: it starts a job on `/wande` and
 //! reads the job back, the same two requests an HTTP caller makes, so there
-//! is one queue, one activity log, and one place a result is validated.
+//! is one queue, one activity log, and one place a result is validated. A
+//! post or reply starts no job at all: it writes a draft that waits in Pluk,
+//! and the call reads back what the user decided about it.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,7 +37,8 @@ use crate::tool_spec::ToolSpec;
 const LABEL: &str = "Wande";
 
 /// The one tool that is this adapter's own rather than the catalog's: how to
-/// collect a call that outlived its wait.
+/// collect a call that outlived its wait. It takes the id the call handed
+/// back, whether that was a browser job or a post waiting on the user.
 const GET_JOB: &str = "get_job";
 
 /// The tool class the catalog tags a read-only action with; anything else
@@ -44,13 +47,14 @@ const READ: &str = "read";
 
 /// How long a tool call waits — for the page, and for the person answering
 /// about a post — before handing back the job id. A post stays answerable
-/// far longer than this; the cap is here because MCP clients give up.
-const MAX_WAIT: Duration = Duration::from_secs(60);
+/// far longer than this; the cap sits under the minute MCP clients give a
+/// call, so the caller gets a "still going" instead of a dead socket.
+const MAX_WAIT: Duration = Duration::from_secs(45);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each tool drives one real page and hands back what it read. x_post and x_reply write the exact text into the composer and then ask the user, in Pluk, whether to send it — one call covers writing, asking and sending, and you get back what the user decided. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. A call waits up to 60 seconds; past that you get a jobId, and get_job returns the outcome once it lands.";
+const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it — one call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. A call waits up to 60 seconds; past that you get a jobId, and get_job returns the outcome once it lands.";
 
-const ACCESS: &str = "Reads and posts through a Chrome window the user is signed in to, one page at a time. Every post is shown to the user in full and goes out only if they say so.";
+const ACCESS: &str = "Reads and posts through a Chrome window the user is signed in to, one page at a time. Every post is shown to the user in full inside Pluk and goes out only if they say so.";
 
 /// The one failure the user can do something about, and the marker
 /// [`WandeAdapter::humanize_error`] recognises it by.
@@ -136,7 +140,7 @@ impl Adapter for WandeAdapter {
                 policy: None,
                 hint: Some(AGENT_HINT.to_owned()),
                 start: Some(
-                    "Start with x_read_feed or x_read_profile to see what is there. x_post writes a post and asks the user to send it."
+                    "Start with x_read_feed or x_read_profile to see what is there. x_post hands a post to the user in Pluk, who decides whether it goes out."
                         .to_owned(),
                 ),
             },
@@ -264,7 +268,7 @@ fn get_job_schema() -> Map<String, Value> {
         "jobId".into(),
         json!({
             "type": "string",
-            "description": "The jobId a call handed back when it was still running.",
+            "description": "The id a call handed back when it was still going.",
         }),
     );
     object_schema(properties, &["jobId"])
@@ -285,40 +289,46 @@ async fn run_tool(store: &Store, tool_id: &str, args: Value) -> ToolResult {
         Ok(value) => value,
         Err(message) => return err(message),
     };
+    let deadline = Instant::now() + MAX_WAIT;
+    // A post is not browser work yet: the user still has to say whether it
+    // goes out, and that answer is this call's real result.
+    if let Some(draft_id) = started["draft"]["id"].as_str() {
+        return match settle_post(store, draft_id, deadline).await {
+            Ok(Some(draft)) => report_post(&draft),
+            Ok(None) => handed_off(draft_id),
+            Err(message) => err(message),
+        };
+    }
     let Some(job_id) = started["job"]["id"].as_str() else {
         return err(NOT_STARTED);
     };
-    let deadline = Instant::now() + MAX_WAIT;
-    let job = match settle_job(store, job_id, deadline).await {
-        Ok(Some(job)) => job,
-        Ok(None) => return handed_off(job_id),
-        Err(message) => return err(message),
-    };
-    // A tool that wrote a post is only halfway done: the user still has to
-    // say whether it goes out, and that answer is this call's real result.
-    let Some(draft_id) = job["draftId"].as_str() else {
-        return report(&job, None);
-    };
-    match settle_post(store, draft_id, deadline).await {
-        Ok(Some(draft)) => report(&job, Some(&draft)),
+    match settle_job(store, job_id, deadline).await {
+        Ok(Some(job)) => report_job(&job),
         Ok(None) => handed_off(job_id),
         Err(message) => err(message),
     }
 }
 
+/// The id a call handed back names a job or a post waiting on the user; a
+/// finished submission job is reported by the post it sent.
 async fn get_job(store: &Store, args: Value) -> ToolResult {
-    let Some(job_id) = identifier(&args, "jobId") else {
+    let Some(id) = identifier(&args, "jobId") else {
         return err("Pass the jobId a call handed back.");
     };
-    let job = match fetch_job(store, job_id).await {
+    let job = match fetch_job(store, id).await {
         Ok(job) => job,
-        Err(message) => return err(message),
+        Err(job_missing) => {
+            return match fetch_draft(store, id).await {
+                Ok(draft) => report_post(&draft),
+                Err(_) => err(job_missing),
+            };
+        }
     };
     let Some(draft_id) = job["draftId"].as_str() else {
-        return report(&job, None);
+        return report_job(&job);
     };
     match fetch_draft(store, draft_id).await {
-        Ok(draft) => report(&job, Some(&draft)),
+        Ok(draft) => report_post(&draft),
         Err(message) => err(message),
     }
 }
@@ -364,7 +374,7 @@ async fn settle_job(
     }
 }
 
-/// Wait for the user's answer about a written post, and for the post to go
+/// Wait for the user's answer about a requested post, and for the post to go
 /// out once they have given it. `None` when the wait ran out first — the post
 /// is still theirs to send from Pluk.
 async fn settle_post(
@@ -384,7 +394,7 @@ async fn settle_post(
     }
 }
 
-/// What became of a written post, or `None` while it is still in motion —
+/// What became of a requested post, or `None` while it is still in motion —
 /// unanswered, or answered and on its way into the page.
 fn post_outcome(draft: &Value) -> Option<&'static str> {
     match draft["status"].as_str()? {
@@ -398,30 +408,32 @@ fn post_outcome(draft: &Value) -> Option<&'static str> {
     }
 }
 
-fn handed_off(job_id: &str) -> ToolResult {
+fn handed_off(id: &str) -> ToolResult {
     ok(format!(
-        "Still going. Call {GET_JOB} with jobId {job_id} to pick up what happened."
+        "Still going. Call {GET_JOB} with jobId {id} to pick up what happened."
     ))
 }
 
-/// What to hand back. A job that wrote a post is reported by what the user
-/// decided about it, not by the job having run.
-fn report(job: &Value, draft: Option<&Value>) -> ToolResult {
-    let Some(draft) = draft else {
-        let text = pretty(job);
-        if job["status"] == "succeeded" {
-            return ok(text);
-        }
-        let reason = job["error"]["message"]
-            .as_str()
-            .unwrap_or("This did not finish.");
-        return err(format!("{reason}\n\n{text}"));
-    };
+fn report_job(job: &Value) -> ToolResult {
+    let text = pretty(job);
+    if job["status"] == "succeeded" {
+        return ok(text);
+    }
+    let reason = job["error"]["message"]
+        .as_str()
+        .unwrap_or("This did not finish.");
+    err(format!("{reason}\n\n{text}"))
+}
+
+/// A post is reported by what the user decided about it, never by the
+/// request having been taken.
+fn report_post(draft: &Value) -> ToolResult {
     let detail = pretty(draft);
     match post_outcome(draft) {
         Some("posted") => ok(format!("The user sent this. It is posted.\n\n{detail}")),
         Some("queued") => ok(format!(
-            "The user chose to send this later, so it is lined up to go out on its own.\n\n{detail}"
+            "The user chose to send this later. It goes out on its own {}.\n\n{detail}",
+            slot_label(draft)
         )),
         Some("discarded") => ok(format!(
             "The user chose not to send this. Nothing was posted. Do not write it again unless they ask.\n\n{detail}"
@@ -433,9 +445,21 @@ fn report(job: &Value, draft: Option<&Value>) -> ToolResult {
             "The user sent this, but the page did not take it. Nothing was posted.\n\n{detail}"
         )),
         None => ok(format!(
-            "Written and waiting on the user to say whether it goes out. Nothing is posted yet.\n\n{detail}"
+            "Waiting on the user in Pluk to say whether it goes out. Nothing is posted yet.\n\n{detail}"
         )),
     }
+}
+
+/// When a queued post goes out, in the user's clock.
+fn slot_label(draft: &Value) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0);
+    draft["scheduledAt"]
+        .as_i64()
+        .map(|at| pluk_store::browser::schedule::describe_slot(at, now))
+        .unwrap_or_else(|| "at the next free time".to_owned())
 }
 
 fn pretty(value: &Value) -> String {
@@ -600,8 +624,8 @@ mod tests {
     }
 
     /// The line the whole design rests on: with every switch turned on, an
-    /// agent still has no tool that sends a post. Writing one asks the user,
-    /// and only their answer sends it.
+    /// agent still has no tool that sends a post. Asking for one hands it to
+    /// the user in Pluk, and only their answer sends it.
     #[test]
     fn nothing_an_agent_can_reach_publishes_on_its_own() {
         let names = registered(Some(&everything_on()));
@@ -666,12 +690,12 @@ mod tests {
     fn an_unanswered_post_is_never_reported_as_posted() {
         let waiting = json!({ "status": "pending", "text": "hello", "scheduledAt": null });
         assert_eq!(post_outcome(&waiting), None);
-        let result = report(&json!({ "status": "succeeded" }), Some(&waiting));
+        let result = report_post(&waiting);
         assert!(!result.is_error);
         assert!(
             result.content[0]
                 .text
-                .starts_with("Written and waiting on the user")
+                .starts_with("Waiting on the user in Pluk")
         );
         assert!(!result.content[0].text.contains("posted."));
 
@@ -705,7 +729,7 @@ mod tests {
         ] {
             let draft = json!({ "status": status, "scheduledAt": scheduled });
             assert_eq!(post_outcome(&draft), Some(outcome));
-            let result = report(&json!({ "status": "succeeded" }), Some(&draft));
+            let result = report_post(&draft);
             assert!(!result.is_error, "{status} should not read as a failure");
             assert!(
                 result.content[0].text.starts_with(opening),

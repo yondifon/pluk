@@ -1,8 +1,6 @@
 import {
-  type AskEnvelope,
   type CommandEnvelope,
   HEARTBEAT_INTERVAL_MS,
-  makeAnswerEnvelope,
   makeHeartbeatEnvelope,
   PROTOCOL_VERSION,
   parseServerMessage,
@@ -294,10 +292,6 @@ export class BrowserBridge {
       this.closeSocket(socket, true);
       return;
     }
-    if (parsed.value.type === "ask") {
-      this.askAboutPost(parsed.value, socket, generation);
-      return;
-    }
     this.enqueueCommand(parsed.value, socket, generation);
   }
 
@@ -318,40 +312,6 @@ export class BrowserBridge {
     } else {
       void this.setStatus("disabled", PAUSED_MESSAGE);
     }
-  }
-
-  // Show Pluk's question in the tab, and send back whatever the owner said.
-  //
-  // Not on the command chain: a question can sit for minutes, and a page
-  // read behind it should not wait. Dismissal answers `later`, which sends
-  // nothing and discards nothing.
-  private askAboutPost(
-    ask: AskEnvelope,
-    socket: WebSocket,
-    generation: number,
-  ): void {
-    void this.browserExecutor
-      .askAboutPost({
-        account: ask.account,
-        text: ask.text,
-        replyingTo: ask.replyingTo,
-        canQueue: ask.canQueue,
-        closesAt: ask.closesAt,
-      })
-      .then((choice) => {
-        if (!this.isCurrentSocket(socket, generation)) {
-          return;
-        }
-        try {
-          socket.send(
-            JSON.stringify(
-              makeAnswerEnvelope(ask.questionId, choice, Date.now()),
-            ),
-          );
-        } catch {
-          this.closeSocket(socket, true);
-        }
-      });
   }
 
   private enqueueCommand(

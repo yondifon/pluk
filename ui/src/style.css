@@ -52,7 +52,7 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .wande-post { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-md); border: var(--border-width) solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-sunken); }
 .wande-post-expired { opacity: 0.7; }
 .wande-post-body { display: flex; flex-direction: column; gap: var(--space-xxs); min-width: 0; }
-.wande-post-account, .wande-post-slot { margin: 0; color: var(--surface-secondary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
+.wande-post-slot { margin: 0; color: var(--surface-secondary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
 .wande-post-text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; font-size: calc(var(--type-body) * var(--zoom-scale)); line-height: 1.45; -webkit-user-select: text; user-select: text; }
 .wande-post-footer { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: var(--space-sm); }
 .wande-post-footer > .hint, .wande-post-note { margin: 0; }
