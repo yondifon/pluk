@@ -422,7 +422,7 @@ test("reads a typed X profile and refuses a read-post ID that does not match the
   expect(mismatched).toMatchObject({ state: "target_not_found" });
 });
 
-test("submits an exact X reply exactly once after explicit confirmation", async () => {
+test("submits an exact X reply exactly once into the editor already under the post", async () => {
   let replyClicks = 0;
   let submitClicks = 0;
   let insertedText = "";
@@ -493,7 +493,7 @@ test("submits an exact X reply exactly once after explicit confirmation", async 
     kind: "submission",
   });
   expect(insertedText).toBe("Thanks for sharing this.");
-  expect(replyClicks).toBe(1);
+  expect(replyClicks).toBe(0);
   expect(submitClicks).toBe(1);
 });
 

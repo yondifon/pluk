@@ -221,7 +221,7 @@ describe("console line-level tinting", () => {
   });
   test("console not grammar-parsed: quotes do not leak", () => {
     const spans = scanConsole(`"unclosed quote and # not a comment`);
-    // should not produce string tint — only line-level
+    // should not produce string tint, only line-level
     expect(spans.every(s => s.tint !== "string")).toBe(true);
   });
 });

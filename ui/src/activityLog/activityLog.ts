@@ -1,5 +1,5 @@
 /**
- * Activity Log — vanilla TS view. Mirrors ConnectionLogView.swift (1,183 lines).
+ * Activity Log, vanilla TS view. Mirrors ConnectionLogView.swift (1,183 lines).
  * Covers: paging, merging, generation counter, toolbar, live SSE, pending poll, caps,
  * two row shapes, syntax highlighting off main thread, UTC parsing, response viewer.
  */

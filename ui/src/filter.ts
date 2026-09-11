@@ -1,5 +1,5 @@
 /**
- * Filter + search reduction — pure logic, tested without DOM.
+ * Filter + search reduction, pure logic, tested without DOM.
  * Mirrors swift/Sources/ContentView.swift filtering behaviour.
  */
 
@@ -64,7 +64,7 @@ export function availableTypes(integrations: Integration[]): string[] {
       out.push(c.type);
     }
   }
-  // sorted by label — but without adapters it is type alphabetical; caller can re-sort with adapters
+  // sorted by label, but without adapters it is type alphabetical; caller can re-sort with adapters
   return out.sort((a, b) => a.localeCompare(b));
 }
 

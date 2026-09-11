@@ -1,5 +1,5 @@
 /**
- * Tool-prefix derivation — must match the server exactly.
+ * Tool-prefix derivation. Must match the server exactly.
  * Mirrors `pluk/src/mcp/namespace.ts#slug` and `crates/pluk-server/src/mcp/namespace.rs#slug`
  * and `swift/Sources/GroupDetailView.swift#NamespaceFormat.slug`.
  *

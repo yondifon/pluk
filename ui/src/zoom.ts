@@ -1,5 +1,5 @@
 /**
- * Zoom bridge — the host owns the scale.
+ * Zoom bridge. The host owns the scale.
  * R15 defines the bridge; this module reads from it and applies scale to
  * typography only (never as a CSS transform on the page).
  *

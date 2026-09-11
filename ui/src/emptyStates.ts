@@ -1,5 +1,5 @@
 /**
- * Empty states — user-facing copy only, no internal vocabulary.
+ * Empty states: user-facing copy only, no internal vocabulary.
  * Banned: owner, manifest, verdict, projection, slug
  */
 import { createButton } from "./primitives";

@@ -11,9 +11,11 @@ function makeManifest(overrides: Partial<AdapterManifest> = {}): AdapterManifest
     label: "PostgreSQL",
     category: "database",
     policyKind: "sql",
+    runsCommands: false,
     tools: [
       {
         name: "query",
+        label: "Query",
         description: "Run query",
         category: "read",
         defaultEnabled: true,
@@ -22,8 +24,8 @@ function makeManifest(overrides: Partial<AdapterManifest> = {}): AdapterManifest
           { key: "danger_flag", label: "Allow delete", type: "toggle", default: "false", danger: true },
         ],
       },
-      { name: "list_tables", description: "List tables", category: "read", defaultEnabled: true },
-      { name: "write_tool", description: "Write", category: "write", defaultEnabled: false },
+      { name: "list_tables", label: "List tables", description: "List tables", category: "read", defaultEnabled: true },
+      { name: "write_tool", label: "Write", description: "Write", category: "write", defaultEnabled: false },
     ],
     configFields: [
       { key: "host", label: "Host", type: "text", required: true },
@@ -205,7 +207,7 @@ describe("editing preserving user-set tool settings", () => {
     d.toolConfig["query"].enabled = false;
     d.toolConfig["query"].settings["mode"] = "destructive";
     // Simulate later catalog adds a new tool
-    const m2: AdapterManifest = { ...m1, tools: [...m1.tools, { name: "new_tool", description: "New", category: "read", defaultEnabled: true }] };
+    const m2: AdapterManifest = { ...m1, tools: [...m1.tools, { name: "new_tool", label: "New tool", description: "New", category: "read", defaultEnabled: true }] };
     const d2 = adopt(d, m2, false);
     expect(d2.toolConfig["query"].enabled).toBe(false);
     expect(d2.toolConfig["query"].settings["mode"]).toBe("destructive");

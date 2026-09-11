@@ -1570,6 +1570,7 @@ pub fn github_cli_tools(cfg: GhConfig) -> Vec<ActionTool> {
 pub fn github_cli_adapter_spec(_store: Arc<pluk_store::Store>) -> ActionAdapterSpec<GhConfig> {
     ActionAdapterSpec::new("github-cli", "GitHub CLI", "code-host")
         .agent_hint(AGENT_HINT)
+        .runs_commands(true)
         .access("Runs the locally installed gh CLI with your own GitHub login — Pluk stores no credentials. Reads issues, PRs, diffs, code search, file contents, CI status, and releases; comments and opens issues/PRs/releases when write is permitted. Every action is policy-checked and recorded in the activity log.")
         .start("list_pull_requests")
         .config_fields(github_cli_fields())
@@ -2109,6 +2110,7 @@ mod tests {
         let store =
             Arc::new(Store::open(&tempfile::tempdir().unwrap().path().join("pluk.db")).unwrap());
         let adapter = crate::github_cli::build_github_cli_adapter(store);
+        assert!(adapter.runs_commands());
         let specs = adapter.tool_specs();
         let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(

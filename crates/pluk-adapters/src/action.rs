@@ -225,6 +225,8 @@ pub struct ActionAdapterSpec<C> {
     pub label: String,
     pub category: String,
     pub agent_hint: String,
+    /// Whether any tool invokes a shell command.
+    pub runs_commands: bool,
     /// One line on the access / safety model, shown to connecting agents.
     pub access: String,
     /// Optional discovery hint: which tools to reach for first.
@@ -255,6 +257,7 @@ impl<C> ActionAdapterSpec<C> {
             label: label.into(),
             category: category.into(),
             agent_hint: String::new(),
+            runs_commands: false,
             access: String::new(),
             start: None,
             config_fields: Vec::new(),
@@ -270,6 +273,11 @@ impl<C> ActionAdapterSpec<C> {
 
     pub fn agent_hint(mut self, hint: impl Into<String>) -> Self {
         self.agent_hint = hint.into();
+        self
+    }
+
+    pub fn runs_commands(mut self, runs_commands: bool) -> Self {
+        self.runs_commands = runs_commands;
         self
     }
 
@@ -403,6 +411,10 @@ impl<C> Adapter for ActionAdapter<C> {
 
     fn agent_hint(&self) -> &str {
         &self.spec.agent_hint
+    }
+
+    fn runs_commands(&self) -> bool {
+        self.spec.runs_commands
     }
 
     fn tool_specs(&self) -> &[ToolSpec] {

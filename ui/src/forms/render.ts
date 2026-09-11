@@ -267,21 +267,24 @@ export function renderToolsSection(
       const toggle = document.createElement("input");
       toggle.type = "checkbox";
       toggle.checked = enabled;
-      toggle.setAttribute("aria-label", tool.name);
+      toggle.setAttribute("aria-label", tool.label);
       toggle.setAttribute("aria-describedby", `tool-desc-${tool.name}`);
       toggle.addEventListener("change", () => onToggle(tool.name, toggle.checked));
       const name = document.createElement("span");
-      name.className = "tool-name mono";
+      name.className = "tool-name";
       name.id = `tool-name-${tool.name}`;
-      name.textContent = tool.name;
+      name.textContent = tool.label;
+      const id = document.createElement("code");
+      id.className = "tool-id tool-category mono";
+      id.textContent = tool.name;
       const category = document.createElement("span");
       category.className = "tool-category";
       category.textContent = tool.category;
-      head.append(toggle, name, category);
+      head.append(toggle, name, id, category);
       if (!enabled) {
         const state = document.createElement("span");
         state.className = "tool-state";
-        state.textContent = "Off — enable to include";
+        state.textContent = "Off";
         head.appendChild(state);
       }
 
@@ -318,7 +321,7 @@ export function renderToolsSection(
     moreTitle.textContent = "More tools";
     const moreHint = document.createElement("p");
     moreHint.className = "hint";
-    moreHint.textContent = "Off by default — enable the ones you need.";
+    moreHint.textContent = "Turn on the ones the agent should have.";
     wrap.append(moreTitle, moreHint);
     renderList(extras);
   }
@@ -601,13 +604,15 @@ export function renderIntegrationForm(
       },
     );
     wrap.appendChild(toolsEl);
-    wrap.appendChild(
-      renderApprovalsSection(
-        draft.approvals,
-        (approvals) => onDraftChange({ ...draft, approvals }),
-        ruleProblem,
-      ),
-    );
+    if (manifest?.runsCommands) {
+      wrap.appendChild(
+        renderApprovalsSection(
+          draft.approvals,
+          (approvals) => onDraftChange({ ...draft, approvals }),
+          ruleProblem,
+        ),
+      );
+    }
   }
 
   const footer = document.createElement("div");
@@ -679,7 +684,7 @@ export function renderGroupForm(
   const listCard = document.createElement("div"); listCard.className = "ui-card";
   listCard.innerHTML = `<h3 class="ui-card-title">Integrations</h3>`;
   if (!connections.length) {
-    const empty = document.createElement("div"); empty.className = "empty"; empty.textContent = "No integrations yet — add one first."; listCard.appendChild(empty);
+    const empty = document.createElement("div"); empty.className = "empty"; empty.textContent = "No integrations yet. Add one first."; listCard.appendChild(empty);
   } else {
     for (const conn of connections) {
       const on = draft.included.has(conn.id);

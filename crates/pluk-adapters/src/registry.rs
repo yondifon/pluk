@@ -169,6 +169,7 @@ mod tests {
             .get(pluk_browser::INTEGRATION_TYPE)
             .expect("Wande is offered in the add flow");
         assert_eq!(wande.label(), "Wande");
+        assert!(!wande.runs_commands());
         // One integration, no platform in its identity: the platforms live in
         // the browser catalog, which this never mirrors.
         assert!(!wande.id().contains('x'));
@@ -180,6 +181,9 @@ mod tests {
                 .any(|spec| spec.name == "x_read_feed")
         );
         assert!(wande.config_fields().is_empty());
+
+        let ssh = registry.get("ssh").expect("SSH is offered in the add flow");
+        assert!(ssh.runs_commands());
     }
 
     #[test]

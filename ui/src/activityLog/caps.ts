@@ -1,4 +1,4 @@
-/** Caps exactly as ConnectionLogView.swift — do not raise. */
+/** Caps exactly as ConnectionLogView.swift. Do not raise. */
 
 export const PREVIEW_LINES = 10;
 export const PREVIEW_CHARS = 1200;

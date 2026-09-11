@@ -23,7 +23,7 @@ function applyCollapsed(collapsed: boolean): void {
   }
 }
 
-/** Both toggles — the one in the sidebar and the one that replaces it — call this. */
+/** Both toggles, the one in the sidebar and the one that replaces it, call this. */
 export function toggleSidebar(): void {
   const collapsed = !shellRoot?.classList.contains("sidebar-collapsed");
   applyCollapsed(collapsed);
@@ -73,7 +73,7 @@ export function createShell(
     startX = e.clientX;
     startW = sidebarWrap.getBoundingClientRect().width;
     // Width relayouts the whole shell, so coalesce to one write per frame and
-    // hold the cursor for the drag — it otherwise reverts the moment the
+    // hold the cursor for the drag. It otherwise reverts the moment the
     // pointer leaves the resizer's hit area.
     const previousCursor = document.body.style.cursor;
     document.body.style.cursor = "col-resize";
@@ -148,11 +148,11 @@ export function renderBanners(mount: HTMLElement, state: BannerState, onRestart:
     banner.setAttribute("role", "status");
     banner.setAttribute("aria-live", "polite");
     if (state.update.updating) {
-      banner.textContent = "Updating — rebuilding from source, app will relaunch";
+      banner.textContent = "Updating. Rebuilding from source, app will relaunch.";
       banner.setAttribute("aria-label", "Updating");
     } else {
       const short = state.update.commit ? state.update.commit.slice(0, 7) : "new commit";
-      banner.textContent = `Update available — ${short} on remote`;
+      banner.textContent = `Update available: ${short} on remote`;
       banner.setAttribute("aria-label", `Update available ${short}`);
       const btn = createButton("Update & Relaunch", { size: "sm", ariaLabel: "Update and relaunch app", onClick: onUpdate });
       banner.appendChild(btn);

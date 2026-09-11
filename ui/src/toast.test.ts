@@ -9,7 +9,7 @@ function toasts(): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>(".toast:not([data-exit])")];
 }
 
-/** DOM order is oldest first, so the newest toast — the one at the corner — is last. */
+/** DOM order is oldest first, so the newest toast, the one at the corner, is last. */
 function front(): HTMLElement {
   return toasts()[toasts().length - 1];
 }

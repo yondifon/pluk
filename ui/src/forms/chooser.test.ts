@@ -10,7 +10,8 @@ function manifest(id: string, label: string, category = "database"): AdapterMani
     category,
     policyKind: "sql",
     agentHint: "",
-    tools: [{ name: "query", description: "Run", category: "read", defaultEnabled: true }],
+    runsCommands: false,
+    tools: [{ name: "query", label: "Query", description: "Run", category: "read", defaultEnabled: true }],
     configFields: [{ key: "host", label: "Host", type: "text" as const, required: true }],
   };
 }
@@ -43,7 +44,7 @@ describe("chooser picking adopts service fields and tool defaults", () => {
   it("adopt seeds config defaults and tool states when reset", () => {
     const m = manifest("postgres", "PostgreSQL");
     m.configFields = [{ key: "port", label: "Port", type: "text" as const, default: "5432" }];
-    m.tools = [{ name: "query", description: "", category: "read", defaultEnabled: true, settings: [{ key: "mode", label: "Mode", type: "select" as const, default: "read-only" }] }];
+    m.tools = [{ name: "query", label: "Query", description: "", category: "read", defaultEnabled: true, settings: [{ key: "mode", label: "Mode", type: "select" as const, default: "read-only" }] }];
     const d = adopt(emptyDraft(), m, true);
     expect(d.type).toBe("postgres");
     expect(d.config["port"]).toBe("5432");

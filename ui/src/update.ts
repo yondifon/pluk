@@ -2,7 +2,7 @@
  * Update notices.
  *
  * The host drives the whole update: it checks on launch, every six hours, and
- * whenever someone picks "Check for Updates…". The window only reacts — it
+ * whenever someone picks "Check for Updates…". The window only reacts: it
  * announces a new version once, offers to install it, and reports a failure
  * worth acting on. A build with no update endpoint stays silent.
  */
@@ -31,7 +31,7 @@ export type UpdateNotice =
 
 /**
  * What the window should say about a state, or null to stay quiet. An endpoint
- * we could not reach is the host's problem, not the person's — it never speaks.
+ * we could not reach is the host's problem, not the person's. It never speaks.
  */
 export function noticeFor(state: UpdateState): UpdateNotice | null {
   switch (state.type) {

@@ -1,4 +1,4 @@
-/* Design tokens — ported from swift/Sources/DesignSystem.swift
+/* Design tokens, ported from swift/Sources/DesignSystem.swift
    Deliberately small: two radii, a spacing scale, one control height,
    and surface tiers that follow the system appearance. No theme switcher. */
 
@@ -81,7 +81,7 @@
   --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.14);
   --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.24);
 
-  /* Surfaces — light defaults (overridden by prefers-color-scheme) */
+  /* Surfaces: light defaults (overridden by prefers-color-scheme) */
   --surface-sidebar: #f4f4f4;           /* neutral 0.957 */
   --surface-content: #fafafa;           /* neutral 0.98 */
   --surface-panel: #ffffff;             /* neutral 1.0 */
@@ -111,22 +111,22 @@
   --status-warning: #f97316;
   --status-info: #3b82f6;
 
-  /* Typography — intended faces with system fallback.
+  /* Typography: intended faces with system fallback.
      IBM Plex Sans / Mono are not bundled today; fallback ships. */
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  /* Motion — one curve, four budgets. Everything that moves uses these.
+  /* Motion: one curve, four budgets. Everything that moves uses these.
      Opening is deliberate and slower; closing is a response and snaps. */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --duration-press: 120ms;
   --duration-exit: 150ms;
   --duration-enter: 200ms;
   --duration-toast: 260ms;
-  /* One revolution of an indeterminate indicator — a loop, not a budget. */
+  /* One revolution of an indeterminate indicator, a loop, not a budget. */
   --duration-spin: 900ms;
 
-  /* Zoom scale — applied to type only, never as a page transform */
+  /* Zoom scale, applied to type only, never as a page transform */
   --zoom-scale: 1;
 
   color-scheme: light dark;

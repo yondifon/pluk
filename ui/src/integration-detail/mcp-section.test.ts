@@ -63,16 +63,30 @@ describe("mcp section", () => {
     expect(root.querySelector(".inspector-row .mono")!.textContent).toBe(target.url);
     expect(root.querySelector('button[aria-label="Copy endpoint URL"]')).not.toBeNull();
     expect(installButton(root)).not.toBeNull();
+    expect(root.querySelector(".snippet + .hint")!.textContent).toBe("Install adds Pluk to these files.");
   });
 
-  test("shows the adapter's agent hint beside the endpoint", () => {
+  test("keeps the adapter's agent hint behind a closed disclosure", () => {
     const root = document.createElement("div");
     renderMcpSection(root, { ...target, agentHint: "Ask for a table before querying." }, async () => ({ status: "added", path: "" }), {
       installed: [],
     });
 
     const labels = [...root.querySelectorAll(".inspector-label")].map((l) => l.textContent);
-    expect(labels).toEqual(["URL", "Agent hint"]);
+    expect(labels).toEqual(["URL"]);
+    const disclosure = root.querySelector<HTMLDetailsElement>(".agent-hint-disclosure")!;
+    expect(disclosure.open).toBe(false);
+    expect(disclosure.querySelector("summary")!.textContent).toBe("What the agent is told");
+    expect(disclosure.querySelector(".hint")!.textContent).toBe("Ask for a table before querying.");
+  });
+
+  test("can label the section Agent setup", () => {
+    const root = document.createElement("div");
+    renderMcpSection(root, { ...target, title: "Agent setup" }, async () => ({ status: "added", path: "" }), {
+      installed: [],
+    });
+
+    expect(root.querySelector(".ui-card-title")!.textContent).toBe("Agent setup");
   });
 });
 
@@ -135,8 +149,8 @@ describe("agent setup install", () => {
     await clickInstall(root);
 
     expect(detailLines()).toEqual([
-      "Cursor — added to /repo/.cursor/mcp.json",
-      "Claude Code — already set up in /repo/.mcp.json",
+      "Cursor: added to /repo/.cursor/mcp.json",
+      "Claude Code: already set up in /repo/.mcp.json",
     ]);
     expect(currentToast().dataset.variant).toBe("success");
   });
@@ -150,8 +164,8 @@ describe("agent setup install", () => {
     await clickInstall(root);
 
     expect(detailLines()).toEqual([
-      "Cursor — added to /repo/.cursor/mcp.json",
-      "Claude Code — Couldn't write /repo/.mcp.json: denied",
+      "Cursor: added to /repo/.cursor/mcp.json",
+      "Claude Code: Couldn't write /repo/.mcp.json: denied",
     ]);
     expect(currentToast().dataset.variant).toBe("error");
     expect(installButton(root).textContent).toBe("Install");

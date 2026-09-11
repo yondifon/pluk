@@ -341,7 +341,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
       waitingCard.appendChild(offline);
     }
     if (!waiting.length && !expired.length) {
-      waitingCard.appendChild(line("No posts waiting. Anything written through Wande lands here for you to send.", "empty"));
+      waitingCard.appendChild(line("Nothing waiting. Posts the agent writes land here for you to send.", "empty"));
       return;
     }
     const list = document.createElement("ul");

@@ -32,7 +32,7 @@ use crate::gate::{ToolResult, err, ok};
 use crate::http_client;
 use crate::instructions::{InstructionParts, build_instructions};
 use crate::tool_host::{BoxFuture, ToolHost, ToolRegistration, object_schema};
-use crate::tool_spec::ToolSpec;
+use crate::tool_spec::{ToolSpec, humanize_tool_name};
 
 const LABEL: &str = "Wande";
 
@@ -198,7 +198,10 @@ fn mcp_name(tool_id: &str) -> String {
 fn tool_specs() -> Vec<ToolSpec> {
     let mut specs: Vec<ToolSpec> = pluk_browser::catalog_tools()
         .iter()
-        .map(|tool| ToolSpec::new(mcp_name(&tool.id), tool.summary, tool.category))
+        .map(|tool| {
+            ToolSpec::new(mcp_name(&tool.id), tool.summary, tool.category)
+                .with_label(humanize_tool_name(tool.action))
+        })
         .collect();
     specs.push(ToolSpec::new(
         GET_JOB,

@@ -1,6 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { draftFromConnection, emptyDraft, parseRules } from "./connectionDraft";
-import { renderApprovalsSection } from "./render";
+import { draftFromConnection, emptyDraft, adopt, parseRules } from "./connectionDraft";
+import { renderApprovalsSection, renderIntegrationForm } from "./render";
+import type { AdapterManifest } from "./catalog";
+
+function manifest(id: string, label: string, runsCommands: boolean): AdapterManifest {
+  const tool = id === "ssh"
+    ? { name: "run_command", label: "Run command", description: "Run a shell command.", category: "read", defaultEnabled: true }
+    : { name: "x_post", label: "Post", description: "Post exact text.", category: "write", defaultEnabled: true };
+  return {
+    id,
+    label,
+    category: id === "ssh" ? "infrastructure" : "social",
+    policyKind: "none",
+    agentHint: "",
+    runsCommands,
+    tools: [
+      tool,
+      { name: "optional_tool", label: "Optional tool", description: "Use another tool.", category: "read", defaultEnabled: false },
+    ],
+    configFields: [],
+  };
+}
 
 describe("approval rules", () => {
   test("one rule per line, blanks dropped", () => {
@@ -76,5 +96,28 @@ describe("approval rules", () => {
     ask.checked = false;
     ask.dispatchEvent(new Event("change"));
     expect(seen.ask).toBe(false);
+  });
+
+  test("Wande does not render command approvals", () => {
+    const wande = manifest("wande", "Wande", false);
+    const form = renderIntegrationForm(adopt(emptyDraft(), wande, true), wande, () => {}, () => {}, () => {});
+    expect(form.textContent).not.toContain("What the agent may run");
+  });
+
+  test("SSH renders command approvals", () => {
+    const ssh = manifest("ssh", "SSH", true);
+    const form = renderIntegrationForm(adopt(emptyDraft(), ssh, true), ssh, () => {}, () => {}, () => {});
+    expect(form.textContent).toContain("What the agent may run");
+  });
+
+  test("tool rows use labels and keep ids secondary", () => {
+    const ssh = manifest("ssh", "SSH", true);
+    const form = renderIntegrationForm(adopt(emptyDraft(), ssh, true), ssh, () => {}, () => {}, () => {});
+    const row = form.querySelector(".tool-row")!;
+    const offRow = form.querySelector(".tool-off")!;
+    expect(row.querySelector(".tool-name")?.textContent).toBe("Run command");
+    expect(row.querySelector("code")?.textContent).toBe("run_command");
+    expect(offRow.querySelector(".tool-state")?.textContent).toBe("Off");
+    expect(form.querySelector(".more-tools-title + .hint")?.textContent).toBe("Turn on the ones the agent should have.");
   });
 });

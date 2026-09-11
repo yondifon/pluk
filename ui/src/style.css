@@ -33,10 +33,20 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .tab, .ui-tab { padding: var(--space-xs) 0; border: 0; border-bottom: var(--border-accent-width) solid transparent; background: transparent; color: var(--surface-tertiary-label); font: inherit; font-size: calc(var(--type-callout) * var(--zoom-scale)); transition: color var(--duration-exit) ease, border-bottom-color var(--duration-exit) ease; }
 .tab-active, .tab.active { color: var(--surface-label); font-weight: 600; border-bottom-color: currentColor; }
 .detail-content, .group-content { padding: 0 0 var(--space-xl); }
+.overview-tab .ui-card-title { color: var(--surface-label); font-size: calc(var(--type-body) * var(--zoom-scale)); letter-spacing: normal; text-transform: none; }
+.overview-tab .ui-button-primary { font-weight: 600; }
+.browser-status-line { display: flex; align-items: center; min-height: var(--control-target); margin-bottom: var(--space-sm); }
+.browser-status { gap: var(--space-xs); font-weight: 600; }
+.browser-status-connected { background: var(--success-fill); color: var(--success-label); }
+.browser-status-disconnected { background: color-mix(in srgb, var(--status-warning) 14%, transparent); color: var(--status-warning); }
+.browser-status-dot { width: var(--space-xs); height: var(--space-xs); flex-shrink: 0; border-radius: 50%; background: currentColor; }
+.browser-id-mount > .hint { margin: 0; }
+.browser-steps { margin: var(--space-sm) 0 0; padding-left: var(--space-lg); color: var(--surface-secondary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); line-height: 1.5; }
+.browser-steps li + li { margin-top: var(--space-xs); }
 .inspector-row { display: flex; align-items: baseline; gap: var(--space-md); min-width: 0; padding: var(--space-xs) 0; }
 .inspector-row > .mono, .inspector-row > .hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inspector-label { width: var(--label-column); flex-shrink: 0; color: var(--surface-tertiary-label); font-size: calc(var(--type-callout) * var(--zoom-scale)); }
-/* Whatever a row holds — checkbox, menu, field, text — sits in this band, so
+/* Whatever a row holds, checkbox, menu, field, text, sits in this band, so
    every control in a group starts on the same axis at the same height. */
 .field-slot { display: flex; align-items: center; min-width: 0; min-height: var(--control-target); gap: var(--space-sm); }
 .field-slot > .ui-button { flex-shrink: 0; }
@@ -79,6 +89,10 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .form-footer, .client-controls, .al-actions { display: flex; align-items: center; gap: var(--space-sm); }
 .client-controls label { color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
 .client-controls { flex-wrap: wrap; }
+.agent-hint-disclosure { margin-top: var(--space-lg); border-top: var(--border-width) solid var(--border-subtle); color: var(--surface-tertiary-label); }
+.agent-hint-disclosure summary { padding-top: var(--space-md); cursor: pointer; font-size: calc(var(--type-caption) * var(--zoom-scale)); }
+.agent-hint-disclosure[open] summary { color: var(--surface-label); }
+.agent-hint-disclosure > .hint { margin: var(--space-sm) 0 0; line-height: 1.45; }
 .control-spacer { flex: 1; }
 .card-divider { height: var(--border-width); margin: var(--space-lg) calc(var(--space-lg) * -1); background: var(--border-subtle); }
 .snippet + .hint { margin-top: var(--space-xs); }
@@ -234,7 +248,7 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .detail-empty p { max-width: var(--empty-max-width); margin: 0 0 var(--space-lg); color: var(--surface-tertiary-label); font-size: calc(var(--type-body) * var(--zoom-scale)); line-height: 1.5; }
 .modal-overlay { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--space-xl); background: color-mix(in srgb, var(--surface-content) 38%, transparent); backdrop-filter: blur(var(--space-xxs)); opacity: 1; transition: opacity var(--duration-enter) var(--ease-out); }
 .modal { display: flex; flex-direction: column; overflow: hidden; background: var(--surface-panel); border-radius: var(--radius-md); box-shadow: var(--shadow-modal); transform: scale(1); transition: transform var(--duration-enter) var(--ease-out); }
-/* Modals appear centred, so they scale from centre — the trigger-origin rule
+/* Modals appear centred, so they scale from centre. The trigger-origin rule
    applies to popovers, not dialogs. Never from scale(0). */
 @starting-style {
   .modal-overlay { opacity: 0; }

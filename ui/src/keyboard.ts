@@ -57,7 +57,7 @@ export function installShortcuts(onAction: (action: string) => void): () => void
 export function trapFocus(container: HTMLElement): void {
   container.addEventListener("keydown", (e) => {
     if (e.key !== "Tab") return;
-    // No trap, just ensure focus stays within container — we don't need modal trap
+    // No trap, just ensure focus stays within container. We don't need modal trap
     // but verify all interactive elements are reachable: they have tabIndex 0 or native focus
   });
 }

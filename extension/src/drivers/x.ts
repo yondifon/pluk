@@ -568,36 +568,48 @@ export function runXPage(
       );
     }
     const target = requestedPostId ? await awaitPost(requestedPostId) : undefined;
-    if (
-      !requestedPostId ||
-      !target ||
-      targetUrlPostId !== target.postId ||
-      window.location.href !== options.targetUrl
-    ) {
+    // The page is the post's own, reached through X's redirect from the
+    // id-only URL, so it is matched on the post id rather than the address.
+    if (!requestedPostId || !target || targetUrlPostId !== target.postId) {
       return failure(
         "target_mismatch",
         "The confirmed X post is not the visible target. Nothing was submitted.",
       );
     }
-    const article = Array.from(
-      document.querySelectorAll('article[data-testid="tweet"], article'),
-    ).find((candidate) => postIdFromNode(candidate) === target.postId);
-    const replyButton = article?.querySelector(
-      '[data-testid="reply"], button[aria-label*="Reply" i], [role="button"][aria-label*="Reply" i]',
-    );
-    if (!article || !replyButton || !options.text) {
+    if (!options.text) {
       return failure(
         "unsupported",
         "X did not expose the confirmed post reply controls. Nothing was submitted.",
       );
     }
-    (replyButton as HTMLElement).click();
-    const scope = await waitFor(() => composerScope(), 3_000);
+    trace(`reply to ${target.postId} at ${window.location.href}`);
+    // A post's page already carries a reply editor under the post. Only
+    // when it is missing is the reply control pressed, and X honours only a
+    // real press there, so that goes through the browser and the script
+    // runs again to find the editor open.
+    const scope = composerScope();
     if (!scope) {
-      return failure(
-        "unsupported",
-        "X did not open the reply editor for the confirmed post. Nothing was submitted.",
+      const article = Array.from(
+        document.querySelectorAll('article[data-testid="tweet"], article'),
+      ).find((candidate) => postIdFromNode(candidate) === target.postId);
+      const replyButton = article?.querySelector(
+        '[data-testid="reply"], button[aria-label*="Reply" i], [role="button"][aria-label*="Reply" i]',
       );
+      if (!replyButton) {
+        return failure(
+          "unsupported",
+          "X did not expose the confirmed post reply controls. Nothing was submitted.",
+        );
+      }
+      const rect = replyButton.getBoundingClientRect();
+      trace("asking for a real press of the reply control");
+      return {
+        state: "waiting",
+        trustedClick: {
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        },
+      };
     }
     const unsupported = unsupportedComposer(scope);
     if (unsupported) {
@@ -610,7 +622,10 @@ export function runXPage(
         "X did not open the reply editor for the confirmed post. Nothing was submitted.",
       );
     }
-    if (!(await typeComposerText(composer, options.text))) {
+    if (
+      editorText(composer) !== clean(options.text) &&
+      !(await typeComposerText(composer, options.text))
+    ) {
       return failure(
         "unsupported",
         "X did not accept the reply text. Check the visible composer and try again; nothing was submitted.",
@@ -622,6 +637,10 @@ export function runXPage(
         "X rejected the reply text in the confirmed editor. Nothing was submitted.",
       );
     }
+    trace("typed reply");
+    await new Promise((resolve) =>
+      setTimeout(resolve, 600 + Math.random() * 800),
+    );
     const submitButton = composerSubmitButton(scope);
     if (!submitButton) {
       return failure(
@@ -630,7 +649,17 @@ export function runXPage(
       );
     }
     const previousNotifications = notificationTexts();
-    (submitButton as HTMLElement).click();
+    trace("submit shortcut");
+    dispatchSubmitShortcut(composer);
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const nothingHappened =
+      editorText(composer) === clean(options.text) &&
+      notificationTexts().length === previousNotifications.length &&
+      composerSubmitButton(scope) !== null;
+    if (nothingHappened) {
+      trace("submit click");
+      (submitButton as HTMLElement).click();
+    }
     const evidence = await waitForSubmissionEvidence(
       scope,
       previousNotifications,

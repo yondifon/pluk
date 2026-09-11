@@ -1406,6 +1406,7 @@ pub fn spark_tools(cfg: SparkCfg) -> Vec<ActionTool> {
 pub fn spark_adapter_spec() -> ActionAdapterSpec<SparkCfg> {
     ActionAdapterSpec::new("spark", "Spark Mail", "email")
         .agent_hint(AGENT_HINT)
+        .runs_commands(true)
         .access(ACCESS)
         .start("accounts")
         .config_fields(spark_fields())
@@ -1475,6 +1476,7 @@ mod tests {
     fn tool_defaults_gated_correctly() {
         let store = test_store();
         let adapter = spark_adapter(store);
+        assert!(adapter.runs_commands());
         let specs = adapter.tool_specs();
         let find = |name: &str| specs.iter().find(|s| s.name == name).unwrap();
         for name in [

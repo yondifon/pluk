@@ -5,7 +5,7 @@ export function askingSummary(ask: boolean): string {
   return ask ? "Anything else asks you first." : "Anything else is refused without asking.";
 }
 
-/** The rules in force, read-only — the Edit screen is where they are written. */
+/** The rules in force, read-only. The Edit screen is where they are written. */
 export function renderApprovals(container: HTMLElement, integration: Integration): void {
   const approvals = integration.approvals ?? { ask: true, allow: [], deny: [] };
   const card = document.createElement("section");

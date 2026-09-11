@@ -116,7 +116,7 @@ describe("install click path", () => {
     await mountAndInstall(root);
 
     expect(toastText(".toast-description")).toBe(`Added “${target.key}” to /repo/.cursor/mcp.json`);
-    expect(toastText(".toast-detail")).toBe("Cursor — added to /repo/.cursor/mcp.json");
+    expect(toastText(".toast-detail")).toBe("Cursor: added to /repo/.cursor/mcp.json");
   });
 
   test("a folder chooser the host refuses is reported, not swallowed", async () => {

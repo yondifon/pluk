@@ -490,10 +490,11 @@ export class BrowserExecutor {
       );
     }
 
+    const alreadyThere =
+      current.url !== undefined &&
+      sameDestination(platform, targetUrl, current.url);
     const shouldObserveTransition =
-      action === "refresh" ||
-      current.url !== targetUrl ||
-      current.pendingUrl !== undefined;
+      action === "refresh" || !alreadyThere || current.pendingUrl !== undefined;
     let transitionObserved = !shouldObserveTransition;
     const onUpdated = (
       tabId: number,
@@ -513,12 +514,9 @@ export class BrowserExecutor {
     }
     try {
       try {
-        if (action === "refresh" && current.url === targetUrl) {
+        if (action === "refresh" && alreadyThere) {
           await chrome.tabs.reload(context.tabId);
-        } else if (
-          current.url !== targetUrl ||
-          current.pendingUrl !== undefined
-        ) {
+        } else if (!alreadyThere || current.pendingUrl !== undefined) {
           await chrome.tabs.update(context.tabId, {
             active: true,
             url: targetUrl,

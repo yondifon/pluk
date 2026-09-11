@@ -1,4 +1,6 @@
-export type TabId = "logs" | "overview" | "tools";
+export type TabId = "agentSetup" | "logs" | "overview" | "tools";
+
+export const INTEGRATION_TAB_ORDER: TabId[] = ["overview", "agentSetup", "logs", "tools"];
 
 /** Latest handler per tab strip, so reused buttons never call a stale closure. */
 const selectHandlers = new WeakMap<HTMLElement, (id: string) => void>();
@@ -49,6 +51,7 @@ export function renderTabList(
 }
 
 const TAB_LABELS: Record<TabId, string> = {
+  agentSetup: "Agent setup",
   logs: "Logs",
   overview: "Overview",
   tools: "Tools",
