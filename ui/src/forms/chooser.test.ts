@@ -78,8 +78,9 @@ describe("chooser accessibility", () => {
     const el = renderTypeChooser([manifest("postgres", "PostgreSQL"), manifest("linear", "Linear")], () => {}, { onCancel: () => {} });
     const heading = el.querySelector("h2");
     expect(heading).not.toBeNull();
-    expect(heading!.textContent).toBe("Choose an integration");
-    expect(el.getAttribute("aria-label")).toBe("Choose an integration");
+    expect(heading!.textContent).toBe("Choose what to connect");
+    expect(el.getAttribute("aria-label")).toBe("Choose what to connect");
+    expect(el.textContent).toContain("Pick what Pluk should talk to.");
     const btns = el.querySelectorAll<HTMLButtonElement>(".chooser-row");
     for (const b of btns) {
       expect(b.getAttribute("aria-label")).toBeTruthy();
@@ -87,6 +88,22 @@ describe("chooser accessibility", () => {
     }
     // the list is a labelled group
     expect(el.querySelectorAll('[role="group"]').length).toBeGreaterThan(0);
+  });
+
+  it("groups rows by category instead of one flat list", () => {
+    const el = renderTypeChooser(
+      [manifest("postgres", "PostgreSQL", "database"), manifest("linear", "Linear", "issue-tracker"), manifest("redis", "Redis", "database")],
+      () => {},
+    );
+    const sections = el.querySelectorAll(".chooser-section");
+    expect(sections.length).toBe(2);
+    const titles = [...el.querySelectorAll(".chooser-section .ui-card-title")].map((h) => h.textContent);
+    expect(titles).toEqual(["Database", "Issue Tracker"]);
+    const databaseSection = sections[0];
+    expect([...databaseSection.querySelectorAll(".chooser-row")].map((b) => b.textContent)).toEqual([
+      expect.stringContaining("PostgreSQL"),
+      expect.stringContaining("Redis"),
+    ]);
   });
 
   it("shows loading and error without internal vocab", () => {

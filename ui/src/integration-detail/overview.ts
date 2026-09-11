@@ -15,11 +15,11 @@ export function renderOverview(
   let posts: { destroy: () => void } | null = null;
   if (integration.type === WANDE_TYPE) {
     const browser = document.createElement("section");
-    browserAccess = renderBrowserAccess(browser);
+    browserAccess = renderBrowserAccess(browser, integration.id);
     container.appendChild(browser);
 
     const outbox = document.createElement("div");
-    posts = mountWandePosts(outbox);
+    posts = mountWandePosts(outbox, integration.id);
     container.appendChild(outbox);
   }
 

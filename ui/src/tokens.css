@@ -21,6 +21,16 @@
   --control-height: 22px;
   --control-target: 28px;
   --icon-size-md: 16px;
+
+  /* Button scale: every button, icon button, and status chip shares one of
+     two sizes. Regular is for footers and primary actions; small is for
+     inline actions next to text. Both share one height so a chip and a
+     button never sit at different heights in the same row. */
+  --button-height: var(--control-target);
+  --button-padding-x-regular: var(--space-md);
+  --button-padding-x-small: var(--space-sm);
+  --button-font-regular: calc(var(--type-callout) * var(--zoom-scale));
+  --button-font-small: calc(var(--type-caption) * var(--zoom-scale));
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23737373' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4.75 6.5 3.25-3.25 3.25 3.25'/%3E%3Cpath d='m4.75 9.5 3.25 3.25 3.25-3.25'/%3E%3C/svg%3E");
   --checkbox-size: 16px;
   --checkbox-border-width: 2px;
@@ -147,8 +157,8 @@
     --surface-sidebar-tertiary: rgba(255, 255, 255, 0.5);
     --surface-label: rgba(255, 255, 255, 0.92);
     --surface-hover: rgba(255, 255, 255, 0.10);
-    --border-control: rgba(255, 255, 255, 0.18);
-    --border-subtle: rgba(255, 255, 255, 0.12);
+    --border-control: rgba(255, 255, 255, 0.10);
+    --border-subtle: rgba(255, 255, 255, 0.08);
     --action-fill: #ffffff;
     --action-fill-hover: #e5e5e5;
     --action-label: #1a1a1a;

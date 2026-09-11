@@ -74,7 +74,7 @@ async function mountWande(connected: boolean): Promise<{ root: HTMLElement; dest
     onDelete: () => {},
     onTest: async () => ({ ok: true }),
     inject: async () => ({ status: "added", path: "" }),
-  });
+  }, "overview");
   await new Promise((resolve) => setTimeout(resolve, 0));
   return { root, destroy: handle.destroy };
 }
@@ -88,7 +88,7 @@ describe("mountIntegrationDetail health update", () => {
       onDelete: () => {},
       onTest: async () => ({ ok: true }),
       inject: async () => ({ status: "added", path: "" }),
-    });
+    }, "overview");
     expect(root.querySelector(".status-unknown")).not.toBeNull();
     handle.updateHealth({ status: "ok", at: Date.now() });
     expect(root.querySelector(".status-ok")).not.toBeNull();
@@ -106,7 +106,7 @@ describe("mountIntegrationDetail health update", () => {
       onDelete: () => {},
       onTest: async () => ({ ok: true }),
       inject: async () => ({ status: "added", path: "" }),
-    });
+    }, "overview");
 
     expect([...root.querySelectorAll(".ui-tab")].map((tab) => tab.textContent)).toEqual([
       "Overview",
@@ -125,7 +125,7 @@ describe("mountIntegrationDetail health update", () => {
       onDelete: () => {},
       onTest: async () => ({ ok: true }),
       inject: async () => ({ status: "added", path: "" }),
-    });
+    }, "overview");
 
     const cards = [...root.querySelectorAll(".ui-card")];
     expect(cards.map((c) => c.querySelector(".ui-card-title")!.textContent)).toEqual(["Configuration"]);
@@ -141,7 +141,7 @@ describe("mountIntegrationDetail health update", () => {
       onDelete: () => {},
       onTest: async () => ({ ok: true }),
       inject: async () => ({ status: "added", path: "" }),
-    });
+    }, "overview");
 
     expect(root.querySelector(".endpoint-url")).toBeNull();
     root.querySelector<HTMLButtonElement>("#tab-agentSetup")!.click();
@@ -196,7 +196,7 @@ describe("mountIntegrationDetail health update", () => {
       onDelete: () => {},
       onTest: async () => ({ ok: false, error: "connection refused" }),
       inject: async () => ({ status: "added", path: "" }),
-    });
+    }, "overview");
     const btn = root.querySelector("button") as HTMLButtonElement;
     expect(btn.textContent).toBe("Test");
 
@@ -220,7 +220,7 @@ describe("mountIntegrationDetail health update", () => {
       onDelete: () => {},
       onTest: async () => ({ ok: true }),
       inject: async () => ({ status: "added", path: "" }),
-    });
+    }, "overview");
 
     (root.querySelector("button") as HTMLButtonElement).click();
     await new Promise((r) => setTimeout(r, 0));

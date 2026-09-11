@@ -41,7 +41,7 @@ afterEach(() => {
 
 async function mount(): Promise<{ root: HTMLElement; destroy: () => void }> {
   const root = document.createElement("div");
-  const panel = mountWandePosts(root);
+  const panel = mountWandePosts(root, "integration-1");
   await vi.advanceTimersByTimeAsync(0);
   return { root, destroy: panel.destroy };
 }
@@ -71,7 +71,7 @@ describe("the posts waiting on a person", () => {
     send.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(calls.filter((c) => c.cmd === "send_wande_post")).toEqual([
-      { cmd: "send_wande_post", args: { draftId: "draft-1", queue: false } },
+      { cmd: "send_wande_post", args: { integrationId: "integration-1", draftId: "draft-1", queue: false } },
     ]);
     destroy();
   });
@@ -118,7 +118,7 @@ describe("the posts going out later", () => {
     [...root.querySelectorAll("button")].find((b) => b.textContent === "Take out of the queue")!.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(calls.filter((c) => c.cmd === "cancel_queued_wande_post")).toEqual([
-      { cmd: "cancel_queued_wande_post", args: { draftId: "draft-2" } },
+      { cmd: "cancel_queued_wande_post", args: { integrationId: "integration-1", draftId: "draft-2" } },
     ]);
     destroy();
   });

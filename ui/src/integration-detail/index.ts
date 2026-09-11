@@ -36,13 +36,14 @@ export function mountIntegrationDetail(
 
   let currentHealth: ConnHealth | null | undefined = health ?? null;
   const tabs: TabId[] = INTEGRATION_TAB_ORDER;
-  const landing: TabId = "overview";
+  const landing: TabId = "logs";
   let selectedTab: TabId = openAt && tabs.includes(openAt) ? openAt : landing;
   let testing = false;
   const logsMount = document.createElement("div");
   logsMount.className = "logs-mount";
   let logs: { destroy: () => void } | null = null;
   let overview: { destroy: () => void } | null = null;
+  let agentSetup: { destroy: () => void } | null = null;
 
   function reportTestFailure(error: string, pending: PendingToast): void {
     currentHealth = { status: "error", error, at: Date.now() };
@@ -89,6 +90,8 @@ export function mountIntegrationDetail(
 
     overview?.destroy();
     overview = null;
+    agentSetup?.destroy();
+    agentSetup = null;
     contentEl.innerHTML = "";
     if (selectedTab === "logs") {
       const panel = document.createElement("div");
@@ -110,7 +113,7 @@ export function mountIntegrationDetail(
       const panel = document.createElement("div");
       panel.setAttribute("role", "tabpanel");
       panel.setAttribute("aria-labelledby", "tab-agentSetup");
-      renderAgentSetup(panel, integration, manifest ?? null, actions.inject);
+      agentSetup = renderAgentSetup(panel, integration, manifest ?? null, actions.inject);
       contentEl.appendChild(panel);
     } else {
       const panel = document.createElement("div");
@@ -136,6 +139,8 @@ export function mountIntegrationDetail(
     destroy() {
       overview?.destroy();
       overview = null;
+      agentSetup?.destroy();
+      agentSetup = null;
       logs?.destroy();
       logs = null;
       root.innerHTML = "";

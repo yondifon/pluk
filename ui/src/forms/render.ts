@@ -1,12 +1,12 @@
 import type { AdapterManifest, ConfigFieldDef, ToolDef } from "./catalog.ts";
-import { visibleFields, groupedFields } from "./catalog.ts";
+import { visibleFields, groupedFields, groupedByCategory, prettyCategory } from "./catalog.ts";
 import type { ConnectionDraft, Environment } from "./connectionDraft.ts";
-import { canSave, parseRules, setEnvironment, splitTools } from "./connectionDraft.ts";
+import { parseRules, setEnvironment, splitTools } from "./connectionDraft.ts";
 import type { Approvals } from "./connectionDraft.ts";
 import type { GroupDraft } from "./groupForm.ts";
 import { overridableFields, inheritPlaceholder, canSaveGroup } from "./groupForm.ts";
 import { createIcon } from "../icon";
-import { createButton, createBadge } from "../primitives";
+import { createButton, createBadge, wizardStepHeader, wizardStepFooter } from "../primitives";
 import { typeBadge } from "../glyph";
 
 export function renderTypeChooser(
@@ -17,14 +17,19 @@ export function renderTypeChooser(
   const wrap = document.createElement("div");
   wrap.className = "form-chooser";
   wrap.setAttribute("role", "region");
-   wrap.setAttribute("aria-label", "Choose an integration");
+   wrap.setAttribute("aria-label", "Choose what to connect");
 
   const heading = document.createElement("h2");
   heading.className = "ui-card-title";
   heading.id = "chooser-heading";
-   heading.textContent = "Choose an integration";
+   heading.textContent = "Choose what to connect";
   heading.setAttribute("tabindex", "-1");
   wrap.appendChild(heading);
+
+  const helper = document.createElement("p");
+  helper.className = "hint";
+  helper.textContent = "Pick what Pluk should talk to.";
+  wrap.appendChild(helper);
 
   if (!adapters.length) {
     const card = document.createElement("div");
@@ -39,7 +44,7 @@ export function renderTypeChooser(
        body.textContent = "The integration catalog is unavailable. Check that the server is running and try again.";
       card.append(title, body);
       if (opts?.onRetry) {
-        const retry = createButton("Try again", { size: "sm", ariaLabel: "Try again", onClick: opts.onRetry });
+        const retry = createButton("Try again", { variant: "secondary", size: "sm", ariaLabel: "Try again", onClick: opts.onRetry });
         card.appendChild(retry);
       }
     } else {
@@ -50,27 +55,38 @@ export function renderTypeChooser(
     }
     wrap.appendChild(card);
   } else {
-    const grid = document.createElement("div");
-    grid.className = "chooser-grid";
-    grid.setAttribute("role", "group");
-    grid.setAttribute("aria-labelledby", "chooser-heading");
-    for (const a of adapters) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "chooser-row";
-      btn.setAttribute("aria-label", `${a.label}`);
-      btn.innerHTML = `<span>${a.label}</span><span class="chooser-chevron" aria-hidden="true"></span>`;
-      btn.prepend(typeBadge(a.id, a.label));
-      btn.querySelector(".chooser-chevron")?.appendChild(createIcon("chevron-right"));
-      btn.addEventListener("click", () => onChoose(a));
-      grid.appendChild(btn);
+    for (const { category, items } of groupedByCategory(adapters)) {
+      const section = document.createElement("div");
+      section.className = "chooser-section";
+      const label = prettyCategory(category);
+      const sectionTitle = document.createElement("h3");
+      sectionTitle.className = "ui-card-title";
+      sectionTitle.textContent = label;
+      section.appendChild(sectionTitle);
+
+      const grid = document.createElement("div");
+      grid.className = "chooser-grid";
+      grid.setAttribute("role", "group");
+      grid.setAttribute("aria-label", label);
+      for (const a of items) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "chooser-row";
+        btn.setAttribute("aria-label", `${a.label}`);
+        btn.innerHTML = `<span>${a.label}</span><span class="chooser-chevron" aria-hidden="true"></span>`;
+        btn.prepend(typeBadge(a.id, a.label));
+        btn.querySelector(".chooser-chevron")?.appendChild(createIcon("chevron-right"));
+        btn.addEventListener("click", () => onChoose(a));
+        grid.appendChild(btn);
+      }
+      section.appendChild(grid);
+      wrap.appendChild(section);
     }
-    wrap.appendChild(grid);
   }
 
   const footer = document.createElement("div");
   footer.className = "form-footer";
-  const cancel = createButton("Cancel", { ariaLabel: "Cancel", onClick: () => opts?.onCancel?.() });
+  const cancel = createButton("Cancel", { variant: "secondary", ariaLabel: "Cancel", onClick: () => opts?.onCancel?.() });
   footer.appendChild(cancel);
   wrap.appendChild(footer);
 
@@ -91,7 +107,7 @@ export function renderTypeChooser(
 }
 
 /** Flags a required control the person left empty, once they try to save. */
-function markMissing(control: HTMLElement, wrap: HTMLElement, message: string): void {
+export function markMissing(control: HTMLElement, wrap: HTMLElement, message: string): void {
   control.setAttribute("aria-invalid", "true");
   control.focus();
   if (wrap.querySelector(".field-error")) return;
@@ -505,43 +521,28 @@ export function renderApprovalsSection(
   return wrap;
 }
 
-export function renderIntegrationForm(
+/** Step 2, Name it: the one field every adapter type asks for, plus environment. */
+export function renderNameStep(
   draft: ConnectionDraft,
   manifest: AdapterManifest | undefined,
+  stepIndex: number,
+  totalSteps: number,
   onDraftChange: (next: ConnectionDraft) => void,
-  onSave: (d: ConnectionDraft) => void,
+  onBack: (() => void) | null,
   onCancel: () => void,
-  onTypeChangeClick?: () => void,
-  ruleProblem?: RuleProblem | null,
+  onContinue: () => void,
 ): HTMLElement {
-  const wrap = document.createElement("div");
-  wrap.className = "form-body";
+  const wrap = wizardStepHeader(stepIndex, totalSteps, "Name it", "Agents will see this name when they use it.");
+  const card = document.createElement("div");
+  card.className = "ui-card";
 
-  // Name + Type row
-  const general = document.createElement("div");
-  general.className = "ui-card";
-  general.innerHTML = `<h3 class="ui-card-title">General</h3>`;
   const name = settingRow("integration-name", "Name *");
   const nameInput = document.createElement("input");
   nameInput.type = "text"; nameInput.placeholder = manifest ? `My ${manifest.label}` : "My Service";
   nameInput.value = draft.name; nameInput.className = "field-input"; nameInput.id = name.controlId;
   nameInput.addEventListener("input", () => onDraftChange({ ...draft, name: nameInput.value }));
   name.slot.appendChild(nameInput);
-  general.appendChild(name.row);
-
-  if (manifest) {
-    const typeRow = document.createElement("div");
-    typeRow.className = "inspector-row";
-    typeRow.innerHTML = `<div class="inspector-label">Type</div>`;
-    const typeSlot = document.createElement("div");
-    typeSlot.className = "field-slot";
-    typeSlot.innerHTML = `<span class="mono">${manifest.label}</span>`;
-    if (onTypeChangeClick) {
-      typeSlot.appendChild(createButton("Change", { size: "sm", onClick: onTypeChangeClick }));
-    }
-    typeRow.appendChild(typeSlot);
-    general.appendChild(typeRow);
-  }
+  card.appendChild(name.row);
 
   const env = settingRow("environment", "Environment");
   const envPicker = document.createElement("select");
@@ -555,37 +556,118 @@ export function renderIntegrationForm(
   }
   envPicker.addEventListener("change", () => onDraftChange(setEnvironment(draft, envPicker.value as Environment)));
   env.slot.appendChild(envPicker);
-  general.appendChild(env.row);
-  wrap.appendChild(general);
+  card.appendChild(env.row);
 
   if (draft.policyKind === "sql" && (draft.environment === "development" || draft.environment === "local") && draft.toolConfig.query?.settings.mode === "mutations") {
     const environmentHint = document.createElement("p");
     environmentHint.className = "hint environment-hint";
     environmentHint.textContent = "Development and local setups allow write actions by default.";
-    wrap.appendChild(environmentHint);
+    card.appendChild(environmentHint);
   }
+  wrap.appendChild(card);
 
-  if (manifest) {
-    for (const { group, fields } of groupedFields(manifest)) {
-      const shown = visibleFields(fields, draft.config);
-      if (!shown.length) continue;
-      const card = document.createElement("div");
-       card.className = "ui-card";
-       const h = document.createElement("h3"); h.className = "ui-card-title"; h.textContent = group;
-      card.appendChild(h);
-      for (const f of shown) {
-        const row = renderField(f, draft.config[f.key] ?? "", (v) => {
-          onDraftChange({ ...draft, config: { ...draft.config, [f.key]: v } });
-        });
-        card.appendChild(row);
+  const { el: footer } = wizardStepFooter({
+    onBack,
+    onCancel,
+    primaryLabel: "Continue",
+    onPrimary: () => {
+      if (!draft.name.trim()) {
+        markMissing(nameInput, name.row, "Enter a name to continue.");
+        return;
       }
-      wrap.appendChild(card);
-    }
-  }
+      onContinue();
+    },
+  });
+  wrap.appendChild(footer);
+  return wrap;
+}
 
-  // No tools means nothing to switch on and nothing to write rules about.
-  if (draft.tools.length) {
-    const toolsEl = renderToolsSection(
+/** Step 3 for an adapter with connection fields: the fields grouped as they already are, instead of a pairing card. */
+export function renderConnectFieldsStep(
+  draft: ConnectionDraft,
+  manifest: AdapterManifest,
+  stepIndex: number,
+  totalSteps: number,
+  onDraftChange: (next: ConnectionDraft) => void,
+  onBack: (() => void) | null,
+  onCancel: () => void,
+  onContinue: () => void,
+): HTMLElement {
+  const wrap = wizardStepHeader(stepIndex, totalSteps, "Connect", `Fill in what Pluk needs to reach ${manifest.label}.`);
+  const body = document.createElement("div");
+  body.className = "wizard-body";
+
+  for (const { group, fields } of groupedFields(manifest)) {
+    const shown = visibleFields(fields, draft.config);
+    if (!shown.length) continue;
+    const card = document.createElement("div");
+    card.className = "ui-card";
+    const h = document.createElement("h3"); h.className = "ui-card-title"; h.textContent = group;
+    card.appendChild(h);
+    for (const f of shown) {
+      const row = renderField(f, draft.config[f.key] ?? "", (v) => {
+        onDraftChange({ ...draft, config: { ...draft.config, [f.key]: v } });
+      });
+      card.appendChild(row);
+    }
+    body.appendChild(card);
+  }
+  wrap.appendChild(body);
+
+  const { el: footer } = wizardStepFooter({
+    onBack,
+    onCancel,
+    primaryLabel: "Continue",
+    onPrimary: () => {
+      const invalid = visibleFields(draft.fields, draft.config).find((field) => field.required && (draft.config[field.key] ?? "") === "");
+      if (!invalid) {
+        onContinue();
+        return;
+      }
+      const invalidRow = wrap.querySelector<HTMLElement>(`[data-field-key="${invalid.key}"]`);
+      const control = invalidRow?.querySelector<HTMLElement>("input, select");
+      if (control) {
+        control.setAttribute("aria-invalid", "true");
+        control.focus();
+        if (!invalidRow?.querySelector(".field-error")) {
+          const error = document.createElement("div");
+          error.className = "field-error";
+          error.setAttribute("role", "alert");
+          error.textContent = `${invalid.label} is required.`;
+          invalidRow?.appendChild(error);
+        }
+      }
+    },
+  });
+  wrap.appendChild(footer);
+  return wrap;
+}
+
+/**
+ * Step 4, Choose what the agent can do: the same tool list as today. When
+ * there is no commands step after it (nothing runs shell-like commands),
+ * this is where the integration is actually saved.
+ */
+export function renderToolsStep(
+  draft: ConnectionDraft,
+  stepIndex: number,
+  totalSteps: number,
+  isLastContentStep: boolean,
+  onDraftChange: (next: ConnectionDraft) => void,
+  onBack: (() => void) | null,
+  onCancel: () => void,
+  onNext: (d: ConnectionDraft) => void,
+): HTMLElement {
+  const wrap = wizardStepHeader(
+    stepIndex,
+    totalSteps,
+    "Choose what the agent can do",
+    "Turn off anything you don’t want an agent posting or reading.",
+  );
+  const body = document.createElement("div");
+  body.className = "wizard-body";
+  body.appendChild(
+    renderToolsSection(
       draft,
       (tool, enabled) => {
         const next = { ...draft, toolConfig: { ...draft.toolConfig, [tool]: { ...(draft.toolConfig[tool] ?? { enabled: false, settings: {} }), enabled } } };
@@ -602,46 +684,49 @@ export function renderIntegrationForm(
         }
         onDraftChange({ ...draft, toolConfig });
       },
-    );
-    wrap.appendChild(toolsEl);
-    if (manifest?.runsCommands) {
-      wrap.appendChild(
-        renderApprovalsSection(
-          draft.approvals,
-          (approvals) => onDraftChange({ ...draft, approvals }),
-          ruleProblem,
-        ),
-      );
-    }
-  }
+    ),
+  );
+  wrap.appendChild(body);
 
-  const footer = document.createElement("div");
-  footer.className = "form-footer";
-  const cancel = createButton("Cancel", { onClick: onCancel });
-  const save = createButton("Save", { variant: "primary" });
-  save.addEventListener("click", () => {
-    if (!draft.name.trim()) {
-      markMissing(nameInput, name.row, "Enter a name to continue.");
-      return;
-    }
-    if (canSave(draft)) {
-      onSave(draft);
-      return;
-    }
-    const invalid = visibleFields(draft.fields, draft.config).find((field) => field.required && (draft.config[field.key] ?? "") === "");
-    const invalidRow = invalid ? wrap.querySelector<HTMLElement>(`[data-field-key="${invalid.key}"]`) : null;
-    const control = invalidRow?.querySelector<HTMLElement>("input, select");
-    if (control) {
-      control.setAttribute("aria-invalid", "true");
-      control.focus();
-      if (!invalidRow?.querySelector(".field-error")) {
-        const error = document.createElement("div"); error.className = "field-error"; error.setAttribute("role", "alert"); error.textContent = `${invalid?.label ?? "This field"} is required.`; invalidRow?.appendChild(error);
-      }
-    }
+  const { el: footer } = wizardStepFooter({
+    onBack,
+    onCancel,
+    primaryLabel: isLastContentStep ? "Save integration" : "Continue",
+    onPrimary: () => onNext(draft),
   });
-  footer.append(cancel, save);
   wrap.appendChild(footer);
+  return wrap;
+}
 
+/** The extra screen for adapters that run commands: today's allow/deny/ask rules, always the step that saves. */
+export function renderCommandsStep(
+  draft: ConnectionDraft,
+  stepIndex: number,
+  totalSteps: number,
+  onDraftChange: (next: ConnectionDraft) => void,
+  onBack: (() => void) | null,
+  onCancel: () => void,
+  onSave: (d: ConnectionDraft) => void,
+  ruleProblem?: RuleProblem | null,
+): HTMLElement {
+  const wrap = wizardStepHeader(
+    stepIndex,
+    totalSteps,
+    "What it’s allowed to run",
+    "Rules for what it can run without asking you first.",
+  );
+  const body = document.createElement("div");
+  body.className = "wizard-body";
+  body.appendChild(renderApprovalsSection(draft.approvals, (approvals) => onDraftChange({ ...draft, approvals }), ruleProblem));
+  wrap.appendChild(body);
+
+  const { el: footer } = wizardStepFooter({
+    onBack,
+    onCancel,
+    primaryLabel: "Save integration",
+    onPrimary: () => onSave(draft),
+  });
+  wrap.appendChild(footer);
   return wrap;
 }
 
@@ -734,7 +819,7 @@ export function renderGroupForm(
   wrap.appendChild(listCard);
 
   const footer = document.createElement("div"); footer.className = "form-footer";
-  const cancel = createButton("Cancel", { onClick: onCancel });
+  const cancel = createButton("Cancel", { variant: "secondary", onClick: onCancel });
   const save = createButton("Save", { variant: "primary" });
   save.addEventListener("click", () => {
     if (!draft.name.trim()) { markMissing(nameInput, name.row, "Enter a name to continue."); return; }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { draftFromConnection, emptyDraft, adopt, parseRules } from "./connectionDraft";
-import { renderApprovalsSection, renderIntegrationForm } from "./render";
+import { renderApprovalsSection, renderToolsStep, renderCommandsStep } from "./render";
+import { wizardSteps } from "./wizard";
 import type { AdapterManifest } from "./catalog";
 
 function manifest(id: string, label: string, runsCommands: boolean): AdapterManifest {
@@ -98,21 +99,37 @@ describe("approval rules", () => {
     expect(seen.ask).toBe(false);
   });
 
-  test("Wande does not render command approvals", () => {
+  test("Wande has no commands step and its tools step saves directly", () => {
     const wande = manifest("wande", "Wande", false);
-    const form = renderIntegrationForm(adopt(emptyDraft(), wande, true), wande, () => {}, () => {}, () => {});
+    const steps = wizardSteps(wande, "create");
+    expect(steps).not.toContain("commands");
+    const draft = adopt(emptyDraft(), wande, true);
+    const toolsIndex = steps.indexOf("tools");
+    const form = renderToolsStep(draft, toolsIndex + 1, steps.length, toolsIndex === steps.length - 2, () => {}, null, () => {}, () => {});
     expect(form.textContent).not.toContain("What the agent may run");
+    expect(form.querySelector(".ui-button-primary")?.textContent).toBe("Save integration");
   });
 
-  test("SSH renders command approvals", () => {
+  test("SSH gets a commands step after tools, which is what saves", () => {
     const ssh = manifest("ssh", "SSH", true);
-    const form = renderIntegrationForm(adopt(emptyDraft(), ssh, true), ssh, () => {}, () => {}, () => {});
-    expect(form.textContent).toContain("What the agent may run");
+    const steps = wizardSteps(ssh, "create");
+    expect(steps).toContain("commands");
+    const draft = adopt(emptyDraft(), ssh, true);
+    const toolsIndex = steps.indexOf("tools");
+    const toolsForm = renderToolsStep(draft, toolsIndex + 1, steps.length, toolsIndex === steps.length - 2, () => {}, null, () => {}, () => {});
+    expect(toolsForm.textContent).not.toContain("What the agent may run");
+    expect(toolsForm.querySelector(".ui-button-primary")?.textContent).toBe("Continue");
+
+    const commandsIndex = steps.indexOf("commands");
+    const commandsForm = renderCommandsStep(draft, commandsIndex + 1, steps.length, () => {}, null, () => {}, () => {});
+    expect(commandsForm.textContent).toContain("What the agent may run");
+    expect(commandsForm.querySelector(".ui-button-primary")?.textContent).toBe("Save integration");
   });
 
   test("tool rows use labels and keep ids secondary", () => {
     const ssh = manifest("ssh", "SSH", true);
-    const form = renderIntegrationForm(adopt(emptyDraft(), ssh, true), ssh, () => {}, () => {}, () => {});
+    const draft = adopt(emptyDraft(), ssh, true);
+    const form = renderToolsStep(draft, 1, 1, true, () => {}, null, () => {}, () => {});
     const row = form.querySelector(".tool-row")!;
     const offRow = form.querySelector(".tool-off")!;
     expect(row.querySelector(".tool-name")?.textContent).toBe("Run command");

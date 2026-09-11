@@ -61,15 +61,15 @@ function endpointRow({ url }: McpSectionSpec): HTMLElement {
   urlText.className = "mono endpoint-url";
   urlText.textContent = url;
   urlText.title = url;
-  const copyBtn = createButton("Copy", {
-    variant: "secondary",
-    size: "sm",
+  const copyBtn = createButton("", {
+    icon: "copy",
     ariaLabel: "Copy endpoint URL",
     onClick: async () => {
       await copyText(url);
       toast.success("Endpoint URL copied");
     },
   });
+  copyBtn.classList.add("icon-button");
 
   row.append(label, urlText, copyBtn);
   return row;

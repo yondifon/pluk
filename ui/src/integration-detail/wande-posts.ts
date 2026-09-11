@@ -95,7 +95,7 @@ function cardTitle(id: string, text: string): HTMLElement {
  * is what fills the composer in Chrome and submits. A post that runs out of
  * time stays on screen saying so rather than vanishing.
  */
-export function mountWandePosts(container: HTMLElement): { destroy: () => void } {
+export function mountWandePosts(container: HTMLElement, integrationId: string): { destroy: () => void } {
   container.innerHTML = "";
   container.className = "stack-lg";
 
@@ -122,7 +122,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
 
   async function refresh(): Promise<void> {
     try {
-      const posts = await invoke<WandePosts>("list_wande_posts");
+      const posts = await invoke<WandePosts>("list_wande_posts", { integrationId });
       if (!alive) return;
       const gone = new Set(expired.map((post) => post.id));
       const arrived = new Set(posts.waiting.map((post) => post.id));
@@ -184,7 +184,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
   function postNow(post: WaitingPost): void {
     void act(
       post.id,
-      () => invoke("send_wande_post", { draftId: post.id, queue: false }),
+      () => invoke("send_wande_post", { integrationId, draftId: post.id, queue: false }),
       {
         title: "On its way",
         description: chromeConnected
@@ -198,7 +198,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
   function addToQueue(post: WaitingPost): void {
     void act(
       post.id,
-      () => invoke("send_wande_post", { draftId: post.id, queue: true }),
+      () => invoke("send_wande_post", { integrationId, draftId: post.id, queue: true }),
       { title: "Added to the queue", description: "It goes out at the next free time." },
       "Couldn’t add this to the queue",
     );
@@ -207,7 +207,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
   function discard(post: WaitingPost): void {
     void act(
       post.id,
-      () => invoke("discard_wande_post", { draftId: post.id }),
+      () => invoke("discard_wande_post", { integrationId, draftId: post.id }),
       { title: "Discarded", description: "This post won’t go out." },
       "Couldn’t discard this",
     );
@@ -216,7 +216,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
   function cancelQueued(post: QueuedPost): void {
     void act(
       post.id,
-      () => invoke("cancel_queued_wande_post", { draftId: post.id }),
+      () => invoke("cancel_queued_wande_post", { integrationId, draftId: post.id }),
       { title: "Taken out of the queue", description: "This post won’t go out." },
       "Couldn’t take this out of the queue",
     );

@@ -1,4 +1,5 @@
 import "./shell.css";
+import { fadeScrollbar } from "./scrollbar";
 import { createButton } from "./primitives";
 
 const COLLAPSED_KEY = "pluk.sidebar.collapsed";
@@ -122,6 +123,7 @@ export function createShell(
 
   const detail = document.createElement("div");
   detail.className = "shell-detail";
+  fadeScrollbar(detail);
   detail.appendChild(detailEl);
 
   const bottom = document.createElement("div");

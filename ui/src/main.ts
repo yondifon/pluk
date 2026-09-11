@@ -10,9 +10,12 @@ import type { TabId } from "./integration-detail/tabs.ts";
 import type { Integration as DetailIntegration, ConnHealth as DetailHealth } from "./integration-detail/types.ts";
 import { renderGroupDetail } from "./groupDetail.ts";
 import {
-  renderIntegrationForm,
   renderGroupForm,
   renderTypeChooser,
+  renderNameStep,
+  renderConnectFieldsStep,
+  renderToolsStep,
+  renderCommandsStep,
   type RuleProblem,
 } from "./forms/render.ts";
 import {
@@ -23,8 +26,11 @@ import {
   type Approvals,
   type ConnectionDraft,
 } from "./forms/connectionDraft.ts";
+import { wizardSteps } from "./forms/wizard.ts";
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
 import type { AdapterManifest as CatalogManifest, ToolState } from "./forms/catalog.ts";
+import { renderConnectChromeStep } from "./integration-detail/browser-access.ts";
+import { renderInstallStep } from "./integration-detail/agent-setup.ts";
 import { toast, mountToaster } from "./toast.ts";
 import { mountUpdates } from "./update.ts";
 import { renderLoadingState } from "./primitives.ts";
@@ -32,6 +38,7 @@ import { openModal } from "./modal.ts";
 import { injectMcpConfig, invoke, hasHost } from "./host.ts";
 import { isMac } from "./platform.ts";
 import type { Integration, Group, Environment, Health } from "./types.ts";
+import { WANDE_TYPE } from "./integration-detail/types.ts";
 
 const app = document.getElementById("app")!;
 
@@ -72,11 +79,10 @@ type Selection =
   | { kind: "integration"; id: string }
   | { kind: "group"; id: string };
 
-/** Which form the modal is showing, if any. */
+/** Which form the modal is showing, if any. `step` indexes into `wizardSteps(...)`. */
 type FormState =
-  | { kind: "choose-integration-type" }
-  | { kind: "new-integration" }
-  | { kind: "edit-integration"; id: string }
+  | { kind: "new-integration"; step: number; savedId: string | null }
+  | { kind: "edit-integration"; id: string; step: number }
   | { kind: "new-group" }
   | { kind: "edit-group"; id: string };
 
@@ -96,9 +102,13 @@ let form: FormState | null = null;
 let formModal: { close: () => void; setTitle: (text: string) => void; content: HTMLElement } | null = null;
 let formHost: HTMLElement | null = null;
 let draft: ConnectionDraft | null = null;
+let provisionalIntegrationId: string | null = null;
+let creatingIntegration = false;
 /** The rule the host refused on the last save attempt, shown beside its list. */
 let ruleProblem: RuleProblem | null = null;
 let groupDraft: GroupDraft | null = null;
+/** Teardown for whatever the current wizard step is watching (Chrome pairing polling). */
+let activeStepCleanup: (() => void) | null = null;
 /** Which tab the next detail render opens on, when it should not be the usual one. */
 let openDetailAt: TabId | null = null;
 let detailHandle: { destroy: () => void; updateHealth: (next: DetailHealth | null) => void } | null = null;
@@ -215,7 +225,6 @@ function renderDetail(mount: HTMLElement): void {
 // ── Form modal ───────────────────────────────────────────────────────────────
 
 const FORM_TITLES: Record<FormState["kind"], string> = {
-  "choose-integration-type": "New Integration",
   "new-integration": "New Integration",
   "edit-integration": "Edit Integration",
   "new-group": "New Group",
@@ -234,6 +243,13 @@ function openForm(next: FormState): void {
       size: "large",
       content: formHost,
       onClose: () => {
+        const provisionalId = provisionalIntegrationId;
+        provisionalIntegrationId = null;
+        if (provisionalId) {
+          void invoke("delete_integration", { id: provisionalId }).then(() => loadData()).catch(() => {});
+        }
+        activeStepCleanup?.();
+        activeStepCleanup = null;
         form = null;
         formModal = null;
         formHost = null;
@@ -249,6 +265,8 @@ function openForm(next: FormState): void {
 
 function closeForm(): void {
   formModal?.close();
+  activeStepCleanup?.();
+  activeStepCleanup = null;
   form = null;
   formModal = null;
   formHost = null;
@@ -264,8 +282,12 @@ function renderForm(): void {
   const index = active ? Array.from(host.querySelectorAll<HTMLElement>(FORM_FOCUSABLE)).indexOf(active) : -1;
   const caret = active instanceof HTMLInputElement ? active.selectionStart : null;
 
+  activeStepCleanup?.();
+  activeStepCleanup = null;
   host.innerHTML = "";
-  host.appendChild(buildForm(form));
+  const built = buildForm(form);
+  host.appendChild(built.el);
+  activeStepCleanup = built.destroy ?? null;
 
   if (index < 0) return;
   const restored = host.querySelectorAll<HTMLElement>(FORM_FOCUSABLE)[index];
@@ -273,56 +295,154 @@ function renderForm(): void {
   if (restored instanceof HTMLInputElement && caret != null) restored.setSelectionRange(caret, caret);
 }
 
-function buildForm(current: FormState): HTMLElement {
+/** Moves the wizard step index for the integration currently open, if one is. */
+function goToStep(delta: number): void {
+  if (!form || (form.kind !== "new-integration" && form.kind !== "edit-integration")) return;
+  form = { ...form, step: form.step + delta };
+  ruleProblem = null;
+  renderForm();
+}
+
+async function continueFromName(): Promise<void> {
+  if (!form || !draft) return;
+  if (form.kind !== "new-integration" || draft.type !== WANDE_TYPE || form.savedId || creatingIntegration) {
+    goToStep(1);
+    return;
+  }
+
+  creatingIntegration = true;
+  try {
+    const created = await invoke<HostIntegration>("create_integration", {
+      payload: {
+        name: draft.name,
+        type: draft.type,
+        config: draft.config,
+        environment: draft.environment,
+      },
+    });
+    if (!form) {
+      await invoke("delete_integration", { id: created.id });
+      return;
+    }
+    provisionalIntegrationId = created.id;
+    form = { ...form, savedId: created.id, step: form.step + 1 };
+    renderForm();
+    await loadData();
+    renderForm();
+  } catch (error) {
+    report(error, "Integration not saved");
+  } finally {
+    creatingIntegration = false;
+  }
+}
+
+function buildForm(current: FormState): { el: HTMLElement; destroy?: () => void } {
   switch (current.kind) {
-    case "choose-integration-type":
-      return renderTypeChooser(manifests, chooseIntegrationType, {
-        onCancel: closeForm,
-        adaptersLoadFailed: state.adaptersLoadFailed,
-        onRetry: () => void loadAdapters().then(renderForm),
-      });
     case "new-integration":
     case "edit-integration": {
-      if (!draft) return document.createElement("div");
+      const mode = current.kind === "edit-integration" ? "edit" : "create";
+      const manifest = draft ? manifestFor(draft.type) : undefined;
+      const steps = wizardSteps(manifest, mode);
+      const stepKind = steps[current.step];
+
+      if (stepKind === "type") {
+        return {
+          el: renderTypeChooser(manifests, chooseIntegrationType, {
+            onCancel: closeForm,
+            adaptersLoadFailed: state.adaptersLoadFailed,
+            onRetry: () => void loadAdapters().then(renderForm),
+          }),
+        };
+      }
+      if (!draft || !manifest) return { el: document.createElement("div") };
+
       const pending = draft;
-      return renderIntegrationForm(
-        pending,
-        manifestFor(pending.type),
-        (next) => {
-          draft = next;
-          ruleProblem = null;
-          renderForm();
-        },
-        (saved) => void saveIntegration(saved),
-        closeForm,
-        current.kind === "new-integration"
-          ? () => openForm({ kind: "choose-integration-type" })
-          : undefined,
-        ruleProblem,
-      );
+      const stepIndex = current.step + 1;
+      const totalSteps = steps.length;
+      const onBack = current.step > 0 ? () => goToStep(-1) : null;
+      const onDraftChange = (next: ConnectionDraft) => {
+        draft = next;
+        renderForm();
+      };
+
+      switch (stepKind) {
+        case "name":
+          return { el: renderNameStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => void continueFromName()) };
+        case "connect": {
+          if (manifest.configFields.length > 0) {
+            return { el: renderConnectFieldsStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => goToStep(1)) };
+          }
+          const integrationId = current.kind === "edit-integration" ? current.id : current.savedId;
+          if (!integrationId) return { el: document.createElement("div") };
+          return renderConnectChromeStep(integrationId, stepIndex, totalSteps, {
+            onBack,
+            onCancel: closeForm,
+            onContinue: () => goToStep(1),
+            onSkip: () => goToStep(1),
+          });
+        }
+        case "tools": {
+          const isLastContentStep = current.step === steps.length - 2;
+          return {
+            el: renderToolsStep(
+              pending,
+              stepIndex,
+              totalSteps,
+              isLastContentStep,
+              onDraftChange,
+              onBack,
+              closeForm,
+              isLastContentStep ? (d) => void saveIntegration(d) : () => goToStep(1),
+            ),
+          };
+        }
+        case "commands":
+          return {
+            el: renderCommandsStep(
+              pending,
+              stepIndex,
+              totalSteps,
+              onDraftChange,
+              onBack,
+              closeForm,
+              (d) => void saveIntegration(d),
+              ruleProblem,
+            ),
+          };
+        case "install": {
+          const targetId = current.kind === "edit-integration" ? current.id : current.savedId;
+          const row = targetId ? hostIntegrations.find((r) => r.id === targetId) : null;
+          if (!row) return { el: document.createElement("div") };
+          return {
+            el: renderInstallStep(row, manifest, injectMcpConfig, stepIndex, totalSteps, { onBack, onDone: closeForm }),
+          };
+        }
+      }
     }
     case "new-group":
     case "edit-group": {
-      if (!groupDraft) return document.createElement("div");
-      return renderGroupForm(
-        groupDraft,
-        hostIntegrations.map((c) => ({
-          id: c.id,
-          name: c.name,
-          type: c.type,
-          environment: c.environment ?? undefined,
-          config: Object.fromEntries(
-            Object.entries(c.config).map(([k, v]) => [k, v == null ? "" : String(v)]),
-          ),
-        })),
-        manifests,
-        (next) => {
-          groupDraft = next;
-          renderForm();
-        },
-        (saved) => void saveGroup(saved),
-        closeForm,
-      );
+      if (!groupDraft) return { el: document.createElement("div") };
+      return {
+        el: renderGroupForm(
+          groupDraft,
+          hostIntegrations.map((c) => ({
+            id: c.id,
+            name: c.name,
+            type: c.type,
+            environment: c.environment ?? undefined,
+            config: Object.fromEntries(
+              Object.entries(c.config).map(([k, v]) => [k, v == null ? "" : String(v)]),
+            ),
+          })),
+          manifests,
+          (next) => {
+            groupDraft = next;
+            renderForm();
+          },
+          (saved) => void saveGroup(saved),
+          closeForm,
+        ),
+      };
     }
   }
 }
@@ -331,13 +451,14 @@ function buildForm(current: FormState): HTMLElement {
 
 function startNewIntegration(): void {
   draft = null;
-  openForm({ kind: "choose-integration-type" });
+  openForm({ kind: "new-integration", step: 0, savedId: null });
 }
 
 function chooseIntegrationType(manifest: CatalogManifest): void {
   const base = draft ?? applyEnvironmentDefaults(emptyDraft());
   draft = adopt(base, manifest, true);
-  openForm({ kind: "new-integration" });
+  if (form?.kind === "new-integration") form = { ...form, step: 1 };
+  renderForm();
 }
 
 function startEditIntegration(id: string): void {
@@ -352,7 +473,7 @@ function startEditIntegration(id: string): void {
   const manifest = manifestFor(row.type);
   const stored = { toolConfig: row.toolConfig, approvals: row.approvals };
   draft = manifest ? { ...adopt(base, manifest, false), ...stored } : { ...base, ...stored };
-  openForm({ kind: "edit-integration", id });
+  openForm({ kind: "edit-integration", id, step: 0 });
 }
 
 function startNewGroup(): void {
@@ -372,6 +493,7 @@ function startEditGroup(id: string): void {
 }
 
 async function saveIntegration(saved: ConnectionDraft): Promise<void> {
+  if (!form || (form.kind !== "new-integration" && form.kind !== "edit-integration")) return;
   const payload = {
     name: saved.name,
     type: saved.type,
@@ -380,7 +502,7 @@ async function saveIntegration(saved: ConnectionDraft): Promise<void> {
     toolConfig: saved.toolConfig,
     approvals: saved.approvals,
   };
-  const editing = form?.kind === "edit-integration" ? form.id : null;
+  const existingId = form.kind === "edit-integration" ? form.id : form.savedId;
   try {
     ruleProblem = await invoke<RuleProblem | null>("check_approval_rules", {
       approvals: saved.approvals,
@@ -389,16 +511,26 @@ async function saveIntegration(saved: ConnectionDraft): Promise<void> {
       renderForm();
       return;
     }
-    if (editing) {
-      await invoke("update_integration", { id: editing, payload });
+    let targetId: string;
+    if (existingId) {
+      await invoke("update_integration", { id: existingId, payload });
+      targetId = existingId;
     } else {
-      // Land on the new integration's setup details, which are what it needs next.
       const created = await invoke<HostIntegration>("create_integration", { payload });
-      selection = { kind: "integration", id: created.id };
-      openDetailAt = "overview";
+      targetId = created.id;
     }
-    closeForm();
+    provisionalIntegrationId = null;
+    // Land on the integration's setup details behind the modal, which are what it needs next.
+    selection = { kind: "integration", id: targetId };
+    openDetailAt = "overview";
     await loadData();
+    // The install step needs the record just saved, so the flow stays open until Done.
+    const steps = wizardSteps(manifestFor(saved.type), form.kind === "edit-integration" ? "edit" : "create");
+    const installStep = steps.length - 1;
+    form = form.kind === "edit-integration"
+      ? { kind: "edit-integration", id: existingId ?? targetId, step: installStep }
+      : { kind: "new-integration", step: installStep, savedId: targetId };
+    renderForm();
   } catch (error) {
     report(error, "Integration not saved");
   }
