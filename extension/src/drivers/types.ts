@@ -16,6 +16,8 @@ export interface DriverScriptOptions {
   readonly targetUrl: string;
   readonly postId?: string;
   readonly text?: string;
+  /** The posts of a thread, in order. Absent or one entry for a plain post. */
+  readonly parts?: readonly string[];
 }
 
 export interface DriverPageResult {

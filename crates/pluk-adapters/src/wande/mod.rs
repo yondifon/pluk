@@ -45,14 +45,14 @@ const GET_JOB: &str = "get_job";
 /// drives the page and is annotated as such.
 const READ: &str = "read";
 
-/// How long a tool call waits — for the page, and for the person answering
-/// about a post — before handing back the job id. A post stays answerable
+/// How long a tool call waits for the page, or for the person answering
+/// about a post, before handing back the job id. A post stays answerable
 /// far longer than this; the cap sits under the minute MCP clients give a
 /// call, so the caller gets a "still going" instead of a dead socket.
 const MAX_WAIT: Duration = Duration::from_secs(45);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it — one call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. A call waits up to 60 seconds; past that you get a jobId, and get_job returns the outcome once it lands.";
+const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. A call waits up to 60 seconds; past that you get a jobId, and get_job returns the outcome once it lands.";
 
 const ACCESS: &str = "Reads and posts through a Chrome window the user is signed in to, one page at a time. Every post is shown to the user in full inside Pluk and goes out only if they say so.";
 
@@ -375,7 +375,7 @@ async fn settle_job(
 }
 
 /// Wait for the user's answer about a requested post, and for the post to go
-/// out once they have given it. `None` when the wait ran out first — the post
+/// out once they have given it. `None` when the wait ran out first; the post
 /// is still theirs to send from Pluk.
 async fn settle_post(
     store: &Store,
@@ -394,7 +394,7 @@ async fn settle_post(
     }
 }
 
-/// What became of a requested post, or `None` while it is still in motion —
+/// What became of a requested post, or `None` while it is still in motion:
 /// unanswered, or answered and on its way into the page.
 fn post_outcome(draft: &Value) -> Option<&'static str> {
     match draft["status"].as_str()? {
@@ -664,8 +664,10 @@ mod tests {
         let schema = input_schema(&compose.args_schema);
         assert_eq!(schema["required"], json!(["payload"]));
         let payload = &schema["properties"]["payload"];
-        assert_eq!(payload["required"], json!(["text"]));
+        // text and thread are alternatives, so neither is required on its own.
+        assert!(payload.get("required").is_none());
         assert!(payload["properties"]["text"].get("required").is_none());
+        assert!(payload["properties"]["thread"].get("required").is_none());
         assert!(schema["properties"]["ttlMs"].get("required").is_none());
     }
 

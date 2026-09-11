@@ -23,6 +23,7 @@ export const MAX_TEXT_LENGTH = 4_000;
 export const MAX_URL_LENGTH = 2_048;
 export const MAX_ID_LENGTH = 256;
 export const MAX_RESULT_TEXT_LENGTH = 8_000;
+export const MAX_THREAD_PARTS = 25;
 export const HEARTBEAT_INTERVAL_MS = 20_000;
 
 export const PLATFORMS = ["x"] as const;
@@ -155,12 +156,16 @@ export interface SubmissionPayload {
 export interface ComposePayload {
   readonly kind: "compose";
   readonly text: string;
+  /** The posts of a thread, in order. One entry for a plain post. */
+  readonly parts: readonly string[];
 }
 
 export interface PostSubmissionPayload {
   readonly kind: "post_submission";
   readonly draftId: string;
   readonly text: string;
+  /** The posts to send, in order. More than one makes a thread. */
+  readonly parts: readonly string[];
 }
 
 // `post` and `reply` requests never reach the extension as commands: Pluk
@@ -408,13 +413,23 @@ function parsePayload(
   }
 
   if (action === "post") {
+    if (hasOnlyKeys(value, ["thread"]) && isThread(value.thread)) {
+      const parts = value.thread;
+      return {
+        ok: true,
+        value: { kind: "compose", text: parts.join("\n\n"), parts },
+      };
+    }
     if (
       !hasOnlyKeys(value, ["text"]) ||
       !isString(value.text, MAX_TEXT_LENGTH)
     ) {
-      return invalid("Post payload needs exact text.");
+      return invalid("Post payload needs exact text, or a thread of posts.");
     }
-    return { ok: true, value: { kind: "compose", text: value.text } };
+    return {
+      ok: true,
+      value: { kind: "compose", text: value.text, parts: [value.text] },
+    };
   }
 
   if (action === "reply") {
@@ -753,10 +768,11 @@ function parseCommandPayload(
   }
   if (action === "submit_post") {
     if (
-      !hasOnlyKeys(value, ["kind", "draftId", "text"]) ||
+      !hasOnlyKeys(value, ["kind", "draftId", "text", "parts"]) ||
       value.kind !== "post_submission" ||
       !isIdentifier(value.draftId) ||
-      !isString(value.text, MAX_TEXT_LENGTH)
+      !isString(value.text, MAX_TEXT_LENGTH) ||
+      !isThread(value.parts)
     ) {
       return invalid("Post submission command payload is invalid.");
     }
@@ -766,6 +782,7 @@ function parseCommandPayload(
         kind: "post_submission",
         draftId: value.draftId,
         text: value.text,
+        parts: value.parts,
       },
     };
   }
@@ -806,6 +823,16 @@ function parseCommandPayload(
     return invalid("This command does not accept a payload.");
   }
   return { ok: true, value: { kind: "empty" } };
+}
+
+/** The posts of a thread on the wire: one to 25 bounded strings. */
+function isThread(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= MAX_THREAD_PARTS &&
+    value.every((part) => isString(part, MAX_TEXT_LENGTH))
+  );
 }
 
 function isBoundedJson(value: unknown, depth = 0): boolean {

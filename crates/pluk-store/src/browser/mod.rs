@@ -87,7 +87,10 @@ pub struct Draft {
     pub kind: String,
     pub target_url: String,
     pub post_id: Option<String>,
+    /// The whole post as one text; the parts joined when it is a thread.
     pub text: String,
+    /// The posts that go out, in order. One entry for a plain post.
+    pub parts: Vec<String>,
     pub status: String,
     pub created_at: i64,
     pub confirmed_at: Option<i64>,
@@ -179,6 +182,8 @@ pub struct DraftInput<'a> {
     pub target_url: &'a str,
     pub post_id: Option<&'a str>,
     pub text: &'a str,
+    /// The posts of a thread, in order. Empty for a plain post.
+    pub parts: &'a [String],
 }
 
 #[derive(Clone, Debug)]
@@ -248,7 +253,7 @@ impl BrowserStore<'_> {
         self.expire_drafts(now)?;
         self.conn
             .query_row(
-                "SELECT id, platform, kind, target_url, post_id, text, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE status = 'pending' AND platform = ? AND target_url = ? AND post_id IS ? AND text = ? ORDER BY created_at DESC LIMIT 1",
+                "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE status = 'pending' AND platform = ? AND target_url = ? AND post_id IS ? AND text = ? ORDER BY created_at DESC LIMIT 1",
                 params![input.platform, input.target_url, input.post_id, input.text],
                 read_draft_row,
             )
@@ -286,9 +291,11 @@ impl BrowserStore<'_> {
         } else {
             "post"
         };
+        let parts_json = serde_json::to_string(input.parts)
+            .map_err(|_| BrowserError::InvalidData("Thread parts could not be stored.".to_owned()))?;
         self.conn.execute(
-            "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
-            params![id, input.platform, kind, input.target_url, input.post_id, input.text, now],
+            "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, parts_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            params![id, input.platform, kind, input.target_url, input.post_id, input.text, parts_json, now],
         )?;
         self.get_draft_row(&id)?
             .map(to_draft)
@@ -497,10 +504,17 @@ impl BrowserStore<'_> {
             None
         };
         let (action, payload) = if draft.kind == "post" {
+            let stored: Vec<String> = serde_json::from_str(&draft.parts_json).unwrap_or_default();
+            let parts = if stored.is_empty() {
+                vec![draft.text.clone()]
+            } else {
+                stored
+            };
             let payload = serde_json::json!({
                 "kind": "post_submission",
                 "draftId": draft.id,
                 "text": draft.text,
+                "parts": parts,
             });
             ("submit_post", payload)
         } else {
@@ -650,7 +664,7 @@ impl BrowserStore<'_> {
     pub fn list_pending_drafts(&mut self, now: i64) -> Result<Vec<Draft>, BrowserError> {
         self.expire_drafts(now)?;
         let mut statement = self.conn.prepare(
-            "SELECT id, platform, kind, target_url, post_id, text, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE status = 'pending' ORDER BY created_at DESC",
+            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE status = 'pending' ORDER BY created_at DESC",
         )?;
         let rows = statement.query_map([], read_draft_row)?;
         rows.map(|row| Ok(to_draft(row?)?)).collect()
@@ -883,7 +897,7 @@ impl BrowserStore<'_> {
 
     fn get_draft_row(&self, id: &str) -> Result<Option<DraftRow>, BrowserError> {
         self.conn.query_row(
-            "SELECT id, platform, kind, target_url, post_id, text, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE id = ?",
+            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE id = ?",
             [id],
             read_draft_row,
         ).optional().map_err(BrowserError::from)
@@ -1096,6 +1110,7 @@ struct DraftRow {
     target_url: String,
     post_id: Option<String>,
     text: String,
+    parts_json: String,
     status: String,
     created_at: i64,
     confirmed_at: Option<i64>,
@@ -1132,11 +1147,12 @@ fn read_draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
         target_url: row.get(3)?,
         post_id: row.get(4)?,
         text: row.get(5)?,
-        status: row.get(6)?,
-        created_at: row.get(7)?,
-        confirmed_at: row.get(8)?,
-        submitted_at: row.get(9)?,
-        scheduled_at: row.get(10)?,
+        parts_json: row.get(6)?,
+        status: row.get(7)?,
+        created_at: row.get(8)?,
+        confirmed_at: row.get(9)?,
+        submitted_at: row.get(10)?,
+        scheduled_at: row.get(11)?,
     })
 }
 
@@ -1160,6 +1176,7 @@ fn to_draft(row: DraftRow) -> rusqlite::Result<Draft> {
         target_url: row.target_url,
         post_id: row.post_id,
         text: row.text,
+        parts: serde_json::from_str(&row.parts_json).unwrap_or_default(),
         status: row.status,
         created_at: row.created_at,
         confirmed_at: row.confirmed_at,
@@ -1205,6 +1222,7 @@ mod tests {
                     target_url: "https://x.com/compose/post",
                     post_id: None,
                     text,
+                    parts: &[],
                 },
                 now,
             )
@@ -1219,6 +1237,7 @@ mod tests {
                     target_url: "https://x.com/status/42",
                     post_id: Some("42"),
                     text,
+                    parts: &[],
                 },
                 now,
             )
@@ -1274,6 +1293,7 @@ mod tests {
             target_url: "https://x.com/compose/post",
             post_id: None,
             text: "Same words",
+            parts: &[],
         };
         assert!(store.find_pending_draft(&input, 100).unwrap().is_none());
         let first = store.create_draft(&input, 100).unwrap();
@@ -1285,6 +1305,31 @@ mod tests {
         assert!(store.find_pending_draft(&other, 101).unwrap().is_none());
         store.cancel_draft(&first.id, 102).unwrap();
         assert!(store.find_pending_draft(&input, 103).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_thread_keeps_its_parts_and_hands_them_to_the_submission() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        let parts = vec!["First post.".to_owned(), "Second post.".to_owned()];
+        let draft = store
+            .create_draft(
+                &DraftInput {
+                    platform: "x",
+                    target_url: "https://x.com/compose/post",
+                    post_id: None,
+                    text: "First post.\n\nSecond post.",
+                    parts: &parts,
+                },
+                100,
+            )
+            .unwrap();
+        assert_eq!(draft.parts, parts);
+        let submission = store.consume_draft(&draft.id, 100, false).unwrap().unwrap();
+        assert_eq!(submission.job.payload["parts"], serde_json::json!(parts));
+        let plain = prepare_post_draft(&mut store, "Just one", 100);
+        assert!(plain.parts.is_empty());
     }
 
     #[test]

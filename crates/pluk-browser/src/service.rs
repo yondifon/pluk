@@ -296,6 +296,19 @@ impl BrowserState {
         if !matches!(request.action, Action::Post | Action::Reply) {
             return self.create_job(request).map(|job| json!({ "job": job }));
         }
+        let parts: Vec<String> = request
+            .payload
+            .get("parts")
+            .and_then(Value::as_array)
+            .filter(|parts| parts.len() > 1)
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
         let input = DraftInput {
             platform: request.platform.as_str(),
             target_url: &request.target_url,
@@ -305,6 +318,7 @@ impl BrowserState {
                 .get("text")
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
+            parts: &parts,
         };
         let now = self.now();
         let mut browser = self.store.browser();
@@ -2175,6 +2189,40 @@ mod tests {
 
         let command = next_command(&mut socket).await;
         assert_eq!(command["payload"]["draftId"], first_id);
+    }
+
+    /// Text over X's limit is asked for as one post and goes out as a thread:
+    /// one command, every part in it.
+    #[tokio::test]
+    async fn a_long_post_becomes_one_thread_command() {
+        let fixture = Fixture::start().await;
+        let state = &fixture.state;
+        let mut socket = pair(&fixture, &["submit_post"]).await;
+        let sentence = "This sentence is exactly long enough to matter here.";
+        let text = std::iter::repeat_n(sentence, 8)
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let started = state
+            .start(&job_request(json!({
+                "platform": "x", "action": "post", "payload": { "text": text }
+            })))
+            .unwrap();
+        let parts = started["draft"]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        let draft_id = started["draft"]["id"].as_str().unwrap().to_owned();
+
+        state.confirm_draft(&draft_id, false).unwrap();
+        let command = next_command(&mut socket).await;
+        assert_eq!(command["action"], "submit_post");
+        assert_eq!(command["payload"]["parts"], json!(parts));
+
+        let single = state
+            .start(&job_request(json!({
+                "platform": "x", "action": "post", "payload": { "text": "Short." }
+            })))
+            .unwrap();
+        assert!(single["draft"]["parts"].as_array().unwrap().is_empty());
     }
 
     /// A reply carries the post it answers, and nothing read from the page.

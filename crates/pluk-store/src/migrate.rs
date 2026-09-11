@@ -202,6 +202,7 @@ fn migrate_v3(conn: &mut Connection) -> Result<()> {
             target_url TEXT NOT NULL,
             post_id TEXT,
             text TEXT NOT NULL,
+            parts_json TEXT NOT NULL DEFAULT '[]',
             status TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'submitted', 'failed', 'unknown', 'cancelled', 'expired')),
             created_at INTEGER NOT NULL,
             confirmed_at INTEGER,

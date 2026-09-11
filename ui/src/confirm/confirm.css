@@ -37,7 +37,12 @@ body {
   display: flex;
   gap: var(--space-xs);
   align-items: baseline;
-  color: var(--surface-secondary-label);
+  margin: 0;
+  color: var(--surface-tertiary-label);
+  font-size: calc(var(--type-caption) * var(--zoom-scale));
+  font-weight: 600;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 
 .confirm-title {
@@ -64,9 +69,28 @@ body {
 }
 
 .confirm-post {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
   font-family: var(--font-sans);
   font-size: calc(var(--type-body) * var(--zoom-scale));
   line-height: 1.45;
+}
+
+/* One post per block; a thread reads as the posts it will become. */
+.confirm-post-part {
+  margin: 0;
+  font: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.confirm-post-part + .confirm-post-part {
+  padding-top: var(--space-sm);
+  border-top: var(--border-width) solid var(--border-subtle);
 }
 
 .confirm-reason,

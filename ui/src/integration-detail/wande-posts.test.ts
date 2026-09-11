@@ -11,6 +11,7 @@ function waitingPost(overrides: Partial<WandePosts["waiting"][number]> = {}) {
   return {
     id: "draft-1",
     text: "First line\nSecond line",
+    parts: [],
     replyingTo: null,
     expiresAt: NOW + 90_000,
     canQueue: true,
@@ -58,7 +59,7 @@ describe("the posts waiting on a person", () => {
     posts.waiting = [waitingPost()];
     const { root, destroy } = await mount();
     expect(root.querySelector(".wande-post-text")!.textContent).toBe("First line\nSecond line");
-    expect(root.querySelector(".wande-post-countdown")!.textContent).toBe("1:30 left to post");
+    expect(root.querySelector(".wande-post-countdown")!.textContent).toBe("Expires in 1:30");
     destroy();
   });
 
@@ -113,7 +114,7 @@ describe("the posts going out later", () => {
     ];
     const { root, destroy } = await mount();
     expect(root.querySelector(".wande-post-slot")!.textContent).toBe(slotLabel(NOW + 3_600_000, NOW));
-    expect(root.querySelectorAll(".wande-post .hint")[0].textContent).toBe("Waiting");
+    expect(root.querySelector(".wande-post-status")!.textContent).toBe("Waiting");
     [...root.querySelectorAll("button")].find((b) => b.textContent === "Take out of the queue")!.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(calls.filter((c) => c.cmd === "cancel_queued_wande_post")).toEqual([
@@ -127,7 +128,7 @@ describe("the posts going out later", () => {
       { id: "draft-3", text: "Gone", scheduledAt: NOW - 60_000, status: "committed" },
     ];
     const { root, destroy } = await mount();
-    expect(root.querySelectorAll(".wande-post .hint")[0].textContent).toBe("Posted");
+    expect(root.querySelector(".wande-post-status")!.textContent).toBe("Posted");
     expect(root.querySelector(".wande-post-actions")).toBeNull();
     destroy();
   });

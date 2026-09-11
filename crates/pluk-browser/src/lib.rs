@@ -18,7 +18,9 @@ mod catalog;
 mod prompt;
 mod protocol;
 mod service;
+mod thread;
 
 pub use catalog::{ToolSpec as CatalogTool, tools as catalog_tools};
 pub use prompt::{PostAnswer, PostChoice, PostPrompt, PostPrompter, set_post_prompter};
+pub use thread::{X_POST_LIMIT, weighted_length};
 pub use service::{BridgeError, BrowserState, INTEGRATION_TYPE, pairing_key, router};

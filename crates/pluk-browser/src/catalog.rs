@@ -58,7 +58,7 @@ const ACTIONS: [(Action, &str, &str); 9] = [
     ),
     (
         Action::Post,
-        "Post exact text. Always the compose box; no target URL accepted. It waits in Pluk until the user sends it now or queues it; no page is touched before then.",
+        "Post exact text, or a thread. X allows 280 weighted characters per post (a link counts 23); longer text is cut into a thread at sentence ends, or pass `thread` for exact parts. It waits in Pluk until the user sends it now or queues it; no page is touched before then.",
         WRITE,
     ),
 ];
@@ -166,9 +166,16 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                 "properties": {
                     "text": {
                         "type": "string",
-                        "required": true,
+                        "required": false,
                         "maxLength": MAX_TEXT_LENGTH,
-                        "description": "Exact post text, submitted verbatim and never generated here.",
+                        "description": "Exact post text, submitted verbatim. Over 280 weighted characters it is cut into a thread at sentence ends. Pass this or thread, not both.",
+                    },
+                    "thread": {
+                        "type": "array",
+                        "required": false,
+                        "items": { "type": "string", "maxLength": MAX_TEXT_LENGTH },
+                        "maxItems": 25,
+                        "description": "The posts of a thread, in order, each under 280 weighted characters. Pass this or text, not both.",
                     },
                 },
                 "description": format!(

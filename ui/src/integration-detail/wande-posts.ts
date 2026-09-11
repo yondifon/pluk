@@ -10,6 +10,8 @@ const TICK_MS = 1000;
 export interface WaitingPost {
   id: string;
   text: string;
+  /** The posts of a thread, in order. Empty for a plain post. */
+  parts: string[];
   /** The post this one replies to, when it is a reply. */
   replyingTo: string | null;
   expiresAt: number;
@@ -89,9 +91,9 @@ function cardTitle(id: string, text: string): HTMLElement {
  * The two lists behind Wande's half of publishing: what has been asked for
  * and is waiting on a person, and what is holding a slot in the queue.
  *
- * Nothing here posts on its own. Sending one is always a click — that click
- * is what fills the composer in Chrome and submits — and a post that runs out
- * of time stays on screen saying so rather than vanishing.
+ * Nothing here posts on its own. Sending one is always a click, and that click
+ * is what fills the composer in Chrome and submits. A post that runs out of
+ * time stays on screen saying so rather than vanishing.
  */
 export function mountWandePosts(container: HTMLElement): { destroy: () => void } {
   container.innerHTML = "";
@@ -225,11 +227,17 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
     render();
   }
 
-  function postBody(post: { text: string; replyingTo?: string | null }): HTMLElement {
+  function postBody(post: { text: string; parts?: string[]; replyingTo?: string | null }): HTMLElement {
     const body = document.createElement("div");
     body.className = "wande-post-body";
     if (post.replyingTo) body.appendChild(line(`Replying to ${post.replyingTo}`, "hint"));
-    body.appendChild(line(post.text, "wande-post-text"));
+    const parts = post.parts ?? [];
+    if (parts.length > 1) {
+      body.appendChild(line(`Thread of ${parts.length}`, "hint"));
+      for (const part of parts) body.appendChild(line(part, "wande-post-text wande-post-part"));
+    } else {
+      body.appendChild(line(post.text, "wande-post-text"));
+    }
     return body;
   }
 
@@ -242,7 +250,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
     footer.className = "wande-post-footer";
     const left = document.createElement("span");
     left.className = "wande-post-countdown";
-    left.textContent = `${countdown(post.expiresAt - now)} left to post`;
+    left.textContent = `Expires in ${countdown(post.expiresAt - now)}`;
     countdowns.set(post.id, { element: left, expiresAt: post.expiresAt });
     const actions = document.createElement("div");
     actions.className = "wande-post-actions";
@@ -285,7 +293,8 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
     item.className = "wande-post";
     const head = document.createElement("div");
     head.className = "wande-post-footer";
-    head.append(line(slotLabel(post.scheduledAt, now), "wande-post-slot"), line(queueStatus(post.status), "hint"));
+    const status = line(queueStatus(post.status), `ui-badge wande-post-status wande-post-status-${post.status}`);
+    head.append(line(slotLabel(post.scheduledAt, now), "wande-post-slot"), status);
     item.append(head, postBody(post));
     if (post.status === "reserved") {
       const actions = document.createElement("div");
@@ -377,7 +386,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
       return;
     }
     for (const { element, expiresAt } of countdowns.values()) {
-      element.textContent = `${countdown(expiresAt - now)} left to post`;
+      element.textContent = `Expires in ${countdown(expiresAt - now)}`;
     }
   }
 

@@ -928,6 +928,72 @@ test("submits an X post immediately", async () => {
   expect(submitClicks).toBe(1);
 });
 
+test("a thread adds one editor per part with the plus button and posts all", async () => {
+  let submitClicks = 0;
+  let addClicks = 0;
+  const typed: string[] = [];
+  let active: FixtureNode | null = null;
+  const first = node("");
+  const second = node("");
+  const submitButton = node("Post all");
+  const addButton = node("");
+  const toastLink = node("View", { href: "/owner/status/777" });
+  const toast = node("An earlier X notification.", {}, { 'a[href*="/status/"]': [toastLink] });
+  for (const editor of [first, second]) {
+    Object.defineProperty(editor, "focus", {
+      value: () => {
+        active = editor;
+      },
+    });
+  }
+  const { scope } = makeComposerScope(first, submitButton, {
+    '[data-testid="addButton"]': [addButton],
+  });
+  Object.defineProperty(addButton, "click", {
+    value: () => {
+      addClicks += 1;
+      (scope.selectors as Record<string, readonly FixtureNode[]>)['[data-testid="tweetTextarea_1"]'] = [second];
+    },
+  });
+  Object.defineProperty(submitButton, "click", {
+    value: () => {
+      submitClicks += 1;
+      for (const editor of [first, second]) {
+        Object.defineProperty(editor, "textContent", { configurable: true, value: "" });
+      }
+      Object.defineProperty(toast, "textContent", { configurable: true, value: "Your post was posted." });
+    },
+  });
+  const restore = installPage(
+    "Compose",
+    "X",
+    "https://x.com/compose/post",
+    {
+      '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
+      '[data-testid="tweetTextarea_0"]': [first],
+      '[role="alert"], [data-testid="toast"]': [toast],
+    },
+    (_commandId, _showUi, value) => {
+      typed.push(value ?? "");
+      if (active) {
+        Object.defineProperty(active, "textContent", { configurable: true, value: value ?? "" });
+      }
+      return true;
+    },
+  );
+  const result = await runXPage({
+    action: "submit_post",
+    targetUrl: "https://x.com/compose/post",
+    text: "One.\n\nTwo.",
+    parts: ["One.", "Two."],
+  });
+  restore();
+  expect(result).toMatchObject({ state: "submission_succeeded", postedId: "777" });
+  expect(typed).toEqual(["One.", "Two."]);
+  expect(addClicks).toBe(1);
+  expect(submitClicks).toBe(1);
+});
+
 test("exposes an uncertain outcome instead of claiming success when no post identity is visible", async () => {
   let submitClicks = 0;
   let submitShortcuts = 0;

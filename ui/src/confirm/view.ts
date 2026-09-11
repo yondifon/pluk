@@ -6,6 +6,8 @@ export type PostChoice = "postNow" | "queue" | "discard" | "later";
 export interface PostQuestion {
   draftId: string;
   text: string;
+  /** The posts of a thread, in order. Empty for a plain post. */
+  parts: string[];
   replyingTo: string | null;
   canQueue: boolean;
   /** When the post stops being sendable, in epoch milliseconds. */
@@ -18,7 +20,7 @@ export function postCountdownText(secondsLeft: number): string {
   if (seconds === 0) return "Time is up. Nothing was posted.";
   const minutes = Math.floor(seconds / 60);
   const rest = String(seconds % 60).padStart(2, "0");
-  return `Nothing is posted until you say so. ${minutes}:${rest} left, then it expires.`;
+  return `Nothing goes out until you answer. Expires in ${minutes}:${rest}.`;
 }
 
 export interface ConfirmQuestion {
@@ -59,7 +61,7 @@ export function renderConfirm(
 
   const reason = document.createElement("p");
   reason.className = "confirm-reason";
-  reason.textContent = `Pluk blocks this by default — ${question.reason}`;
+  reason.textContent = `Pluk blocks this by default. ${question.reason}`;
 
   // The countdown is read as it changes, so it is not announced: the
   // consequence of waiting is already in the text above it.
@@ -110,13 +112,23 @@ export function renderPost(
   source.className = "confirm-source";
   source.textContent = "Wande";
 
+  const thread = question.parts.length > 1;
   const title = document.createElement("h1");
   title.className = "confirm-title";
-  title.textContent = question.replyingTo ? "Send this reply?" : "Post this?";
+  title.textContent = question.replyingTo
+    ? "Send this reply?"
+    : thread
+      ? `Post this thread of ${question.parts.length}?`
+      : "Post this?";
 
-  const text = document.createElement("pre");
+  const text = document.createElement("div");
   text.className = "confirm-command confirm-post";
-  text.textContent = question.text;
+  for (const part of thread ? question.parts : [question.text]) {
+    const block = document.createElement("pre");
+    block.className = "confirm-post-part";
+    block.textContent = part;
+    text.appendChild(block);
+  }
 
   const context = document.createElement("p");
   context.className = "confirm-reason";

@@ -622,28 +622,54 @@ export function runXPage(
     if (unsupported) {
       return unsupported;
     }
-    const composer = scope.querySelector('[data-testid="tweetTextarea_0"]');
+    const parts = options.parts?.length ? options.parts : [options.text];
+    // Each part gets its own editor: the first is already open, every next
+    // one is added with X's plus button and waited for before it is typed.
+    let composer: Element | null = null;
+    for (const [index, part] of parts.entries()) {
+      if (index > 0) {
+        const addButton = scope.querySelector('[data-testid="addButton"]');
+        if (!addButton || isDisabled(addButton)) {
+          return failure(
+            "unsupported",
+            `X did not offer to add post ${index + 1} of the thread. Nothing was submitted.`,
+          );
+        }
+        (addButton as HTMLElement).click();
+      }
+      const selector = `[data-testid="tweetTextarea_${index}"]`;
+      composer = await waitFor(() => scope.querySelector(selector), 3_000);
+      if (!composer) {
+        return failure(
+          "unsupported",
+          index === 0
+            ? "X did not expose the confirmed post editor. Nothing was submitted."
+            : `X did not open an editor for post ${index + 1} of the thread. Nothing was submitted.`,
+        );
+      }
+      if (
+        editorText(composer) !== clean(part) &&
+        !(await typeComposerText(composer, part))
+      ) {
+        return failure(
+          "unsupported",
+          "X did not accept the post text. Check the visible composer and try again; nothing was submitted.",
+        );
+      }
+      if (editorText(composer) !== clean(part)) {
+        return failure(
+          "unsupported",
+          "X rejected the post text in the confirmed editor. Nothing was submitted.",
+        );
+      }
+    }
     if (!composer) {
       return failure(
         "unsupported",
         "X did not expose the confirmed post editor. Nothing was submitted.",
       );
     }
-    if (
-      editorText(composer) !== clean(options.text) &&
-      !(await typeComposerText(composer, options.text))
-    ) {
-      return failure(
-        "unsupported",
-        "X did not accept the post text. Check the visible composer and try again; nothing was submitted.",
-      );
-    }
-    if (editorText(composer) !== clean(options.text)) {
-      return failure(
-        "unsupported",
-        "X rejected the post text in the confirmed editor. Nothing was submitted.",
-      );
-    }
+    const lastPart = parts[parts.length - 1] ?? "";
     await new Promise((resolve) =>
       setTimeout(resolve, 600 + Math.random() * 800),
     );
@@ -658,7 +684,7 @@ export function runXPage(
     dispatchSubmitShortcut(composer);
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     const nothingHappened =
-      editorText(composer) === clean(options.text ?? "") &&
+      editorText(composer) === clean(lastPart) &&
       notificationTexts().length === previousNotifications.length &&
       composerSubmitButton(scope) !== null;
     if (nothingHappened) {

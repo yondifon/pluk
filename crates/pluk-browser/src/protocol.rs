@@ -1,6 +1,8 @@
 use serde_json::{Map, Value, json};
 use url::Url;
 
+use crate::thread::{MAX_THREAD_PARTS, X_POST_LIMIT, split_into_parts, weighted_length};
+
 pub const PROTOCOL_VERSION: u64 = 1;
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
@@ -430,15 +432,13 @@ fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResu
         .and_then(Value::as_object)
         .ok_or_else(|| invalid("Payload must be an object."))?;
     if action == Action::Post {
-        if !has_only_keys(object, &["text"]) {
-            return Err(invalid("Post payload needs exact text."));
-        }
-        let text = object
-            .get("text")
-            .and_then(Value::as_str)
-            .filter(|value| is_string(value, MAX_TEXT_LENGTH))
-            .ok_or_else(|| invalid("Post payload needs exact text."))?;
-        return Ok(json!({ "kind": "compose", "text": text }));
+        let parts = parse_post_parts(object)?;
+        let text = if parts.len() == 1 {
+            parts[0].clone()
+        } else {
+            parts.join("\n\n")
+        };
+        return Ok(json!({ "kind": "compose", "text": text, "parts": parts }));
     }
     if action == Action::Reply {
         if !has_only_keys(object, &["postId", "text"]) {
@@ -454,12 +454,70 @@ fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResu
             .and_then(Value::as_str)
             .filter(|value| is_string(value, MAX_TEXT_LENGTH))
             .ok_or_else(|| invalid("Reply payload needs a post ID and exact text."))?;
+        if weighted_length(text) > X_POST_LIMIT {
+            return Err(ValidationError {
+                code: "too_long",
+                message: format!(
+                    "This reply weighs {} on X, over the {X_POST_LIMIT} limit. Links count 23. Shorten it.",
+                    weighted_length(text)
+                ),
+            });
+        }
         return Ok(json!({ "kind": "reply", "postId": post_id, "text": text }));
     }
     if !object.is_empty() {
         return Err(invalid("This action does not accept a payload."));
     }
     Ok(json!({ "kind": "empty" }))
+}
+
+/// The posts a compose request becomes: `thread` as given, or `text` cut
+/// into posts that each fit X's limit.
+fn parse_post_parts(object: &Map<String, Value>) -> ValidationResult<Vec<String>> {
+    if has_only_keys(object, &["thread"]) {
+        let parts: Vec<String> = object
+            .get("thread")
+            .and_then(Value::as_array)
+            .filter(|parts| !parts.is_empty() && parts.len() <= MAX_THREAD_PARTS)
+            .ok_or_else(|| invalid("A thread needs 1 to 25 posts, each a string."))?
+            .iter()
+            .map(|part| {
+                part.as_str()
+                    .filter(|value| is_string(value, MAX_TEXT_LENGTH))
+                    .map(str::to_owned)
+                    .ok_or_else(|| invalid("A thread needs 1 to 25 posts, each a string."))
+            })
+            .collect::<Result<_, _>>()?;
+        if let Some((index, part)) = parts
+            .iter()
+            .enumerate()
+            .find(|(_, part)| weighted_length(part) > X_POST_LIMIT)
+        {
+            return Err(ValidationError {
+                code: "too_long",
+                message: format!(
+                    "Post {} of the thread weighs {} on X, over the {X_POST_LIMIT} limit. Links count 23.",
+                    index + 1,
+                    weighted_length(part)
+                ),
+            });
+        }
+        return Ok(parts);
+    }
+    if !has_only_keys(object, &["text"]) {
+        return Err(invalid("Post payload needs exact text, or a thread of posts."));
+    }
+    let text = object
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|value| is_string(value, MAX_TEXT_LENGTH))
+        .ok_or_else(|| invalid("Post payload needs exact text, or a thread of posts."))?;
+    split_into_parts(text).ok_or_else(|| ValidationError {
+        code: "too_long",
+        message: format!(
+            "This text cannot be cut into posts under X's {X_POST_LIMIT} limit. Pass a thread of shorter posts."
+        ),
+    })
 }
 
 pub fn parse_command_envelope(value: &Value) -> ValidationResult<Value> {
@@ -563,19 +621,20 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
     if action == Action::Post {
-        if !has_only_keys(object, &["kind", "text"])
+        if !has_only_keys(object, &["kind", "text", "parts"])
             || object.get("kind").and_then(Value::as_str) != Some("compose")
             || !object
                 .get("text")
                 .and_then(Value::as_str)
                 .is_some_and(|value| is_string(value, MAX_TEXT_LENGTH))
+            || !is_thread(object.get("parts"))
         {
             return Err(invalid("Post command payload is invalid."));
         }
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
     if action == Action::SubmitPost {
-        if !has_only_keys(object, &["kind", "draftId", "text"])
+        if !has_only_keys(object, &["kind", "draftId", "text", "parts"])
             || object.get("kind").and_then(Value::as_str) != Some("post_submission")
             || !object
                 .get("draftId")
@@ -585,6 +644,7 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
                 .get("text")
                 .and_then(Value::as_str)
                 .is_some_and(|value| is_string(value, MAX_TEXT_LENGTH))
+            || !is_thread(object.get("parts"))
         {
             return Err(invalid("Post submission command payload is invalid."));
         }
@@ -992,6 +1052,17 @@ pub fn is_allowed_extension_origin(origin: &str) -> bool {
         .is_some_and(|id| id.len() == 32 && id.bytes().all(|byte| (b'a'..=b'p').contains(&byte)))
 }
 
+/// The posts of a thread on the wire: one to 25 bounded strings.
+fn is_thread(value: Option<&Value>) -> bool {
+    value.and_then(Value::as_array).is_some_and(|parts| {
+        !parts.is_empty()
+            && parts.len() <= MAX_THREAD_PARTS
+            && parts
+                .iter()
+                .all(|part| part.as_str().is_some_and(|value| is_string(value, MAX_TEXT_LENGTH)))
+    })
+}
+
 pub fn is_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_ID_LENGTH
@@ -1189,6 +1260,35 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_post_request_becomes_parts_and_a_thread_is_taken_as_given() {
+        let single = parse_create_job_request(&json!({
+            "platform": "x", "action": "post", "payload": { "text": "Short." }
+        }))
+        .unwrap();
+        assert_eq!(single.payload["parts"], json!(["Short."]));
+
+        let thread = parse_create_job_request(&json!({
+            "platform": "x", "action": "post", "payload": { "thread": ["One.", "Two."] }
+        }))
+        .unwrap();
+        assert_eq!(thread.payload["parts"], json!(["One.", "Two."]));
+        assert_eq!(thread.payload["text"], "One.\n\nTwo.");
+
+        let over = parse_create_job_request(&json!({
+            "platform": "x", "action": "post", "payload": { "thread": ["x".repeat(281)] }
+        }))
+        .unwrap_err();
+        assert_eq!(over.code, "too_long");
+
+        let long_reply = parse_create_job_request(&json!({
+            "platform": "x", "action": "reply", "targetUrl": "https://x.com/status/42",
+            "payload": { "postId": "42", "text": "word ".repeat(70) }
+        }))
+        .unwrap_err();
+        assert_eq!(long_reply.code, "too_long");
     }
 
     #[test]

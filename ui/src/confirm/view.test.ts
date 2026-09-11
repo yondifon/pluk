@@ -85,7 +85,7 @@ describe("the post window", () => {
     const answers: PostChoice[] = [];
     renderPost(
       root,
-      { draftId: "d1", text: "Hello\nworld", replyingTo: null, canQueue: true, closesAt: Date.now() + 60_000 },
+      { draftId: "d1", text: "Hello\nworld", parts: [], replyingTo: null, canQueue: true, closesAt: Date.now() + 60_000 },
       (choice) => answers.push(choice),
     );
     expect(root.querySelector(".confirm-title")?.textContent).toBe("Post this?");
@@ -100,7 +100,7 @@ describe("the post window", () => {
     const root = document.createElement("div");
     renderPost(
       root,
-      { draftId: "d2", text: "Thanks", replyingTo: "https://x.com/a/status/1", canQueue: false, closesAt: Date.now() },
+      { draftId: "d2", text: "Thanks", parts: [], replyingTo: "https://x.com/a/status/1", canQueue: false, closesAt: Date.now() },
       () => {},
     );
     expect(root.querySelector(".confirm-title")?.textContent).toBe("Send this reply?");
@@ -111,8 +111,19 @@ describe("the post window", () => {
     ]);
   });
 
+  test("a thread is shown as the posts it becomes", () => {
+    const root = document.createElement("div");
+    renderPost(
+      root,
+      { draftId: "d3", text: "One\n\nTwo", parts: ["One", "Two"], replyingTo: null, canQueue: true, closesAt: Date.now() },
+      () => {},
+    );
+    expect(root.querySelector(".confirm-title")?.textContent).toBe("Post this thread of 2?");
+    expect([...root.querySelectorAll(".confirm-post-part")].map((b) => b.textContent)).toEqual(["One", "Two"]);
+  });
+
   test("the countdown says nothing goes out on its own", () => {
-    expect(postCountdownText(95)).toBe("Nothing is posted until you say so. 1:35 left, then it expires.");
+    expect(postCountdownText(95)).toBe("Nothing goes out until you answer. Expires in 1:35.");
     expect(postCountdownText(0)).toBe("Time is up. Nothing was posted.");
   });
 });

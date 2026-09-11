@@ -1,8 +1,8 @@
 //! Putting a requested post to the owner the moment it arrives.
 //!
 //! An agent asking for a post writes a draft and nothing else. Whoever is
-//! attached here — the desktop app, with a window that stays above other
-//! apps — is asked straight away, and their answer is what sends, queues, or
+//! attached here (the desktop app, with a window that stays above other
+//! apps) is asked straight away, and their answer is what sends, queues, or
 //! drops it. Nobody attached, nobody answering, or the window dismissed all
 //! mean the same thing: the post keeps waiting in the app's panel. Silence
 //! never publishes.
@@ -21,8 +21,10 @@ use serde::{Deserialize, Serialize};
 pub struct PostPrompt {
     /// The draft this decides; the answer is applied to this one only.
     pub draft_id: String,
-    /// The full text, verbatim — never an excerpt.
+    /// The full text, verbatim, never an excerpt.
     pub text: String,
+    /// The posts of a thread, in order. Empty for a plain post.
+    pub parts: Vec<String>,
     /// The post this replies to, when it is a reply.
     pub replying_to: Option<String>,
     /// Whether taking a later slot is an option for this one.
@@ -36,6 +38,7 @@ impl PostPrompt {
         PostPrompt {
             draft_id: draft.id.clone(),
             text: draft.text.clone(),
+            parts: draft.parts.clone(),
             replying_to: draft.post_id.is_some().then(|| draft.target_url.clone()),
             can_queue: draft.can_queue(),
             closes_at: draft.created_at + DRAFT_TTL_MS,

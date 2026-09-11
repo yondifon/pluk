@@ -211,7 +211,7 @@ test("capture still attaches a screenshot", async () => {
   expect(result.screenshotArtifactId).toBe("screenshot-artifact");
 });
 
-test("submit_reply focuses the window and succeeds without a screenshot even when capture would fail", async () => {
+test("submit_reply stays in the background and succeeds without a screenshot even when capture would fail", async () => {
   captureVisibleTabImpl = () => Promise.reject(new Error("quota exceeded"));
   const executor = new BrowserExecutor();
   const sink = makeSink();
@@ -233,7 +233,7 @@ test("submit_reply focuses the window and succeeds without a screenshot even whe
   };
   const submission = await executor.run(submitCommand, sink);
   expect(captureVisibleTabCalls).toBe(0);
-  expect(windowFocusCalls).toEqual([1]);
+  expect(windowFocusCalls).toEqual([]);
   expect(submission).not.toHaveProperty("screenshotArtifactId");
 });
 
@@ -263,6 +263,7 @@ test("a pre-submit failure stays a failure instead of becoming uncertain", async
       kind: "post_submission",
       draftId: "draft-1",
       text: "Do not send",
+      parts: ["Do not send"],
     },
   };
 

@@ -31,7 +31,8 @@ const SCREENSHOT_ACTIONS = new Set<Action>(["capture"]);
 // Both submit actions type the confirmed text into X's editor and publish it
 // on a single click. Any uncertainty past that click (a Chrome failure, an
 // unparsable result) must surface as "unknown", never as a clean failure
-// that invites a retry. Typing into the editor also needs the window focused.
+// that invites a retry. The window is never brought forward for it: posting
+// happens behind whatever the owner is doing.
 const SUBMIT_ACTIONS = new Set<Action>(["submit_reply", "submit_post"]);
 
 interface TabState {
@@ -321,16 +322,6 @@ export class BrowserExecutor {
           "Chrome could not navigate the automation tab.",
         );
       }
-      if (SUBMIT_ACTIONS.has(action)) {
-        try {
-          await chrome.windows.update(context.windowId, { focused: true });
-        } catch (error) {
-          throw mapChromeFailure(
-            error,
-            "Could not bring the Chrome window forward. Make it visible and try again.",
-          );
-        }
-      }
       return await this.waitForReady(
         context,
         targetUrl,
@@ -615,7 +606,12 @@ function makeDriverScriptOptions(
     };
   }
   if (command.payload.kind === "post_submission") {
-    return { action: command.action, targetUrl, text: command.payload.text };
+    return {
+      action: command.action,
+      targetUrl,
+      text: command.payload.text,
+      parts: command.payload.parts,
+    };
   }
   return { action: command.action, targetUrl };
 }

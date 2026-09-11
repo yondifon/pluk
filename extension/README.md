@@ -7,7 +7,7 @@ back.
 
 Posting is one job, not two. A post or reply an agent asks for waits in Pluk
 until the user sends it, queues it, or discards it; the extension is never
-told about it before then. Sending — now, or when a queued slot comes due —
+told about it before then. Sending, now or when a queued slot comes due,
 dispatches a single `submit_post` or `submit_reply` command that opens the
 composer, types the confirmed text, and submits.
 

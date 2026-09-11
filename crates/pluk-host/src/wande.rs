@@ -52,6 +52,8 @@ pub struct WandePosts {
 pub struct WaitingPost {
     pub id: String,
     pub text: String,
+    /// The posts of a thread, in order. Empty for a plain post.
+    pub parts: Vec<String>,
     /// The post this one replies to, when it is a reply.
     pub replying_to: Option<String>,
     /// When it stops being sendable, in epoch milliseconds.
@@ -76,6 +78,7 @@ impl From<Draft> for WaitingPost {
             can_queue: draft.can_queue(),
             expires_at: draft.created_at + DRAFT_TTL_MS,
             replying_to: draft.post_id.is_some().then_some(draft.target_url),
+            parts: draft.parts,
             text: draft.text,
             id: draft.id,
         }
@@ -148,14 +151,14 @@ pub fn send_wande_post(
 ) -> CmdResult<()> {
     browser(&state)?
         .confirm_draft(&draft_id, queue)
-        .map_err(|error| refusal(error, "This post is no longer waiting — its time ran out."))
+        .map_err(|error| refusal(error, "This post is no longer waiting. Its time ran out."))
 }
 
 #[tauri::command]
 pub fn discard_wande_post(state: State<'_, HostState>, draft_id: String) -> CmdResult<()> {
     browser(&state)?
         .discard_draft(&draft_id)
-        .map_err(|error| refusal(error, "This post is no longer waiting — its time ran out."))
+        .map_err(|error| refusal(error, "This post is no longer waiting. Its time ran out."))
 }
 
 #[tauri::command]
