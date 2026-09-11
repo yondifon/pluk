@@ -38,8 +38,8 @@ use crate::catalog::{catalog_value, find_tool};
 use crate::prompt::{PostChoice, PostPrompt};
 use crate::protocol::{
     Action, CommandInput, CreateJobRequest, ExtensionCapability, ExtensionMessage,
-    HEARTBEAT_INTERVAL_MS, MAX_BODY_BYTES, MAX_CLOCK_SKEW_MS, MAX_EXTRACT_BYTES, MAX_ID_LENGTH,
-    MAX_MESSAGE_BYTES, MAX_SCREENSHOT_BYTES, MAX_URL_LENGTH, PROTOCOL_VERSION, Platform,
+    HEARTBEAT_INTERVAL_MS, MAX_BODY_BYTES, MAX_CLOCK_SKEW_MS, MAX_EXTRACT_BYTES, MAX_HTML_BYTES,
+    MAX_ID_LENGTH, MAX_MESSAGE_BYTES, MAX_SCREENSHOT_BYTES, MAX_URL_LENGTH, PROTOCOL_VERSION, Platform,
     ProtocolError, ResultMessage, canonicalize_target_url, is_allowed_extension_origin,
     make_command, make_heartbeat, make_heartbeat_ack, make_ready_envelope, parse_command_envelope,
     parse_create_job_request, parse_extension_message,
@@ -319,6 +319,11 @@ impl BrowserState {
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
             parts: &parts,
+            debug: request
+                .payload
+                .get("debug")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         };
         let now = self.now();
         let mut browser = self.store.browser();
@@ -1333,10 +1338,11 @@ async fn http_create_artifact(
         .unwrap_or_default();
     let valid_content_type = match kind {
         "screenshot" => content_type == "image/png" && body.len() <= MAX_SCREENSHOT_BYTES,
-        "extract" => {
-            (content_type == "application/json" || content_type == "text/plain")
-                && body.len() <= MAX_EXTRACT_BYTES
-        }
+        "extract" => match content_type {
+            "application/json" | "text/plain" => body.len() <= MAX_EXTRACT_BYTES,
+            "text/html" => body.len() <= MAX_HTML_BYTES,
+            _ => false,
+        },
         _ => false,
     };
     if !valid_content_type {

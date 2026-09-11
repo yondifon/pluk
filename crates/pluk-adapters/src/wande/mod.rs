@@ -52,7 +52,7 @@ const READ: &str = "read";
 const MAX_WAIT: Duration = Duration::from_secs(45);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. A call waits up to 60 seconds; past that you get a jobId, and get_job returns the outcome once it lands.";
+const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. A call waits up to 45 seconds; past that you get a jobId, and get_job returns the outcome once it lands. Pass payload.debug true on x_post or x_reply to have a screenshot and the page HTML attached to the browser job when the page refuses it.";
 
 const ACCESS: &str = "Reads and posts through a Chrome window the user is signed in to, one page at a time. Every post is shown to the user in full inside Pluk and goes out only if they say so.";
 
@@ -294,7 +294,7 @@ async fn run_tool(store: &Store, tool_id: &str, args: Value) -> ToolResult {
     // goes out, and that answer is this call's real result.
     if let Some(draft_id) = started["draft"]["id"].as_str() {
         return match settle_post(store, draft_id, deadline).await {
-            Ok(Some(draft)) => report_post(&draft),
+            Ok(Some(draft)) => report_post(&draft, failed_job(store, &draft).await.as_ref()),
             Ok(None) => handed_off(draft_id),
             Err(message) => err(message),
         };
@@ -319,7 +319,7 @@ async fn get_job(store: &Store, args: Value) -> ToolResult {
         Ok(job) => job,
         Err(job_missing) => {
             return match fetch_draft(store, id).await {
-                Ok(draft) => report_post(&draft),
+                Ok(draft) => report_post(&draft, failed_job(store, &draft).await.as_ref()),
                 Err(_) => err(job_missing),
             };
         }
@@ -328,7 +328,7 @@ async fn get_job(store: &Store, args: Value) -> ToolResult {
         return report_job(&job);
     };
     match fetch_draft(store, draft_id).await {
-        Ok(draft) => report_post(&draft),
+        Ok(draft) => report_post(&draft, failed_job(store, &draft).await.as_ref()),
         Err(message) => err(message),
     }
 }
@@ -425,9 +425,26 @@ fn report_job(job: &Value) -> ToolResult {
     err(format!("{reason}\n\n{text}"))
 }
 
+/// The browser job a refused post ran as: its error, and the screenshot and
+/// page HTML when the call asked for debug output.
+async fn failed_job(store: &Store, draft: &Value) -> Option<Value> {
+    if post_outcome(draft) != Some("failed") {
+        return None;
+    }
+    let id = draft["id"].as_str()?;
+    let jobs = send(store, reqwest::Method::GET, "/jobs?limit=20", None)
+        .await
+        .ok()?;
+    jobs["jobs"]
+        .as_array()?
+        .iter()
+        .find(|job| job["draftId"] == id)
+        .cloned()
+}
+
 /// A post is reported by what the user decided about it, never by the
 /// request having been taken.
-fn report_post(draft: &Value) -> ToolResult {
+fn report_post(draft: &Value, job: Option<&Value>) -> ToolResult {
     let detail = pretty(draft);
     match post_outcome(draft) {
         Some("posted") => ok(format!("The user sent this. It is posted.\n\n{detail}")),
@@ -441,9 +458,15 @@ fn report_post(draft: &Value) -> ToolResult {
         Some("expired") => ok(format!(
             "Nobody answered, so this was not posted. It is still in Pluk for the user to send.\n\n{detail}"
         )),
-        Some(_) => err(format!(
-            "The user sent this, but the page did not take it. Nothing was posted.\n\n{detail}"
-        )),
+        Some(_) => {
+            let reason = job
+                .and_then(|job| job["error"]["message"].as_str())
+                .unwrap_or("The page gave no reason.");
+            let job = job.map(pretty).unwrap_or_default();
+            err(format!(
+                "The user sent this, but the page did not take it. Nothing was posted.\n{reason}\n\n{detail}\n\nBrowser job:\n{job}"
+            ))
+        }
         None => ok(format!(
             "Waiting on the user in Pluk to say whether it goes out. Nothing is posted yet.\n\n{detail}"
         )),
@@ -692,7 +715,7 @@ mod tests {
     fn an_unanswered_post_is_never_reported_as_posted() {
         let waiting = json!({ "status": "pending", "text": "hello", "scheduledAt": null });
         assert_eq!(post_outcome(&waiting), None);
-        let result = report_post(&waiting);
+        let result = report_post(&waiting, None);
         assert!(!result.is_error);
         assert!(
             result.content[0]
@@ -731,7 +754,7 @@ mod tests {
         ] {
             let draft = json!({ "status": status, "scheduledAt": scheduled });
             assert_eq!(post_outcome(&draft), Some(outcome));
-            let result = report_post(&draft);
+            let result = report_post(&draft, None);
             assert!(!result.is_error, "{status} should not read as a failure");
             assert!(
                 result.content[0].text.starts_with(opening),

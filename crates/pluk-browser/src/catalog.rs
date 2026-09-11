@@ -152,6 +152,11 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                         "maxLength": MAX_TEXT_LENGTH,
                         "description": "Exact reply text, submitted verbatim and never generated here.",
                     },
+                    "debug": {
+                        "type": "boolean",
+                        "required": false,
+                        "description": "When the page refuses it, attach a screenshot and the page's HTML to the failed job so the refusal can be read.",
+                    },
                 },
             },
             "ttlMs": ttl_ms,
@@ -176,6 +181,11 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                         "items": { "type": "string", "maxLength": MAX_TEXT_LENGTH },
                         "maxItems": 25,
                         "description": "The posts of a thread, in order, each under 280 weighted characters. Pass this or text, not both.",
+                    },
+                    "debug": {
+                        "type": "boolean",
+                        "required": false,
+                        "description": "When the page refuses it, attach a screenshot and the page's HTML to the failed job so the refusal can be read.",
                     },
                 },
                 "description": format!(

@@ -91,6 +91,8 @@ pub struct Draft {
     pub text: String,
     /// The posts that go out, in order. One entry for a plain post.
     pub parts: Vec<String>,
+    /// Whether a failure should carry a screenshot and the page's HTML.
+    pub debug: bool,
     pub status: String,
     pub created_at: i64,
     pub confirmed_at: Option<i64>,
@@ -184,6 +186,8 @@ pub struct DraftInput<'a> {
     pub text: &'a str,
     /// The posts of a thread, in order. Empty for a plain post.
     pub parts: &'a [String],
+    /// Whether a failure should carry a screenshot and the page's HTML.
+    pub debug: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -253,7 +257,7 @@ impl BrowserStore<'_> {
         self.expire_drafts(now)?;
         self.conn
             .query_row(
-                "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE status = 'pending' AND platform = ? AND target_url = ? AND post_id IS ? AND text = ? ORDER BY created_at DESC LIMIT 1",
+                "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug FROM browser_drafts WHERE status = 'pending' AND platform = ? AND target_url = ? AND post_id IS ? AND text = ? ORDER BY created_at DESC LIMIT 1",
                 params![input.platform, input.target_url, input.post_id, input.text],
                 read_draft_row,
             )
@@ -294,8 +298,8 @@ impl BrowserStore<'_> {
         let parts_json = serde_json::to_string(input.parts)
             .map_err(|_| BrowserError::InvalidData("Thread parts could not be stored.".to_owned()))?;
         self.conn.execute(
-            "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, parts_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
-            params![id, input.platform, kind, input.target_url, input.post_id, input.text, parts_json, now],
+            "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, parts_json, debug, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            params![id, input.platform, kind, input.target_url, input.post_id, input.text, parts_json, input.debug, now],
         )?;
         self.get_draft_row(&id)?
             .map(to_draft)
@@ -503,7 +507,7 @@ impl BrowserStore<'_> {
         } else {
             None
         };
-        let (action, payload) = if draft.kind == "post" {
+        let (action, mut payload) = if draft.kind == "post" {
             let stored: Vec<String> = serde_json::from_str(&draft.parts_json).unwrap_or_default();
             let parts = if stored.is_empty() {
                 vec![draft.text.clone()]
@@ -528,6 +532,9 @@ impl BrowserStore<'_> {
                 }),
             )
         };
+        if draft.debug {
+            payload["debug"] = serde_json::Value::Bool(true);
+        }
         let expires_at = scheduled_at
             .and_then(|value| value.checked_add(DEFAULT_JOB_TTL_MS))
             .unwrap_or(now + DEFAULT_JOB_TTL_MS);
@@ -664,7 +671,7 @@ impl BrowserStore<'_> {
     pub fn list_pending_drafts(&mut self, now: i64) -> Result<Vec<Draft>, BrowserError> {
         self.expire_drafts(now)?;
         let mut statement = self.conn.prepare(
-            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE status = 'pending' ORDER BY created_at DESC",
+            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug FROM browser_drafts WHERE status = 'pending' ORDER BY created_at DESC",
         )?;
         let rows = statement.query_map([], read_draft_row)?;
         rows.map(|row| Ok(to_draft(row?)?)).collect()
@@ -897,7 +904,7 @@ impl BrowserStore<'_> {
 
     fn get_draft_row(&self, id: &str) -> Result<Option<DraftRow>, BrowserError> {
         self.conn.query_row(
-            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE id = ?",
+            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug FROM browser_drafts WHERE id = ?",
             [id],
             read_draft_row,
         ).optional().map_err(BrowserError::from)
@@ -1116,6 +1123,7 @@ struct DraftRow {
     confirmed_at: Option<i64>,
     submitted_at: Option<i64>,
     scheduled_at: Option<i64>,
+    debug: bool,
 }
 
 fn read_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRow> {
@@ -1153,6 +1161,7 @@ fn read_draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
         confirmed_at: row.get(9)?,
         submitted_at: row.get(10)?,
         scheduled_at: row.get(11)?,
+        debug: row.get(12)?,
     })
 }
 
@@ -1177,6 +1186,7 @@ fn to_draft(row: DraftRow) -> rusqlite::Result<Draft> {
         post_id: row.post_id,
         text: row.text,
         parts: serde_json::from_str(&row.parts_json).unwrap_or_default(),
+        debug: row.debug,
         status: row.status,
         created_at: row.created_at,
         confirmed_at: row.confirmed_at,
@@ -1223,6 +1233,7 @@ mod tests {
                     post_id: None,
                     text,
                     parts: &[],
+                    debug: false,
                 },
                 now,
             )
@@ -1238,6 +1249,7 @@ mod tests {
                     post_id: Some("42"),
                     text,
                     parts: &[],
+                    debug: false,
                 },
                 now,
             )
@@ -1294,6 +1306,7 @@ mod tests {
             post_id: None,
             text: "Same words",
             parts: &[],
+            debug: false,
         };
         assert!(store.find_pending_draft(&input, 100).unwrap().is_none());
         let first = store.create_draft(&input, 100).unwrap();
@@ -1321,6 +1334,7 @@ mod tests {
                     post_id: None,
                     text: "First post.\n\nSecond post.",
                     parts: &parts,
+                    debug: false,
                 },
                 100,
             )

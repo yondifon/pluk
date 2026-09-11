@@ -8,6 +8,8 @@ pub const MAX_BODY_BYTES: usize = 64 * 1024;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 pub const MAX_SCREENSHOT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_EXTRACT_BYTES: usize = 256 * 1024;
+/// A page's HTML attached to a failed job when the caller asked for debug output.
+pub const MAX_HTML_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_JOB_TTL_MS: i64 = 5 * 60 * 1000;
 pub const MIN_JOB_TTL_MS: i64 = 1_000;
 pub const DEFAULT_JOB_TTL_MS: i64 = 2 * 60 * 1000;
@@ -428,9 +430,19 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
 }
 
 fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResult<Value> {
-    let object = value
+    let mut object = value
         .and_then(Value::as_object)
-        .ok_or_else(|| invalid("Payload must be an object."))?;
+        .ok_or_else(|| invalid("Payload must be an object."))?
+        .clone();
+    let debug = match object.remove("debug") {
+        None => false,
+        Some(Value::Bool(value)) => value,
+        Some(_) => return Err(invalid("debug must be true or false.")),
+    };
+    if debug && !matches!(action, Action::Post | Action::Reply) {
+        return Err(invalid("Only posts and replies take debug."));
+    }
+    let object = &object;
     if action == Action::Post {
         let parts = parse_post_parts(object)?;
         let text = if parts.len() == 1 {
@@ -438,7 +450,10 @@ fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResu
         } else {
             parts.join("\n\n")
         };
-        return Ok(json!({ "kind": "compose", "text": text, "parts": parts }));
+        return Ok(with_debug(
+            json!({ "kind": "compose", "text": text, "parts": parts }),
+            debug,
+        ));
     }
     if action == Action::Reply {
         if !has_only_keys(object, &["postId", "text"]) {
@@ -463,12 +478,28 @@ fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResu
                 ),
             });
         }
-        return Ok(json!({ "kind": "reply", "postId": post_id, "text": text }));
+        return Ok(with_debug(
+            json!({ "kind": "reply", "postId": post_id, "text": text }),
+            debug,
+        ));
     }
     if !object.is_empty() {
         return Err(invalid("This action does not accept a payload."));
     }
     Ok(json!({ "kind": "empty" }))
+}
+
+/// Mark a payload whose failure should come back with a screenshot and the
+/// page's HTML. Absent when not asked for, so the wire shape stays as before.
+fn with_debug(mut payload: Value, debug: bool) -> Value {
+    if debug {
+        payload["debug"] = Value::Bool(true);
+    }
+    payload
+}
+
+fn debug_is_flag(object: &Map<String, Value>) -> bool {
+    object.get("debug").is_none_or(Value::is_boolean)
 }
 
 /// The posts a compose request becomes: `thread` as given, or `text` cut
@@ -634,7 +665,8 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
     if action == Action::SubmitPost {
-        if !has_only_keys(object, &["kind", "draftId", "text", "parts"])
+        if !has_only_keys(object, &["kind", "draftId", "text", "parts", "debug"])
+            || !debug_is_flag(object)
             || object.get("kind").and_then(Value::as_str) != Some("post_submission")
             || !object
                 .get("draftId")
@@ -651,7 +683,8 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
     if action == Action::SubmitReply {
-        if !has_only_keys(object, &["kind", "draftId", "postId", "text"])
+        if !has_only_keys(object, &["kind", "draftId", "postId", "text", "debug"])
+            || !debug_is_flag(object)
             || object.get("kind").and_then(Value::as_str) != Some("submission")
             || !object
                 .get("draftId")
@@ -1320,7 +1353,8 @@ mod tests {
             "payload": {
                 "kind": "post_submission",
                 "draftId": "draft-1",
-                "text": "Hello"
+                "text": "Hello",
+                "parts": ["Hello"]
             }
         });
         assert!(parse_command_envelope(&envelope).is_ok());

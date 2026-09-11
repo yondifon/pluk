@@ -95,7 +95,8 @@ pub fn split_into_parts(text: &str) -> Option<Vec<String>> {
 }
 
 fn fits(current: &str, next: &str) -> bool {
-    current.is_empty() || weighted_length(current) + 1 + weighted_length(next) <= X_POST_LIMIT
+    let separator = usize::from(!current.is_empty());
+    weighted_length(current) + separator + weighted_length(next) <= X_POST_LIMIT
 }
 
 fn append(current: &mut String, next: &str) {
