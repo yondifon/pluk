@@ -122,8 +122,10 @@ function isValidPostId(value: string): boolean {
   return isIdentifier(value) && /^\d{1,32}$/u.test(value);
 }
 
+// X serves a post without its author only under /i/status, then redirects
+// to the author's URL.
 function canonicalPostUrl(postId: string): string {
-  return `https://x.com/status/${postId}`;
+  return `https://x.com/i/status/${postId}`;
 }
 
 function extractPostId(url: URL): string | null {
@@ -133,6 +135,8 @@ function extractPostId(url: URL): string | null {
 
 export interface EmptyPayload {
   readonly kind: "empty";
+  /** Attach a screenshot and the page's HTML to the job when it fails. */
+  readonly debug?: true;
 }
 
 export interface ReplyPayload {
@@ -144,6 +148,8 @@ export interface ReplyPayload {
 export interface ReadPostPayload {
   readonly kind: "read_post";
   readonly postId: string;
+  /** Attach a screenshot and the page's HTML to the job when it fails. */
+  readonly debug?: true;
 }
 
 export interface SubmissionPayload {
@@ -794,7 +800,8 @@ function parseCommandPayload(
   }
   if (action === "read_post") {
     if (
-      !hasOnlyKeys(value, ["kind", "postId"]) ||
+      !hasOnlyKeys(value, ["kind", "postId"], ["debug"]) ||
+      !isDebugFlag(value.debug) ||
       value.kind !== "read_post" ||
       !isIdentifier(value.postId)
     ) {
@@ -802,7 +809,11 @@ function parseCommandPayload(
     }
     return {
       ok: true,
-      value: { kind: "read_post", postId: value.postId },
+      value: {
+        kind: "read_post",
+        postId: value.postId,
+        ...(value.debug === true ? { debug: true } : {}),
+      },
     };
   }
   if (action === "submit_reply") {
@@ -827,10 +838,20 @@ function parseCommandPayload(
       },
     };
   }
-  if (!hasOnlyKeys(value, ["kind"]) || value.kind !== "empty") {
+  if (
+    !hasOnlyKeys(value, ["kind"], ["debug"]) ||
+    !isDebugFlag(value.debug) ||
+    value.kind !== "empty"
+  ) {
     return invalid("This command does not accept a payload.");
   }
-  return { ok: true, value: { kind: "empty" } };
+  return {
+    ok: true,
+    value: {
+      kind: "empty",
+      ...(value.debug === true ? { debug: true } : {}),
+    },
+  };
 }
 
 function isDebugFlag(value: unknown): boolean {

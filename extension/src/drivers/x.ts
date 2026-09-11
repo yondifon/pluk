@@ -111,7 +111,7 @@ export function runXPage(
   ): string =>
     authorHandle
       ? `https://x.com/${authorHandle}/status/${postId}`
-      : `https://x.com/status/${postId}`;
+      : `https://x.com/i/status/${postId}`;
 
   interface ReadPost {
     readonly postId: string;
@@ -161,7 +161,7 @@ export function runXPage(
       seen.add(postId);
       posts.push({
         postId,
-        targetUrl: `https://x.com/status/${postId}`,
+        targetUrl: `https://x.com/i/status/${postId}`,
         canonicalTarget: canonicalPostTarget(authorHandle, postId),
         author,
         postedAt:
@@ -849,14 +849,25 @@ export function runXPage(
       );
     }
     const nameNode = document.querySelector('[data-testid="UserName"]');
-    const displayName = clean(nameNode?.textContent).slice(0, 256);
-    const visibleHandle = displayName
-      .match(/@([A-Za-z0-9_]{1,50})/u)?.[1]
-      ?.toLowerCase();
-    if (
-      !displayName ||
-      (visibleHandle && visibleHandle !== handle.toLowerCase())
-    ) {
+    // The header's spans run together with no separator: the name, the
+    // handle, then whatever badge X adds. Each is read on its own.
+    const headerTexts = Array.from(nameNode?.querySelectorAll("span") ?? [])
+      .map((span) => clean(span.textContent))
+      .filter(Boolean);
+    const displayName = (
+      headerTexts.find((text) => !text.startsWith("@")) ??
+      clean(nameNode?.textContent)
+    ).slice(0, 256);
+    // X draws the profile header a beat after the page loads, so an empty
+    // header is not yet a missing profile.
+    if (!displayName) {
+      return failure("waiting", "X has not shown the profile yet.");
+    }
+    const visibleHandle = headerTexts
+      .find((text) => /^@[A-Za-z0-9_]{1,50}$/u.test(text))
+      ?.slice(1)
+      .toLowerCase();
+    if (visibleHandle && visibleHandle !== handle.toLowerCase()) {
       return failure(
         "target_not_found",
         "The requested X profile was not visible. No profile data was returned.",
@@ -876,17 +887,23 @@ export function runXPage(
   if (options.action === "inspect") {
     if (!target) {
       return failure(
-        "target_not_found",
+        posts.length === 0 ? "waiting" : "target_not_found",
         "The requested X post was not visible. No post data was returned.",
       );
     }
     return { ...baseData("x_post", target.text), post: target };
   }
   if (options.action === "read_post") {
-    if (!requestedPostId || !target || targetUrlPostId !== requestedPostId) {
+    if (!requestedPostId || targetUrlPostId !== requestedPostId) {
       return failure(
         "target_not_found",
-        "The requested X post was not visible, or the post ID did not match the target URL. No post data was returned.",
+        "The post ID did not match the target URL. No post data was returned.",
+      );
+    }
+    if (!target) {
+      return failure(
+        posts.length === 0 ? "waiting" : "target_not_found",
+        "The requested X post was not visible. No post data was returned.",
       );
     }
     return {

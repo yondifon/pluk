@@ -211,6 +211,11 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                         "required": false,
                         "description": "Exact post identifier to read. Provide this or targetUrl, not neither; the missing one is derived.",
                     },
+                    "debug": {
+                        "type": "boolean",
+                        "required": false,
+                        "description": "When the page refuses it, attach a screenshot and the page's HTML to the failed job so the refusal can be read.",
+                    },
                 },
             },
             "ttlMs": ttl_ms,
@@ -232,6 +237,11 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                         "required": true,
                         "description": "Handle to read, with or without a leading @. Resolved to this site's canonical profile URL.",
                     },
+                    "debug": {
+                        "type": "boolean",
+                        "required": false,
+                        "description": "When the page refuses it, attach a screenshot and the page's HTML to the failed job so the refusal can be read.",
+                    },
                 },
             },
             "ttlMs": ttl_ms,
@@ -252,7 +262,14 @@ fn args_schema(platform: Platform, action: Action) -> Value {
             "payload": {
                 "type": "object",
                 "required": true,
-                "description": "Must be an empty object for this tool.",
+                "properties": {
+                    "debug": {
+                        "type": "boolean",
+                        "required": false,
+                        "description": "When the page refuses it, attach a screenshot and the page's HTML to the failed job so the refusal can be read.",
+                    },
+                },
+                "description": "Empty unless debug is wanted.",
             },
             "ttlMs": ttl_ms,
         });
@@ -262,7 +279,14 @@ fn args_schema(platform: Platform, action: Action) -> Value {
         "payload": {
             "type": "object",
             "required": true,
-            "description": "Must be an empty object for this tool.",
+            "properties": {
+                "debug": {
+                    "type": "boolean",
+                    "required": false,
+                    "description": "When the page refuses it, attach a screenshot and the page's HTML to the failed job so the refusal can be read.",
+                },
+            },
+            "description": "Empty unless debug is wanted.",
         },
         "ttlMs": ttl_ms,
     })

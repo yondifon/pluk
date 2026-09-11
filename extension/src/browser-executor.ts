@@ -36,6 +36,7 @@ const SCREENSHOT_ACTIONS = new Set<Action>(["capture"]);
 const SUBMIT_ACTIONS = new Set<Action>(["submit_reply", "submit_post"]);
 const MAX_DEBUG_HTML_BYTES = 2 * 1024 * 1024;
 const MAX_TRUSTED_CLICKS = 25;
+const IN_PLACE_ACTIONS = new Set<Action>(["read_post", "inspect"]);
 
 function trustedClickRequest(
   result: DriverPageResult,
@@ -54,10 +55,7 @@ function trustedClickRequest(
 }
 
 function wantsDebug(payload: CommandEnvelope["payload"]): boolean {
-  return (
-    (payload.kind === "submission" || payload.kind === "post_submission") &&
-    payload.debug === true
-  );
+  return payload.debug === true;
 }
 
 interface TabState {
@@ -147,47 +145,10 @@ export class BrowserExecutor {
     await requireSitePermission(targetUrl.value);
 
     const context = await this.ensureAutomationContext(targetUrl.value);
-    const ready = await this.preparePage(
-      context,
-      targetUrl.value,
-      command.action,
-      command.platform,
-    );
-    if (ready.url === undefined) {
-      throw new BrowserExecutionError(
-        "browser_unavailable",
-        "Chrome returned no final page URL.",
-      );
-    }
-    if (ready.url !== targetUrl.value) {
-      throw new BrowserExecutionError(
-        "page_changed",
-        "The page changed while it was being prepared. Try again.",
-      );
-    }
-    const readPage = async () => {
-      try {
-        return await this.readDriverPage(
-          context,
-          driver,
-          makeDriverScriptOptions(command, targetUrl.value),
-          targetUrl.value,
-          command.platform,
-        );
-      } catch (error) {
-        if (wantsDebug(command.payload) && error instanceof BrowserExecutionError) {
-          const notes = await this.attachDebug(context, command.jobId, sink);
-          throw new BrowserExecutionError(
-            error.code,
-            `${error.message} Debug: ${notes.join("; ")}`.slice(0, 512),
-          );
-        }
-        throw error;
-      }
-    };
-    const page = SUBMIT_ACTIONS.has(command.action)
-      ? await this.withWindowInFront(context, readPage)
-      : await readPage();
+    const options = makeDriverScriptOptions(command, targetUrl.value);
+    const page =
+      (await this.readInPlace(context, driver, options, command.platform)) ??
+      (await this.readAfterNavigation(context, driver, command, options, targetUrl.value, sink));
     let extractArtifactId: string;
     let screenshotArtifactId: string | undefined;
     try {
@@ -225,6 +186,99 @@ export class BrowserExecutor {
       extractArtifactId,
       ...(screenshotArtifactId === undefined ? {} : { screenshotArtifactId }),
     };
+  }
+
+  /** A post already on screen is read where it is, so the tab is not sent
+   * off to load a page it is already looking at. Anything short of the
+   * post being there falls through to navigation. */
+  private async readInPlace(
+    context: AutomationContext,
+    driver: SiteDriver,
+    options: DriverScriptOptions,
+    platform: Platform,
+  ): Promise<PageRead | null> {
+    if (!IN_PLACE_ACTIONS.has(options.action)) {
+      return null;
+    }
+    const state = await this.readTabState(context);
+    if (
+      state.url === undefined ||
+      state.pendingUrl !== undefined ||
+      state.status !== "complete" ||
+      !isSameAllowedOrigin(options.targetUrl, state.url, platform)
+    ) {
+      return null;
+    }
+    let results: readonly chrome.scripting.InjectionResult<DriverPageResult>[];
+    try {
+      results = await chrome.scripting.executeScript({
+        target: { tabId: context.tabId },
+        func: driver.pageScript,
+        args: [options],
+      });
+    } catch {
+      return null;
+    }
+    const result = parseDriverPageResult(results[0]?.result);
+    if (result?.state !== "ready") {
+      return null;
+    }
+    try {
+      return pageFromResult(platform, state.url, result);
+    } catch {
+      return null;
+    }
+  }
+
+  private async readAfterNavigation(
+    context: AutomationContext,
+    driver: SiteDriver,
+    command: CommandEnvelope,
+    options: DriverScriptOptions,
+    targetUrl: string,
+    sink: ArtifactSink,
+  ): Promise<PageRead> {
+    const ready = await this.preparePage(
+      context,
+      targetUrl,
+      command.action,
+      command.platform,
+    );
+    if (ready.url === undefined) {
+      throw new BrowserExecutionError(
+        "browser_unavailable",
+        "Chrome returned no final page URL.",
+      );
+    }
+    if (!sameDestination(command.platform, targetUrl, ready.url)) {
+      throw new BrowserExecutionError(
+        "page_changed",
+        "The page changed while it was being prepared. Try again.",
+      );
+    }
+    const readPage = async () => {
+      try {
+        return await this.readDriverPage(
+          context,
+          driver,
+          options,
+          targetUrl,
+          command.platform,
+        );
+      } catch (error) {
+        if (wantsDebug(command.payload) && error instanceof BrowserExecutionError) {
+          const notes = await this.attachDebug(context, command.jobId, sink);
+          throw new BrowserExecutionError(
+            error.code,
+            `${error.message} Debug: ${notes.join("; ")}`.slice(0, 512),
+          );
+        }
+        throw error;
+      }
+    };
+    return SUBMIT_ACTIONS.has(command.action)
+      ? this.withWindowInFront(context, readPage)
+      : readPage();
   }
 
   /** A real click, delivered through the browser rather than the page, for
@@ -532,13 +586,10 @@ export class BrowserExecutor {
     options: DriverScriptOptions,
     expectedUrl: string,
     platform: Platform,
-  ): Promise<{
-    readonly data: ResultData;
-    readonly url: string;
-    readonly title: string;
-  }> {
+  ): Promise<PageRead> {
     const deadline = Date.now() + NAVIGATION_TIMEOUT_MS;
     let trustedClicks = 0;
+    let lastWait: string | null = null;
     while (Date.now() < deadline) {
       let results: readonly chrome.scripting.InjectionResult<DriverPageResult>[];
       try {
@@ -571,6 +622,7 @@ export class BrowserExecutor {
         );
       }
       if (result.state === "waiting") {
+        lastWait = readResultString(result.message, 512);
         const click = trustedClickRequest(result);
         if (click && SUBMIT_ACTIONS.has(options.action)) {
           trustedClicks += 1;
@@ -592,43 +644,7 @@ export class BrowserExecutor {
       }
       const submissionSucceeded = result.state === "submission_succeeded";
       try {
-        const url = readResultString(result.url, 2_048);
-        const title = readResultString(result.title, 512);
-        if (url === null || title === null) {
-          throw new BrowserExecutionError(
-            "site_markup_changed",
-            `The ${platform} page did not return a usable URL and title. Its markup may have changed.`,
-          );
-        }
-        const finalUrl = assertFinalUrl(platform, expectedUrl, url);
-        if (finalUrl !== expectedUrl) {
-          throw new BrowserExecutionError(
-            "page_changed",
-            "The page changed while it was being read. Try again.",
-          );
-        }
-        const {
-          state: _state,
-          message: _message,
-          url: _url,
-          title: _title,
-          ...data
-        } = result;
-        if (typeof data.kind !== "string" || data.kind.length === 0) {
-          throw new BrowserExecutionError(
-            "site_markup_changed",
-            `The ${platform} driver returned no supported result kind. Its markup may have changed.`,
-          );
-        }
-        const boundedData =
-          typeof data.text === "string"
-            ? { ...data, text: data.text.slice(0, MAX_RESULT_TEXT_LENGTH) }
-            : data;
-        return {
-          data: { kind: data.kind, ...boundedData },
-          url: finalUrl,
-          title,
-        };
+        return pageFromResult(platform, expectedUrl, result);
       } catch (error) {
         if (
           SUBMIT_ACTIONS.has(options.action) &&
@@ -642,7 +658,9 @@ export class BrowserExecutor {
     }
     throw new BrowserExecutionError(
       "site_markup_changed",
-      `The ${platform} page did not expose the required controls before the job expired. Its markup may have changed.`,
+      lastWait
+        ? `Waited on the ${platform} page until the job expired. Last seen: ${lastWait}`
+        : `The ${platform} page did not expose the required controls before the job expired. Its markup may have changed.`,
     );
   }
 
@@ -907,6 +925,73 @@ export function isSameAllowedOrigin(
     targetParsed.hostname === candidateParsed.hostname &&
     targetParsed.port === candidateParsed.port
   );
+}
+
+interface PageRead {
+  readonly data: ResultData;
+  readonly url: string;
+  readonly title: string;
+}
+
+/** The page a ready driver result describes, checked against where the
+ * tab was meant to be. */
+function pageFromResult(
+  platform: Platform,
+  expectedUrl: string,
+  result: DriverPageResult,
+): PageRead {
+  const url = readResultString(result.url, 2_048);
+  const title = readResultString(result.title, 512);
+  if (url === null || title === null) {
+    throw new BrowserExecutionError(
+      "site_markup_changed",
+      `The ${platform} page did not return a usable URL and title. Its markup may have changed.`,
+    );
+  }
+  const finalUrl = assertFinalUrl(platform, expectedUrl, url);
+  if (!sameDestination(platform, expectedUrl, finalUrl)) {
+    throw new BrowserExecutionError(
+      "page_changed",
+      "The page changed while it was being read. Try again.",
+    );
+  }
+  const {
+    state: _state,
+    message: _message,
+    url: _url,
+    title: _title,
+    ...data
+  } = result;
+  if (typeof data.kind !== "string" || data.kind.length === 0) {
+    throw new BrowserExecutionError(
+      "site_markup_changed",
+      `The ${platform} driver returned no supported result kind. Its markup may have changed.`,
+    );
+  }
+  const boundedData =
+    typeof data.text === "string"
+      ? { ...data, text: data.text.slice(0, MAX_RESULT_TEXT_LENGTH) }
+      : data;
+  return { data: { kind: data.kind, ...boundedData }, url: finalUrl, title };
+}
+
+/** The same page, allowing for X moving a post from /i/status/<id> to the
+ * author's own URL for that post. */
+function sameDestination(
+  platform: Platform,
+  expected: string,
+  actual: string,
+): boolean {
+  if (expected === actual) {
+    return true;
+  }
+  if (platform !== "x") {
+    return false;
+  }
+  const postId = (value: string) =>
+    new URL(value).pathname.match(/\/status\/(\d+)(?:\/|$)/u)?.[1] ?? null;
+  const expectedId = postId(expected);
+  return expectedId !== null && expectedId === postId(actual);
 }
 
 function assertFinalUrl(

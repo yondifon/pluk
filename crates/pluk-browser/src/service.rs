@@ -2016,7 +2016,7 @@ mod tests {
             .unwrap();
         let post_command = next_command(&mut socket).await;
         assert_eq!(post_command["action"], "read_post");
-        assert_eq!(post_command["targetUrl"], "https://x.com/status/42");
+        assert_eq!(post_command["targetUrl"], "https://x.com/i/status/42");
         assert_eq!(post_command["payload"]["postId"], "42");
         send(
             &mut socket,
@@ -2529,7 +2529,7 @@ mod tests {
         let post_id_only_job: Value = post_id_only.json().await.unwrap();
         assert_eq!(
             post_id_only_job["job"]["targetUrl"],
-            "https://x.com/status/42"
+            "https://x.com/i/status/42"
         );
 
         // Neither a URL nor a post ID fails before any job is created.

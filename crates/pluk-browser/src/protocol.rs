@@ -242,7 +242,7 @@ fn is_valid_post_id(value: &str) -> bool {
 }
 
 fn canonical_post_url(post_id: &str) -> String {
-    format!("https://x.com/status/{post_id}")
+    format!("https://x.com/i/status/{post_id}")
 }
 
 // Digits embedded in a post page's own URL. Mirrors extract_profile_username:
@@ -389,24 +389,26 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
         });
     }
     let target_url_field = object.get("targetUrl").and_then(Value::as_str);
+    let (payload_field, debug) = split_debug(object.get("payload"))?;
+    let payload_field = payload_field.as_ref();
     let (target_url, payload) = if action == Action::ReadProfile {
-        resolve_profile_target(platform, target_url_field, object.get("payload"))?
+        resolve_profile_target(platform, target_url_field, payload_field)?
     } else if action == Action::Post {
         let target_url = resolve_compose_target(platform, target_url_field)?;
-        let payload = parse_public_payload(object.get("payload"), action)?;
+        let payload = parse_public_payload(payload_field, action)?;
         (target_url, payload)
     } else if action == Action::ReadPost {
-        resolve_post_target(platform, target_url_field, object.get("payload"))?
+        resolve_post_target(platform, target_url_field, payload_field)?
     } else if action == Action::ReadFeed || action == Action::ReadTrends {
         let target_url = resolve_fixed_destination_target(platform, action, target_url_field)?;
-        let payload = parse_public_payload(object.get("payload"), action)?;
+        let payload = parse_public_payload(payload_field, action)?;
         (target_url, payload)
     } else {
         let target_url = canonicalize_target_url(
             target_url_field.ok_or_else(|| invalid("Target URL is missing or too long."))?,
             platform,
         )?;
-        let payload = parse_public_payload(object.get("payload"), action)?;
+        let payload = parse_public_payload(payload_field, action)?;
         (target_url, payload)
     };
     let ttl_ms = object
@@ -424,25 +426,15 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
         platform,
         action,
         target_url,
-        payload,
+        payload: with_debug(payload, debug),
         ttl_ms,
     })
 }
 
 fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResult<Value> {
-    let mut object = value
+    let object = value
         .and_then(Value::as_object)
-        .ok_or_else(|| invalid("Payload must be an object."))?
-        .clone();
-    let debug = match object.remove("debug") {
-        None => false,
-        Some(Value::Bool(value)) => value,
-        Some(_) => return Err(invalid("debug must be true or false.")),
-    };
-    if debug && !matches!(action, Action::Post | Action::Reply) {
-        return Err(invalid("Only posts and replies take debug."));
-    }
-    let object = &object;
+        .ok_or_else(|| invalid("Payload must be an object."))?;
     if action == Action::Post {
         let parts = parse_post_parts(object)?;
         let text = if parts.len() == 1 {
@@ -450,10 +442,7 @@ fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResu
         } else {
             parts.join("\n\n")
         };
-        return Ok(with_debug(
-            json!({ "kind": "compose", "text": text, "parts": parts }),
-            debug,
-        ));
+        return Ok(json!({ "kind": "compose", "text": text, "parts": parts }));
     }
     if action == Action::Reply {
         if !has_only_keys(object, &["postId", "text"]) {
@@ -478,15 +467,27 @@ fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResu
                 ),
             });
         }
-        return Ok(with_debug(
-            json!({ "kind": "reply", "postId": post_id, "text": text }),
-            debug,
-        ));
+        return Ok(json!({ "kind": "reply", "postId": post_id, "text": text }));
     }
     if !object.is_empty() {
         return Err(invalid("This action does not accept a payload."));
     }
     Ok(json!({ "kind": "empty" }))
+}
+
+/// Take the `debug` flag off a payload so the action's own parser sees the
+/// shape it expects. Anything but a boolean is refused.
+fn split_debug(value: Option<&Value>) -> ValidationResult<(Option<Value>, bool)> {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return Ok((value.cloned(), false));
+    };
+    let mut object = object.clone();
+    let debug = match object.remove("debug") {
+        None => false,
+        Some(Value::Bool(value)) => value,
+        Some(_) => return Err(invalid("debug must be true or false.")),
+    };
+    Ok((Some(Value::Object(object)), debug))
 }
 
 /// Mark a payload whose failure should come back with a screenshot and the
@@ -640,7 +641,8 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
     if action == Action::ReadPost {
-        if !has_only_keys(object, &["kind", "postId"])
+        if !has_only_keys(object, &["kind", "postId", "debug"])
+            || !debug_is_flag(object)
             || object.get("kind").and_then(Value::as_str) != Some("read_post")
             || !object
                 .get("postId")
@@ -703,7 +705,7 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
         }
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
-    if !has_only_keys(object, &["kind"])
+    if !has_only_keys(object, &["kind", "debug"]) || !debug_is_flag(object)
         || object.get("kind").and_then(Value::as_str) != Some("empty")
     {
         return Err(invalid("This command does not accept a payload."));
@@ -1240,7 +1242,7 @@ mod tests {
             "platform": "x", "action": "read_post", "payload": { "postId": "42" }
         }))
         .unwrap();
-        assert_eq!(post_id_only.target_url, "https://x.com/status/42");
+        assert_eq!(post_id_only.target_url, "https://x.com/i/status/42");
     }
 
     #[test]
