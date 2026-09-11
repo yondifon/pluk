@@ -1,5 +1,6 @@
 import { mcpKey, mcpUrl, overviewRows } from "./logic";
 import { renderBrowserAccess } from "./browser-access";
+import { mountWandePosts } from "./wande-posts";
 import { renderMcpSection, type InjectFn } from "./mcp-section";
 import { WANDE_TYPE, type AdapterManifest, type Integration } from "./types";
 
@@ -8,9 +9,19 @@ export function renderOverview(
   integration: Integration,
   manifest: AdapterManifest | null | undefined,
   deps: { inject: InjectFn },
-): void {
+): { destroy: () => void } {
   container.innerHTML = "";
   container.className = "overview-tab stack-lg";
+
+  // Wande is the one integration with work waiting inside it — posts that go
+  // nowhere until someone sends them — so that comes before the setup.
+  let posts: { destroy: () => void } | null = null;
+  if (integration.type === WANDE_TYPE) {
+    const outbox = document.createElement("div");
+    posts = mountWandePosts(outbox);
+    container.appendChild(outbox);
+  }
+  const destroy = () => posts?.destroy();
 
   // Where the outside connects. Every integration has an MCP endpoint;
   // Wande also needs the value Chrome pairs with, so it shows both.
@@ -33,7 +44,7 @@ export function renderOverview(
   }
 
   const rows = overviewRows(integration, manifest ?? null);
-  if (!rows.length) return;
+  if (!rows.length) return { destroy };
 
   const config = document.createElement("section");
   config.className = "ui-card";
@@ -56,4 +67,5 @@ export function renderOverview(
   }
 
   container.appendChild(config);
+  return { destroy };
 }

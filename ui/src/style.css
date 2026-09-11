@@ -46,6 +46,19 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .inspector-row-wrap { align-items: flex-start; }
 .inspector-row-wrap > .hint { overflow: visible; white-space: normal; line-height: 1.45; }
 .hint, .empty { color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
+/* Posts waiting on a person. The text is the thing being judged, so it keeps
+   its own line breaks and stays selectable; everything else is a caption. */
+.wande-post-list { display: flex; flex-direction: column; gap: var(--space-md); margin: var(--space-md) 0 0; padding: 0; list-style: none; }
+.wande-post { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-md); border: var(--border-width) solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-sunken); }
+.wande-post-expired { opacity: 0.7; }
+.wande-post-body { display: flex; flex-direction: column; gap: var(--space-xxs); min-width: 0; }
+.wande-post-account, .wande-post-slot { margin: 0; color: var(--surface-secondary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
+.wande-post-text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; font-size: calc(var(--type-body) * var(--zoom-scale)); line-height: 1.45; -webkit-user-select: text; user-select: text; }
+.wande-post-footer { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: var(--space-sm); }
+.wande-post-footer > .hint, .wande-post-note { margin: 0; }
+.wande-post-countdown { color: var(--surface-tertiary-label); font-family: var(--font-mono); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
+.wande-post-note { color: var(--status-warning); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
+.wande-post-actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
 .field-error { margin-top: var(--space-xs); color: var(--danger-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
 .field-input, .field-select { width: 100%; box-sizing: border-box; min-height: var(--control-target); padding: var(--space-xs) var(--space-sm); border: var(--border-width) solid var(--border-control); border-radius: var(--radius-sm); background: var(--surface-panel); color: var(--surface-label); font: inherit; font-size: calc(var(--type-callout) * var(--zoom-scale)); }
 .field-select { appearance: none; max-width: var(--select-max-width); padding-right: calc(var(--space-lg) + var(--space-xs)); background-image: var(--select-chevron); background-repeat: no-repeat; background-position: right var(--space-xs) center; background-size: var(--space-lg) var(--space-lg); }

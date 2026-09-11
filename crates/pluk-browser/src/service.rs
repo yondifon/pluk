@@ -28,8 +28,8 @@ use uuid::Uuid;
 
 use pluk_store::browser::schedule::ScheduleSettings;
 use pluk_store::browser::{
-    ArtifactBody, BrowserError, Completion, DraftInput, Job, JobCompletion, JobInput,
-    ProtocolErrorView,
+    ArtifactBody, BrowserError, Completion, Draft, DraftInput, Job, JobCompletion, JobInput,
+    ProtocolErrorView, ScheduleReservation,
 };
 use pluk_store::{LogDraft, Store, Verdict};
 
@@ -134,6 +134,55 @@ impl BrowserState {
     /// restarts.
     pub fn pairing_key(&self) -> &str {
         &self.token
+    }
+
+    /// Posts waiting on a person, and the posts already holding a queue slot.
+    ///
+    /// Pluk's own window reads these in process rather than over the loopback
+    /// routes, so nothing in the app has to carry the pairing key.
+    pub fn pending_drafts(&self) -> Result<Vec<Draft>, BridgeError> {
+        self.store
+            .browser()
+            .list_pending_drafts(self.now())
+            .map_err(BridgeError::from)
+    }
+
+    pub fn scheduled_posts(&self) -> Result<Vec<ScheduleReservation>, BridgeError> {
+        self.store
+            .browser()
+            .list_schedule_reservations(MAX_LIST_LIMIT, self.now())
+            .map_err(BridgeError::from)
+    }
+
+    /// Publish a waiting draft, or give it the next queue slot.
+    pub fn confirm_draft(&self, draft_id: &str, schedule: bool) -> Result<(), BridgeError> {
+        confirm_draft_value(self, draft_id, schedule).map(|_| ())
+    }
+
+    /// Drop a draft before it is confirmed.
+    pub fn discard_draft(&self, draft_id: &str) -> Result<(), BridgeError> {
+        let dropped = self
+            .store
+            .browser()
+            .cancel_draft(draft_id, self.now())
+            .map_err(BridgeError::from)?;
+        dropped.map(|_| ()).ok_or_else(already_consumed)
+    }
+
+    /// Release a queue slot so the post it holds never goes out.
+    pub fn cancel_scheduled(&self, draft_id: &str) -> Result<(), BridgeError> {
+        let released = self
+            .store
+            .browser()
+            .cancel_scheduled(draft_id, self.now())
+            .map_err(BridgeError::from)?;
+        released.map(|_| ()).ok_or_else(already_consumed)
+    }
+
+    /// Whether the paired extension is connected right now.
+    pub fn extension_connected(&self) -> bool {
+        self.lock_queue()
+            .is_ok_and(|queue| queue.connection.is_some())
     }
 
     fn now(&self) -> i64 {
@@ -1475,6 +1524,16 @@ async fn handle_socket(state: BrowserState, mut socket: WebSocket, connection_id
     let _ = socket.send(Message::Close(None)).await;
 }
 
+/// The one refusal every draft action shares: it is no longer the caller's to
+/// act on.
+fn already_consumed() -> BridgeError {
+    BridgeError::with_status(
+        "already_consumed",
+        "This draft was already confirmed or is no longer available.",
+        409,
+    )
+}
+
 fn confirm_draft_value(
     state: &BrowserState,
     draft_id: &str,
@@ -1486,11 +1545,7 @@ fn confirm_draft_value(
         .consume_draft(draft_id, state.now(), schedule)
         .map_err(BridgeError::from)?;
     let Some(creation) = creation else {
-        return Err(BridgeError::with_status(
-            "already_consumed",
-            "This draft was already confirmed or is no longer available.",
-            409,
-        ));
+        return Err(already_consumed());
     };
     state.pump();
     Ok(json!({ "draft": creation.draft, "job": creation.job }))

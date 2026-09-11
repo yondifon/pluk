@@ -6,6 +6,7 @@ pub mod server;
 mod tray_menu;
 pub mod updater;
 pub mod version;
+pub mod wande;
 pub mod zoom;
 
 use std::sync::{Arc, Mutex};
@@ -200,7 +201,11 @@ pub fn run() {
             commands::update_group,
             commands::delete_group,
             commands::list_adapters,
-            commands::get_pluk_id,
+            wande::get_pluk_id,
+            wande::list_wande_posts,
+            wande::send_wande_post,
+            wande::discard_wande_post,
+            wande::cancel_queued_wande_post,
             commands::get_health,
             commands::test_connection,
             commands::get_logs,

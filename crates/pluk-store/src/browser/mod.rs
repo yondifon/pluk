@@ -23,7 +23,8 @@ pub const DEFAULT_JOB_TTL_MS: i64 = 2 * 60 * 1000;
 
 pub const MAX_JOBS: i64 = 1_000;
 pub const MAX_ARTIFACTS: i64 = 2_000;
-const DRAFT_TTL_MS: i64 = DEFAULT_JOB_TTL_MS;
+/// How long a draft waits for a confirmation before it expires unposted.
+pub const DRAFT_TTL_MS: i64 = DEFAULT_JOB_TTL_MS;
 
 // A reservation's post text lives on its draft, and the draft is gone once its
 // job is pruned, so the join stays outer and the text can come back empty.
@@ -94,6 +95,17 @@ pub struct Draft {
     pub confirmed_at: Option<i64>,
     pub submitted_at: Option<i64>,
     pub scheduled_at: Option<i64>,
+}
+
+impl Draft {
+    /// Whether this draft can take a queue slot instead of going out as soon
+    /// as it is confirmed. The queue holds whole posts on X; replies and
+    /// every other platform publish on confirmation.
+    ///
+    /// Mirrors what [`BrowserStore::consume_draft`] accepts.
+    pub fn can_queue(&self) -> bool {
+        self.kind == "post" && self.platform == "x"
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -508,6 +520,68 @@ impl BrowserStore<'_> {
         self.get_draft(draft_id)
     }
 
+    /// Drop a post that is holding a queue slot: the slot is released and the
+    /// submission never runs.
+    ///
+    /// `None` once the slot has come due and the submission has been picked
+    /// up — at that point there is nothing left to call back.
+    pub fn cancel_scheduled(
+        &mut self,
+        draft_id: &str,
+        now: i64,
+    ) -> Result<Option<ScheduleReservation>, BrowserError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = self.cancel_scheduled_transaction(draft_id, now);
+        match result {
+            Ok(value) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    fn cancel_scheduled_transaction(
+        &mut self,
+        draft_id: &str,
+        now: i64,
+    ) -> Result<Option<ScheduleReservation>, BrowserError> {
+        let reserved: bool = self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE draft_id = ? AND status = 'reserved')",
+            [draft_id],
+            |row| row.get(0),
+        )?;
+        if !reserved {
+            return Ok(None);
+        }
+        let dropped = self.conn.execute(
+            "DELETE FROM browser_jobs WHERE draft_id = ? AND status = 'queued'",
+            [draft_id],
+        )?;
+        if dropped == 0 {
+            return Ok(None);
+        }
+        self.conn.execute(
+            "UPDATE browser_schedule_reservations SET status = 'released', released_at = ? WHERE draft_id = ? AND status = 'reserved'",
+            params![now, draft_id],
+        )?;
+        self.conn.execute(
+            "UPDATE browser_drafts SET status = 'cancelled' WHERE id = ? AND status = 'confirmed'",
+            [draft_id],
+        )?;
+        self.conn
+            .query_row(
+                &format!("{SELECT_RESERVATION} WHERE browser_schedule_reservations.draft_id = ?"),
+                [draft_id],
+                read_schedule_reservation,
+            )
+            .optional()
+            .map_err(BrowserError::from)
+    }
+
     pub fn get_job(&mut self, id: &str, now: i64) -> Result<Option<Job>, BrowserError> {
         self.expire_queued(now)?;
         let row = self.conn.query_row(
@@ -536,6 +610,16 @@ impl BrowserStore<'_> {
     pub fn get_draft(&mut self, id: &str) -> Result<Option<Draft>, BrowserError> {
         self.expire_drafts(now_millis())?;
         Ok(self.get_draft_row(id)?.map(to_draft).transpose()?)
+    }
+
+    /// Every draft still waiting on a confirmation, newest first.
+    pub fn list_pending_drafts(&mut self, now: i64) -> Result<Vec<Draft>, BrowserError> {
+        self.expire_drafts(now)?;
+        let mut statement = self.conn.prepare(
+            "SELECT id, job_id, platform, kind, target_url, post_id, target_excerpt, text, visible_account_identity, status, created_at, confirmed_at, submitted_at, scheduled_at FROM browser_drafts WHERE status = 'pending' ORDER BY created_at DESC",
+        )?;
+        let rows = statement.query_map([], read_draft_row)?;
+        rows.map(|row| Ok(to_draft(row?)?)).collect()
     }
 
     pub fn get_schedule_settings(&self) -> Result<ScheduleSettings, BrowserError> {
@@ -1384,6 +1468,57 @@ mod tests {
             store.claim_next(100).unwrap().unwrap().action,
             "submit_post"
         );
+    }
+
+    #[test]
+    fn waiting_drafts_are_listed_newest_first_until_they_are_answered() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        // Wall-clock timestamps: reading a draft back expires the ones that
+        // have aged out, against the real clock rather than the one passed in.
+        let now = now_millis();
+        let first = prepare_post_draft(&mut store, "First post", now);
+        let second = prepare_post_draft(&mut store, "Second post", now + 1);
+
+        let waiting = store.list_pending_drafts(now + 2).unwrap();
+        assert_eq!(
+            waiting
+                .iter()
+                .map(|draft| draft.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Second post", "First post"]
+        );
+        assert!(waiting.iter().all(Draft::can_queue));
+
+        store.cancel_draft(&first.id, now + 2).unwrap().unwrap();
+        store
+            .consume_draft(&second.id, now + 2, false)
+            .unwrap()
+            .unwrap();
+        assert!(store.list_pending_drafts(now + 2).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_queued_post_can_be_taken_back_until_its_slot_comes_due() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        let draft = prepare_post_draft(&mut store, "Queued post", 100);
+        let slot = store
+            .consume_draft(&draft.id, 100, true)
+            .unwrap()
+            .unwrap()
+            .draft
+            .scheduled_at
+            .unwrap();
+
+        let released = store.cancel_scheduled(&draft.id, 200).unwrap().unwrap();
+
+        assert_eq!(released.status, "released");
+        assert_eq!(store.get_draft(&draft.id).unwrap().unwrap().status, "cancelled");
+        assert!(store.claim_next(slot).unwrap().is_none());
+        assert!(store.cancel_scheduled(&draft.id, 300).unwrap().is_none());
     }
 
     #[test]

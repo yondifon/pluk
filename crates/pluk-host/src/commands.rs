@@ -376,26 +376,6 @@ pub fn delete_group(state: State<'_, HostState>, id: String) -> CmdResult<bool> 
     Ok(did)
 }
 
-/// The one value Wande asks for, read from the running browser surface so it
-/// is always the one Chrome can actually connect with.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlukId {
-    pub id: String,
-}
-
-#[tauri::command]
-pub fn get_pluk_id(state: State<'_, HostState>) -> CmdResult<PlukId> {
-    let browser = state
-        .shared
-        .browser
-        .as_ref()
-        .ok_or_else(|| "Browser control is not running.".to_string())?;
-    Ok(PlukId {
-        id: browser.pairing_key().to_string(),
-    })
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdapterInfo {

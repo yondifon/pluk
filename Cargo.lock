@@ -4097,6 +4097,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "pluk-adapters",
+ "pluk-browser",
  "pluk-core",
  "pluk-policy",
  "pluk-server",

@@ -42,6 +42,7 @@ export function mountIntegrationDetail(
   const logsMount = document.createElement("div");
   logsMount.className = "logs-mount";
   let logs: { destroy: () => void } | null = null;
+  let overview: { destroy: () => void } | null = null;
 
   function reportTestFailure(error: string, pending: PendingToast): void {
     currentHealth = { status: "error", error, at: Date.now() };
@@ -86,6 +87,8 @@ export function mountIntegrationDetail(
       render();
     });
 
+    overview?.destroy();
+    overview = null;
     contentEl.innerHTML = "";
     if (selectedTab === "logs") {
       const panel = document.createElement("div");
@@ -101,7 +104,7 @@ export function mountIntegrationDetail(
       const overviewWrap = document.createElement("div");
       overviewWrap.setAttribute("role", "tabpanel");
       overviewWrap.setAttribute("aria-labelledby", "tab-overview");
-      renderOverview(overviewWrap, integration, manifest ?? null, { inject: actions.inject });
+      overview = renderOverview(overviewWrap, integration, manifest ?? null, { inject: actions.inject });
       contentEl.appendChild(overviewWrap);
     } else {
       const panel = document.createElement("div");
@@ -125,6 +128,8 @@ export function mountIntegrationDetail(
       });
     },
     destroy() {
+      overview?.destroy();
+      overview = null;
       logs?.destroy();
       logs = null;
       root.innerHTML = "";

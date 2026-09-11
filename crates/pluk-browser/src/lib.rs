@@ -18,4 +18,4 @@ mod protocol;
 mod service;
 
 pub use catalog::{ToolSpec as CatalogTool, tools as catalog_tools};
-pub use service::{BrowserState, INTEGRATION_TYPE, pairing_key, router};
+pub use service::{BridgeError, BrowserState, INTEGRATION_TYPE, pairing_key, router};
