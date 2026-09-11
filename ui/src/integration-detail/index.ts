@@ -22,6 +22,7 @@ export function mountIntegrationDetail(
   manifest: AdapterManifest | null | undefined,
   health: ConnHealth | null | undefined,
   actions: DetailActions,
+  openAt?: TabId,
 ): { destroy: () => void; updateHealth: (next: ConnHealth | null | undefined) => void } {
   root.innerHTML = "";
   root.className = "integration-detail";
@@ -33,7 +34,10 @@ export function mountIntegrationDetail(
   root.append(headerEl, tabsEl, contentEl);
 
   let currentHealth: ConnHealth | null | undefined = health ?? null;
-  let selectedTab: TabId = "logs";
+  // An integration that publishes no tools has none to list and no rules to
+  // approve, so it gets no Tools tab.
+  const tabs: TabId[] = manifest?.tools?.length ? ["logs", "overview", "tools"] : ["logs", "overview"];
+  let selectedTab: TabId = openAt && tabs.includes(openAt) ? openAt : "logs";
   let testing = false;
   const logsMount = document.createElement("div");
   logsMount.className = "logs-mount";
@@ -77,7 +81,7 @@ export function mountIntegrationDetail(
       onDelete: actions.onDelete,
     });
 
-    renderTabs(tabsEl, selectedTab, (id) => {
+    renderTabs(tabsEl, tabs, selectedTab, (id) => {
       selectedTab = id;
       render();
     });

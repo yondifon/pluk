@@ -48,15 +48,23 @@ export function renderTabList(
   }
 }
 
+const TAB_LABELS: Record<TabId, string> = {
+  logs: "Logs",
+  overview: "Overview",
+  tools: "Tools",
+};
+
 export function renderTabs(
   container: HTMLElement,
+  tabs: TabId[],
   selected: TabId,
   onSelect: (id: TabId) => void,
 ): void {
-  renderTabList(container, [
-    { id: "logs", label: "Logs" },
-    { id: "overview", label: "Overview" },
-    { id: "tools", label: "Tools" },
-  ], selected, (id) => onSelect(id as TabId));
+  renderTabList(
+    container,
+    tabs.map((id) => ({ id, label: TAB_LABELS[id] })),
+    selected,
+    (id) => onSelect(id as TabId),
+  );
   container.setAttribute("aria-label", "Integration sections");
 }

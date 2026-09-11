@@ -6,6 +6,7 @@ import { createShell } from "./shell.ts";
 import { createSidebar, type SidebarState } from "./sidebar.ts";
 import { emptyState, renderEmptyState } from "./emptyStates.ts";
 import { mountIntegrationDetail } from "./integration-detail/index.ts";
+import type { TabId } from "./integration-detail/tabs.ts";
 import type { Integration as DetailIntegration, ConnHealth as DetailHealth } from "./integration-detail/types.ts";
 import { renderGroupDetail } from "./groupDetail.ts";
 import {
@@ -98,6 +99,8 @@ let draft: ConnectionDraft | null = null;
 /** The rule the host refused on the last save attempt, shown beside its list. */
 let ruleProblem: RuleProblem | null = null;
 let groupDraft: GroupDraft | null = null;
+/** Which tab the next detail render opens on, when it should not be the usual one. */
+let openDetailAt: TabId | null = null;
 let detailHandle: { destroy: () => void; updateHealth: (next: DetailHealth | null) => void } | null = null;
 let detachDetail: (() => void) | null = null;
 
@@ -177,7 +180,9 @@ function renderDetail(mount: HTMLElement): void {
           onTest: () => testIntegration(row.id),
           inject: injectMcpConfig,
         },
+        openDetailAt ?? undefined,
       );
+      openDetailAt = null;
       detailHandle = mounted;
       detachDetail = mounted.destroy;
       return;
@@ -387,7 +392,10 @@ async function saveIntegration(saved: ConnectionDraft): Promise<void> {
     if (editing) {
       await invoke("update_integration", { id: editing, payload });
     } else {
-      await invoke("create_integration", { payload });
+      // Land on the new integration's setup details, which are what it needs next.
+      const created = await invoke<HostIntegration>("create_integration", { payload });
+      selection = { kind: "integration", id: created.id };
+      openDetailAt = "overview";
     }
     closeForm();
     await loadData();

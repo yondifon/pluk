@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Wande",
+  "version": "0.1.0",
+  "description": "Lets Pluk read and post on X in a Chrome window you are signed in to.",
+  "minimum_chrome_version": "116",
+  "permissions": ["alarms", "scripting", "storage", "tabs"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "optional_host_permissions": [
+    "<all_urls>",
+    "https://x.com/*",
+    "https://www.x.com/*",
+    "https://twitter.com/*",
+    "https://www.twitter.com/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open Wande"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src http://127.0.0.1:* ws://127.0.0.1:*"
+  }
+}

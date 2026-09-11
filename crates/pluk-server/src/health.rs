@@ -71,7 +71,7 @@ mod tests {
     fn absent_is_distinguishable_from_ok_and_error() {
         let health = HealthMap::default();
         assert!(
-            health.all().get("i1").is_none(),
+            !health.all().contains_key("i1"),
             "unobserved ids stay absent"
         );
 

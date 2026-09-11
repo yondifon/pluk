@@ -67,6 +67,7 @@ pub fn default_registry(
         registry.register(adapter)?;
     }
     registry.register(crate::ssh::SshAdapter::new(store.clone()))?;
+    registry.register(crate::wande::WandeAdapter::new(store.clone()))?;
     registry.register(crate::redis::RedisAdapter::new(store.clone()))?;
     registry.register(crate::mongodb::MongoAdapter::new(store.clone()))?;
     registry.register(crate::slack::SlackAdapter::new(store.clone()))?;
@@ -156,6 +157,29 @@ mod tests {
 
     fn stub(id: &str) -> Arc<dyn Adapter> {
         Arc::new(StubAdapter { id: id.to_string() })
+    }
+
+    #[test]
+    fn the_shipped_catalog_offers_wande() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(pluk_store::Store::open(&dir.path().join("pluk.db")).expect("open"));
+        let registry =
+            default_registry(store, Arc::new(crate::sql::SqlCancelRegistry::default())).expect("registry");
+        let wande = registry
+            .get(pluk_browser::INTEGRATION_TYPE)
+            .expect("Wande is offered in the add flow");
+        assert_eq!(wande.label(), "Wande");
+        // One integration, no platform in its identity: the platforms live in
+        // the browser catalog, which this never mirrors.
+        assert!(!wande.id().contains('x'));
+        // Its tools are the browser catalog's, published like any adapter's.
+        assert!(
+            wande
+                .tool_specs()
+                .iter()
+                .any(|spec| spec.name == "x_read_feed")
+        );
+        assert!(wande.config_fields().is_empty());
     }
 
     #[test]

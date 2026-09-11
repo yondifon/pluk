@@ -20,7 +20,7 @@ use crate::error::{Result, StoreError};
 /// A single migration step: upgrades the database by one version.
 type Step = fn(&mut Connection) -> Result<()>;
 
-const LADDER: &[Step] = &[migrate_v1, migrate_v2];
+const LADDER: &[Step] = &[migrate_v1, migrate_v2, migrate_v3];
 
 /// Bring `conn` up to the latest version.
 pub(crate) fn run(conn: &mut Connection) -> Result<()> {
@@ -162,6 +162,104 @@ fn migrate_v2(conn: &mut Connection) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS query_log_created_at_idx ON query_log(created_at);",
     )?;
     tx.pragma_update(None, "user_version", 2)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Version 3: the browser control tables.
+///
+/// Names carry a `browser_` prefix because `jobs`, `drafts` and `artifacts`
+/// are too generic to own unprefixed in a database this one shares.
+fn migrate_v3(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS browser_jobs (
+            id TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL UNIQUE,
+            platform TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_url TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'expired', 'unknown')),
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            started_at INTEGER,
+            finished_at INTEGER,
+            error_code TEXT,
+            error_message TEXT,
+            result_json TEXT,
+            dispatch_count INTEGER NOT NULL DEFAULT 0,
+            draft_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS browser_jobs_status_created_idx ON browser_jobs (status, created_at);
+        CREATE INDEX IF NOT EXISTS browser_jobs_recovery_idx ON browser_jobs (action, status, draft_id);
+
+        CREATE TABLE IF NOT EXISTS browser_drafts (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL REFERENCES browser_jobs(id) ON DELETE CASCADE,
+            platform TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('reply', 'post')),
+            target_url TEXT NOT NULL,
+            post_id TEXT,
+            target_excerpt TEXT NOT NULL DEFAULT '',
+            text TEXT NOT NULL,
+            visible_account_identity TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'submitted', 'failed', 'unknown', 'cancelled', 'expired')),
+            created_at INTEGER NOT NULL,
+            confirmed_at INTEGER,
+            submitted_at INTEGER,
+            scheduled_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS browser_drafts_status_idx ON browser_drafts (status, created_at);
+
+        CREATE TABLE IF NOT EXISTS browser_schedule_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            window_start TEXT NOT NULL,
+            window_end TEXT NOT NULL,
+            min_gap_minutes INTEGER NOT NULL,
+            max_gap_minutes INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS browser_schedule_reservations (
+            id TEXT PRIMARY KEY,
+            draft_id TEXT NOT NULL UNIQUE REFERENCES browser_drafts(id) ON DELETE CASCADE,
+            account_identity TEXT NOT NULL,
+            scheduled_at INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('reserved', 'committed', 'released', 'unknown')),
+            created_at INTEGER NOT NULL,
+            committed_at INTEGER,
+            released_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS browser_schedule_reservations_account_idx ON browser_schedule_reservations (account_identity, status, scheduled_at);
+
+        CREATE TABLE IF NOT EXISTS browser_artifacts (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL REFERENCES browser_jobs(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK (kind IN ('screenshot', 'extract')),
+            content_type TEXT NOT NULL,
+            bytes INTEGER NOT NULL,
+            data BLOB NOT NULL,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS browser_artifacts_job_created_idx ON browser_artifacts (job_id, created_at);
+        CREATE INDEX IF NOT EXISTS browser_artifacts_expires_idx ON browser_artifacts (expires_at);
+        ",
+    )?;
+
+    let defaults = crate::browser::schedule::ScheduleSettings::defaults();
+    tx.execute(
+        "INSERT OR IGNORE INTO browser_schedule_settings (id, window_start, window_end, min_gap_minutes, max_gap_minutes) VALUES (1, ?, ?, ?, ?)",
+        rusqlite::params![
+            defaults.window_start,
+            defaults.window_end,
+            defaults.min_gap_minutes,
+            defaults.max_gap_minutes,
+        ],
+    )?;
+
+    tx.pragma_update(None, "user_version", 3)?;
     tx.commit()?;
     Ok(())
 }

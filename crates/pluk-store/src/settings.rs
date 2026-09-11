@@ -11,6 +11,8 @@ const DEFAULT_RETENTION_DAYS: i64 = 30;
 pub const LOG_RETENTION_DAYS_KEY: &str = "log_retention_days";
 /// SSE resume high-water mark for the log stream.
 pub const LOG_CURSOR_KEY: &str = "log_cursor";
+/// The Pluk ID the browser extension presents to `/wande/...`.
+pub const BROWSER_PAIRING_TOKEN_KEY: &str = "browser_pairing_token";
 
 impl Store {
     /// Read one setting; `None` when unset. Callers apply their own defaults.
@@ -43,5 +45,16 @@ impl Store {
 
     pub fn set_retention_days(&self, days: i64) -> Result<()> {
         self.set_setting(LOG_RETENTION_DAYS_KEY, &days.to_string())
+    }
+
+    /// The Pluk ID the browser extension pairs with, minted on first read so
+    /// the app never ships a default one.
+    pub fn browser_pairing_token(&self) -> Result<String> {
+        if let Some(existing) = self.get_setting(BROWSER_PAIRING_TOKEN_KEY)? {
+            return Ok(existing);
+        }
+        let token = crate::ids::new_token();
+        self.set_setting(BROWSER_PAIRING_TOKEN_KEY, &token)?;
+        Ok(token)
     }
 }

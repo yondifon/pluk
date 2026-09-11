@@ -1,6 +1,7 @@
 import { mcpKey, mcpUrl, overviewRows } from "./logic";
+import { renderBrowserAccess } from "./browser-access";
 import { renderMcpSection, type InjectFn } from "./mcp-section";
-import type { AdapterManifest, Integration } from "./types";
+import { WANDE_TYPE, type AdapterManifest, type Integration } from "./types";
 
 export function renderOverview(
   container: HTMLElement,
@@ -11,9 +12,11 @@ export function renderOverview(
   container.innerHTML = "";
   container.className = "overview-tab stack-lg";
 
-  const mcp = document.createElement("section");
+  // Where the outside connects. Every integration has an MCP endpoint;
+  // Wande also needs the value Chrome pairs with, so it shows both.
+  const endpoint = document.createElement("section");
   renderMcpSection(
-    mcp,
+    endpoint,
     {
       key: mcpKey(integration.name, integration.environment ?? "development"),
       url: mcpUrl(integration.token),
@@ -21,6 +24,16 @@ export function renderOverview(
     },
     deps.inject,
   );
+  container.appendChild(endpoint);
+
+  if (integration.type === WANDE_TYPE) {
+    const browserAccess = document.createElement("section");
+    renderBrowserAccess(browserAccess);
+    container.appendChild(browserAccess);
+  }
+
+  const rows = overviewRows(integration, manifest ?? null);
+  if (!rows.length) return;
 
   const config = document.createElement("section");
   config.className = "ui-card";
@@ -29,7 +42,7 @@ export function renderOverview(
   cfgTitle.textContent = "Configuration";
   config.appendChild(cfgTitle);
 
-  for (const [label, value] of overviewRows(integration, manifest ?? null)) {
+  for (const [label, value] of rows) {
     const row = document.createElement("div");
     row.className = "inspector-row";
     const l = document.createElement("span");
@@ -42,5 +55,5 @@ export function renderOverview(
     config.appendChild(row);
   }
 
-  container.append(mcp, config);
+  container.appendChild(config);
 }

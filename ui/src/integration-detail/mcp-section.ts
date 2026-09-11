@@ -3,6 +3,7 @@ import type { ConfigScope, FanOutResult, McpClientId } from "./types";
 import { createButton } from "../primitives";
 import { toast } from "../toast";
 import { hasHost, invoke, pickDirectory } from "../host";
+import { copyText } from "../clipboard";
 
 const CLIENTS: Array<{ id: McpClientId; label: string; supportsProject: boolean; globalPath: string; projectPath: string | null; language: string }> = [
   { id: "opencode", label: "OpenCode", supportsProject: true, globalPath: "~/.config/opencode/opencode.json", projectPath: "opencode.json", language: "json" },
@@ -89,19 +90,6 @@ function agentHintRow(hint: string): HTMLElement {
 /** Host errors arrive as plain strings, not Error objects. */
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
-}
-
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    ta.remove();
-  }
 }
 
 /**

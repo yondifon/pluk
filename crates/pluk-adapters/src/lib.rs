@@ -30,6 +30,7 @@ mod ssh_fields;
 mod test_support;
 mod tool_host;
 mod tool_spec;
+pub mod wande;
 
 pub use action::{
     ActionAdapter, ActionAdapterSpec, ActionOutput, ActionTool, ClientFn, HumanizeFn,

@@ -8,6 +8,7 @@
 # Node/Bun
 node_modules/
 ui/dist/
+extension/dist/
 
 .agents/
 skills-lock.json

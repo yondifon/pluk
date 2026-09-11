@@ -200,6 +200,7 @@ pub fn run() {
             commands::update_group,
             commands::delete_group,
             commands::list_adapters,
+            commands::get_pluk_id,
             commands::get_health,
             commands::test_connection,
             commands::get_logs,

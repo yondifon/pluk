@@ -578,6 +578,10 @@ export function renderIntegrationForm(
       }
       wrap.appendChild(card);
     }
+  }
+
+  // No tools means nothing to switch on and nothing to write rules about.
+  if (draft.tools.length) {
     const toolsEl = renderToolsSection(
       draft,
       (tool, enabled) => {
@@ -597,15 +601,14 @@ export function renderIntegrationForm(
       },
     );
     wrap.appendChild(toolsEl);
+    wrap.appendChild(
+      renderApprovalsSection(
+        draft.approvals,
+        (approvals) => onDraftChange({ ...draft, approvals }),
+        ruleProblem,
+      ),
+    );
   }
-
-  wrap.appendChild(
-    renderApprovalsSection(
-      draft.approvals,
-      (approvals) => onDraftChange({ ...draft, approvals }),
-      ruleProblem,
-    ),
-  );
 
   const footer = document.createElement("div");
   footer.className = "form-footer";
