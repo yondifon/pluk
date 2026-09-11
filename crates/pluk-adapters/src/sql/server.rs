@@ -359,6 +359,7 @@ fn switch_block(sql: &str, pinned: Option<&String>) -> Option<String> {
     None
 }
 
+#[allow(clippy::field_reassign_with_default)]
 fn sql_config_from(conn: &Integration, database_override: Option<&str>) -> SqlConfig {
     let mut cfg = SqlConfig::default();
     cfg.r#type = conn.r#type.clone();
