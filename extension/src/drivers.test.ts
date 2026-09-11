@@ -506,7 +506,7 @@ test("prepares an exact X post draft only on the compose page with a visible acc
     },
   );
   const draft = await runXPage({
-    action: "compose_post",
+    action: "post",
     targetUrl: "https://x.com/compose/post",
     text: "Hello from Wande",
   });
@@ -523,7 +523,7 @@ test("prepares an exact X post draft only on the compose page with a visible acc
     '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
   });
   const wrongPage = await runXPage({
-    action: "compose_post",
+    action: "post",
     targetUrl: "https://x.com/compose/post",
     text: "Hello from Wande",
   });
@@ -539,7 +539,7 @@ test("prepares an exact X post draft only on the compose page with a visible acc
     },
   );
   const noEditor = await runXPage({
-    action: "compose_post",
+    action: "post",
     targetUrl: "https://x.com/compose/post",
     text: "Hello from Wande",
   });

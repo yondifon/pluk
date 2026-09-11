@@ -68,9 +68,18 @@ export function runXPage(
     return null;
   };
 
+  // The timestamp is the one permalink X wraps in an anchor; every other
+  // `/status/` link on a post points somewhere else, `/analytics` included.
+  const permalinkFromNode = (node: Element): string | null =>
+    node.querySelector("time")?.closest("a")?.getAttribute("href") ?? null;
+
   const postIdFromNode = (node: Element): string | null => {
-    const hrefs = Array.from(node.querySelectorAll('a[href*="/status/"]'))
-      .map((link) => link.getAttribute("href") ?? "")
+    const hrefs = [permalinkFromNode(node) ?? ""]
+      .concat(
+        Array.from(node.querySelectorAll('a[href*="/status/"]')).map(
+          (link) => link.getAttribute("href") ?? "",
+        ),
+      )
       .concat(node.getAttribute("data-tweet-id") ?? "");
     for (const href of hrefs) {
       const match = href.match(/(?:\/status\/|^)(\d+)(?:[/?#]|$)/u);
@@ -82,8 +91,10 @@ export function runXPage(
   };
 
   const authorHandleFromNode = (node: Element): string | null => {
-    const hrefs = Array.from(node.querySelectorAll('a[href*="/status/"]')).map(
-      (link) => link.getAttribute("href") ?? "",
+    const hrefs = [permalinkFromNode(node) ?? ""].concat(
+      Array.from(node.querySelectorAll('a[href*="/status/"]')).map(
+        (link) => link.getAttribute("href") ?? "",
+      ),
     );
     for (const href of hrefs) {
       const handle = href.match(/^\/([A-Za-z0-9_]{1,50})\/status\//u)?.[1];
@@ -102,14 +113,18 @@ export function runXPage(
       ? `https://x.com/${authorHandle}/status/${postId}`
       : `https://x.com/status/${postId}`;
 
-  const readPosts = (): Array<{
+  interface ReadPost {
     readonly postId: string;
     readonly targetUrl: string;
     readonly canonicalTarget: string;
     readonly author: string;
+    readonly postedAt: string | null;
+    readonly engagement: string | null;
     readonly text: string;
     readonly excerpt: string;
-  }> => {
+  }
+
+  const readPosts = (): ReadPost[] => {
     const articles = Array.from(
       document.querySelectorAll('article[data-testid="tweet"]'),
     );
@@ -118,33 +133,46 @@ export function runXPage(
         ? articles
         : Array.from(document.querySelectorAll("article"));
     const seen = new Set<string>();
-    const posts: Array<{
-      readonly postId: string;
-      readonly targetUrl: string;
-      readonly canonicalTarget: string;
-      readonly author: string;
-      readonly text: string;
-      readonly excerpt: string;
-    }> = [];
+    const posts: ReadPost[] = [];
     for (const article of fallback) {
       const postId = postIdFromNode(article);
       if (!postId || seen.has(postId)) {
         continue;
       }
+      // A shortened link ends in an ellipsis X draws itself; the href it
+      // stands for is already in the text nodes around it.
       const text = clean(
         article.querySelector('[data-testid="tweetText"]')?.textContent ??
           article.textContent,
-      ).slice(0, 1_000);
-      const author = clean(
-        article.querySelector('[data-testid="User-Name"]')?.textContent,
-      ).slice(0, 256);
+      )
+        .replace(/\s*…\s*$/u, "")
+        .slice(0, 1_000);
       const authorHandle = authorHandleFromNode(article);
+      // The display name and the handle sit in separate nodes with no
+      // separator between them, so they are read apart and joined.
+      const displayName = clean(
+        article.querySelector('[data-testid="User-Name"] span')?.textContent,
+      );
+      const author = (
+        authorHandle ? `${displayName} @${authorHandle}` : displayName
+      )
+        .trim()
+        .slice(0, 256);
       seen.add(postId);
       posts.push({
         postId,
         targetUrl: `https://x.com/status/${postId}`,
         canonicalTarget: canonicalPostTarget(authorHandle, postId),
         author,
+        postedAt:
+          article.querySelector("time")?.getAttribute("datetime") ?? null,
+        // One aria-label carries replies, reposts, likes, bookmarks and views.
+        engagement:
+          clean(
+            article
+              .querySelector('[role="group"][aria-label]')
+              ?.getAttribute("aria-label"),
+          ) || null,
         text,
         excerpt: text.slice(0, 1_000),
       });
@@ -175,28 +203,55 @@ export function runXPage(
     text: text.slice(0, 8_000),
   });
 
-  const draft = (): DriverPageResult => {
+  // Read at entry the signed-in account can still be null, because the
+  // navigation that precedes a command lands before X has drawn the sidebar
+  // it is read from. An absent account is not a changed one.
+  const awaitAccount = async (): Promise<string | null> => {
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const found = account ?? accountIdentity();
+      if (found || Date.now() >= deadline) {
+        return found;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  };
+
+  // The posts read at entry can be empty: a command that navigates first
+  // arrives before X has drawn the timeline. Read again until the wanted
+  // post appears.
+  const awaitPost = async (postId: string): Promise<ReadPost | undefined> => {
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const found = readPosts().find((post) => post.postId === postId);
+      if (found || Date.now() >= deadline) {
+        return found;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  };
+
+  const draft = async (): Promise<DriverPageResult> => {
     if (!account) {
       return failure(
         "account_unverified",
         "Pluk could not tell which X account is signed in. Open the account menu in that Chrome window and try again.",
       );
     }
+    const target = requestedPostId ? await awaitPost(requestedPostId) : undefined;
     if (!requestedPostId || !target || targetUrlPostId !== target.postId) {
       return failure(
         "target_not_found",
         "The requested X post was not visible. No reply draft was created.",
       );
     }
-    const replyButton = target
-      ? Array.from(
-          document.querySelectorAll('article[data-testid="tweet"], article'),
-        )
-          .find((article) => postIdFromNode(article) === target.postId)
-          ?.querySelector(
-            '[data-testid="reply"], button[aria-label*="Reply" i], [role="button"][aria-label*="Reply" i]',
-          )
-      : null;
+    const replyButton = Array.from(
+      document.querySelectorAll('article[data-testid="tweet"], article'),
+    )
+      .find((article) => postIdFromNode(article) === target.postId)
+      ?.querySelector(
+        '[data-testid="reply"], button[aria-label*="Reply" i], [role="button"][aria-label*="Reply" i]',
+      );
     if (!replyButton) {
       return failure(
         "unsupported",
@@ -341,7 +396,6 @@ export function runXPage(
   const settleEditor = async (
     editor: Element,
     expected: string,
-    before: string,
     timeoutMs: number,
   ): Promise<boolean> => {
     const deadline = Date.now() + timeoutMs;
@@ -351,7 +405,10 @@ export function runXPage(
         await new Promise((resolve) => setTimeout(resolve, 200));
         return editorText(editor) === expected;
       }
-      if (current !== before || Date.now() >= deadline) {
+      // X rewrites the editor after the text lands — it decorates links and
+      // reflows blocks — so intermediate states are expected. Only the
+      // deadline ends the wait; the match above is still exact.
+      if (Date.now() >= deadline) {
         return false;
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -378,12 +435,11 @@ export function runXPage(
     editor: Element,
     text: string,
   ): Promise<boolean> => {
-    const before = editorText(editor);
     placeCaretAtEnd(editor);
     if (!dispatchPaste(editor, text)) {
       return false;
     }
-    return settleEditor(editor, clean(text), before, 2_000);
+    return settleEditor(editor, clean(text), 4_000);
   };
 
   const clearComposer = async (editor: Element): Promise<boolean> => {
@@ -492,6 +548,7 @@ export function runXPage(
   };
 
   const submit = async (): Promise<DriverPageResult> => {
+    const account = await awaitAccount();
     if (!account || account !== options.visibleAccountIdentity) {
       return failure(
         "account_mismatch",
@@ -633,6 +690,7 @@ export function runXPage(
   };
 
   const submitCompose = async (): Promise<DriverPageResult> => {
+    const account = await awaitAccount();
     if (!account || account !== options.visibleAccountIdentity) {
       return failure(
         "account_mismatch",
@@ -759,13 +817,13 @@ export function runXPage(
     };
   }
 
-  if (options.action === "prepare_reply") {
+  if (options.action === "reply") {
     return draft();
   }
   if (options.action === "submit_reply") {
     return submit();
   }
-  if (options.action === "compose_post") {
+  if (options.action === "post") {
     return draftCompose();
   }
   if (options.action === "submit_post") {

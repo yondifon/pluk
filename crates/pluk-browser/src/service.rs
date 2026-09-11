@@ -7,6 +7,7 @@
 //! that was issued before anything is stored. A queued post waits for its
 //! reserved slot, so the pump also arms a wake-up timer.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -19,8 +20,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, sleep};
 use url::Url;
@@ -28,17 +31,18 @@ use uuid::Uuid;
 
 use pluk_store::browser::schedule::ScheduleSettings;
 use pluk_store::browser::{
-    ArtifactBody, BrowserError, Completion, Draft, DraftInput, Job, JobCompletion, JobInput,
-    ProtocolErrorView, ScheduleReservation,
+    ArtifactBody, BrowserError, Completion, DRAFT_TTL_MS, Draft, DraftInput, Job, JobCompletion,
+    JobInput, ProtocolErrorView, ScheduleReservation,
 };
-use pluk_store::{LogDraft, Store, Verdict};
+use pluk_store::{LogDraft, LogUpdate, Store, Verdict};
 
 use crate::catalog::{catalog_value, find_tool};
+use crate::prompt::{PostChoice, PostPrompt};
 use crate::protocol::{
     Action, CommandInput, CreateJobRequest, DraftData, ExtensionCapability, ExtensionMessage,
     HEARTBEAT_INTERVAL_MS, MAX_BODY_BYTES, MAX_CLOCK_SKEW_MS, MAX_EXTRACT_BYTES, MAX_ID_LENGTH,
     MAX_MESSAGE_BYTES, MAX_SCREENSHOT_BYTES, MAX_URL_LENGTH, PROTOCOL_VERSION, Platform,
-    ProtocolError, ResultMessage, canonicalize_target_url, is_allowed_extension_origin,
+    ProtocolError, ResultMessage, canonicalize_target_url, is_allowed_extension_origin, make_ask,
     make_command, make_heartbeat, make_heartbeat_ack, make_ready_envelope, parse_command_envelope,
     parse_create_job_request, parse_extension_message, parse_post_draft_data,
     parse_reply_draft_data,
@@ -76,6 +80,11 @@ pub struct BrowserState {
     token: Arc<String>,
     port: u16,
     extension_origin: Option<String>,
+    questions: Arc<Mutex<HashMap<String, oneshot::Sender<PostChoice>>>>,
+    /// Timers are armed from Tauri command handlers too, and those run on a
+    /// blocking thread with no runtime of their own, so the one this state
+    /// was built on is carried along rather than looked up at spawn time.
+    runtime: Handle,
     #[cfg(test)]
     test_now: Arc<Mutex<Option<i64>>>,
 }
@@ -106,6 +115,8 @@ impl BrowserState {
     /// this is the first start. `port` is the loopback port the server binds,
     /// which the Host and Origin checks pin requests to.
     pub fn new(store: Arc<Store>, port: u16) -> Result<Self, String> {
+        let runtime = Handle::try_current()
+            .map_err(|_| "Browser control has to start inside a Tokio runtime.".to_owned())?;
         let token = pairing_key(&store)?;
         let extension_origin = configured_extension_origin()?;
         store
@@ -124,6 +135,8 @@ impl BrowserState {
             token: Arc::new(token),
             port,
             extension_origin,
+            questions: Arc::new(Mutex::new(HashMap::new())),
+            runtime,
             #[cfg(test)]
             test_now: Arc::new(Mutex::new(None)),
         })
@@ -179,6 +192,75 @@ impl BrowserState {
         released.map(|_| ()).ok_or_else(already_consumed)
     }
 
+    /// Put a written post to the owner, drawn over the page it was written
+    /// into, and wait for what they say.
+    ///
+    /// The extension is the only thing that can answer, and only by naming a
+    /// question this issued. No answer — Chrome gone, tab closed, overlay
+    /// dismissed, nobody looking — is [`PostChoice::Later`], which leaves the
+    /// post waiting in the app.
+    async fn ask_about(&self, prompt: PostPrompt) -> PostChoice {
+        let question_id = Uuid::new_v4().to_string();
+        let (answer, wait) = oneshot::channel();
+        let now = self.now();
+        let ask = make_ask(&question_id, &prompt, now, now + DRAFT_TTL_MS);
+        // Registered before it is sent: the overlay can answer the instant it
+        // lands, and an answer with nowhere to go would be lost.
+        self.questions
+            .lock()
+            .expect("questions")
+            .insert(question_id.clone(), answer);
+        if !self.send_to_extension(ask.to_string()) {
+            self.questions
+                .lock()
+                .expect("questions")
+                .remove(&question_id);
+            return PostChoice::Later;
+        }
+        let answered =
+            tokio::time::timeout(Duration::from_millis(DRAFT_TTL_MS.max(0) as u64), wait).await;
+        self.questions
+            .lock()
+            .expect("questions")
+            .remove(&question_id);
+        match answered {
+            Ok(Ok(choice)) => choice,
+            _ => PostChoice::Later,
+        }
+    }
+
+    /// Hand one message to the paired extension. `false` when there is none.
+    fn send_to_extension(&self, message: String) -> bool {
+        self.lock_queue().is_ok_and(|queue| {
+            queue
+                .connection
+                .as_ref()
+                .is_some_and(|connection| connection.sender.send(message).is_ok())
+        })
+    }
+
+    /// Settle the one question this answer names. An answer for a question
+    /// that is not open — already answered, timed out, never issued — is
+    /// dropped rather than applied to whatever is waiting now.
+    fn handle_answer(&self, answer: crate::protocol::AnswerMessage) {
+        let now = self.now();
+        if answer.expires_at <= now
+            || answer.issued_at < now - MAX_CLOCK_SKEW_MS
+            || answer.issued_at > now + MAX_CLOCK_SKEW_MS
+        {
+            return;
+        }
+        let Some(sender) = self
+            .questions
+            .lock()
+            .expect("questions")
+            .remove(&answer.question_id)
+        else {
+            return;
+        };
+        let _ = sender.send(PostChoice::from_wire(&answer.choice));
+    }
+
     /// Whether the paired extension is connected right now.
     pub fn extension_connected(&self) -> bool {
         self.lock_queue()
@@ -224,6 +306,9 @@ impl BrowserState {
                     .map(|error| format!("{}: {}", error.code, error.message)),
             ),
         };
+        let response = job.result.as_ref().map(|result| {
+            serde_json::to_string_pretty(result).unwrap_or_else(|_| result.to_string())
+        });
         let (connection_id, connection_name) = self.log_connection();
         let mut draft = LogDraft::new(
             connection_id,
@@ -233,7 +318,19 @@ impl BrowserState {
         .with_verdict(verdict)
         .with_source(job.action);
         draft.reason = reason;
-        let _ = self.store.create_log_entry(draft);
+        let Ok(entry_id) = self.store.create_log_entry(draft) else {
+            return;
+        };
+        if let Some(response_text) = response {
+            let _ = self.store.update_log_entry(
+                entry_id,
+                LogUpdate {
+                    verdict,
+                    response_text: Some(response_text),
+                    ..LogUpdate::default()
+                },
+            );
+        }
     }
 
     /// Whose activity log a finished job belongs in: the integration the user
@@ -241,10 +338,7 @@ impl BrowserState {
     fn log_connection(&self) -> (String, String) {
         match self.store.integration_by_type(INTEGRATION_TYPE) {
             Ok(Some(integration)) => (integration.id, integration.name),
-            _ => (
-                LOG_CONNECTION_ID.to_owned(),
-                LOG_CONNECTION_NAME.to_owned(),
-            ),
+            _ => (LOG_CONNECTION_ID.to_owned(), LOG_CONNECTION_NAME.to_owned()),
         }
     }
 
@@ -387,7 +481,7 @@ impl BrowserState {
             let job_id = job.id.clone();
             let command_id = job.command_id.clone();
             let delay = Duration::from_millis((job.expires_at - self.now()).max(1) as u64);
-            let timer = tokio::spawn(async move {
+            let timer = self.runtime.spawn(async move {
                 sleep(delay).await;
                 service.expire_active(&job_id, &command_id);
             });
@@ -408,7 +502,7 @@ impl BrowserState {
         let service = self.clone();
         let delay = Duration::from_millis((wake_at - self.now()).max(1) as u64);
         queue.wake_at = Some(wake_at);
-        queue.wake_timer = Some(tokio::spawn(async move {
+        queue.wake_timer = Some(self.runtime.spawn(async move {
             sleep(delay).await;
             service.wake_pump(wake_at);
         }));
@@ -588,7 +682,64 @@ impl BrowserState {
         }
         drop(queue);
         self.log_job(&job_id);
+        self.ask_about_written_post(&job_id);
         self.pump();
+    }
+
+    /// A post that was just written is put to the owner straight away, in its
+    /// own task so the queue keeps moving while they read it.
+    ///
+    /// Their answer is what publishes. No answer leaves it pending, which is
+    /// exactly where the app's Waiting list picks it up.
+    fn ask_about_written_post(&self, job_id: &str) {
+        let Some(draft) = self.written_post(job_id) else {
+            return;
+        };
+        let state = self.clone();
+        self.runtime
+            .spawn(async move { state.answer_written_post(draft).await });
+    }
+
+    /// Put one written post to the owner and carry out what they say.
+    ///
+    /// No answer is not a refusal and not a send: the post is left exactly as
+    /// it was, still pending, still listed in the app for them to pick up.
+    async fn answer_written_post(&self, draft: Draft) {
+        let outcome = match self.ask_about(PostPrompt::from_draft(&draft)).await {
+            PostChoice::PostNow => self.confirm_draft(&draft.id, false),
+            PostChoice::Queue => self.confirm_draft(&draft.id, true),
+            PostChoice::Discard => self.discard_draft(&draft.id),
+            PostChoice::Later => return,
+        };
+        if let Err(error) = outcome {
+            self.log_answer_failure(&draft, &error);
+        }
+    }
+
+    /// The draft this job just produced, when it produced one and it is still
+    /// waiting on someone.
+    fn written_post(&self, job_id: &str) -> Option<Draft> {
+        let mut browser = self.store.browser();
+        let draft_id = browser.get_job(job_id, self.now()).ok()??.draft_id?;
+        browser
+            .get_draft(&draft_id)
+            .ok()?
+            .filter(|draft| draft.status == "pending")
+    }
+
+    /// An answer that could not be carried out is the one thing the owner
+    /// cannot see from the modal, so it goes in the activity log.
+    fn log_answer_failure(&self, draft: &Draft, error: &BridgeError) {
+        let (connection_id, connection_name) = self.log_connection();
+        let mut entry = LogDraft::new(
+            connection_id,
+            connection_name,
+            format!("{}.{} {}", draft.platform, draft.kind, draft.target_url),
+        )
+        .with_verdict(Verdict::Error)
+        .with_source("post_answer");
+        entry.reason = Some(error.message.clone());
+        let _ = self.store.create_log_entry(entry);
     }
 
     fn validate_result(
@@ -624,7 +775,7 @@ impl BrowserState {
                 None,
             );
         }
-        if job.action == Action::PrepareReply.as_str() {
+        if job.action == Action::Reply.as_str() {
             let Some(draft) =
                 parse_reply_draft_data(result.data.as_ref(), Some(&job.target_url)).ok()
             else {
@@ -654,7 +805,7 @@ impl BrowserState {
                 Some(DraftData::Reply(draft)),
             );
         }
-        if job.action == Action::ComposePost.as_str() {
+        if job.action == Action::Post.as_str() {
             let Some(draft) =
                 parse_post_draft_data(result.data.as_ref(), Some(&job.target_url)).ok()
             else {
@@ -836,8 +987,11 @@ impl BrowserState {
 
 /// The `/wande` surface, ready to nest into Pluk's loopback router.
 ///
-/// Everything but `/wande/healthz` needs the pairing key as a Bearer token,
-/// and every request is pinned to the loopback host and an allowed origin.
+/// Everything but `/wande/healthz` needs the Pluk ID as a Bearer token, and
+/// every request is pinned to the loopback host and an allowed origin.
+///
+/// Nothing here publishes. A written post is confirmed by the owner answering
+/// in Pluk's own window, so no route reachable with the Pluk ID can send one.
 pub fn router(state: BrowserState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
@@ -856,10 +1010,6 @@ pub fn router(state: BrowserState) -> Router {
         )
         .route("/artifacts/{artifact_id}", get(http_get_artifact))
         .route("/drafts/{draft_id}", get(http_get_draft))
-        .route(
-            "/drafts/{draft_id}/confirm",
-            axum::routing::post(http_confirm_draft),
-        )
         .route(
             "/drafts/{draft_id}/cancel",
             axum::routing::post(http_cancel_draft),
@@ -1205,46 +1355,6 @@ async fn http_get_draft(
     }
 }
 
-async fn http_confirm_draft(
-    State(state): State<BrowserState>,
-    headers: HeaderMap,
-    AxumPath(draft_id): AxumPath<String>,
-    body: Bytes,
-) -> Response {
-    if let Err(response) = state.check_boundary(&headers) {
-        return *response;
-    }
-    if !state.authenticated(&headers) {
-        return unauthorized();
-    }
-    if !is_uuid(&draft_id) {
-        return api_error(StatusCode::NOT_FOUND, "not_found", "Draft not found.");
-    }
-    let Some(schedule) = parse_confirm_schedule(&body) else {
-        return api_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_schema",
-            "Confirmation accepts an empty JSON object or {\"schedule\": true}.",
-        );
-    };
-    match confirm_draft_value(&state, &draft_id, schedule) {
-        Ok(value) => api_json(StatusCode::ACCEPTED, value),
-        Err(error) => bridge_error_response(error),
-    }
-}
-
-// Confirming posts the draft straight away; only an explicit `schedule` takes
-// a queue slot, so a caller never gets an unasked-for delay.
-fn parse_confirm_schedule(body: &Bytes) -> Option<bool> {
-    let value = serde_json::from_slice::<Value>(body).ok()?;
-    let object = value.as_object()?;
-    match object.len() {
-        0 => Some(false),
-        1 => object.get("schedule")?.as_bool(),
-        _ => None,
-    }
-}
-
 async fn http_cancel_draft(
     State(state): State<BrowserState>,
     headers: HeaderMap,
@@ -1511,6 +1621,7 @@ async fn handle_socket(state: BrowserState, mut socket: WebSocket, connection_id
                         let _ = socket.send(Message::Text(Utf8Bytes::from(make_heartbeat_ack(&heartbeat.nonce, current).to_string()))).await;
                     }
                     ExtensionMessage::Result(result) => state.handle_result(&connection_id, result),
+                    ExtensionMessage::Answer(answer) => state.handle_answer(answer),
                     ExtensionMessage::Hello(_) => break,
                 }
             }
@@ -1817,7 +1928,10 @@ mod tests {
         assert_eq!(name, LOG_CONNECTION_NAME);
 
         let integration = store
-            .create_integration(&pluk_store::IntegrationInput::new("My browser", INTEGRATION_TYPE))
+            .create_integration(&pluk_store::IntegrationInput::new(
+                "My browser",
+                INTEGRATION_TYPE,
+            ))
             .unwrap();
         let (id, name) = fixture.state.log_connection();
         assert_eq!(id, integration.id);
@@ -1833,7 +1947,11 @@ mod tests {
                 None,
             )
             .unwrap();
-        let details: Vec<&str> = page.entries.iter().map(|entry| entry.sql.as_str()).collect();
+        let details: Vec<&str> = page
+            .entries
+            .iter()
+            .map(|entry| entry.sql.as_str())
+            .collect();
         assert_eq!(details, ["x.read_feed https://x.com/home"]);
     }
 
@@ -1848,6 +1966,16 @@ mod tests {
             ))
             .await
             .unwrap();
+    }
+
+    async fn next_message(socket: &mut TestSocket, kind: &str) -> Value {
+        loop {
+            let message = socket.next().await.unwrap().unwrap();
+            let value: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+            if value["type"] == kind {
+                return value;
+            }
+        }
     }
 
     async fn next_command(socket: &mut TestSocket) -> Value {
@@ -1917,6 +2045,48 @@ mod tests {
         )
         .await;
         wait_for_status(&fixture.state, &job.id, "succeeded").await;
+    }
+
+    /// The activity log carries what the page answered, not just that it was
+    /// asked — a row with the call and no result reads as "No response".
+    #[tokio::test]
+    async fn the_log_carries_what_the_page_answered() {
+        let fixture = Fixture::start().await;
+        let mut socket = pair(&fixture, &["inspect"]).await;
+        let job = fixture
+            .state
+            .create_job(&job_request(json!({
+                "platform":"x","action":"inspect","targetUrl":"https://x.com/status/42","payload":{}
+            })))
+            .unwrap();
+        let command = next_command(&mut socket).await;
+        send(
+            &mut socket,
+            json!({
+                "version":1,"type":"result","jobId":job.id,"commandId":job.command_id,
+                "issuedAt":now_millis(),"expiresAt":command["expiresAt"],"outcome":"succeeded",
+                "data":{"kind":"page","title":"Fixture"}
+            }),
+        )
+        .await;
+        wait_for_status(&fixture.state, &job.id, "succeeded").await;
+
+        let page = fixture
+            .state
+            .store
+            .read_log_page(
+                &pluk_store::LogScope::Connection(LOG_CONNECTION_ID.to_owned()),
+                pluk_store::LogRange::All,
+                None,
+            )
+            .unwrap();
+        let response = page
+            .entries
+            .iter()
+            .find(|entry| entry.sql.starts_with("x.inspect"))
+            .and_then(|entry| entry.response_text.clone())
+            .expect("the inspect row carries a response");
+        assert!(response.contains("Fixture"), "response was {response}");
     }
 
     // Regression: every advertised X action must reach a paired extension
@@ -2039,6 +2209,138 @@ mod tests {
         assert!(parse_published_resolution(&json!({"published": "true"})).is_none());
     }
 
+    /// What a dismissed overlay does to a written post, and what an answer
+    /// does. Driven through the real socket, because the overlay's answer has
+    /// no other way in.
+    #[tokio::test]
+    async fn a_dismissed_overlay_keeps_the_post_waiting_and_only_an_answer_sends_it() {
+        let fixture = Fixture::start().await;
+        let state = &fixture.state;
+        let mut socket = pair(&fixture, &["post", "submit_post"]).await;
+
+        let compose_job = state
+            .create_job(&job_request(json!({
+                "platform": "x", "action": "post", "payload": { "text": "Only if you say so" }
+            })))
+            .unwrap();
+        let command = next_command(&mut socket).await;
+        send(&mut socket, json!({
+            "version":1,"type":"result","jobId":compose_job.id,"commandId":compose_job.command_id,
+            "issuedAt":now_millis(),"expiresAt":command["expiresAt"],"outcome":"succeeded",
+            "data":{"kind":"post_draft","text":"Only if you say so","visibleAccountIdentity":"@owner"}
+        })).await;
+        let composed = wait_for_status(state, &compose_job.id, "succeeded").await;
+        let draft_id = composed.draft_id.expect("compose produced no post");
+
+        let written = || {
+            state
+                .store
+                .browser()
+                .get_draft(&draft_id)
+                .unwrap()
+                .expect("the post should still exist")
+        };
+        let waiting = || -> Vec<String> {
+            state
+                .pending_drafts()
+                .unwrap()
+                .into_iter()
+                .map(|draft| draft.id)
+                .collect()
+        };
+
+        // The question goes out over the same socket, carrying what the
+        // owner has to see — and nothing that identifies the post.
+        let ask = next_message(&mut socket, "ask").await;
+        assert_eq!(ask["account"], "@owner");
+        assert_eq!(ask["text"], "Only if you say so");
+        assert_eq!(ask["canQueue"], true);
+        assert!(
+            ask.get("draftId").is_none(),
+            "the page is never told which post this is"
+        );
+        let question_id = ask["questionId"].as_str().unwrap().to_owned();
+
+        let answer = |choice: &str, question: &str| {
+            let now = now_millis();
+            json!({
+                "version":1,"type":"answer","questionId":question,"choice":choice,
+                "issuedAt":now,"expiresAt":now + 60_000
+            })
+        };
+
+        // An answer naming a question nobody asked is dropped, not applied to
+        // whatever happens to be open.
+        send(
+            &mut socket,
+            answer("postNow", "00000000-0000-4000-8000-000000000000"),
+        )
+        .await;
+        // A dismissal is not an answer: nothing sent, nothing discarded.
+        send(&mut socket, answer("later", &question_id)).await;
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(written().status, "pending");
+        assert!(waiting().contains(&draft_id));
+        assert_eq!(
+            state.get_job(&compose_job.id).unwrap().unwrap().status,
+            "succeeded",
+            "the call that wrote it stays succeeded either way"
+        );
+
+        // The post is still answerable afterwards, from the panel in the app.
+        state.confirm_draft(&draft_id, false).unwrap();
+        assert_eq!(written().status, "confirmed");
+        assert!(!waiting().contains(&draft_id));
+        assert_eq!(next_command(&mut socket).await["action"], "submit_post");
+    }
+
+    /// The other half: an answer, and only an answer, publishes.
+    #[tokio::test]
+    async fn the_owners_answer_is_what_sends_a_post() {
+        let fixture = Fixture::start().await;
+        let state = &fixture.state;
+        let mut socket = pair(&fixture, &["post", "submit_post"]).await;
+
+        let compose_job = state
+            .create_job(&job_request(json!({
+                "platform": "x", "action": "post", "payload": { "text": "Send it" }
+            })))
+            .unwrap();
+        let command = next_command(&mut socket).await;
+        send(&mut socket, json!({
+            "version":1,"type":"result","jobId":compose_job.id,"commandId":compose_job.command_id,
+            "issuedAt":now_millis(),"expiresAt":command["expiresAt"],"outcome":"succeeded",
+            "data":{"kind":"post_draft","text":"Send it","visibleAccountIdentity":"@owner"}
+        })).await;
+        let composed = wait_for_status(state, &compose_job.id, "succeeded").await;
+        let draft_id = composed.draft_id.expect("compose produced no post");
+
+        let ask = next_message(&mut socket, "ask").await;
+        let now = now_millis();
+        send(
+            &mut socket,
+            json!({
+                "version":1,"type":"answer","questionId":ask["questionId"],"choice":"postNow",
+                "issuedAt":now,"expiresAt":now + 60_000
+            }),
+        )
+        .await;
+
+        assert_eq!(next_command(&mut socket).await["action"], "submit_post");
+        assert_eq!(
+            state
+                .store
+                .browser()
+                .get_draft(&draft_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "confirmed"
+        );
+    }
+
     // Full compose -> confirm -> submit lifecycle for a new X post, through
     // the real dispatch loop and draft-consumption path. Also proves that
     // confirming the same draft twice is refused, so a retried confirm can
@@ -2047,15 +2349,15 @@ mod tests {
     async fn server_fixture_composes_and_submits_a_post_without_duplication() {
         let fixture = Fixture::start().await;
         let state = &fixture.state;
-        let mut socket = pair(&fixture, &["compose_post", "submit_post"]).await;
+        let mut socket = pair(&fixture, &["post", "submit_post"]).await;
 
         let compose_job = state
             .create_job(&job_request(json!({
-                "platform": "x", "action": "compose_post", "payload": { "text": "Exact post text" }
+                "platform": "x", "action": "post", "payload": { "text": "Exact post text" }
             })))
             .unwrap();
         let compose_command = next_command(&mut socket).await;
-        assert_eq!(compose_command["action"], "compose_post");
+        assert_eq!(compose_command["action"], "post");
         assert_eq!(compose_command["targetUrl"], "https://x.com/compose/post");
         assert_eq!(compose_command["payload"]["text"], "Exact post text");
         send(&mut socket, json!({
@@ -2068,9 +2370,7 @@ mod tests {
             }
         })).await;
         let composed = wait_for_status(state, &compose_job.id, "succeeded").await;
-        let draft_id = composed
-            .draft_id
-            .expect("compose_post job did not produce a draft");
+        let draft_id = composed.draft_id.expect("post job did not produce a draft");
 
         let creation = confirm_draft_value(state, &draft_id, true).unwrap();
         assert_eq!(creation["job"]["action"], "submit_post");
@@ -2373,11 +2673,11 @@ mod tests {
             reqwest::StatusCode::BAD_REQUEST
         );
 
-        // prepare_reply needs both a post ID and exact text; a missing one
+        // reply needs both a post ID and exact text; a missing one
         // fails before dispatch.
         assert_eq!(
             invoke(
-                "x.prepare_reply",
+                "x.reply",
                 json!({
                     "targetUrl": "https://x.com/status/42",
                     "payload": { "text": "exact reply text" }
@@ -2388,7 +2688,7 @@ mod tests {
             reqwest::StatusCode::BAD_REQUEST
         );
         let prepared = invoke(
-            "x.prepare_reply",
+            "x.reply",
             json!({
                 "targetUrl": "https://x.com/status/42",
                 "payload": { "postId": "42", "text": "exact reply text" }
@@ -2397,7 +2697,7 @@ mod tests {
         .await;
         assert_eq!(prepared.status(), reqwest::StatusCode::ACCEPTED);
         let prepared_job: Value = prepared.json().await.unwrap();
-        assert_eq!(prepared_job["job"]["action"], "prepare_reply");
+        assert_eq!(prepared_job["job"]["action"], "reply");
         assert_eq!(prepared_job["job"]["targetUrl"], "https://x.com/status/42");
 
         // Submissions are reached only by confirming a draft.

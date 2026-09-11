@@ -6,7 +6,7 @@ import { renderTabs, type TabId } from "./tabs";
 import { mountActivityLog } from "../activityLog/activityLog";
 import { humanizeHealthError } from "../health";
 import { toast, type PendingToast } from "../toast";
-import type { AdapterManifest, ConnHealth, Integration } from "./types";
+import { WANDE_TYPE, type AdapterManifest, type ConnHealth, type Integration } from "./types";
 
 export type DetailActions = {
   onEdit: () => void;
@@ -37,7 +37,10 @@ export function mountIntegrationDetail(
   // An integration that publishes no tools has none to list and no rules to
   // approve, so it gets no Tools tab.
   const tabs: TabId[] = manifest?.tools?.length ? ["logs", "overview", "tools"] : ["logs", "overview"];
-  let selectedTab: TabId = openAt && tabs.includes(openAt) ? openAt : "logs";
+  // Wande is the one integration with something to answer inside it, so it
+  // opens on the posts rather than on the history.
+  const landing: TabId = integration.type === WANDE_TYPE ? "overview" : "logs";
+  let selectedTab: TabId = openAt && tabs.includes(openAt) ? openAt : landing;
   let testing = false;
   const logsMount = document.createElement("div");
   logsMount.className = "logs-mount";

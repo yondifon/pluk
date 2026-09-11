@@ -1,10 +1,11 @@
 //! The Wande surface the window calls: the Pluk ID Chrome pairs with, and the
 //! posts waiting on the person at the keyboard.
 //!
-//! Publishing is two steps on purpose — an agent writes a draft and stops,
-//! and only a confirmation sends it. These commands are that confirmation, so
-//! they read and write the browser state in process rather than over the
-//! `/wande` routes.
+//! Nothing an agent can reach sends a post. These commands are the other
+//! side of that: the list a person sees and the actions they take on it, for
+//! the posts that were not answered when they were written. They read and
+//! write the browser state in process, so no route carrying the Pluk ID has
+//! to be able to publish.
 
 use serde::Serialize;
 use tauri::State;

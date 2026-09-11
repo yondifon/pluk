@@ -50,7 +50,7 @@ describe("the posts waiting on a person", () => {
   test("with nothing waiting, it says so instead of going blank", async () => {
     const { root, destroy } = await mount();
     expect(root.querySelector(".empty")!.textContent).toBe(
-      "No posts waiting. Anything written through Wande waits here for you to send.",
+      "No posts waiting. Anything written through Wande lands here for you to send.",
     );
     destroy();
   });

@@ -3,7 +3,7 @@
 //!
 //! The tables live in `pluk.db` alongside everything else Pluk records, and
 //! evolve through the same `user_version` ladder. A draft is written only by
-//! a successful `compose_post` or `prepare_reply`, and only `consume_draft`
+//! a successful `post` or `reply`, and only `consume_draft`
 //! turns one into a submission job — that is where the publish boundary is
 //! enforced.
 
@@ -17,14 +17,16 @@ use uuid::Uuid;
 use crate::Store;
 use schedule::{ScheduleSettings, next_slot};
 
-/// Default job expiry. Also bounds how long an unconfirmed draft lives and
-/// how long a confirmed submission job stays dispatchable.
+/// Default job expiry, and how long a confirmed submission job stays
+/// dispatchable. A page either answers inside this or it has stalled.
 pub const DEFAULT_JOB_TTL_MS: i64 = 2 * 60 * 1000;
 
 pub const MAX_JOBS: i64 = 1_000;
 pub const MAX_ARTIFACTS: i64 = 2_000;
-/// How long a draft waits for a confirmation before it expires unposted.
-pub const DRAFT_TTL_MS: i64 = DEFAULT_JOB_TTL_MS;
+/// How long a written post waits on a person before it expires unposted.
+/// Longer than a job's own expiry on purpose: a page that stalls for two
+/// minutes is broken, but a person who takes two minutes to answer is not.
+pub const DRAFT_TTL_MS: i64 = 10 * 60 * 1000;
 
 // A reservation's post text lives on its draft, and the draft is gone once its
 // job is pruned, so the join stays outer and the text can come back empty.
@@ -173,7 +175,7 @@ pub struct JobInput<'a> {
     pub ttl_ms: i64,
 }
 
-/// The draft a successful `prepare_reply` or `compose_post` produced. Nothing
+/// The draft a successful `reply` or `post` produced. Nothing
 /// is public until the draft is confirmed.
 #[derive(Clone, Debug)]
 pub enum DraftInput<'a> {
@@ -1190,7 +1192,7 @@ mod tests {
     fn compose<'a>(payload: &'a Value) -> JobInput<'a> {
         JobInput {
             platform: "x",
-            action: "compose_post",
+            action: "post",
             target_url: "https://x.com/compose/post",
             payload,
             ttl_ms: DEFAULT_JOB_TTL_MS,
@@ -1266,7 +1268,7 @@ mod tests {
             .create_job(
                 &JobInput {
                     platform: "x",
-                    action: "prepare_reply",
+                    action: "reply",
                     target_url: "https://x.com/status/42",
                     payload: &payload,
                     ttl_ms: DEFAULT_JOB_TTL_MS,
@@ -1313,7 +1315,7 @@ mod tests {
                 .create_job(
                     &JobInput {
                         platform: "x",
-                        action: "prepare_reply",
+                        action: "reply",
                         target_url: "https://x.com/status/42",
                         payload: &payload,
                         ttl_ms: DEFAULT_JOB_TTL_MS,

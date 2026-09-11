@@ -52,13 +52,13 @@ const ACTIONS: [(Action, &str, &str); 9] = [
         READ,
     ),
     (
-        Action::PrepareReply,
-        "Prepare an immutable reply draft with an exact post ID and exact text. Does not submit; confirm separately.",
+        Action::Reply,
+        "Reply to an exact post ID with exact text. The user approves it before it is sent.",
         WRITE,
     ),
     (
-        Action::ComposePost,
-        "Prepare an immutable new post draft with exact text. Always the compose box; no target URL accepted. Does not post; confirm separately to post now or to queue it.",
+        Action::Post,
+        "Post exact text. Always the compose box; no target URL accepted. The user approves it before it is sent, now or into the queue.",
         WRITE,
     ),
 ];
@@ -134,7 +134,7 @@ fn args_schema(platform: Platform, action: Action) -> Value {
         "default": DEFAULT_JOB_TTL_MS,
         "description": "Job expiry window in milliseconds.",
     });
-    if action == Action::PrepareReply {
+    if action == Action::Reply {
         return json!({
             "targetUrl": target_url,
             "payload": {
@@ -157,7 +157,7 @@ fn args_schema(platform: Platform, action: Action) -> Value {
             "ttlMs": ttl_ms,
         });
     }
-    if action == Action::ComposePost {
+    if action == Action::Post {
         let default_target = fixed_compose_target(platform);
         return json!({
             "payload": {
@@ -277,7 +277,7 @@ fn result_schema() -> Value {
                 },
                 "draftId": {
                     "type": ["string", "null"],
-                    "description": "Set for prepare_reply and compose_post; confirm via POST /wande/drafts/{draftId}/confirm. Confirming posts immediately; send {\"schedule\": true} to take the next queue slot instead.",
+                    "description": "Set for reply and post. The post is put to the user, and their answer is what sends it; read this draft to see what they decided. Nothing here publishes it.",
                 },
             },
         },
@@ -301,8 +301,8 @@ mod tests {
                 "x.read_trends",
                 "x.refresh",
                 "x.capture",
-                "x.prepare_reply",
-                "x.compose_post",
+                "x.reply",
+                "x.post",
             ]
         );
         // Submissions are reached by confirming a draft, never by invoking a tool.
@@ -315,7 +315,7 @@ mod tests {
         assert!(find_tool("x.inspect").is_some());
         assert!(find_tool("x.read_profile").is_some());
         assert!(find_tool("x.read_post").is_some());
-        assert!(find_tool("x.compose_post").is_some());
+        assert!(find_tool("x.post").is_some());
         assert!(find_tool("linkedin.read_post").is_none());
         assert!(find_tool("gmail.read_feed").is_none());
         assert!(find_tool("tiktok.read_profile").is_none());

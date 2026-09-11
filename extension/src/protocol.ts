@@ -38,9 +38,9 @@ export const ACTIONS = [
   "read_trends",
   "refresh",
   "capture",
-  "prepare_reply",
+  "reply",
   "submit_reply",
-  "compose_post",
+  "post",
   "submit_post",
 ] as const;
 export type Action = (typeof ACTIONS)[number];
@@ -65,9 +65,9 @@ export const DRIVER_CONTRACTS: Record<
       "read_trends",
       "refresh",
       "capture",
-      "prepare_reply",
+      "reply",
       "submit_reply",
-      "compose_post",
+      "post",
       "submit_post",
     ],
   },
@@ -79,7 +79,7 @@ export const DRIVER_CONTRACTS: Record<
 export const FIXED_FEED_TARGET = "https://x.com/home";
 export const FIXED_TRENDS_TARGET = "https://x.com/explore";
 
-// compose_post has one fixed destination, and unlike read_feed/read_trends
+// x.post has one fixed destination, and unlike read_feed/read_trends
 // it never accepts a caller-supplied override: there is no other page a new
 // post could be composed on.
 export const FIXED_COMPOSE_TARGET = "https://x.com/compose/post";
@@ -274,13 +274,48 @@ export interface HeartbeatAckEnvelope {
 export type ExtensionMessage =
   | ExtensionHelloEnvelope
   | HeartbeatEnvelope
-  | ResultEnvelope;
+  | ResultEnvelope
+  | AnswerEnvelope;
 
 export type ServerMessage =
   | ReadyEnvelope
   | CommandEnvelope
   | HeartbeatEnvelope
-  | HeartbeatAckEnvelope;
+  | HeartbeatAckEnvelope
+  | AskEnvelope;
+
+/** The four answers the overlay offers. Nothing else is an answer. */
+export const CHOICES = ["postNow", "queue", "discard", "later"] as const;
+export type PostChoice = (typeof CHOICES)[number];
+
+/**
+ * Pluk asking the owner about a post that has just been written.
+ *
+ * It carries what they have to see and nothing more — no identifier for the
+ * post itself, so an answer can only ever name the question it came from.
+ */
+export interface AskEnvelope {
+  readonly version: typeof PROTOCOL_VERSION;
+  readonly type: "ask";
+  readonly questionId: string;
+  readonly account: string;
+  readonly text: string;
+  readonly replyingTo: string | null;
+  readonly canQueue: boolean;
+  /** When the overlay should give up, in epoch milliseconds. */
+  readonly closesAt: number;
+  readonly issuedAt: number;
+  readonly expiresAt: number;
+}
+
+export interface AnswerEnvelope {
+  readonly version: typeof PROTOCOL_VERSION;
+  readonly type: "answer";
+  readonly questionId: string;
+  readonly choice: PostChoice;
+  readonly issuedAt: number;
+  readonly expiresAt: number;
+}
 
 export interface ReadyEnvelope {
   readonly version: typeof PROTOCOL_VERSION;
@@ -438,7 +473,7 @@ function parsePayload(
     return invalid("Payload must be an object.");
   }
 
-  if (action === "compose_post") {
+  if (action === "post") {
     if (
       !hasOnlyKeys(value, ["text"]) ||
       !isString(value.text, MAX_TEXT_LENGTH)
@@ -448,7 +483,7 @@ function parsePayload(
     return { ok: true, value: { kind: "compose", text: value.text } };
   }
 
-  if (action === "prepare_reply") {
+  if (action === "reply") {
     if (
       !hasOnlyKeys(value, ["postId", "text"]) ||
       !isIdentifier(value.postId) ||
@@ -640,7 +675,7 @@ export function parseCreateJobRequest(
     }
     targetUrl = resolved.value.targetUrl;
     payload = resolved.value.payload;
-  } else if (value.action === "compose_post") {
+  } else if (value.action === "post") {
     const resolvedTarget = resolveComposeTarget(
       value.platform,
       value.targetUrl,
@@ -779,7 +814,7 @@ function parseCommandPayload(
   if (!isRecord(value)) {
     return invalid("Command payload must be an object.");
   }
-  if (action === "prepare_reply") {
+  if (action === "reply") {
     if (
       !hasOnlyKeys(value, ["kind", "postId", "text"]) ||
       value.kind !== "reply" ||
@@ -793,7 +828,7 @@ function parseCommandPayload(
       value: { kind: "reply", postId: value.postId, text: value.text },
     };
   }
-  if (action === "compose_post") {
+  if (action === "post") {
     if (
       !hasOnlyKeys(value, ["kind", "text"]) ||
       value.kind !== "compose" ||
@@ -1099,6 +1134,9 @@ export function parseServerMessage(
   if (value.type === "heartbeat_ack") {
     return parseHeartbeatAckMessage(value);
   }
+  if (value.type === "ask") {
+    return parseAskMessage(value);
+  }
   return invalid("Message type is not supported.");
 }
 
@@ -1133,6 +1171,58 @@ function parseHelloMessage(
       type: "hello",
       extensionVersion: value.extensionVersion,
       capabilities: capabilities.value,
+      issuedAt: times.issuedAt,
+      expiresAt: times.expiresAt,
+    },
+  };
+}
+
+const CHOICE_SET = new Set<string>(CHOICES);
+
+export function isPostChoice(value: unknown): value is PostChoice {
+  return typeof value === "string" && CHOICE_SET.has(value);
+}
+
+function parseAskMessage(
+  value: Record<string, unknown>,
+): ValidationResult<AskEnvelope> {
+  if (
+    !hasOnlyKeys(value, [
+      "version",
+      "type",
+      "questionId",
+      "account",
+      "text",
+      "replyingTo",
+      "canQueue",
+      "closesAt",
+      "issuedAt",
+      "expiresAt",
+    ]) ||
+    !isIdentifier(value.questionId) ||
+    !isString(value.account, MAX_TEXT_LENGTH) ||
+    !isString(value.text, MAX_TEXT_LENGTH) ||
+    (value.replyingTo !== null && !isString(value.replyingTo, MAX_TEXT_LENGTH)) ||
+    typeof value.canQueue !== "boolean" ||
+    !isTimestamp(value.closesAt)
+  ) {
+    return invalid("Ask message has an unsupported shape.");
+  }
+  const times = parseEnvelopeTimes(value);
+  if (!times) {
+    return invalid("Ask message has an unsupported shape.");
+  }
+  return {
+    ok: true,
+    value: {
+      version: PROTOCOL_VERSION,
+      type: "ask",
+      questionId: value.questionId,
+      account: value.account,
+      text: value.text,
+      replyingTo: value.replyingTo as string | null,
+      canQueue: value.canQueue,
+      closesAt: value.closesAt,
       issuedAt: times.issuedAt,
       expiresAt: times.expiresAt,
     },
@@ -1432,6 +1522,21 @@ export function makeReadyEnvelope(
       hostnames: DRIVER_CONTRACTS[platform].hostnames,
       capabilities: DRIVER_CONTRACTS[platform].capabilities,
     })),
+    issuedAt: now,
+    expiresAt: now + HEARTBEAT_INTERVAL_MS,
+  };
+}
+
+export function makeAnswerEnvelope(
+  questionId: string,
+  choice: PostChoice,
+  now: number,
+): AnswerEnvelope {
+  return {
+    version: PROTOCOL_VERSION,
+    type: "answer",
+    questionId,
+    choice,
     issuedAt: now,
     expiresAt: now + HEARTBEAT_INTERVAL_MS,
   };

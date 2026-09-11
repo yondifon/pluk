@@ -4,7 +4,9 @@ import {
   canonicalizeTargetUrl,
   MAX_EXTRACT_BYTES,
   MAX_SCREENSHOT_BYTES,
+  isPostChoice,
   type Platform,
+  type PostChoice,
   type ResultData,
 } from "./protocol";
 import { getSiteDriver } from "./drivers";
@@ -18,13 +20,14 @@ import {
   readAutomationContext,
   writeAutomationContext,
 } from "./state";
+import { type PostPrompt, postPromptScript } from "./post-prompt";
 
 const NAVIGATION_TIMEOUT_MS = 20_000;
 const CAPTURE_INTERVAL_MS = 500;
 const MAX_RESULT_TEXT_LENGTH = 8_000;
 
 // Only the explicit "capture" tool touches captureVisibleTab. Every other
-// action, including prepare_reply/submit_reply, returns DOM text only, so
+// action, including reply/submit_reply, returns DOM text only, so
 // a missing or failed screenshot grant can never block reading or replying.
 const SCREENSHOT_ACTIONS = new Set<Action>(["capture"]);
 
@@ -32,12 +35,12 @@ const SCREENSHOT_ACTIONS = new Set<Action>(["capture"]);
 // uncertainty past that click (a Chrome failure, an unparsable result) must
 // surface as "unknown", never as a clean failure that invites a retry.
 const SUBMIT_ACTIONS = new Set<Action>(["submit_reply", "submit_post"]);
-// compose_post types the exact text into X's editor, so its window needs focus
+// post types the exact text into X's editor, so its window needs focus
 // for the same reason a submit does.
 const FOCUS_ACTIONS = new Set<Action>([
   "submit_reply",
   "submit_post",
-  "compose_post",
+  "post",
 ]);
 
 interface TabState {
@@ -102,6 +105,39 @@ export class BrowserExecutor {
       () => undefined,
     );
     return next;
+  }
+
+  /**
+   * Draw Pluk's question over the page the post was written into.
+   *
+   * Deliberately outside the command chain: the owner may take minutes, and
+   * nothing else should wait on them. Anything that goes wrong — no tab, the
+   * tab navigated, Chrome refused — is not an answer, so the post is left
+   * waiting rather than sent or thrown away.
+   */
+  async askAboutPost(prompt: PostPrompt): Promise<PostChoice> {
+    const context = await readAutomationContext();
+    if (context === null) {
+      console.error("[wande] no automation tab to ask in; post left waiting");
+      return "later";
+    }
+    let results: readonly chrome.scripting.InjectionResult<PostChoice>[];
+    try {
+      results = await chrome.scripting.executeScript({
+        target: { tabId: context.tabId },
+        func: postPromptScript,
+        args: [prompt],
+      });
+    } catch (error) {
+      console.error("[wande] could not draw the prompt:", error);
+      return "later";
+    }
+    const choice = results[0]?.result;
+    if (!isPostChoice(choice)) {
+      console.error("[wande] prompt returned no answer:", choice);
+      return "later";
+    }
+    return choice;
   }
 
   private async execute(

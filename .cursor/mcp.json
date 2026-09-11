@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "space-local": {
+      "args": [
+        "mcp-remote",
+        "http://localhost:4242/mcp/pluk_dcd869053e5e4a61ba35a8e92c09d0ce"
+      ],
+      "command": "bunx"
+    }
+  }
+}

@@ -211,7 +211,7 @@ test("capture still attaches a screenshot", async () => {
   expect(result.screenshotArtifactId).toBe("screenshot-artifact");
 });
 
-test("prepare_reply and submit_reply succeed without a screenshot even when capture would fail", async () => {
+test("reply and submit_reply succeed without a screenshot even when capture would fail", async () => {
   captureVisibleTabImpl = () => Promise.reject(new Error("quota exceeded"));
   executeScriptImpl = (targetUrl) => ({
     state: "ready",
@@ -227,7 +227,7 @@ test("prepare_reply and submit_reply succeed without a screenshot even when capt
   const sink = makeSink();
 
   const draftCommand: CommandEnvelope = {
-    ...makeCommand("prepare_reply", "https://x.com/status/42"),
+    ...makeCommand("reply", "https://x.com/status/42"),
     payload: {
       kind: "reply",
       postId: "42",

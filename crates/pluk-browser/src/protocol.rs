@@ -48,9 +48,9 @@ pub enum Action {
     ReadTrends,
     Refresh,
     Capture,
-    PrepareReply,
+    Reply,
     SubmitReply,
-    ComposePost,
+    Post,
     SubmitPost,
 }
 
@@ -64,9 +64,9 @@ impl Action {
             Self::ReadTrends => "read_trends",
             Self::Refresh => "refresh",
             Self::Capture => "capture",
-            Self::PrepareReply => "prepare_reply",
+            Self::Reply => "reply",
             Self::SubmitReply => "submit_reply",
-            Self::ComposePost => "compose_post",
+            Self::Post => "post",
             Self::SubmitPost => "submit_post",
         }
     }
@@ -80,9 +80,9 @@ impl Action {
             "read_trends" => Some(Self::ReadTrends),
             "refresh" => Some(Self::Refresh),
             "capture" => Some(Self::Capture),
-            "prepare_reply" => Some(Self::PrepareReply),
+            "reply" => Some(Self::Reply),
             "submit_reply" => Some(Self::SubmitReply),
-            "compose_post" => Some(Self::ComposePost),
+            "post" => Some(Self::Post),
             "submit_post" => Some(Self::SubmitPost),
             _ => None,
         }
@@ -179,6 +179,18 @@ pub enum ExtensionMessage {
     Hello(HelloMessage),
     Heartbeat(HeartbeatMessage),
     Result(ResultMessage),
+    Answer(AnswerMessage),
+}
+
+/// What the owner said about a post, carried back from the overlay the
+/// extension drew on the page. `choice` is checked against the four the
+/// overlay offers; anything else is refused before it reaches a draft.
+#[derive(Clone, Debug)]
+pub struct AnswerMessage {
+    pub question_id: String,
+    pub choice: String,
+    pub issued_at: i64,
+    pub expires_at: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -204,7 +216,7 @@ pub(crate) fn fixed_trends_target(platform: Platform) -> &'static str {
     }
 }
 
-// compose_post has one fixed destination and, unlike read_feed/read_trends,
+// x.post has one fixed destination and, unlike read_feed/read_trends,
 // never accepts a caller-supplied override: there is no other page a new
 // post could be composed on.
 pub(crate) fn fixed_compose_target(platform: Platform) -> &'static str {
@@ -411,7 +423,7 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
     let target_url_field = object.get("targetUrl").and_then(Value::as_str);
     let (target_url, payload) = if action == Action::ReadProfile {
         resolve_profile_target(platform, target_url_field, object.get("payload"))?
-    } else if action == Action::ComposePost {
+    } else if action == Action::Post {
         let target_url = resolve_compose_target(platform, target_url_field)?;
         let payload = parse_public_payload(object.get("payload"), action)?;
         (target_url, payload)
@@ -453,7 +465,7 @@ fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResu
     let object = value
         .and_then(Value::as_object)
         .ok_or_else(|| invalid("Payload must be an object."))?;
-    if action == Action::ComposePost {
+    if action == Action::Post {
         if !has_only_keys(object, &["text"]) {
             return Err(invalid("Post payload needs exact text."));
         }
@@ -464,7 +476,7 @@ fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResu
             .ok_or_else(|| invalid("Post payload needs exact text."))?;
         return Ok(json!({ "kind": "compose", "text": text }));
     }
-    if action == Action::PrepareReply {
+    if action == Action::Reply {
         if !has_only_keys(object, &["postId", "text"]) {
             return Err(invalid("Reply payload needs a post ID and exact text."));
         }
@@ -558,7 +570,7 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
     let object = value
         .and_then(Value::as_object)
         .ok_or_else(|| invalid("Command payload must be an object."))?;
-    if action == Action::PrepareReply {
+    if action == Action::Reply {
         if !has_only_keys(object, &["kind", "postId", "text"])
             || object.get("kind").and_then(Value::as_str) != Some("reply")
             || !object
@@ -586,7 +598,7 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
         }
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
-    if action == Action::ComposePost {
+    if action == Action::Post {
         if !has_only_keys(object, &["kind", "text"])
             || object.get("kind").and_then(Value::as_str) != Some("compose")
             || !object
@@ -682,6 +694,7 @@ pub fn parse_extension_message(value: &Value) -> ValidationResult<ExtensionMessa
         Some("hello") => parse_hello(object).map(ExtensionMessage::Hello),
         Some("heartbeat") => parse_heartbeat(object).map(ExtensionMessage::Heartbeat),
         Some("result") => parse_result(object).map(ExtensionMessage::Result),
+        Some("answer") => parse_answer(object).map(ExtensionMessage::Answer),
         _ => Err(invalid("Message type is not supported.")),
     }
 }
@@ -708,6 +721,49 @@ fn parse_hello(object: &Map<String, Value>) -> ValidationResult<HelloMessage> {
     let (issued_at, expires_at) = parse_envelope_times(object)?;
     Ok(HelloMessage {
         capabilities,
+        issued_at,
+        expires_at,
+    })
+}
+
+/// The four answers the overlay can give. Kept here so the wire word is
+/// validated in the same place every other envelope field is.
+const CHOICES: [&str; 4] = ["postNow", "queue", "discard", "later"];
+
+fn parse_answer(object: &Map<String, Value>) -> ValidationResult<AnswerMessage> {
+    if !has_only_keys(
+        object,
+        &[
+            "version",
+            "type",
+            "questionId",
+            "choice",
+            "issuedAt",
+            "expiresAt",
+        ],
+    ) || !object
+        .get("questionId")
+        .and_then(Value::as_str)
+        .is_some_and(is_identifier)
+        || !object
+            .get("choice")
+            .and_then(Value::as_str)
+            .is_some_and(|choice| CHOICES.contains(&choice))
+    {
+        return Err(invalid("Answer message has an unsupported shape."));
+    }
+    let (issued_at, expires_at) = parse_envelope_times(object)?;
+    Ok(AnswerMessage {
+        question_id: object
+            .get("questionId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        choice: object
+            .get("choice")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
         issued_at,
         expires_at,
     })
@@ -1092,9 +1148,9 @@ pub fn make_ready_envelope(connection_id: &str, now: i64) -> Value {
         Action::ReadTrends,
         Action::Refresh,
         Action::Capture,
-        Action::PrepareReply,
+        Action::Reply,
         Action::SubmitReply,
-        Action::ComposePost,
+        Action::Post,
         Action::SubmitPost,
     ]
     .map(Action::as_str);
@@ -1108,6 +1164,32 @@ pub fn make_ready_envelope(connection_id: &str, now: i64) -> Value {
             "hostnames": hostnames(Platform::X),
             "capabilities": capabilities,
         }],
+        "issuedAt": now,
+        "expiresAt": now + HEARTBEAT_INTERVAL_MS,
+    })
+}
+
+/// The question the extension draws over the page it just wrote into.
+///
+/// It carries what the owner has to see and nothing else — no draft id, so a
+/// tampered answer cannot name a different post, and no job id, so the page
+/// learns nothing about the work behind it. `closesAt` is when the overlay
+/// should give up; the envelope's own expiry is only about this message.
+pub fn make_ask(
+    question_id: &str,
+    prompt: &crate::prompt::PostPrompt,
+    now: i64,
+    closes_at: i64,
+) -> Value {
+    json!({
+        "version": PROTOCOL_VERSION,
+        "type": "ask",
+        "questionId": question_id,
+        "account": prompt.account,
+        "text": prompt.text,
+        "replyingTo": prompt.replying_to,
+        "canQueue": prompt.can_queue,
+        "closesAt": closes_at,
         "issuedAt": now,
         "expiresAt": now + HEARTBEAT_INTERVAL_MS,
     })
@@ -1352,13 +1434,13 @@ mod tests {
     #[test]
     fn composing_refuses_a_caller_supplied_target() {
         let composed = parse_create_job_request(&json!({
-            "platform": "x", "action": "compose_post", "payload": { "text": "Exact text" }
+            "platform": "x", "action": "post", "payload": { "text": "Exact text" }
         }))
         .unwrap();
         assert_eq!(composed.target_url, "https://x.com/compose/post");
         assert!(
             parse_create_job_request(&json!({
-                "platform": "x", "action": "compose_post",
+                "platform": "x", "action": "post",
                 "targetUrl": "https://x.com/compose/post", "payload": { "text": "Exact text" }
             }))
             .is_err()

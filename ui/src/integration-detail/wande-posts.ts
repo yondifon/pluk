@@ -76,6 +76,14 @@ function line(text: string, className: string): HTMLParagraphElement {
   return element;
 }
 
+function cardTitle(id: string, text: string): HTMLElement {
+  const title = document.createElement("h2");
+  title.className = "ui-card-title";
+  title.id = id;
+  title.textContent = text;
+  return title;
+}
+
 /**
  * The two lists behind Wande's half of publishing: what has been written and
  * is waiting on a person, and what is holding a slot in the queue.
@@ -101,7 +109,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
   let waiting: WaitingPost[] = [];
   let queued: QueuedPost[] = [];
   let expired: WaitingPost[] = [];
-  let busy: string | null = null;
+  let busy = false;
   const handled = new Set<string>();
   const countdowns = new Map<string, { element: HTMLElement; expiresAt: number }>();
   let painted = "";
@@ -119,6 +127,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
           gone.add(post.id);
         }
       }
+      for (const id of handled) if (!arrived.has(id)) handled.delete(id);
       waiting = posts.waiting.filter((post) => !gone.has(post.id));
       queued = posts.queued;
       chromeConnected = posts.chromeConnected;
@@ -151,7 +160,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
     done: { title: string; description: string },
     failed: string,
   ): Promise<void> {
-    busy = id;
+    busy = true;
     handled.add(id);
     render();
     try {
@@ -161,7 +170,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
       handled.delete(id);
       toast.error(failed, { description: error instanceof Error ? error.message : String(error) });
     }
-    busy = null;
+    busy = false;
     await refresh();
   }
 
@@ -169,7 +178,12 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
     void act(
       post.id,
       () => invoke("send_wande_post", { draftId: post.id, queue: false }),
-      { title: "On its way", description: "Wande is posting it in Chrome." },
+      {
+        title: "On its way",
+        description: chromeConnected
+          ? "Wande is posting it in Chrome."
+          : "It goes out as soon as Chrome is connected.",
+      },
       "Couldn’t post this",
     );
   }
@@ -235,7 +249,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
         : []),
       createButton("Discard", { variant: "secondary", size: "sm", onClick: () => discard(post) }),
     ];
-    for (const button of buttons) button.disabled = busy !== null;
+    for (const button of buttons) button.disabled = busy;
     actions.append(...buttons);
     footer.append(left, actions);
     item.appendChild(footer);
@@ -273,7 +287,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
         size: "sm",
         onClick: () => cancelQueued(post),
       });
-      cancel.disabled = busy !== null;
+      cancel.disabled = busy;
       actions.appendChild(cancel);
       item.appendChild(actions);
     }
@@ -282,11 +296,10 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
 
   function renderWaiting(now: number): void {
     waitingCard.innerHTML = "";
-    const title = document.createElement("h2");
-    title.className = "ui-card-title";
-    title.id = TITLE_ID;
-    title.textContent = "Waiting for you";
-    waitingCard.append(title, line("Nothing goes out until you send it.", "hint"));
+    waitingCard.append(
+      cardTitle(TITLE_ID, "Waiting for you"),
+      line("Nothing goes out until you send it.", "hint"),
+    );
 
     if (unreachable) {
       const failure = line("Pluk can’t show this right now. Restart Pluk and try again.", "empty");
@@ -306,7 +319,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
       waitingCard.appendChild(offline);
     }
     if (!waiting.length && !expired.length) {
-      waitingCard.appendChild(line("No posts waiting. Anything written through Wande waits here for you to send.", "empty"));
+      waitingCard.appendChild(line("No posts waiting. Anything written through Wande lands here for you to send.", "empty"));
       return;
     }
     const list = document.createElement("ul");
@@ -320,11 +333,7 @@ export function mountWandePosts(container: HTMLElement): { destroy: () => void }
     queueCard.hidden = !queued.length;
     queueCard.innerHTML = "";
     if (!queued.length) return;
-    const title = document.createElement("h2");
-    title.className = "ui-card-title";
-    title.id = QUEUE_TITLE_ID;
-    title.textContent = "Going out later";
-    queueCard.appendChild(title);
+    queueCard.appendChild(cardTitle(QUEUE_TITLE_ID, "Going out later"));
     const list = document.createElement("ul");
     list.className = "wande-post-list";
     for (const post of queued) list.appendChild(queuedItem(post, now));
