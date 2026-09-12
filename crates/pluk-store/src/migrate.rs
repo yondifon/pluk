@@ -20,7 +20,7 @@ use crate::error::{Result, StoreError};
 /// A single migration step: upgrades the database by one version.
 type Step = fn(&mut Connection) -> Result<()>;
 
-const LADDER: &[Step] = &[migrate_v1, migrate_v2, migrate_v3];
+const LADDER: &[Step] = &[migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5];
 
 /// Bring `conn` up to the latest version.
 pub(crate) fn run(conn: &mut Connection) -> Result<()> {
@@ -263,6 +263,89 @@ fn migrate_v3(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 4: give each browser integration its own pairing token and queue
+/// ownership. Existing rows move to the only Wande integration when there is
+/// exactly one, otherwise they keep the standalone `browser` owner.
+fn migrate_v4(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "
+        ALTER TABLE browser_jobs ADD COLUMN integration_id TEXT NOT NULL DEFAULT 'browser';
+        ALTER TABLE browser_drafts ADD COLUMN integration_id TEXT NOT NULL DEFAULT 'browser';
+
+        CREATE INDEX IF NOT EXISTS browser_jobs_integration_status_created_idx
+            ON browser_jobs (integration_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS browser_drafts_integration_status_idx
+            ON browser_drafts (integration_id, status, created_at);
+
+        CREATE TABLE IF NOT EXISTS browser_pairing_tokens (
+            integration_id TEXT PRIMARY KEY,
+            token TEXT NOT NULL UNIQUE
+        );
+        ",
+    )?;
+
+    tx.execute(
+        "UPDATE browser_jobs
+         SET integration_id = (SELECT id FROM integrations WHERE type = 'wande' LIMIT 1)
+         WHERE integration_id = 'browser'
+           AND (SELECT COUNT(*) FROM integrations WHERE type = 'wande') = 1",
+        [],
+    )?;
+    tx.execute(
+        "UPDATE browser_drafts
+         SET integration_id = (SELECT id FROM integrations WHERE type = 'wande' LIMIT 1)
+         WHERE integration_id = 'browser'
+           AND (SELECT COUNT(*) FROM integrations WHERE type = 'wande') = 1",
+        [],
+    )?;
+    tx.execute(
+        "INSERT OR IGNORE INTO browser_pairing_tokens (integration_id, token)
+         SELECT integrations.id, settings.value
+         FROM integrations
+         JOIN settings ON settings.key = 'browser_pairing_token'
+         WHERE integrations.type = 'wande'
+           AND (SELECT COUNT(*) FROM integrations WHERE type = 'wande') = 1",
+        [],
+    )?;
+
+    tx.pragma_update(None, "user_version", 4)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Version 5: retain the integration owner when a settled draft is pruned.
+/// Orphaned reservations from a single Wande installation follow that
+/// installation; ambiguous rows keep the standalone browser owner.
+fn migrate_v5(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "
+        ALTER TABLE browser_schedule_reservations ADD COLUMN integration_id TEXT NOT NULL DEFAULT 'browser';
+        CREATE INDEX IF NOT EXISTS browser_schedule_reservations_integration_status_idx
+            ON browser_schedule_reservations (integration_id, status, scheduled_at);
+        ",
+    )?;
+    tx.execute(
+        "UPDATE browser_schedule_reservations
+         SET integration_id = COALESCE(
+             (SELECT browser_drafts.integration_id
+              FROM browser_drafts
+              WHERE browser_drafts.id = browser_schedule_reservations.draft_id),
+             CASE
+                 WHEN (SELECT COUNT(*) FROM integrations WHERE type = 'wande') = 1
+                 THEN (SELECT id FROM integrations WHERE type = 'wande' LIMIT 1)
+                 ELSE 'browser'
+             END
+         )
+         WHERE integration_id = 'browser'",
+        [],
+    )?;
+    tx.pragma_update(None, "user_version", 5)?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Columns added to `query_log` over time by the TypeScript ALTER loop. Old
 /// databases may lack any subset; add exactly what is missing and fail loudly
 /// if an ALTER fails for any other reason.
@@ -479,6 +562,57 @@ mod tests {
             15,
             "no duplicate columns added"
         );
+    }
+
+    #[test]
+    fn reservation_migration_keeps_orphaned_rows_with_the_only_wande() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_v1(&mut conn).unwrap();
+        migrate_v2(&mut conn).unwrap();
+        migrate_v3(&mut conn).unwrap();
+        migrate_v4(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO integrations (id, name, type, token) VALUES ('wande-1', 'Wande', 'wande', 'token-1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO browser_drafts (id, platform, kind, target_url, text, status, created_at, integration_id) VALUES ('draft-1', 'x', 'post', 'https://x.com/compose/post', 'Saved post', 'submitted', 100, 'wande-1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO browser_schedule_reservations (id, draft_id, platform, scheduled_at, status, created_at) VALUES ('reservation-1', 'draft-1', 'x', 200, 'committed', 100)",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute(
+            "INSERT INTO browser_schedule_reservations (id, draft_id, platform, scheduled_at, status, created_at) VALUES ('reservation-2', 'missing-draft', 'x', 300, 'released', 100)",
+            [],
+        )
+        .unwrap();
+
+        migrate_v5(&mut conn).unwrap();
+
+        let owners: Vec<(String, String)> = {
+            let mut statement = conn
+                .prepare("SELECT id, integration_id FROM browser_schedule_reservations ORDER BY id")
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .map(|row| row.unwrap())
+                .collect()
+        };
+        assert_eq!(
+            owners,
+            vec![
+                ("reservation-1".to_owned(), "wande-1".to_owned()),
+                ("reservation-2".to_owned(), "wande-1".to_owned()),
+            ]
+        );
+        assert_eq!(current_version(&conn).unwrap(), 5);
     }
 
     fn columns_of(conn: &Connection, table: &str) -> HashSet<String> {

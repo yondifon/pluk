@@ -104,6 +104,21 @@ fn browser<'a>(state: &'a State<'_, HostState>) -> CmdResult<&'a BrowserState> {
         .ok_or_else(|| "Browser control is not running.".to_string())
 }
 
+fn browser_for<'a>(
+    state: &'a State<'_, HostState>,
+    integration_id: &str,
+) -> CmdResult<&'a BrowserState> {
+    let integration = state
+        .store
+        .integration_by_id(integration_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Wande integration not found.".to_string())?;
+    if integration.r#type != pluk_browser::INTEGRATION_TYPE {
+        return Err("This is not a Wande integration.".to_string());
+    }
+    browser(state)
+}
+
 /// Turn a refusal into something the window can show, keeping the one case a
 /// person can act on — the post is gone — in this layer's own words.
 fn refusal(error: pluk_browser::BridgeError, gone: &str) -> String {
@@ -114,30 +129,36 @@ fn refusal(error: pluk_browser::BridgeError, gone: &str) -> String {
 }
 
 #[tauri::command]
-pub fn get_pluk_id(state: State<'_, HostState>) -> CmdResult<PlukId> {
+pub fn get_pluk_id(
+    state: State<'_, HostState>,
+    integration_id: String,
+) -> CmdResult<PlukId> {
     Ok(PlukId {
-        id: browser(&state)?.pairing_key().to_string(),
+        id: browser_for(&state, &integration_id)?.pairing_key_for(&integration_id)?,
     })
 }
 
 #[tauri::command]
-pub fn list_wande_posts(state: State<'_, HostState>) -> CmdResult<WandePosts> {
-    let browser = browser(&state)?;
+pub fn list_wande_posts(
+    state: State<'_, HostState>,
+    integration_id: String,
+) -> CmdResult<WandePosts> {
+    let browser = browser_for(&state, &integration_id)?;
     let waiting = browser
-        .pending_drafts()
+        .pending_drafts(&integration_id)
         .map_err(|error| error.message)?
         .into_iter()
         .map(WaitingPost::from)
         .collect();
     let queued = browser
-        .scheduled_posts()
+        .scheduled_posts(&integration_id)
         .map_err(|error| error.message)?
         .into_iter()
         .map(QueuedPost::from)
         .collect();
     Ok(WandePosts {
-        chrome_connected: browser.extension_connected(),
-        sending: browser.sending().map_err(|error| error.message)?,
+        chrome_connected: browser.extension_connected(&integration_id),
+        sending: browser.sending(&integration_id).map_err(|error| error.message)?,
         waiting,
         queued,
     })
@@ -146,25 +167,34 @@ pub fn list_wande_posts(state: State<'_, HostState>) -> CmdResult<WandePosts> {
 #[tauri::command]
 pub fn send_wande_post(
     state: State<'_, HostState>,
+    integration_id: String,
     draft_id: String,
     queue: bool,
 ) -> CmdResult<()> {
-    browser(&state)?
-        .confirm_draft(&draft_id, queue)
+    browser_for(&state, &integration_id)?
+        .confirm_draft(&integration_id, &draft_id, queue)
         .map_err(|error| refusal(error, "This post is no longer waiting. Its time ran out."))
 }
 
 #[tauri::command]
-pub fn discard_wande_post(state: State<'_, HostState>, draft_id: String) -> CmdResult<()> {
-    browser(&state)?
-        .discard_draft(&draft_id)
+pub fn discard_wande_post(
+    state: State<'_, HostState>,
+    integration_id: String,
+    draft_id: String,
+) -> CmdResult<()> {
+    browser_for(&state, &integration_id)?
+        .discard_draft(&integration_id, &draft_id)
         .map_err(|error| refusal(error, "This post is no longer waiting. Its time ran out."))
 }
 
 #[tauri::command]
-pub fn cancel_queued_wande_post(state: State<'_, HostState>, draft_id: String) -> CmdResult<()> {
-    browser(&state)?
-        .cancel_scheduled(&draft_id)
+pub fn cancel_queued_wande_post(
+    state: State<'_, HostState>,
+    integration_id: String,
+    draft_id: String,
+) -> CmdResult<()> {
+    browser_for(&state, &integration_id)?
+        .cancel_scheduled(&integration_id, &draft_id)
         .map_err(|error| refusal(error, "This post is already on its way out."))
 }
 

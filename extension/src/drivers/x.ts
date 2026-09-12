@@ -410,8 +410,8 @@ export function runXPage(
         await new Promise((resolve) => setTimeout(resolve, 200));
         return editorText(editor) === expected;
       }
-      // X rewrites the editor after the text lands — it decorates links and
-      // reflows blocks — so intermediate states are expected. Only the
+      // X rewrites the editor after the text lands: it decorates links and
+      // reflows blocks, so intermediate states are expected. Only the
       // deadline ends the wait; the match above is still exact.
       if (Date.now() >= deadline) {
         return false;

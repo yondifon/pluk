@@ -2,7 +2,7 @@
 //!
 //! The surface itself lives in [`pluk_browser`]: a Chrome extension signed in
 //! as the user pairs to Pluk's `/wande` routes and drives the sites they are
-//! signed in to. This adapter is the row behind it — what the user picks in
+//! signed in to. This adapter is the row behind it, what the user picks in
 //! the add flow, what browser activity is logged against, and what the Test
 //! button asks.
 //!
@@ -113,13 +113,13 @@ impl Adapter for WandeAdapter {
         &[]
     }
 
-    /// Ask the running surface whether Chrome is paired right now — the one
+    /// Ask the running surface whether Chrome is paired right now, the one
     /// thing standing between a saved integration and a working browser.
     ///
     /// Which tools that browser can then run is the catalog's answer, not
     /// this check's.
-    async fn test_connection(&self, _conn: &Integration) -> Result<(), AdapterError> {
-        match chrome_is_connected(&self.store).await {
+    async fn test_connection(&self, conn: &Integration) -> Result<(), AdapterError> {
+        match chrome_is_connected(&self.store, &conn.id).await {
             Ok(true) => Ok(()),
             Ok(false) => Err(AdapterError::new(NOT_PAIRED)),
             Err(message) => Err(AdapterError::new(message)),
@@ -150,11 +150,13 @@ impl Adapter for WandeAdapter {
     fn register(
         &self,
         host: &mut dyn ToolHost,
-        _conn: &Integration,
+        conn: &Integration,
         _owner_id: &str,
     ) -> Result<(), AdapterError> {
+        let integration_id = conn.id.clone();
         for tool in pluk_browser::catalog_tools() {
             let store = self.store.clone();
+            let integration_id = integration_id.clone();
             let tool_id = tool.id.clone();
             host.register_tool(
                 ToolRegistration {
@@ -165,13 +167,17 @@ impl Adapter for WandeAdapter {
                 },
                 Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
                     let store = store.clone();
+                    let integration_id = integration_id.clone();
                     let tool_id = tool_id.clone();
-                    Box::pin(async move { run_tool(&store, &tool_id, args).await })
+                    Box::pin(async move {
+                        run_tool(&store, &integration_id, &tool_id, args).await
+                    })
                 }),
             );
         }
 
         let store = self.store.clone();
+        let integration_id = integration_id.clone();
         host.register_tool(
             ToolRegistration {
                 name: GET_JOB.to_owned(),
@@ -181,7 +187,8 @@ impl Adapter for WandeAdapter {
             },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
                 let store = store.clone();
-                Box::pin(async move { get_job(&store, args).await })
+                let integration_id = integration_id.clone();
+                Box::pin(async move { get_job(&store, &integration_id, args).await })
             }),
         );
         Ok(())
@@ -277,12 +284,18 @@ fn get_job_schema() -> Map<String, Value> {
     object_schema(properties, &["jobId"])
 }
 
-async fn run_tool(store: &Store, tool_id: &str, args: Value) -> ToolResult {
-    if let Err(message) = require_chrome(store).await {
+async fn run_tool(
+    store: &Store,
+    integration_id: &str,
+    tool_id: &str,
+    args: Value,
+) -> ToolResult {
+    if let Err(message) = require_chrome(store, integration_id).await {
         return err(message);
     }
     let started = match send(
         store,
+        integration_id,
         reqwest::Method::POST,
         &format!("/tools/{tool_id}"),
         Some(args),
@@ -296,8 +309,10 @@ async fn run_tool(store: &Store, tool_id: &str, args: Value) -> ToolResult {
     // A post is not browser work yet: the user still has to say whether it
     // goes out, and that answer is this call's real result.
     if let Some(draft_id) = started["draft"]["id"].as_str() {
-        return match settle_post(store, draft_id, deadline).await {
-            Ok(Some(draft)) => report_post(&draft, failed_job(store, &draft).await.as_ref()),
+        return match settle_post(store, integration_id, draft_id, deadline).await {
+            Ok(Some(draft)) => {
+                report_post(&draft, failed_job(store, integration_id, &draft).await.as_ref())
+            }
             Ok(None) => handed_off(draft_id),
             Err(message) => err(message),
         };
@@ -305,7 +320,7 @@ async fn run_tool(store: &Store, tool_id: &str, args: Value) -> ToolResult {
     let Some(job_id) = started["job"]["id"].as_str() else {
         return err(NOT_STARTED);
     };
-    match settle_job(store, job_id, deadline).await {
+    match settle_job(store, integration_id, job_id, deadline).await {
         Ok(Some(job)) => report_job(&job),
         Ok(None) => handed_off(job_id),
         Err(message) => err(message),
@@ -314,15 +329,17 @@ async fn run_tool(store: &Store, tool_id: &str, args: Value) -> ToolResult {
 
 /// The id a call handed back names a job or a post waiting on the user; a
 /// finished submission job is reported by the post it sent.
-async fn get_job(store: &Store, args: Value) -> ToolResult {
+async fn get_job(store: &Store, integration_id: &str, args: Value) -> ToolResult {
     let Some(id) = identifier(&args, "jobId") else {
         return err("Pass the jobId a call handed back.");
     };
-    let job = match fetch_job(store, id).await {
+    let job = match fetch_job(store, integration_id, id).await {
         Ok(job) => job,
         Err(job_missing) => {
-            return match fetch_draft(store, id).await {
-                Ok(draft) => report_post(&draft, failed_job(store, &draft).await.as_ref()),
+            return match fetch_draft(store, integration_id, id).await {
+                Ok(draft) => {
+                    report_post(&draft, failed_job(store, integration_id, &draft).await.as_ref())
+                }
                 Err(_) => err(job_missing),
             };
         }
@@ -330,15 +347,18 @@ async fn get_job(store: &Store, args: Value) -> ToolResult {
     let Some(draft_id) = job["draftId"].as_str() else {
         return report_job(&job);
     };
-    match fetch_draft(store, draft_id).await {
-        Ok(draft) => report_post(&draft, failed_job(store, &draft).await.as_ref()),
+    match fetch_draft(store, integration_id, draft_id).await {
+        Ok(draft) => {
+            report_post(&draft, failed_job(store, integration_id, &draft).await.as_ref())
+        }
         Err(message) => err(message),
     }
 }
 
-async fn fetch_job(store: &Store, job_id: &str) -> Result<Value, String> {
+async fn fetch_job(store: &Store, integration_id: &str, job_id: &str) -> Result<Value, String> {
     let value = send(
         store,
+        integration_id,
         reqwest::Method::GET,
         &format!("/jobs/{job_id}"),
         None,
@@ -347,9 +367,10 @@ async fn fetch_job(store: &Store, job_id: &str) -> Result<Value, String> {
     Ok(value["job"].clone())
 }
 
-async fn fetch_draft(store: &Store, draft_id: &str) -> Result<Value, String> {
+async fn fetch_draft(store: &Store, integration_id: &str, draft_id: &str) -> Result<Value, String> {
     let value = send(
         store,
+        integration_id,
         reqwest::Method::GET,
         &format!("/drafts/{draft_id}"),
         None,
@@ -359,14 +380,15 @@ async fn fetch_draft(store: &Store, draft_id: &str) -> Result<Value, String> {
 }
 
 /// Poll the job the same way an HTTP caller would. `None` when the wait ran
-/// out first — the job itself keeps going.
+/// out first, the job itself keeps going.
 async fn settle_job(
     store: &Store,
+    integration_id: &str,
     job_id: &str,
     deadline: Instant,
 ) -> Result<Option<Value>, String> {
     loop {
-        let job = fetch_job(store, job_id).await?;
+        let job = fetch_job(store, integration_id, job_id).await?;
         if !matches!(job["status"].as_str(), Some("queued" | "running")) {
             return Ok(Some(job));
         }
@@ -382,11 +404,12 @@ async fn settle_job(
 /// is still theirs to send from Pluk.
 async fn settle_post(
     store: &Store,
+    integration_id: &str,
     draft_id: &str,
     deadline: Instant,
 ) -> Result<Option<Value>, String> {
     loop {
-        let draft = fetch_draft(store, draft_id).await?;
+        let draft = fetch_draft(store, integration_id, draft_id).await?;
         if post_outcome(&draft).is_some() {
             return Ok(Some(draft));
         }
@@ -430,14 +453,20 @@ fn report_job(job: &Value) -> ToolResult {
 
 /// The browser job a refused post ran as: its error, and the screenshot and
 /// page HTML when the call asked for debug output.
-async fn failed_job(store: &Store, draft: &Value) -> Option<Value> {
+async fn failed_job(store: &Store, integration_id: &str, draft: &Value) -> Option<Value> {
     if post_outcome(draft) != Some("failed") {
         return None;
     }
     let id = draft["id"].as_str()?;
-    let jobs = send(store, reqwest::Method::GET, "/jobs?limit=20", None)
-        .await
-        .ok()?;
+    let jobs = send(
+        store,
+        integration_id,
+        reqwest::Method::GET,
+        "/jobs?limit=20",
+        None,
+    )
+    .await
+    .ok()?;
     jobs["jobs"]
         .as_array()?
         .iter()
@@ -492,16 +521,16 @@ fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
-async fn require_chrome(store: &Store) -> Result<(), String> {
-    match chrome_is_connected(store).await {
+async fn require_chrome(store: &Store, integration_id: &str) -> Result<(), String> {
+    match chrome_is_connected(store, integration_id).await {
         Ok(true) => Ok(()),
         Ok(false) => Err(NOT_PAIRED_HELP.to_owned()),
         Err(message) => Err(message),
     }
 }
 
-async fn chrome_is_connected(store: &Store) -> Result<bool, String> {
-    let status = send(store, reqwest::Method::GET, "/status", None).await?;
+async fn chrome_is_connected(store: &Store, integration_id: &str) -> Result<bool, String> {
+    let status = send(store, integration_id, reqwest::Method::GET, "/status", None).await?;
     Ok(status["extension"]["connected"].as_bool().unwrap_or(false))
 }
 
@@ -521,11 +550,12 @@ fn identifier<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
 /// the Pluk ID the extension pairs with.
 async fn send(
     store: &Store,
+    integration_id: &str,
     method: reqwest::Method,
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, String> {
-    let key = pluk_browser::pairing_key(store)?;
+    let key = pluk_browser::pairing_key_for(store, integration_id)?;
     let client = http_client::shared().map_err(|error| error.message)?;
     let mut request = client
         .request(

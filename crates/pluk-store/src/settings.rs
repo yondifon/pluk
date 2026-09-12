@@ -57,4 +57,46 @@ impl Store {
         self.set_setting(BROWSER_PAIRING_TOKEN_KEY, &token)?;
         Ok(token)
     }
+
+    /// Read or mint the pairing token owned by one browser integration.
+    pub fn browser_pairing_token_for(&self, integration_id: &str) -> Result<String> {
+        let conn = self.conn.lock().expect("store lock");
+        let existing = conn
+            .query_row(
+                "SELECT token FROM browser_pairing_tokens WHERE integration_id = ?",
+                [integration_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(token) = existing {
+            return Ok(token);
+        }
+        let token = crate::ids::new_token();
+        conn.execute(
+            "INSERT INTO browser_pairing_tokens (integration_id, token) VALUES (?, ?)",
+            rusqlite::params![integration_id, token],
+        )?;
+        Ok(token)
+    }
+
+    /// Resolve a browser token to its integration, when it is persisted.
+    pub fn browser_integration_id_by_token(&self, token: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().expect("store lock");
+        Ok(conn
+            .query_row(
+                "SELECT integration_id FROM browser_pairing_tokens WHERE token = ?",
+                [token],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn delete_browser_pairing_token(&self, integration_id: &str) -> Result<()> {
+        let conn = self.conn.lock().expect("store lock");
+        conn.execute(
+            "DELETE FROM browser_pairing_tokens WHERE integration_id = ?",
+            [integration_id],
+        )?;
+        Ok(())
+    }
 }

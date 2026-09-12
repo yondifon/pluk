@@ -252,6 +252,11 @@ pub fn update_integration(
 
 #[tauri::command]
 pub fn delete_integration(state: State<'_, HostState>, id: String) -> CmdResult<bool> {
+    if let Some(browser) = state.shared.browser.as_deref() {
+        browser
+            .disconnect_integration(&id)
+            .map_err(|error| error.message)?;
+    }
     let did = state
         .store
         .delete_integration(&id)

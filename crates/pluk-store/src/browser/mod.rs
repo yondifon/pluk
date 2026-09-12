@@ -22,6 +22,8 @@ pub const DEFAULT_JOB_TTL_MS: i64 = 2 * 60 * 1000;
 
 pub const MAX_JOBS: i64 = 1_000;
 pub const MAX_ARTIFACTS: i64 = 2_000;
+/// Owner used by browser rows created before integrations had their own queue.
+pub const LEGACY_INTEGRATION_ID: &str = "browser";
 /// How long a requested post waits on a person before it expires unposted.
 /// Longer than a job's own expiry on purpose: a page that stalls for two
 /// minutes is broken, but a person who takes two minutes to answer is not.
@@ -29,7 +31,7 @@ pub const DRAFT_TTL_MS: i64 = 10 * 60 * 1000;
 
 // A reservation's post text lives on its draft, and the draft is pruned once
 // it has settled, so the join stays outer and the text can come back empty.
-const SELECT_RESERVATION: &str = "SELECT browser_schedule_reservations.id, browser_schedule_reservations.draft_id, browser_schedule_reservations.scheduled_at, browser_schedule_reservations.status, browser_schedule_reservations.created_at, browser_schedule_reservations.committed_at, browser_schedule_reservations.released_at, browser_drafts.text FROM browser_schedule_reservations LEFT JOIN browser_drafts ON browser_drafts.id = browser_schedule_reservations.draft_id";
+const SELECT_RESERVATION: &str = "SELECT browser_schedule_reservations.integration_id, browser_schedule_reservations.id, browser_schedule_reservations.draft_id, browser_schedule_reservations.scheduled_at, browser_schedule_reservations.status, browser_schedule_reservations.created_at, browser_schedule_reservations.committed_at, browser_schedule_reservations.released_at, browser_drafts.text FROM browser_schedule_reservations LEFT JOIN browser_drafts ON browser_drafts.id = browser_schedule_reservations.draft_id";
 
 #[derive(Debug)]
 pub enum BrowserError {
@@ -82,6 +84,7 @@ pub struct ArtifactBody {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Draft {
+    pub integration_id: String,
     pub id: String,
     pub platform: String,
     pub kind: String,
@@ -114,6 +117,7 @@ impl Draft {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleReservation {
+    pub integration_id: String,
     pub id: String,
     pub draft_id: String,
     pub scheduled_at: i64,
@@ -134,6 +138,7 @@ pub struct ScheduleSummary {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Job {
+    pub integration_id: String,
     pub id: String,
     pub command_id: String,
     pub platform: String,
@@ -213,6 +218,7 @@ pub struct JobCompletion<'a> {
 /// an await point or a second [`Store`] method.
 pub struct BrowserStore<'a> {
     conn: std::sync::MutexGuard<'a, Connection>,
+    integration_id: String,
     max_jobs: i64,
     max_artifacts: i64,
 }
@@ -220,8 +226,14 @@ pub struct BrowserStore<'a> {
 impl Store {
     /// Borrow the browser tables. Blocks until the store lock is free.
     pub fn browser(&self) -> BrowserStore<'_> {
+        self.browser_for(LEGACY_INTEGRATION_ID)
+    }
+
+    /// Borrow the browser tables for one integration.
+    pub fn browser_for(&self, integration_id: &str) -> BrowserStore<'_> {
         BrowserStore {
             conn: self.conn.lock().expect("store lock"),
+            integration_id: integration_id.to_owned(),
             max_jobs: MAX_JOBS,
             max_artifacts: MAX_ARTIFACTS,
         }
@@ -231,16 +243,16 @@ impl Store {
 impl BrowserStore<'_> {
     pub fn recover_in_flight(&mut self, now: i64) -> Result<(), BrowserError> {
         self.conn.execute(
-            "UPDATE browser_jobs SET status = 'unknown', finished_at = ?, error_code = 'server_restarted', error_message = 'The server restarted before this job completed.' WHERE status = 'running'",
-            [now],
+            "UPDATE browser_jobs SET status = 'unknown', finished_at = ?, error_code = 'server_restarted', error_message = 'The server restarted before this job completed.' WHERE integration_id = ? AND status = 'running'",
+            params![now, self.integration_id.as_str()],
         )?;
         self.conn.execute(
-            "UPDATE browser_drafts SET status = 'unknown' WHERE status = 'confirmed' AND id IN (SELECT draft_id FROM browser_jobs WHERE action IN ('submit_reply', 'submit_post') AND status = 'unknown' AND draft_id IS NOT NULL)",
-            [],
+            "UPDATE browser_drafts SET status = 'unknown' WHERE integration_id = ? AND status = 'confirmed' AND id IN (SELECT draft_id FROM browser_jobs WHERE integration_id = ? AND action IN ('submit_reply', 'submit_post') AND status = 'unknown' AND draft_id IS NOT NULL)",
+            params![self.integration_id.as_str(), self.integration_id.as_str()],
         )?;
         self.conn.execute(
-            "UPDATE browser_schedule_reservations SET status = 'unknown' WHERE status = 'reserved' AND draft_id IN (SELECT draft_id FROM browser_jobs WHERE action IN ('submit_reply', 'submit_post') AND status = 'unknown' AND draft_id IS NOT NULL)",
-            [],
+            "UPDATE browser_schedule_reservations SET status = 'unknown' WHERE integration_id = ? AND status = 'reserved' AND draft_id IN (SELECT draft_id FROM browser_jobs WHERE integration_id = ? AND action IN ('submit_reply', 'submit_post') AND status = 'unknown' AND draft_id IS NOT NULL)",
+            params![self.integration_id.as_str(), self.integration_id.as_str()],
         )?;
         self.expire_drafts(now)?;
         self.expire_queued(now)?;
@@ -257,8 +269,14 @@ impl BrowserStore<'_> {
         self.expire_drafts(now)?;
         self.conn
             .query_row(
-                "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug FROM browser_drafts WHERE status = 'pending' AND platform = ? AND target_url = ? AND post_id IS ? AND text = ? ORDER BY created_at DESC LIMIT 1",
-                params![input.platform, input.target_url, input.post_id, input.text],
+                "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id FROM browser_drafts WHERE integration_id = ? AND status = 'pending' AND platform = ? AND target_url = ? AND post_id IS ? AND text = ? ORDER BY created_at DESC LIMIT 1",
+                params![
+                    self.integration_id.as_str(),
+                    input.platform,
+                    input.target_url,
+                    input.post_id,
+                    input.text
+                ],
                 read_draft_row,
             )
             .optional()?
@@ -273,8 +291,8 @@ impl BrowserStore<'_> {
         self.expire_queued(now)?;
         self.conn
             .query_row(
-                "SELECT EXISTS (SELECT 1 FROM browser_jobs WHERE action IN ('submit_post', 'submit_reply') AND status IN ('queued', 'running') AND NOT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE browser_schedule_reservations.draft_id = browser_jobs.draft_id AND browser_schedule_reservations.status = 'reserved' AND browser_schedule_reservations.scheduled_at > ?))",
-                [now],
+                "SELECT EXISTS (SELECT 1 FROM browser_jobs WHERE integration_id = ? AND action IN ('submit_post', 'submit_reply') AND status IN ('queued', 'running') AND NOT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE browser_schedule_reservations.integration_id = browser_jobs.integration_id AND browser_schedule_reservations.draft_id = browser_jobs.draft_id AND browser_schedule_reservations.status = 'reserved' AND browser_schedule_reservations.scheduled_at > ?))",
+                params![self.integration_id.as_str(), now],
                 |row| row.get(0),
             )
             .map_err(BrowserError::from)
@@ -298,8 +316,19 @@ impl BrowserStore<'_> {
         let parts_json = serde_json::to_string(input.parts)
             .map_err(|_| BrowserError::InvalidData("Thread parts could not be stored.".to_owned()))?;
         self.conn.execute(
-            "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, parts_json, debug, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
-            params![id, input.platform, kind, input.target_url, input.post_id, input.text, parts_json, input.debug, now],
+            "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, parts_json, debug, status, created_at, integration_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+            params![
+                id,
+                input.platform,
+                kind,
+                input.target_url,
+                input.post_id,
+                input.text,
+                parts_json,
+                input.debug,
+                now,
+                self.integration_id.as_str()
+            ],
         )?;
         self.get_draft_row(&id)?
             .map(to_draft)
@@ -316,8 +345,18 @@ impl BrowserStore<'_> {
         let id = Uuid::new_v4().to_string();
         let command_id = Uuid::new_v4().to_string();
         self.conn.execute(
-            "INSERT INTO browser_jobs (id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
-            params![id, command_id, request.platform, request.action, request.target_url, request.payload.to_string(), now, now + request.ttl_ms],
+            "INSERT INTO browser_jobs (id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, integration_id) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
+            params![
+                id,
+                command_id,
+                request.platform,
+                request.action,
+                request.target_url,
+                request.payload.to_string(),
+                now,
+                now + request.ttl_ms,
+                self.integration_id.as_str()
+            ],
         )?;
         self.get_job(&id, now)?.ok_or_else(|| {
             BrowserError::InvalidData("Created job could not be read back.".to_owned())
@@ -328,8 +367,8 @@ impl BrowserStore<'_> {
         self.expire_queued(now)?;
         let next: Option<String> = self.conn
             .query_row(
-                "SELECT browser_jobs.id FROM browser_jobs WHERE browser_jobs.status = 'queued' AND browser_jobs.expires_at > ? AND NOT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE browser_schedule_reservations.draft_id = browser_jobs.draft_id AND browser_schedule_reservations.status IN ('reserved', 'unknown') AND (browser_schedule_reservations.status = 'unknown' OR browser_schedule_reservations.scheduled_at > ?)) ORDER BY browser_jobs.created_at ASC LIMIT 1",
-                params![now, now],
+                "SELECT browser_jobs.id FROM browser_jobs WHERE browser_jobs.integration_id = ? AND browser_jobs.status = 'queued' AND browser_jobs.expires_at > ? AND NOT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE browser_schedule_reservations.integration_id = browser_jobs.integration_id AND browser_schedule_reservations.draft_id = browser_jobs.draft_id AND browser_schedule_reservations.status IN ('reserved', 'unknown') AND (browser_schedule_reservations.status = 'unknown' OR browser_schedule_reservations.scheduled_at > ?)) ORDER BY browser_jobs.created_at ASC LIMIT 1",
+                params![self.integration_id.as_str(), now, now],
                 |row| row.get(0),
             )
             .optional()?;
@@ -337,8 +376,8 @@ impl BrowserStore<'_> {
             return Ok(None);
         };
         self.conn.execute(
-            "UPDATE browser_jobs SET status = 'running', started_at = ?, dispatch_count = dispatch_count + 1 WHERE id = ? AND status = 'queued'",
-            params![now, id],
+            "UPDATE browser_jobs SET status = 'running', started_at = ?, dispatch_count = dispatch_count + 1 WHERE id = ? AND integration_id = ? AND status = 'queued'",
+            params![now, id, self.integration_id.as_str()],
         )?;
         self.get_job(&id, now)
     }
@@ -346,8 +385,8 @@ impl BrowserStore<'_> {
     pub fn next_scheduled_job_at(&self, now: i64) -> Result<Option<i64>, BrowserError> {
         self.conn
             .query_row(
-                "SELECT MIN(browser_schedule_reservations.scheduled_at) FROM browser_jobs JOIN browser_schedule_reservations ON browser_schedule_reservations.draft_id = browser_jobs.draft_id WHERE browser_jobs.action = 'submit_post' AND browser_jobs.status = 'queued' AND browser_jobs.expires_at > ? AND browser_schedule_reservations.status = 'reserved' AND browser_schedule_reservations.scheduled_at > ?",
-                params![now, now],
+                "SELECT MIN(browser_schedule_reservations.scheduled_at) FROM browser_jobs JOIN browser_schedule_reservations ON browser_schedule_reservations.draft_id = browser_jobs.draft_id AND browser_schedule_reservations.integration_id = browser_jobs.integration_id WHERE browser_jobs.integration_id = ? AND browser_jobs.action = 'submit_post' AND browser_jobs.status = 'queued' AND browser_jobs.expires_at > ? AND browser_schedule_reservations.status = 'reserved' AND browser_schedule_reservations.scheduled_at > ?",
+                params![self.integration_id.as_str(), now, now],
                 |row| row.get(0),
             )
             .map_err(BrowserError::from)
@@ -383,7 +422,7 @@ impl BrowserStore<'_> {
             return Ok(Completion { accepted: false });
         }
         self.conn.execute(
-            "UPDATE browser_jobs SET status = ?, finished_at = ?, error_code = ?, error_message = ?, result_json = ? WHERE id = ? AND command_id = ? AND status = 'running'",
+            "UPDATE browser_jobs SET status = ?, finished_at = ?, error_code = ?, error_message = ?, result_json = ? WHERE id = ? AND command_id = ? AND integration_id = ? AND status = 'running'",
             params![
                 completion.outcome,
                 completion.now,
@@ -392,6 +431,7 @@ impl BrowserStore<'_> {
                 completion.result.map(Value::to_string),
                 completion.id,
                 completion.command_id,
+                self.integration_id.as_str(),
             ],
         )?;
         if action == "submit_reply" || action == "submit_post" {
@@ -418,8 +458,16 @@ impl BrowserStore<'_> {
                 });
             if accepted {
                 self.conn.execute(
-                    "UPDATE browser_jobs SET status = ?, finished_at = ?, error_code = ?, error_message = ? WHERE id = ? AND command_id = ? AND status = 'running'",
-                    params![status, now, error.code, error.message, id, command_id],
+                    "UPDATE browser_jobs SET status = ?, finished_at = ?, error_code = ?, error_message = ? WHERE id = ? AND command_id = ? AND integration_id = ? AND status = 'running'",
+                    params![
+                        status,
+                        now,
+                        error.code,
+                        error.message,
+                        id,
+                        command_id,
+                        self.integration_id.as_str()
+                    ],
                 )?;
                 if let Some((_, _, action, payload)) = row
                     && (action == "submit_reply" || action == "submit_post")
@@ -494,9 +542,10 @@ impl BrowserStore<'_> {
             let scheduled_at = next_slot(now, latest_scheduled_at, &settings)
                 .map_err(|error| BrowserError::InvalidData(error.to_string()))?;
             self.conn.execute(
-                "INSERT INTO browser_schedule_reservations (id, draft_id, platform, scheduled_at, status, created_at) VALUES (?, ?, ?, ?, 'reserved', ?)",
+                "INSERT INTO browser_schedule_reservations (id, integration_id, draft_id, platform, scheduled_at, status, created_at) VALUES (?, ?, ?, ?, ?, 'reserved', ?)",
                 params![
                     Uuid::new_v4().to_string(),
+                    self.integration_id.as_str(),
                     draft.id,
                     draft.platform,
                     scheduled_at,
@@ -539,12 +588,23 @@ impl BrowserStore<'_> {
             .and_then(|value| value.checked_add(DEFAULT_JOB_TTL_MS))
             .unwrap_or(now + DEFAULT_JOB_TTL_MS);
         self.conn.execute(
-            "INSERT INTO browser_jobs (id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, draft_id) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-            params![job_id, command_id, draft.platform, action, draft.target_url, payload.to_string(), now, expires_at, draft.id],
+            "INSERT INTO browser_jobs (id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, draft_id, integration_id) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
+            params![
+                job_id,
+                command_id,
+                draft.platform,
+                action,
+                draft.target_url,
+                payload.to_string(),
+                now,
+                expires_at,
+                draft.id,
+                self.integration_id.as_str()
+            ],
         )?;
         self.conn.execute(
-            "UPDATE browser_drafts SET status = 'confirmed', confirmed_at = ?, scheduled_at = ? WHERE id = ? AND status = 'pending'",
-            params![now, scheduled_at, draft.id],
+            "UPDATE browser_drafts SET status = 'confirmed', confirmed_at = ?, scheduled_at = ? WHERE id = ? AND integration_id = ? AND status = 'pending'",
+            params![now, scheduled_at, draft.id, self.integration_id.as_str()],
         )?;
         let stored_draft = self.get_draft(draft_id)?.ok_or_else(|| {
             BrowserError::InvalidData("Confirmed draft could not be read back.".to_owned())
@@ -569,8 +629,8 @@ impl BrowserStore<'_> {
             return Ok(None);
         }
         self.conn.execute(
-            "UPDATE browser_drafts SET status = 'cancelled' WHERE id = ? AND status = 'pending'",
-            [draft_id],
+            "UPDATE browser_drafts SET status = 'cancelled' WHERE integration_id = ? AND id = ? AND status = 'pending'",
+            params![self.integration_id.as_str(), draft_id],
         )?;
         self.get_draft(draft_id)
     }
@@ -605,32 +665,32 @@ impl BrowserStore<'_> {
         now: i64,
     ) -> Result<Option<ScheduleReservation>, BrowserError> {
         let reserved: bool = self.conn.query_row(
-            "SELECT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE draft_id = ? AND status = 'reserved')",
-            [draft_id],
+            "SELECT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE browser_schedule_reservations.integration_id = ? AND browser_schedule_reservations.draft_id = ? AND browser_schedule_reservations.status = 'reserved')",
+            params![self.integration_id.as_str(), draft_id],
             |row| row.get(0),
         )?;
         if !reserved {
             return Ok(None);
         }
         let dropped = self.conn.execute(
-            "DELETE FROM browser_jobs WHERE draft_id = ? AND status = 'queued'",
-            [draft_id],
+            "DELETE FROM browser_jobs WHERE integration_id = ? AND draft_id = ? AND status = 'queued'",
+            params![self.integration_id.as_str(), draft_id],
         )?;
         if dropped == 0 {
             return Ok(None);
         }
         self.conn.execute(
-            "UPDATE browser_schedule_reservations SET status = 'released', released_at = ? WHERE draft_id = ? AND status = 'reserved'",
-            params![now, draft_id],
+            "UPDATE browser_schedule_reservations SET status = 'released', released_at = ? WHERE integration_id = ? AND draft_id = ? AND status = 'reserved'",
+            params![now, self.integration_id.as_str(), draft_id],
         )?;
         self.conn.execute(
-            "UPDATE browser_drafts SET status = 'cancelled' WHERE id = ? AND status = 'confirmed'",
-            [draft_id],
+            "UPDATE browser_drafts SET status = 'cancelled' WHERE integration_id = ? AND id = ? AND status = 'confirmed'",
+            params![self.integration_id.as_str(), draft_id],
         )?;
         self.conn
             .query_row(
-                &format!("{SELECT_RESERVATION} WHERE browser_schedule_reservations.draft_id = ?"),
-                [draft_id],
+                &format!("{SELECT_RESERVATION} WHERE browser_schedule_reservations.integration_id = ? AND browser_schedule_reservations.draft_id = ?"),
+                params![self.integration_id.as_str(), draft_id],
                 read_schedule_reservation,
             )
             .optional()
@@ -640,8 +700,8 @@ impl BrowserStore<'_> {
     pub fn get_job(&mut self, id: &str, now: i64) -> Result<Option<Job>, BrowserError> {
         self.expire_queued(now)?;
         let row = self.conn.query_row(
-            "SELECT id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, started_at, finished_at, error_code, error_message, result_json, dispatch_count, draft_id FROM browser_jobs WHERE id = ?",
-            [id],
+            "SELECT id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, started_at, finished_at, error_code, error_message, result_json, dispatch_count, draft_id, integration_id FROM browser_jobs WHERE id = ? AND integration_id = ?",
+            params![id, self.integration_id.as_str()],
             read_job_row,
         ).optional()?;
         row.map(|row| self.load_job(row)).transpose()
@@ -651,9 +711,12 @@ impl BrowserStore<'_> {
         self.expire_queued(now)?;
         let bounded_limit = limit.clamp(1, 100);
         let mut statement = self.conn.prepare(
-            "SELECT id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, started_at, finished_at, error_code, error_message, result_json, dispatch_count, draft_id FROM browser_jobs ORDER BY created_at DESC LIMIT ?",
+            "SELECT id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, started_at, finished_at, error_code, error_message, result_json, dispatch_count, draft_id, integration_id FROM browser_jobs WHERE integration_id = ? ORDER BY created_at DESC LIMIT ?",
         )?;
-        let rows = statement.query_map([bounded_limit], read_job_row)?;
+        let rows = statement.query_map(
+            params![self.integration_id.as_str(), bounded_limit],
+            read_job_row,
+        )?;
         let rows: Result<Vec<JobRow>, rusqlite::Error> = rows.collect();
         drop(statement);
         rows.map_err(BrowserError::from)?
@@ -671,9 +734,9 @@ impl BrowserStore<'_> {
     pub fn list_pending_drafts(&mut self, now: i64) -> Result<Vec<Draft>, BrowserError> {
         self.expire_drafts(now)?;
         let mut statement = self.conn.prepare(
-            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug FROM browser_drafts WHERE status = 'pending' ORDER BY created_at DESC",
+            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id FROM browser_drafts WHERE integration_id = ? AND status = 'pending' ORDER BY created_at DESC",
         )?;
-        let rows = statement.query_map([], read_draft_row)?;
+        let rows = statement.query_map([self.integration_id.as_str()], read_draft_row)?;
         rows.map(|row| Ok(to_draft(row?)?)).collect()
     }
 
@@ -717,17 +780,20 @@ impl BrowserStore<'_> {
         self.expire_queued(now)?;
         let bounded_limit = limit.clamp(1, 100);
         let mut statement = self.conn.prepare(&format!(
-            "{SELECT_RESERVATION} WHERE browser_schedule_reservations.status IN ('reserved', 'committed', 'unknown', 'released') AND (browser_schedule_reservations.status IN ('reserved', 'unknown') OR browser_schedule_reservations.scheduled_at >= ?) ORDER BY browser_schedule_reservations.scheduled_at ASC LIMIT ?",
+            "{SELECT_RESERVATION} WHERE browser_schedule_reservations.integration_id = ? AND browser_schedule_reservations.status IN ('reserved', 'committed', 'unknown', 'released') AND (browser_schedule_reservations.status IN ('reserved', 'unknown') OR browser_schedule_reservations.scheduled_at >= ?) ORDER BY browser_schedule_reservations.scheduled_at ASC LIMIT ?",
         ))?;
-        let rows = statement.query_map(params![now, bounded_limit], read_schedule_reservation)?;
+        let rows = statement.query_map(
+            params![self.integration_id.as_str(), now, bounded_limit],
+            read_schedule_reservation,
+        )?;
         rows.map(|row| row.map_err(BrowserError::from)).collect()
     }
 
     pub fn schedule_summary(&self) -> Result<ScheduleSummary, BrowserError> {
         self.conn
             .query_row(
-                "SELECT COALESCE(SUM(CASE WHEN status = 'reserved' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN status = 'unknown' THEN 1 ELSE 0 END), 0) FROM browser_schedule_reservations",
-                [],
+                "SELECT COALESCE(SUM(CASE WHEN browser_schedule_reservations.status = 'reserved' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN browser_schedule_reservations.status = 'unknown' THEN 1 ELSE 0 END), 0) FROM browser_schedule_reservations WHERE browser_schedule_reservations.integration_id = ?",
+                [self.integration_id.as_str()],
                 |row| {
                     Ok(ScheduleSummary {
                         pending_reservations: row.get(0)?,
@@ -748,8 +814,8 @@ impl BrowserStore<'_> {
         let result = (|| {
             let reservation = self.conn
                 .query_row(
-                    &format!("{SELECT_RESERVATION} WHERE browser_schedule_reservations.draft_id = ? AND browser_schedule_reservations.status = 'unknown'"),
-                    [draft_id],
+                    &format!("{SELECT_RESERVATION} WHERE browser_schedule_reservations.integration_id = ? AND browser_schedule_reservations.draft_id = ? AND browser_schedule_reservations.status = 'unknown'"),
+                    params![self.integration_id.as_str(), draft_id],
                     read_schedule_reservation,
                 )
                 .optional()?;
@@ -758,26 +824,28 @@ impl BrowserStore<'_> {
             };
             let status = if published { "committed" } else { "released" };
             self.conn.execute(
-                "UPDATE browser_schedule_reservations SET status = ?, committed_at = ?, released_at = ? WHERE draft_id = ? AND status = 'unknown'",
+                "UPDATE browser_schedule_reservations SET status = ?, committed_at = ?, released_at = ? WHERE integration_id = ? AND draft_id = ? AND status = 'unknown'",
                 params![
                     status,
                     published.then_some(now),
                     (!published).then_some(now),
+                    self.integration_id.as_str(),
                     draft_id,
                 ],
             )?;
             self.conn.execute(
-                "UPDATE browser_drafts SET status = ?, submitted_at = ? WHERE id = ? AND status = 'unknown'",
+                "UPDATE browser_drafts SET status = ?, submitted_at = ? WHERE integration_id = ? AND id = ? AND status = 'unknown'",
                 params![
                     if published { "submitted" } else { "failed" },
                     published.then_some(now),
+                    self.integration_id.as_str(),
                     draft_id,
                 ],
             )?;
             self.conn
                 .query_row(
-                    &format!("{SELECT_RESERVATION} WHERE browser_schedule_reservations.id = ?"),
-                    [reservation.id],
+                    &format!("{SELECT_RESERVATION} WHERE browser_schedule_reservations.integration_id = ? AND browser_schedule_reservations.id = ?"),
+                    params![self.integration_id.as_str(), reservation.id],
                     read_schedule_reservation,
                 )
                 .map(Some)
@@ -819,16 +887,16 @@ impl BrowserStore<'_> {
 
     pub fn get_artifact(&mut self, id: &str) -> Result<Option<Artifact>, BrowserError> {
         self.conn.query_row(
-            "SELECT id, job_id, kind, content_type, bytes, created_at, expires_at FROM browser_artifacts WHERE id = ? AND expires_at > ?",
-            params![id, now_millis()],
+            "SELECT id, job_id, kind, content_type, bytes, created_at, expires_at FROM browser_artifacts WHERE id = ? AND expires_at > ? AND EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.id = browser_artifacts.job_id AND browser_jobs.integration_id = ?)",
+            params![id, now_millis(), self.integration_id.as_str()],
             read_artifact,
         ).optional().map_err(BrowserError::from)
     }
 
     pub fn get_artifact_body(&mut self, id: &str) -> Result<Option<ArtifactBody>, BrowserError> {
         self.conn.query_row(
-            "SELECT id, job_id, kind, content_type, bytes, data, created_at, expires_at FROM browser_artifacts WHERE id = ? AND expires_at > ?",
-            params![id, now_millis()],
+            "SELECT id, job_id, kind, content_type, bytes, data, created_at, expires_at FROM browser_artifacts WHERE id = ? AND expires_at > ? AND EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.id = browser_artifacts.job_id AND browser_jobs.integration_id = ?)",
+            params![id, now_millis(), self.integration_id.as_str()],
             |row| {
                 let metadata = Artifact {
                     id: row.get(0)?,
@@ -849,8 +917,8 @@ impl BrowserStore<'_> {
         self.expire_queued(now)?;
         self.conn
             .query_row(
-                "SELECT COUNT(*) FROM browser_jobs WHERE status = 'queued'",
-                [],
+                "SELECT COUNT(*) FROM browser_jobs WHERE integration_id = ? AND status = 'queued'",
+                [self.integration_id.as_str()],
                 |row| row.get(0),
             )
             .map_err(BrowserError::from)
@@ -875,6 +943,7 @@ impl BrowserStore<'_> {
             _ => None,
         };
         Ok(Job {
+            integration_id: row.integration_id,
             id: row.id.clone(),
             command_id: row.command_id,
             platform: row.platform,
@@ -896,16 +965,19 @@ impl BrowserStore<'_> {
 
     fn list_artifacts(&self, job_id: &str) -> Result<Vec<Artifact>, BrowserError> {
         let mut statement = self.conn.prepare(
-            "SELECT id, job_id, kind, content_type, bytes, created_at, expires_at FROM browser_artifacts WHERE job_id = ? AND expires_at > ? ORDER BY created_at ASC",
+            "SELECT id, job_id, kind, content_type, bytes, created_at, expires_at FROM browser_artifacts WHERE job_id = ? AND expires_at > ? AND EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.id = browser_artifacts.job_id AND browser_jobs.integration_id = ?) ORDER BY created_at ASC",
         )?;
-        let rows = statement.query_map(params![job_id, now_millis()], read_artifact)?;
+        let rows = statement.query_map(
+            params![job_id, now_millis(), self.integration_id.as_str()],
+            read_artifact,
+        )?;
         rows.map(|row| row.map_err(BrowserError::from)).collect()
     }
 
     fn get_draft_row(&self, id: &str) -> Result<Option<DraftRow>, BrowserError> {
         self.conn.query_row(
-            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug FROM browser_drafts WHERE id = ?",
-            [id],
+            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id FROM browser_drafts WHERE id = ? AND integration_id = ?",
+            params![id, self.integration_id.as_str()],
             read_draft_row,
         ).optional().map_err(BrowserError::from)
     }
@@ -916,8 +988,8 @@ impl BrowserStore<'_> {
         now: i64,
     ) -> Result<Option<i64>, BrowserError> {
         let has_uncertain: bool = self.conn.query_row(
-            "SELECT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE platform = ? AND status = 'unknown')",
-            [platform],
+                "SELECT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE browser_schedule_reservations.integration_id = ? AND browser_schedule_reservations.platform = ? AND browser_schedule_reservations.status = 'unknown')",
+            params![self.integration_id.as_str(), platform],
             |row| row.get(0),
         )?;
         if has_uncertain {
@@ -925,8 +997,8 @@ impl BrowserStore<'_> {
         }
         self.conn
             .query_row(
-                "SELECT MAX(scheduled_at) FROM browser_schedule_reservations WHERE platform = ? AND status IN ('reserved', 'committed') AND scheduled_at > ?",
-                params![platform, now],
+                "SELECT MAX(browser_schedule_reservations.scheduled_at) FROM browser_schedule_reservations WHERE browser_schedule_reservations.integration_id = ? AND browser_schedule_reservations.platform = ? AND browser_schedule_reservations.status IN ('reserved', 'committed') AND browser_schedule_reservations.scheduled_at > ?",
+                params![self.integration_id.as_str(), platform, now],
                 |row| row.get(0),
             )
             .map_err(BrowserError::from)
@@ -938,8 +1010,8 @@ impl BrowserStore<'_> {
     ) -> Result<Option<(String, String, String, String)>, BrowserError> {
         self.conn
             .query_row(
-                "SELECT command_id, status, action, payload_json FROM browser_jobs WHERE id = ?",
-                [id],
+                "SELECT command_id, status, action, payload_json FROM browser_jobs WHERE id = ? AND integration_id = ?",
+                params![id, self.integration_id.as_str()],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()
@@ -964,8 +1036,13 @@ impl BrowserStore<'_> {
             _ => "failed",
         };
         self.conn.execute(
-            "UPDATE browser_drafts SET status = ?, submitted_at = ? WHERE id = ? AND status = 'confirmed'",
-            params![status, (outcome == "succeeded").then_some(now), draft_id],
+            "UPDATE browser_drafts SET status = ?, submitted_at = ? WHERE integration_id = ? AND id = ? AND status = 'confirmed'",
+            params![
+                status,
+                (outcome == "succeeded").then_some(now),
+                self.integration_id.as_str(),
+                draft_id
+            ],
         )?;
         let reservation_status = match outcome {
             "succeeded" => "committed",
@@ -973,11 +1050,12 @@ impl BrowserStore<'_> {
             _ => "released",
         };
         self.conn.execute(
-            "UPDATE browser_schedule_reservations SET status = ?, committed_at = ?, released_at = ? WHERE draft_id = ? AND status = 'reserved'",
+            "UPDATE browser_schedule_reservations SET status = ?, committed_at = ?, released_at = ? WHERE integration_id = ? AND draft_id = ? AND status = 'reserved'",
             params![
                 reservation_status,
                 (outcome == "succeeded").then_some(now),
                 (outcome != "succeeded" && outcome != "unknown").then_some(now),
+                self.integration_id.as_str(),
                 draft_id,
             ],
         )?;
@@ -990,12 +1068,12 @@ impl BrowserStore<'_> {
         })?;
         if let Some(draft_id) = payload.get("draftId").and_then(Value::as_str) {
             self.conn.execute(
-                "UPDATE browser_drafts SET status = 'unknown' WHERE id = ? AND status = 'confirmed'",
-                [draft_id],
+                "UPDATE browser_drafts SET status = 'unknown' WHERE integration_id = ? AND id = ? AND status = 'confirmed'",
+                params![self.integration_id.as_str(), draft_id],
             )?;
             self.conn.execute(
-                "UPDATE browser_schedule_reservations SET status = 'unknown' WHERE draft_id = ? AND status = 'reserved'",
-                [draft_id],
+                "UPDATE browser_schedule_reservations SET status = 'unknown' WHERE integration_id = ? AND draft_id = ? AND status = 'reserved'",
+                params![self.integration_id.as_str(), draft_id],
             )?;
         }
         Ok(())
@@ -1003,15 +1081,17 @@ impl BrowserStore<'_> {
 
     fn expire_queued(&self, now: i64) -> Result<(), BrowserError> {
         let mut statement = self.conn.prepare(
-            "SELECT action, payload_json FROM browser_jobs WHERE status = 'queued' AND expires_at <= ?",
+            "SELECT action, payload_json FROM browser_jobs WHERE integration_id = ? AND status = 'queued' AND expires_at <= ?",
         )?;
         let expired: Vec<(String, String)> = statement
-            .query_map([now], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .query_map(params![self.integration_id.as_str(), now], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?
             .collect::<Result<Vec<_>, _>>()?;
         drop(statement);
         self.conn.execute(
-            "UPDATE browser_jobs SET status = 'expired', finished_at = ?, error_code = 'expired', error_message = 'The job expired before it started.' WHERE status = 'queued' AND expires_at <= ?",
-            [now, now],
+            "UPDATE browser_jobs SET status = 'expired', finished_at = ?, error_code = 'expired', error_message = 'The job expired before it started.' WHERE integration_id = ? AND status = 'queued' AND expires_at <= ?",
+            params![now, self.integration_id.as_str(), now],
         )?;
         for (action, payload) in expired {
             if action == "submit_reply" || action == "submit_post" {
@@ -1023,8 +1103,8 @@ impl BrowserStore<'_> {
 
     fn expire_drafts(&self, now: i64) -> Result<(), BrowserError> {
         self.conn.execute(
-            "UPDATE browser_drafts SET status = 'expired' WHERE status = 'pending' AND created_at + ? <= ?",
-            [DRAFT_TTL_MS, now],
+            "UPDATE browser_drafts SET status = 'expired' WHERE integration_id = ? AND status = 'pending' AND created_at + ? <= ?",
+            params![self.integration_id.as_str(), DRAFT_TTL_MS, now],
         )?;
         Ok(())
     }
@@ -1034,18 +1114,26 @@ impl BrowserStore<'_> {
     fn prune_drafts(&self) -> Result<(), BrowserError> {
         let count: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM browser_drafts", [], |row| row.get(0))?;
+            .query_row(
+                "SELECT COUNT(*) FROM browser_drafts WHERE integration_id = ?",
+                [self.integration_id.as_str()],
+                |row| row.get(0),
+            )?;
         if count < self.max_jobs {
             return Ok(());
         }
         let remove = count - self.max_jobs + 1;
         self.conn.execute(
-            "DELETE FROM browser_drafts WHERE id IN (SELECT id FROM browser_drafts WHERE status NOT IN ('pending', 'confirmed') AND NOT EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.draft_id = browser_drafts.id) ORDER BY created_at ASC LIMIT ?)",
-            [remove],
+            "DELETE FROM browser_drafts WHERE integration_id = ? AND id IN (SELECT id FROM browser_drafts WHERE integration_id = ? AND status NOT IN ('pending', 'confirmed') AND NOT EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.draft_id = browser_drafts.id) ORDER BY created_at ASC LIMIT ?)",
+            params![self.integration_id.as_str(), self.integration_id.as_str(), remove],
         )?;
         let after: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM browser_drafts", [], |row| row.get(0))?;
+            .query_row(
+                "SELECT COUNT(*) FROM browser_drafts WHERE integration_id = ?",
+                [self.integration_id.as_str()],
+                |row| row.get(0),
+            )?;
         if after >= self.max_jobs {
             return Err(BrowserError::Full);
         }
@@ -1055,18 +1143,26 @@ impl BrowserStore<'_> {
     fn prune_jobs(&self) -> Result<(), BrowserError> {
         let count: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM browser_jobs", [], |row| row.get(0))?;
+            .query_row(
+                "SELECT COUNT(*) FROM browser_jobs WHERE integration_id = ?",
+                [self.integration_id.as_str()],
+                |row| row.get(0),
+            )?;
         if count < self.max_jobs {
             return Ok(());
         }
         let remove = count - self.max_jobs + 1;
         self.conn.execute(
-            "DELETE FROM browser_jobs WHERE id IN (SELECT browser_jobs.id FROM browser_jobs WHERE status IN ('succeeded', 'failed', 'expired', 'unknown') AND NOT EXISTS (SELECT 1 FROM browser_drafts WHERE browser_drafts.id = browser_jobs.draft_id AND browser_drafts.status = 'confirmed') ORDER BY created_at ASC LIMIT ?)",
-            [remove],
+            "DELETE FROM browser_jobs WHERE integration_id = ? AND id IN (SELECT browser_jobs.id FROM browser_jobs WHERE browser_jobs.integration_id = ? AND browser_jobs.status IN ('succeeded', 'failed', 'expired', 'unknown') AND NOT EXISTS (SELECT 1 FROM browser_drafts WHERE browser_drafts.id = browser_jobs.draft_id AND browser_drafts.status = 'confirmed') ORDER BY browser_jobs.created_at ASC LIMIT ?)",
+            params![self.integration_id.as_str(), self.integration_id.as_str(), remove],
         )?;
         let after: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM browser_jobs", [], |row| row.get(0))?;
+            .query_row(
+                "SELECT COUNT(*) FROM browser_jobs WHERE integration_id = ?",
+                [self.integration_id.as_str()],
+                |row| row.get(0),
+            )?;
         if after >= self.max_jobs {
             return Err(BrowserError::Full);
         }
@@ -1074,18 +1170,23 @@ impl BrowserStore<'_> {
     }
 
     fn prune_artifacts(&self, now: i64) -> Result<(), BrowserError> {
-        self.conn
-            .execute("DELETE FROM browser_artifacts WHERE expires_at <= ?", [now])?;
-        let count: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM browser_artifacts", [], |row| {
-                    row.get(0)
-                })?;
+        self.conn.execute(
+            "DELETE FROM browser_artifacts WHERE expires_at <= ? AND EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.id = browser_artifacts.job_id AND browser_jobs.integration_id = ?)",
+            params![now, self.integration_id.as_str()],
+        )?;
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM browser_artifacts WHERE EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.id = browser_artifacts.job_id AND browser_jobs.integration_id = ?)",
+            [self.integration_id.as_str()],
+            |row| row.get(0),
+        )?;
         if count < self.max_artifacts {
             return Ok(());
         }
         let remove = count - self.max_artifacts + 1;
-        self.conn.execute("DELETE FROM browser_artifacts WHERE id IN (SELECT id FROM browser_artifacts ORDER BY created_at ASC LIMIT ?)", [remove])?;
+        self.conn.execute(
+            "DELETE FROM browser_artifacts WHERE id IN (SELECT browser_artifacts.id FROM browser_artifacts WHERE EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.id = browser_artifacts.job_id AND browser_jobs.integration_id = ?) ORDER BY browser_artifacts.created_at ASC LIMIT ?)",
+            params![self.integration_id.as_str(), remove],
+        )?;
         Ok(())
     }
 }
@@ -1108,6 +1209,7 @@ struct JobRow {
     result_json: Option<String>,
     dispatch_count: i64,
     draft_id: Option<String>,
+    integration_id: String,
 }
 
 struct DraftRow {
@@ -1124,6 +1226,7 @@ struct DraftRow {
     submitted_at: Option<i64>,
     scheduled_at: Option<i64>,
     debug: bool,
+    integration_id: String,
 }
 
 fn read_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRow> {
@@ -1144,6 +1247,7 @@ fn read_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRow> {
         result_json: row.get(13)?,
         dispatch_count: row.get(14)?,
         draft_id: row.get(15)?,
+        integration_id: row.get(16)?,
     })
 }
 
@@ -1162,6 +1266,7 @@ fn read_draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
         submitted_at: row.get(10)?,
         scheduled_at: row.get(11)?,
         debug: row.get(12)?,
+        integration_id: row.get(13)?,
     })
 }
 
@@ -1179,6 +1284,7 @@ fn read_artifact(row: &rusqlite::Row<'_>) -> rusqlite::Result<Artifact> {
 
 fn to_draft(row: DraftRow) -> rusqlite::Result<Draft> {
     Ok(Draft {
+        integration_id: row.integration_id,
         id: row.id,
         platform: row.platform,
         kind: row.kind,
@@ -1197,14 +1303,15 @@ fn to_draft(row: DraftRow) -> rusqlite::Result<Draft> {
 
 fn read_schedule_reservation(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScheduleReservation> {
     Ok(ScheduleReservation {
-        id: row.get(0)?,
-        draft_id: row.get(1)?,
-        scheduled_at: row.get(2)?,
-        status: row.get(3)?,
-        created_at: row.get(4)?,
-        committed_at: row.get(5)?,
-        released_at: row.get(6)?,
-        text: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+        integration_id: row.get(0)?,
+        id: row.get(1)?,
+        draft_id: row.get(2)?,
+        scheduled_at: row.get(3)?,
+        status: row.get(4)?,
+        created_at: row.get(5)?,
+        committed_at: row.get(6)?,
+        released_at: row.get(7)?,
+        text: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
     })
 }
 
@@ -1685,6 +1792,42 @@ mod tests {
         assert_eq!(
             store.get_draft(&draft.id).unwrap().unwrap().status,
             "failed"
+        );
+    }
+
+    #[test]
+    fn scheduled_reservations_are_isolated_between_integrations() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let (first_job_id, first_draft_id) = {
+            let mut first = database.browser_for("wande-1");
+            let draft = prepare_post_draft(&mut first, "First post", 100);
+            let submission = first.consume_draft(&draft.id, 100, true).unwrap().unwrap();
+            let reservation = first
+                .list_schedule_reservations(10, 100)
+                .unwrap()
+                .pop()
+                .unwrap();
+            assert_eq!(reservation.integration_id, "wande-1");
+            (submission.job.id, draft.id)
+        };
+
+        let mut second = database.browser_for("wande-2");
+        assert!(second.get_job(&first_job_id, 100).unwrap().is_none());
+        assert!(second.get_draft(&first_draft_id).unwrap().is_none());
+        assert!(
+            second
+                .list_schedule_reservations(10, 100)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(second.schedule_summary().unwrap().pending_reservations, 0);
+        let own_draft = prepare_post_draft(&mut second, "Second post", 100);
+        assert!(
+            second
+                .consume_draft(&own_draft.id, 100, true)
+                .unwrap()
+                .is_some()
         );
     }
 }
