@@ -224,7 +224,7 @@ test("a profile read resolves a username to the canonical profile URL", () => {
   });
 });
 
-test("rejects invalid profile usernames, mixed inputs, and other platforms", () => {
+test("rejects invalid profile usernames, mixed inputs, and unknown platforms", () => {
   expect(
     parseCreateJobRequest({
       platform: "x",
@@ -258,7 +258,7 @@ test("rejects invalid profile usernames, mixed inputs, and other platforms", () 
     }),
   ).toMatchObject({ ok: false, error: { code: "invalid_schema" } });
 
-  for (const platform of ["linkedin", "instagram", "gmail", "tiktok"]) {
+  for (const platform of ["linkedin", "gmail", "tiktok"]) {
     expect(
       parseCreateJobRequest({
         platform,

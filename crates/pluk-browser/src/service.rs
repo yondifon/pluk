@@ -2755,7 +2755,12 @@ mod tests {
         assert!(tools.iter().any(|tool| tool["id"] == "x.inspect"));
         assert!(tools.iter().any(|tool| tool["id"] == "x.read_profile"));
         assert!(tools.iter().any(|tool| tool["id"] == "x.read_post"));
-        assert!(tools.iter().all(|tool| tool["platform"] == "x"));
+        assert!(tools.iter().any(|tool| tool["id"] == "instagram.inspect"));
+        assert!(
+            tools
+                .iter()
+                .all(|tool| tool["platform"] == "x" || tool["platform"] == "instagram")
+        );
 
         // An unauthenticated call is rejected before the catalog is even read.
         let missing_auth = client.get(&tools_url).send().await.unwrap();

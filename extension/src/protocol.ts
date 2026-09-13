@@ -26,7 +26,7 @@ export const MAX_RESULT_TEXT_LENGTH = 8_000;
 export const MAX_THREAD_PARTS = 25;
 export const HEARTBEAT_INTERVAL_MS = 20_000;
 
-export const PLATFORMS = ["x"] as const;
+export const PLATFORMS = ["x", "instagram"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 export const ACTIONS = [
@@ -68,6 +68,13 @@ export const DRIVER_CONTRACTS: Record<
       "submit_post",
     ],
   },
+  instagram: {
+    platform: "instagram",
+    hostnames: ["instagram.com", "www.instagram.com"],
+    // No feed, trends, or compose surface: reads profiles and posts and
+    // takes screenshots, nothing else.
+    capabilities: ["inspect", "read_profile", "read_post", "refresh", "capture"],
+  },
 };
 
 // Actions with one fixed destination: the caller supplies no target URL and
@@ -81,27 +88,41 @@ export const FIXED_TRENDS_TARGET = "https://x.com/explore";
 // post could be composed on.
 export const FIXED_COMPOSE_TARGET = "https://x.com/compose/post";
 
-const PROFILE_USERNAME_PATTERN = /^[A-Za-z0-9_]{1,50}$/u;
+const X_PROFILE_USERNAME_PATTERN = /^[A-Za-z0-9_]{1,50}$/u;
+const INSTAGRAM_PROFILE_USERNAME_PATTERN = /^[A-Za-z0-9_.]{1,30}$/u;
 
-// Path segments that collide with X's own feature pages, so they can never be
-// a real handle even though they match the username pattern. Shared with the
-// site driver, which applies the same check against the live page's URL.
-const RESERVED_PROFILE_HANDLES: ReadonlySet<string> = new Set([
-  "home",
-  "explore",
-  "notifications",
-  "messages",
-  "settings",
-  "search",
-  "compose",
-  "login",
-  "i",
-]);
+// Path segments that collide with a platform's own feature pages, so they
+// can never be a real handle even though they match the username pattern.
+// Shared with the site driver, which applies the same check against the
+// live page's URL.
+const RESERVED_PROFILE_HANDLES: Record<Platform, ReadonlySet<string>> = {
+  x: new Set([
+    "home",
+    "explore",
+    "notifications",
+    "messages",
+    "settings",
+    "search",
+    "compose",
+    "login",
+    "i",
+  ]),
+  // "p" and "reel" are Instagram's own post routes; a profile handle there
+  // would collide with a post target's first path segment.
+  instagram: new Set(["p", "reel"]),
+};
 
-export function isValidProfileUsername(value: string): boolean {
+export function isValidProfileUsername(
+  value: string,
+  platform: Platform = "x",
+): boolean {
+  const pattern =
+    platform === "instagram"
+      ? INSTAGRAM_PROFILE_USERNAME_PATTERN
+      : X_PROFILE_USERNAME_PATTERN;
   return (
-    PROFILE_USERNAME_PATTERN.test(value) &&
-    !RESERVED_PROFILE_HANDLES.has(value.toLowerCase())
+    pattern.test(value) &&
+    !RESERVED_PROFILE_HANDLES[platform].has(value.toLowerCase())
   );
 }
 
@@ -109,28 +130,44 @@ export function normalizeUsername(value: string): string {
   return value.startsWith("@") ? value.slice(1) : value;
 }
 
-function canonicalProfileUrl(username: string): string {
-  return `https://x.com/${username}`;
+function canonicalProfileUrl(platform: Platform, username: string): string {
+  return platform === "instagram"
+    ? `https://www.instagram.com/${username}/`
+    : `https://x.com/${username}`;
 }
 
-function extractProfileUsername(url: URL): string | null {
-  const username = /^\/([A-Za-z0-9_]{1,50})\/?$/u.exec(url.pathname)?.[1] ?? null;
-  return username !== null && isValidProfileUsername(username) ? username : null;
+function extractProfileUsername(platform: Platform, url: URL): string | null {
+  const username = /^\/([^/]+)\/?$/u.exec(url.pathname)?.[1] ?? null;
+  return username !== null && isValidProfileUsername(username, platform)
+    ? username
+    : null;
 }
 
-function isValidPostId(value: string): boolean {
-  return isIdentifier(value) && /^\d{1,32}$/u.test(value);
+function isValidPostId(platform: Platform, value: string): boolean {
+  if (!isIdentifier(value)) {
+    return false;
+  }
+  return platform === "instagram"
+    ? /^[A-Za-z0-9_-]{1,30}$/u.test(value)
+    : /^\d{1,32}$/u.test(value);
 }
 
 // X serves a post without its author only under /i/status, then redirects
-// to the author's URL.
-function canonicalPostUrl(postId: string): string {
-  return `https://x.com/i/status/${postId}`;
+// to the author's URL. Instagram's own canonical form is a /p/ post link;
+// /reel/ is accepted as an alternate target but never generated.
+function canonicalPostUrl(platform: Platform, postId: string): string {
+  return platform === "instagram"
+    ? `https://www.instagram.com/p/${postId}/`
+    : `https://x.com/i/status/${postId}`;
 }
 
-function extractPostId(url: URL): string | null {
+function extractPostId(platform: Platform, url: URL): string | null {
+  if (platform === "instagram") {
+    const postId = /^\/(?:p|reel)\/([^/]+)/u.exec(url.pathname)?.[1];
+    return postId && isValidPostId(platform, postId) ? postId : null;
+  }
   const postId = url.pathname.match(/\/status\/(\d+)/u)?.[1];
-  return postId && isValidPostId(postId) ? postId : null;
+  return postId && isValidPostId(platform, postId) ? postId : null;
 }
 
 export interface EmptyPayload {
@@ -499,13 +536,13 @@ function resolveProfileTarget(
       return invalid("Profile payload needs a single username field.");
     }
     const username = normalizeUsername(payload.username);
-    if (!isValidProfileUsername(username)) {
+    if (!isValidProfileUsername(username, platform)) {
       return invalid("Enter a valid username for this site.");
     }
     return {
       ok: true,
       value: {
-        targetUrl: canonicalProfileUrl(username),
+        targetUrl: canonicalProfileUrl(platform, username),
         payload: { kind: "empty" },
       },
     };
@@ -518,7 +555,7 @@ function resolveProfileTarget(
   if (!targetUrl.ok) {
     return targetUrl;
   }
-  if (extractProfileUsername(new URL(targetUrl.value)) === null) {
+  if (extractProfileUsername(platform, new URL(targetUrl.value)) === null) {
     return invalid(
       "Target URL is not a recognized profile page for this site. Pass a username instead.",
     );
@@ -549,7 +586,7 @@ function resolvePostTarget(
   }
   const payloadPostId =
     typeof payloadValue.postId === "string" ? payloadValue.postId : undefined;
-  if (payloadPostId !== undefined && !isValidPostId(payloadPostId)) {
+  if (payloadPostId !== undefined && !isValidPostId(platform, payloadPostId)) {
     return invalid("Enter a valid post ID for this site.");
   }
   if (targetUrlValue === undefined) {
@@ -557,7 +594,7 @@ function resolvePostTarget(
       return invalid("Provide a post URL or a post ID.");
     }
     const validated = canonicalizeTargetUrl(
-      canonicalPostUrl(payloadPostId),
+      canonicalPostUrl(platform, payloadPostId),
       platform,
     );
     if (!validated.ok) {
@@ -575,7 +612,7 @@ function resolvePostTarget(
   if (!targetUrl.ok) {
     return targetUrl;
   }
-  const urlPostId = extractPostId(new URL(targetUrl.value));
+  const urlPostId = extractPostId(platform, new URL(targetUrl.value));
   if (urlPostId === null) {
     return invalid(
       "Target URL is not a recognized post page for this site. Pass a post ID instead.",

@@ -19,23 +19,26 @@ pub const MAX_ID_LENGTH: usize = 256;
 pub const HEARTBEAT_INTERVAL_MS: i64 = 20_000;
 pub const MAX_CLOCK_SKEW_MS: i64 = 30_000;
 
-/// The one site Pluk drives. Kept as a type so the wire envelope still
-/// carries a platform and a second site stays a variant away.
+/// The sites Pluk drives. Kept as a type so the wire envelope always
+/// carries a platform and adding a site stays a variant away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Platform {
     X,
+    Instagram,
 }
 
 impl Platform {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::X => "x",
+            Self::Instagram => "instagram",
         }
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
         match value {
             "x" => Some(Self::X),
+            "instagram" => Some(Self::Instagram),
             _ => None,
         }
     }
@@ -93,6 +96,12 @@ impl Action {
     pub fn is_supported_on(self, platform: Platform) -> bool {
         match platform {
             Platform::X => true,
+            // Instagram has no feed, trends, or compose surface: it reads
+            // profiles and posts and takes screenshots, nothing else.
+            Platform::Instagram => matches!(
+                self,
+                Self::Inspect | Self::ReadProfile | Self::ReadPost | Self::Refresh | Self::Capture
+            ),
         }
     }
 }
@@ -175,12 +184,16 @@ pub type ValidationResult<T> = Result<T, ValidationError>;
 pub(crate) fn fixed_feed_target(platform: Platform) -> &'static str {
     match platform {
         Platform::X => "https://x.com/home",
+        // is_supported_on rejects read_feed for Instagram before a caller
+        // ever reaches this, so there is no real destination to fake here.
+        Platform::Instagram => unreachable!("Instagram does not support read_feed"),
     }
 }
 
 pub(crate) fn fixed_trends_target(platform: Platform) -> &'static str {
     match platform {
         Platform::X => "https://x.com/explore",
+        Platform::Instagram => unreachable!("Instagram does not support read_trends"),
     }
 }
 
@@ -190,40 +203,60 @@ pub(crate) fn fixed_trends_target(platform: Platform) -> &'static str {
 pub(crate) fn fixed_compose_target(platform: Platform) -> &'static str {
     match platform {
         Platform::X => "https://x.com/compose/post",
+        Platform::Instagram => unreachable!("Instagram does not support post"),
     }
 }
 
-// Path segments that collide with X's own feature pages, so they can never be
-// a real handle even though they match the username pattern. Shared in spirit
-// with the site driver, which applies the same check against the live page's
-// URL (duplicated there because injected page scripts cannot reference
-// outside module state).
-fn is_reserved_profile_handle(value: &str) -> bool {
-    const RESERVED: [&str; 9] = [
-        "home",
-        "explore",
-        "notifications",
-        "messages",
-        "settings",
-        "search",
-        "compose",
-        "login",
-        "i",
-    ];
-    RESERVED.contains(&value.to_ascii_lowercase().as_str())
+// Path segments that collide with a platform's own feature pages, so they
+// can never be a real handle even though they match the username pattern.
+// Shared in spirit with the site driver, which applies the same check
+// against the live page's URL (duplicated there because injected page
+// scripts cannot reference outside module state).
+fn is_reserved_profile_handle(platform: Platform, value: &str) -> bool {
+    let reserved: &[&str] = match platform {
+        Platform::X => &[
+            "home",
+            "explore",
+            "notifications",
+            "messages",
+            "settings",
+            "search",
+            "compose",
+            "login",
+            "i",
+        ],
+        // "p" and "reel" are Instagram's own post routes; a profile handle
+        // there would collide with a post target's first path segment.
+        Platform::Instagram => &["p", "reel"],
+    };
+    reserved.contains(&value.to_ascii_lowercase().as_str())
 }
 
-fn is_valid_profile_username(value: &str) -> bool {
-    !value.is_empty()
-        && !is_reserved_profile_handle(value)
-        && value.len() <= 50
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+fn is_valid_profile_username(platform: Platform, value: &str) -> bool {
+    if value.is_empty() || is_reserved_profile_handle(platform, value) {
+        return false;
+    }
+    match platform {
+        Platform::X => {
+            value.len() <= 50
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        }
+        Platform::Instagram => {
+            value.len() <= 30
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.')
+        }
+    }
 }
 
-fn canonical_profile_url(username: &str) -> String {
-    format!("https://x.com/{username}")
+fn canonical_profile_url(platform: Platform, username: &str) -> String {
+    match platform {
+        Platform::X => format!("https://x.com/{username}"),
+        Platform::Instagram => format!("https://www.instagram.com/{username}/"),
+    }
 }
 
 fn single_path_segment(path: &str) -> Option<&str> {
@@ -232,26 +265,55 @@ fn single_path_segment(path: &str) -> Option<&str> {
     (!trimmed.is_empty() && !trimmed.contains('/')).then_some(trimmed)
 }
 
-fn extract_profile_username(url: &Url) -> Option<String> {
+fn extract_profile_username(platform: Platform, url: &Url) -> Option<String> {
     let segment = single_path_segment(url.path())?;
-    is_valid_profile_username(segment).then(|| segment.to_owned())
+    is_valid_profile_username(platform, segment).then(|| segment.to_owned())
 }
 
-fn is_valid_post_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 32 && value.bytes().all(|byte| byte.is_ascii_digit())
+fn is_valid_post_id(platform: Platform, value: &str) -> bool {
+    if value.is_empty() {
+        return false;
+    }
+    match platform {
+        Platform::X => value.len() <= 32 && value.bytes().all(|byte| byte.is_ascii_digit()),
+        // Instagram shortcode: 1 to 30 characters of A-Za-z0-9_-.
+        Platform::Instagram => {
+            value.len() <= 30
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        }
+    }
 }
 
-fn canonical_post_url(post_id: &str) -> String {
-    format!("https://x.com/i/status/{post_id}")
+fn canonical_post_url(platform: Platform, post_id: &str) -> String {
+    match platform {
+        Platform::X => format!("https://x.com/i/status/{post_id}"),
+        Platform::Instagram => format!("https://www.instagram.com/p/{post_id}/"),
+    }
 }
 
-// Digits embedded in a post page's own URL. Mirrors extract_profile_username:
-// lets a caller pass either a full post URL or a bare post ID, with the other
-// one derived.
-fn extract_post_id(url: &Url) -> Option<String> {
-    let rest = url.path().split("/status/").nth(1)?;
-    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    (!digits.is_empty()).then_some(digits)
+// The post's own identifier embedded in a post page's URL. Mirrors
+// extract_profile_username: lets a caller pass either a full post URL or a
+// bare post ID, with the other one derived.
+fn extract_post_id(platform: Platform, url: &Url) -> Option<String> {
+    match platform {
+        Platform::X => {
+            let rest = url.path().split("/status/").nth(1)?;
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            (!digits.is_empty()).then_some(digits)
+        }
+        // Both /p/<shortcode>/ and /reel/<shortcode>/ address a post.
+        Platform::Instagram => {
+            let mut segments = url.path_segments()?;
+            let prefix = segments.next()?;
+            if prefix != "p" && prefix != "reel" {
+                return None;
+            }
+            let shortcode = segments.next()?;
+            is_valid_post_id(platform, shortcode).then(|| shortcode.to_owned())
+        }
+    }
 }
 
 fn resolve_post_target(
@@ -273,10 +335,11 @@ fn resolve_post_target(
     match (target_url, payload_post_id) {
         (None, None) => Err(invalid("Provide a post URL or a post ID.")),
         (None, Some(post_id)) => {
-            if !is_valid_post_id(post_id) {
+            if !is_valid_post_id(platform, post_id) {
                 return Err(invalid("Enter a valid post ID for this site."));
             }
-            let canonical = canonicalize_target_url(&canonical_post_url(post_id), platform)?;
+            let canonical =
+                canonicalize_target_url(&canonical_post_url(platform, post_id), platform)?;
             Ok((canonical, json!({ "kind": "read_post", "postId": post_id })))
         }
         (Some(url), post_id_field) => {
@@ -284,7 +347,7 @@ fn resolve_post_target(
             let parsed = Url::parse(&canonical).map_err(|_| {
                 invalid("Target URL is not a recognized post page for this site. Pass a post ID instead.")
             })?;
-            let url_post_id = extract_post_id(&parsed).ok_or_else(|| {
+            let url_post_id = extract_post_id(platform, &parsed).ok_or_else(|| {
                 invalid("Target URL is not a recognized post page for this site. Pass a post ID instead.")
             })?;
             if let Some(post_id) = post_id_field
@@ -340,10 +403,13 @@ fn resolve_profile_target(
                 return Err(invalid("Profile payload needs a single username field."));
             };
             let username = username.strip_prefix('@').unwrap_or(username);
-            if !is_valid_profile_username(username) {
+            if !is_valid_profile_username(platform, username) {
                 return Err(invalid("Enter a valid username for this site."));
             }
-            return Ok((canonical_profile_url(username), json!({ "kind": "empty" })));
+            return Ok((
+                canonical_profile_url(platform, username),
+                json!({ "kind": "empty" }),
+            ));
         }
         if !object.is_empty() {
             return Err(invalid("Profile payload needs a single username field."));
@@ -357,7 +423,7 @@ fn resolve_profile_target(
             "Target URL is not a recognized profile page for this site. Pass a username instead.",
         )
     })?;
-    if extract_profile_username(&parsed).is_none() {
+    if extract_profile_username(platform, &parsed).is_none() {
         return Err(invalid(
             "Target URL is not a recognized profile page for this site. Pass a username instead.",
         ));
@@ -1010,8 +1076,11 @@ pub fn canonicalize_target_url(value: &str, platform: Platform) -> ValidationRes
     Ok(url.to_string())
 }
 
-pub fn make_ready_envelope(connection_id: &str, now: i64) -> Value {
-    let capabilities = [
+// The commands dispatched to the extension for a platform: every read
+// action it is supported on, plus the submit actions that replace the
+// held-back post/reply once the user confirms.
+fn ready_capabilities(platform: Platform) -> Vec<Action> {
+    [
         Action::Inspect,
         Action::ReadProfile,
         Action::ReadPost,
@@ -1022,17 +1091,28 @@ pub fn make_ready_envelope(connection_id: &str, now: i64) -> Value {
         Action::SubmitReply,
         Action::SubmitPost,
     ]
-    .map(Action::as_str);
+    .into_iter()
+    .filter(|action| action.is_supported_on(platform))
+    .collect()
+}
+
+pub fn make_ready_envelope(connection_id: &str, now: i64) -> Value {
+    let contracts: Vec<Value> = [Platform::X, Platform::Instagram]
+        .into_iter()
+        .map(|platform| {
+            json!({
+                "platform": platform.as_str(),
+                "hostnames": hostnames(platform),
+                "capabilities": ready_capabilities(platform).into_iter().map(Action::as_str).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
     json!({
         "version": PROTOCOL_VERSION,
         "type": "ready",
         "connectionId": connection_id,
         "heartbeatIntervalMs": HEARTBEAT_INTERVAL_MS,
-        "contracts": [{
-            "platform": Platform::X.as_str(),
-            "hostnames": hostnames(Platform::X),
-            "capabilities": capabilities,
-        }],
+        "contracts": contracts,
         "issuedAt": now,
         "expiresAt": now + HEARTBEAT_INTERVAL_MS,
     })
@@ -1077,6 +1157,7 @@ pub(crate) fn make_command(input: CommandInput<'_>) -> Value {
 pub fn hostnames(platform: Platform) -> Vec<&'static str> {
     match platform {
         Platform::X => vec!["x.com", "www.x.com", "twitter.com", "www.twitter.com"],
+        Platform::Instagram => vec!["instagram.com", "www.instagram.com"],
     }
 }
 
@@ -1270,8 +1351,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_every_platform_but_x() {
-        for platform in ["linkedin", "instagram", "gmail", "tiktok"] {
+    fn rejects_every_platform_but_x_and_instagram() {
+        for platform in ["linkedin", "gmail", "tiktok"] {
             assert!(
                 parse_create_job_request(&json!({
                     "platform": platform, "action": "read_feed", "payload": {}
@@ -1279,6 +1360,84 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn instagram_post_urls_canonicalise() {
+        assert_eq!(
+            canonicalize_target_url(
+                "https://www.instagram.com/p/CxYz_1-2Ab/",
+                Platform::Instagram
+            )
+            .unwrap(),
+            "https://www.instagram.com/p/CxYz_1-2Ab/"
+        );
+        assert_eq!(
+            canonicalize_target_url(
+                "https://instagram.com:443/reel/CxYz_1-2Ab/",
+                Platform::Instagram
+            )
+            .unwrap(),
+            "https://instagram.com/reel/CxYz_1-2Ab/"
+        );
+    }
+
+    #[test]
+    fn rejects_a_non_instagram_hostname() {
+        assert!(
+            canonicalize_target_url("https://instagram.com.evil/p/abc/", Platform::Instagram)
+                .is_err()
+        );
+        assert!(canonicalize_target_url("https://x.com/p/abc/", Platform::Instagram).is_err());
+    }
+
+    #[test]
+    fn instagram_rejects_read_trends_as_unsupported() {
+        let error = parse_create_job_request(&json!({
+            "platform": "instagram", "action": "read_trends", "payload": {}
+        }))
+        .unwrap_err();
+        assert_eq!(error.code, "unsupported_action");
+    }
+
+    #[test]
+    fn instagram_read_post_accepts_a_p_or_reel_url_and_derives_the_shortcode() {
+        let by_post = parse_create_job_request(&json!({
+            "platform": "instagram", "action": "read_post",
+            "targetUrl": "https://www.instagram.com/p/CxYz_1-2Ab/", "payload": {}
+        }))
+        .unwrap();
+        assert_eq!(
+            by_post.target_url,
+            "https://www.instagram.com/p/CxYz_1-2Ab/"
+        );
+        assert_eq!(by_post.payload["postId"], "CxYz_1-2Ab");
+
+        let by_reel = parse_create_job_request(&json!({
+            "platform": "instagram", "action": "read_post",
+            "targetUrl": "https://www.instagram.com/reel/CxYz_1-2Ab/", "payload": {}
+        }))
+        .unwrap();
+        assert_eq!(by_reel.payload["postId"], "CxYz_1-2Ab");
+
+        let by_shortcode = parse_create_job_request(&json!({
+            "platform": "instagram", "action": "read_post",
+            "payload": { "postId": "CxYz_1-2Ab" }
+        }))
+        .unwrap();
+        assert_eq!(
+            by_shortcode.target_url,
+            "https://www.instagram.com/p/CxYz_1-2Ab/"
+        );
+    }
+
+    #[test]
+    fn instagram_read_profile_resolves_a_username_to_the_canonical_profile_url() {
+        let by_handle = parse_create_job_request(&json!({
+            "platform": "instagram", "action": "read_profile", "payload": { "username": "@jack" }
+        }))
+        .unwrap();
+        assert_eq!(by_handle.target_url, "https://www.instagram.com/jack/");
     }
 
     #[test]

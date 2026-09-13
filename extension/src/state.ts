@@ -11,6 +11,8 @@ export const SITE_ORIGINS = [
   "https://www.x.com/*",
   "https://twitter.com/*",
   "https://www.twitter.com/*",
+  "https://instagram.com/*",
+  "https://www.instagram.com/*",
 ] as const;
 const MIN_TOKEN_LENGTH = 16;
 const MAX_TOKEN_LENGTH = 256;

@@ -6,7 +6,7 @@ use crate::protocol::{
     fixed_compose_target, fixed_feed_target, fixed_trends_target, hostnames,
 };
 
-const PLATFORMS: [Platform; 1] = [Platform::X];
+const PLATFORMS: [Platform; 2] = [Platform::X, Platform::Instagram];
 
 /// Tool classes, matching the categories the adapter layer groups by.
 const READ: &str = "read";
@@ -344,6 +344,11 @@ mod tests {
                 "x.capture",
                 "x.reply",
                 "x.post",
+                "instagram.inspect",
+                "instagram.read_profile",
+                "instagram.read_post",
+                "instagram.refresh",
+                "instagram.capture",
             ]
         );
         // Submissions are reached by confirming a draft, never by invoking a tool.
@@ -352,11 +357,34 @@ mod tests {
     }
 
     #[test]
+    fn catalog_publishes_exactly_the_instagram_tools_instagram_supports() {
+        let ids: Vec<String> = tools()
+            .into_iter()
+            .map(|tool| tool.id)
+            .filter(|id| id.starts_with("instagram."))
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                "instagram.inspect",
+                "instagram.read_profile",
+                "instagram.read_post",
+                "instagram.refresh",
+                "instagram.capture",
+            ]
+        );
+    }
+
+    #[test]
     fn find_tool_rejects_unknown_and_unsupported_pairs() {
         assert!(find_tool("x.inspect").is_some());
         assert!(find_tool("x.read_profile").is_some());
         assert!(find_tool("x.read_post").is_some());
         assert!(find_tool("x.post").is_some());
+        assert!(find_tool("instagram.inspect").is_some());
+        assert!(find_tool("instagram.read_post").is_some());
+        assert!(find_tool("instagram.read_trends").is_none());
+        assert!(find_tool("instagram.post").is_none());
         assert!(find_tool("linkedin.read_post").is_none());
         assert!(find_tool("gmail.read_feed").is_none());
         assert!(find_tool("tiktok.read_profile").is_none());

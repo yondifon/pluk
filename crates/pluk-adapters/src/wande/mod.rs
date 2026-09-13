@@ -52,7 +52,7 @@ const READ: &str = "read";
 const MAX_WAIT: Duration = Duration::from_secs(45);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. A call waits up to 45 seconds; past that you get a jobId, and get_job returns the outcome once it lands. Pass payload.debug true on x_post or x_reply to have a screenshot and the page HTML attached to the browser job when the page refuses it.";
+const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. Instagram tools are read-only: profiles, posts, and screenshots, no posting or replying there. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. A call waits up to 45 seconds; past that you get a jobId, and get_job returns the outcome once it lands. Pass payload.debug true on x_post or x_reply to have a screenshot and the page HTML attached to the browser job when the page refuses it.";
 
 const ACCESS: &str = "Reads and posts through a Chrome window the user is signed in to, one page at a time. Every post is shown to the user in full inside Pluk and goes out only if they say so.";
 
@@ -140,7 +140,7 @@ impl Adapter for WandeAdapter {
                 policy: None,
                 hint: Some(AGENT_HINT.to_owned()),
                 start: Some(
-                    "Start with x_read_feed or x_read_profile to see what is there. x_post hands a post to the user in Pluk, who decides whether it goes out."
+                    "Start with x_read_feed, x_read_profile, or instagram_read_profile to see what is there. x_post hands a post to the user in Pluk, who decides whether it goes out."
                         .to_owned(),
                 ),
             },
@@ -662,6 +662,11 @@ mod tests {
                 "x_capture",
                 "x_reply",
                 "x_post",
+                "instagram_inspect",
+                "instagram_read_profile",
+                "instagram_read_post",
+                "instagram_refresh",
+                "instagram_capture",
                 GET_JOB,
             ]
         );
