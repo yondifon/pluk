@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { runInstagramPage } from "./drivers/instagram";
 import { runXPage } from "./drivers/x";
 
 interface FixtureNode {
@@ -1098,3 +1099,189 @@ test("exposes an uncertain outcome instead of claiming success when no post iden
   expect(submitShortcuts).toBe(1);
   expect(submitClicks).toBe(1);
 }, 20_000);
+
+const instagramOgTitle = (username: string): FixtureNode =>
+  node("", { content: `${username} on Instagram` });
+
+test("reads an Instagram post with no comments", async () => {
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    {
+      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+  });
+  restore();
+  expect(result).toMatchObject({
+    state: "ready",
+    kind: "instagram_post",
+    comments: [],
+    truncated: false,
+  });
+});
+
+test("loads two pages of Instagram comments before the Load More button disappears", async () => {
+  const commentRow = (text: string): FixtureNode =>
+    node(text, {}, { "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })] });
+  const c1 = commentRow("Comment one");
+  const loadMoreButton = node(
+    "",
+    {},
+    { 'svg[aria-label="Load more comments"]': [node("")] },
+  );
+  const listSelectors: Record<string, FixtureNode[]> = {
+    li: [c1],
+    ":scope > li": [c1],
+    button: [loadMoreButton],
+  };
+  let clicks = 0;
+  Object.defineProperty(loadMoreButton, "click", {
+    value: () => {
+      clicks += 1;
+      if (clicks === 1) {
+        const c2 = commentRow("Comment two");
+        listSelectors.li = [c1, c2];
+        listSelectors[":scope > li"] = [c1, c2];
+      } else {
+        const c3 = commentRow("Comment three");
+        listSelectors.li = [...listSelectors.li, c3];
+        listSelectors[":scope > li"] = [...listSelectors[":scope > li"], c3];
+        delete listSelectors.button;
+      }
+    },
+  });
+  const commentList = node("", {}, listSelectors);
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    {
+      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
+      ul: [commentList],
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+  });
+  restore();
+  expect(clicks).toBe(2);
+  expect(result).toMatchObject({ state: "ready", truncated: false });
+  expect((result as unknown as { comments: unknown[] }).comments).toHaveLength(3);
+});
+
+test("expands a collapsed Instagram reply thread", async () => {
+  const replyLi = node(
+    "Reply text",
+    {},
+    { "time[datetime]": [node("", { datetime: "2024-01-01T00:05:00Z" })] },
+  );
+  const replyUlSelectors: Record<string, FixtureNode[]> = { ":scope > li": [] };
+  const replyUl = node("", {}, replyUlSelectors);
+  const c1 = node(
+    "Comment one",
+    {},
+    {
+      "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })],
+      "ul._a9ym": [replyUl],
+    },
+  );
+  const listSelectors: Record<string, FixtureNode[]> = {
+    li: [c1],
+    ":scope > li": [c1],
+  };
+  const toggleButton = node("");
+  const toggleSpan = node("View replies (1)");
+  Object.defineProperty(toggleSpan, "closest", {
+    value: (selector: string) => (selector === "button" ? toggleButton : null),
+  });
+  Object.defineProperty(toggleButton, "click", {
+    value: () => {
+      Object.defineProperty(toggleSpan, "textContent", {
+        configurable: true,
+        value: "Hide replies",
+      });
+      replyUlSelectors[":scope > li"] = [replyLi];
+      listSelectors.li = [c1, replyLi];
+    },
+  });
+  listSelectors["span._a9yi"] = [toggleSpan];
+  const commentList = node("", {}, listSelectors);
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    {
+      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
+      ul: [commentList],
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+  });
+  restore();
+  const comments = (
+    result as unknown as { comments: ReadonlyArray<{ replies: unknown[] }> }
+  ).comments;
+  expect(comments).toHaveLength(1);
+  expect(comments[0]?.replies).toHaveLength(1);
+  expect(result).toMatchObject({ state: "ready", truncated: false });
+});
+
+test("stops loading Instagram comments at the 300 cap and marks the result truncated", async () => {
+  const makeBatch = (count: number, offset: number): FixtureNode[] =>
+    Array.from({ length: count }, (_, index) =>
+      node(`Comment ${offset + index}`, {}, {
+        "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })],
+      }),
+    );
+  const initial = makeBatch(100, 0);
+  const listSelectors: Record<string, FixtureNode[]> = {
+    li: initial,
+    ":scope > li": initial,
+    button: [
+      node(
+        "",
+        {},
+        { 'svg[aria-label="Load more comments"]': [node("")] },
+      ),
+    ],
+  };
+  let clicks = 0;
+  Object.defineProperty(listSelectors.button[0], "click", {
+    value: () => {
+      clicks += 1;
+      const next = makeBatch(100, listSelectors.li.length);
+      listSelectors.li = [...listSelectors.li, ...next];
+      listSelectors[":scope > li"] = listSelectors.li;
+    },
+  });
+  const commentList = node("", {}, listSelectors);
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    {
+      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
+      ul: [commentList],
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+  });
+  restore();
+  expect(clicks).toBe(2);
+  expect(result).toMatchObject({ state: "ready", truncated: true });
+  expect((result as unknown as { comments: unknown[] }).comments).toHaveLength(300);
+});
