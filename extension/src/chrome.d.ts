@@ -171,16 +171,11 @@ declare namespace chrome {
       readonly populate?: boolean;
     }
 
-    interface UpdateInfo {
-      readonly focused?: boolean;
-    }
-
     function create(createData: CreateData): Promise<Window | undefined>;
     function get(
       windowId: number,
       queryOptions?: QueryOptions,
     ): Promise<Window>;
-    function update(windowId: number, updateInfo: UpdateInfo): Promise<Window>;
   }
 
   interface Event<Listener> {

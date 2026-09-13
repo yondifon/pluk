@@ -79,6 +79,11 @@ interface ArtifactSink {
   ): Promise<string>;
 }
 
+interface DebuggerSession {
+  readonly target: chrome.DebuggerTarget;
+  readonly api: chrome.DebuggerApi;
+}
+
 export type BrowserErrorCode =
   | "artifact_upload_failed"
   | "account_unverified"
@@ -256,7 +261,7 @@ export class BrowserExecutor {
         "The page changed while it was being prepared. Try again.",
       );
     }
-    const readPage = async () => {
+    const readPage = async (session?: DebuggerSession) => {
       try {
         return await this.readDriverPage(
           context,
@@ -264,6 +269,7 @@ export class BrowserExecutor {
           options,
           targetUrl,
           command.platform,
+          session,
         );
       } catch (error) {
         if (wantsDebug(command.payload) && error instanceof BrowserExecutionError) {
@@ -277,32 +283,20 @@ export class BrowserExecutor {
       }
     };
     return SUBMIT_ACTIONS.has(command.action)
-      ? this.withWindowInFront(context, readPage)
+      ? this.withEmulatedFocus(context, readPage)
       : readPage();
   }
 
   /** A real click, delivered through the browser rather than the page, for
-   * controls that ignore or mistrust scripted events. The debugger stays
-   * attached only for the press. */
+   * controls that ignore or mistrust scripted events. Runs on the debugger
+   * session withEmulatedFocus already holds for the submit. */
   private async trustedClick(
-    tabId: number,
+    session: DebuggerSession,
     point: { readonly x: number; readonly y: number },
   ): Promise<void> {
-    const target = { tabId };
-    // `debugger` is a reserved word, so the namespace cannot be declared
-    // alongside the others in chrome.d.ts and is typed through this lookup.
-    const api = (chrome as unknown as { debugger: chrome.DebuggerApi }).debugger;
-    try {
-      await api.attach(target, "1.3");
-    } catch (error) {
-      throw mapChromeFailure(
-        error,
-        "Chrome would not let Pluk press the control on the page.",
-      );
-    }
     try {
       for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
-        await api.sendCommand(target, "Input.dispatchMouseEvent", {
+        await session.api.sendCommand(session.target, "Input.dispatchMouseEvent", {
           type,
           x: point.x,
           y: point.y,
@@ -315,8 +309,6 @@ export class BrowserExecutor {
         error,
         "Chrome did not deliver the press to the page.",
       );
-    } finally {
-      await api.detach(target).catch(() => undefined);
     }
   }
 
@@ -372,27 +364,41 @@ export class BrowserExecutor {
     return Promise.all([screenshot, html]);
   }
 
-  /** X drives its composer from animation frames, which Chrome pauses while
-   * the tab is covered. A submit gets the window in front for exactly as long
-   * as it takes, then hands the front back. */
-  private async withWindowInFront<T>(
+  /** X drives its composer from animation frames, which Chrome throttles for
+   * a tab that is covered or backgrounded. The CDP debugger emulates a
+   * focused, active page on the automation tab for the submit, so the
+   * composer keeps running without the window ever coming forward. */
+  private async withEmulatedFocus<T>(
     context: AutomationContext,
-    work: () => Promise<T>,
+    work: (session: DebuggerSession) => Promise<T>,
   ): Promise<T> {
+    const target: chrome.DebuggerTarget = { tabId: context.tabId };
+    // `debugger` is a reserved word, so the namespace cannot be declared
+    // alongside the others in chrome.d.ts and is typed through this lookup.
+    const api = (chrome as unknown as { debugger: chrome.DebuggerApi }).debugger;
     try {
-      await chrome.windows.update(context.windowId, { focused: true });
+      await api.attach(target, "1.3");
     } catch (error) {
       throw mapChromeFailure(
         error,
-        "Chrome could not bring the dedicated window forward.",
+        "Chrome would not let Pluk emulate focus on the automation tab.",
       );
     }
     try {
-      return await work();
+      await api.sendCommand(target, "Emulation.setFocusEmulationEnabled", {
+        enabled: true,
+      });
+      await api.sendCommand(target, "Page.setWebLifecycleState", {
+        state: "active",
+      });
+      return await work({ target, api });
     } finally {
-      await chrome.windows
-        .update(context.windowId, { focused: false })
+      await api
+        .sendCommand(target, "Emulation.setFocusEmulationEnabled", {
+          enabled: false,
+        })
         .catch(() => undefined);
+      await api.detach(target).catch(() => undefined);
     }
   }
 
@@ -584,6 +590,7 @@ export class BrowserExecutor {
     options: DriverScriptOptions,
     expectedUrl: string,
     platform: Platform,
+    session?: DebuggerSession,
   ): Promise<PageRead> {
     const deadline = Date.now() + NAVIGATION_TIMEOUT_MS;
     let trustedClicks = 0;
@@ -630,7 +637,9 @@ export class BrowserExecutor {
               `The ${platform} page kept asking for more clicks than a thread can need. Nothing was submitted.`,
             );
           }
-          await this.trustedClick(context.tabId, click);
+          // SUBMIT_ACTIONS is the only source of trusted clicks, and
+          // withEmulatedFocus always supplies a session for that path.
+          await this.trustedClick(session!, click);
           await delay(400);
           continue;
         }

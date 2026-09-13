@@ -21,8 +21,9 @@ let tab: MockTab = {
 let captureVisibleTabImpl: () => Promise<string> = () =>
   Promise.resolve("data:image/png;base64,AA==");
 let captureVisibleTabCalls = 0;
-let windowFocusCalls: boolean[] = [];
-let windowFocused = false;
+let focusEmulationCalls: boolean[] = [];
+let debuggerAttachCalls = 0;
+let debuggerDetachCalls = 0;
 let executeScriptImpl: (targetUrl: string) => DriverPageResult = (
   targetUrl,
 ) => ({
@@ -58,7 +59,6 @@ const mockChrome = {
   },
   windows: {
     create: async (data: { readonly url?: string }) => {
-      windowFocused = false;
       tab = {
         id: 1,
         windowId: 1,
@@ -72,20 +72,26 @@ const mockChrome = {
       id,
       type: "normal" as const,
       incognito: false,
-      focused: windowFocused,
+      focused: false,
       tabs: [{ id: tab.id, windowId: tab.windowId, active: tab.active }],
     }),
-    update: async (id: number, properties: { readonly focused?: boolean }) => {
-      if (properties.focused !== undefined) {
-        windowFocused = properties.focused;
-        windowFocusCalls.push(properties.focused);
+  },
+  debugger: {
+    attach: async () => {
+      debuggerAttachCalls += 1;
+    },
+    detach: async () => {
+      debuggerDetachCalls += 1;
+    },
+    sendCommand: async (
+      _target: { readonly tabId?: number },
+      method: string,
+      commandParams?: Record<string, unknown>,
+    ) => {
+      if (method === "Emulation.setFocusEmulationEnabled") {
+        focusEmulationCalls.push(commandParams?.enabled === true);
       }
-      return {
-        id,
-        type: "normal" as const,
-        incognito: false,
-        focused: windowFocused,
-      };
+      return undefined;
     },
   },
   tabs: {
@@ -130,8 +136,9 @@ beforeEach(() => {
   storage.clear();
   tab = { id: 1, windowId: 1, status: "complete", url: "", active: true };
   captureVisibleTabCalls = 0;
-  windowFocusCalls = [];
-  windowFocused = false;
+  focusEmulationCalls = [];
+  debuggerAttachCalls = 0;
+  debuggerDetachCalls = 0;
   captureVisibleTabImpl = () => Promise.resolve("data:image/png;base64,AA==");
   executeScriptImpl = (targetUrl) => ({
     state: "ready",
@@ -189,7 +196,7 @@ test("a read succeeds and returns no image field even when screenshot capture is
   );
 
   expect(captureVisibleTabCalls).toBe(0);
-  expect(windowFocusCalls).toEqual([]);
+  expect(debuggerAttachCalls).toBe(0);
   expect(result.extractArtifactId).toBe("extract-artifact");
   expect(result).not.toHaveProperty("screenshotArtifactId");
   expect(sink.uploads).toEqual([
@@ -211,7 +218,7 @@ test("capture still attaches a screenshot", async () => {
   expect(result.screenshotArtifactId).toBe("screenshot-artifact");
 });
 
-test("submit_reply brings the window forward only while it runs and succeeds without a screenshot even when capture would fail", async () => {
+test("submit_reply emulates focus on the automation tab only while it runs and succeeds without a screenshot even when capture would fail", async () => {
   captureVisibleTabImpl = () => Promise.reject(new Error("quota exceeded"));
   const executor = new BrowserExecutor();
   const sink = makeSink();
@@ -233,7 +240,9 @@ test("submit_reply brings the window forward only while it runs and succeeds wit
   };
   const submission = await executor.run(submitCommand, sink);
   expect(captureVisibleTabCalls).toBe(0);
-  expect(windowFocusCalls).toEqual([true, false]);
+  expect(focusEmulationCalls).toEqual([true, false]);
+  expect(debuggerAttachCalls).toBe(1);
+  expect(debuggerDetachCalls).toBe(1);
   expect(submission).not.toHaveProperty("screenshotArtifactId");
 });
 
