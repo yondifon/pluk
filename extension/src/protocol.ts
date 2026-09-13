@@ -161,10 +161,20 @@ function canonicalPostUrl(platform: Platform, postId: string): string {
     : `https://x.com/i/status/${postId}`;
 }
 
+// A post's shortcode sits right after a `p` or `reel` segment, either bare
+// (/p/<shortcode>/) or with the author's handle in front
+// (/<username>/p/<shortcode>/), which is the shape Instagram's own post
+// grid links use.
 function extractPostId(platform: Platform, url: URL): string | null {
   if (platform === "instagram") {
-    const postId = /^\/(?:p|reel)\/([^/]+)/u.exec(url.pathname)?.[1];
-    return postId && isValidPostId(platform, postId) ? postId : null;
+    const segments = url.pathname.split("/").filter((segment) => segment.length > 0);
+    const shortcode =
+      segments[0] === "p" || segments[0] === "reel"
+        ? segments[1]
+        : segments[1] === "p" || segments[1] === "reel"
+          ? segments[2]
+          : undefined;
+    return shortcode && isValidPostId(platform, shortcode) ? shortcode : null;
   }
   const postId = url.pathname.match(/\/status\/(\d+)/u)?.[1];
   return postId && isValidPostId(platform, postId) ? postId : null;

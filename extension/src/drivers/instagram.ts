@@ -2,6 +2,8 @@ import type { DriverPageResult, DriverScriptOptions } from "./types";
 
 const MAX_COMMENTS = 300;
 const COMMENT_LOAD_TIMEOUT_MS = 45_000;
+const MAX_GRID_ENTRIES = 120;
+const GRID_LOAD_TIMEOUT_MS = 30_000;
 
 // "p" and "reel" are Instagram's own post routes, so they can never be a
 // real profile handle even though the pattern would otherwise accept them.
@@ -12,6 +14,10 @@ export function runInstagramPage(
 ): DriverPageResult | Promise<DriverPageResult> {
   const clean = (value: string | null | undefined): string =>
     (value ?? "").replace(/\s+/gu, " ").trim();
+  // Trims only the ends: some captured text (a profile's display name) keeps
+  // meaningful internal spacing that `clean` would otherwise collapse away.
+  const trimOnly = (value: string | null | undefined): string =>
+    (value ?? "").trim();
   const meta = (): { readonly url: string; readonly title: string } => ({
     url: window.location.href,
     title: document.title.slice(0, 512),
@@ -39,7 +45,9 @@ export function runInstagramPage(
   }
 
   const shortcodeFromPath = (value: string): string | null =>
-    value.match(/^\/(?:p|reel)\/([A-Za-z0-9_-]+)/u)?.[1] ?? null;
+    value.match(
+      /^\/(?:[A-Za-z0-9_.]{1,30}\/)?(?:p|reel)\/([A-Za-z0-9_-]+)/u,
+    )?.[1] ?? null;
 
   const canonicalPostTarget = (shortcode: string): string =>
     `https://www.instagram.com/p/${shortcode}/`;
@@ -310,6 +318,167 @@ export function runInstagramPage(
 
   const shortcode = shortcodeFromPath(path);
 
+  // A `<br>` inside the bio leaves no trace in `textContent`, so the bio's
+  // own subtree is walked and each `<br>` is turned back into `\n`.
+  const bioTextFrom = (element: Element | null): string => {
+    if (!element) {
+      return "";
+    }
+    const parts: string[] = [];
+    const visit = (node: Node): void => {
+      if ((node as Element).tagName === "BR") {
+        parts.push("\n");
+        return;
+      }
+      if (node.nodeType === 3) {
+        parts.push(node.textContent ?? "");
+        return;
+      }
+      for (const child of Array.from(node.childNodes ?? [])) {
+        visit(child);
+      }
+    };
+    for (const child of Array.from(element.childNodes ?? [])) {
+      visit(child);
+    }
+    return trimOnly(parts.join(""));
+  };
+
+  const AUTO_SPAN_SELECTOR = 'header span[dir="auto"]';
+  const BIO_SELECTOR = 'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]';
+  const CATEGORY_SELECTOR = "div._ap3a._aaco._aacu._aacy";
+  const EXTERNAL_LINK_SELECTOR = 'a[href^="https://l.instagram.com/?u="]';
+  const COUNT_SUFFIXES = [" posts", " followers", " following"] as const;
+
+  const isCountText = (text: string): boolean =>
+    COUNT_SUFFIXES.some((suffix) => text.endsWith(suffix));
+
+  interface CountValue {
+    readonly exact: string | null;
+    readonly label: string;
+  }
+
+  // The exact figure lives in the inner span's `title`; its own text is the
+  // abbreviated one Instagram draws ("60.5K"). Both are worth keeping.
+  const readCount = (spans: readonly Element[], suffix: string): CountValue => {
+    const span = spans.find((candidate) =>
+      trimOnly(candidate.textContent).endsWith(suffix),
+    );
+    if (!span) {
+      return { exact: null, label: "" };
+    }
+    const inner = span.querySelector("span[title]");
+    return {
+      exact: inner?.getAttribute("title") ?? null,
+      label: inner
+        ? trimOnly(inner.textContent)
+        : trimOnly(span.textContent).slice(0, -suffix.length),
+    };
+  };
+
+  interface GridEntry {
+    readonly shortcode: string;
+    readonly canonicalTarget: string;
+    readonly caption: string;
+    readonly kind: "reel" | "post";
+    readonly pinned: boolean;
+  }
+
+  const GRID_ENTRY_HREF_PATTERN =
+    /^\/[A-Za-z0-9_.]{1,30}\/(p|reel)\/([A-Za-z0-9_-]+)\/?$/u;
+
+  const readGridEntry = (anchor: Element): GridEntry | null => {
+    const href = anchor.getAttribute("href") ?? "";
+    const match = href.match(GRID_ENTRY_HREF_PATTERN);
+    if (!match) {
+      return null;
+    }
+    const [, kindSegment, entryShortcode] = match;
+    const caption = trimOnly(
+      anchor.querySelector("div._aagu > div._aagv img")?.getAttribute("alt"),
+    );
+    const isClip = anchor.querySelector('svg[aria-label="Clip"]') !== null;
+    const pinned =
+      anchor.querySelector('svg[aria-label="Pinned post icon"]') !== null;
+    return {
+      shortcode: entryShortcode ?? "",
+      canonicalTarget: `https://www.instagram.com${href.endsWith("/") ? href : `${href}/`}`,
+      caption,
+      kind: isClip || kindSegment === "reel" ? "reel" : "post",
+      pinned,
+    };
+  };
+
+  const readGridEntries = (): GridEntry[] =>
+    Array.from(document.querySelectorAll("div._ac7v a[href]"))
+      .map(readGridEntry)
+      .filter((entry): entry is GridEntry => entry !== null);
+
+  const countGridEntries = (): number => readGridEntries().length;
+
+  // Scrolled to the bottom repeatedly until a scroll adds nothing new, the
+  // same growth-polling shape `loadAllComments` uses for its own load-more
+  // button, bounded here by entry count and wall time instead of a cap click.
+  const loadGridEntries = async (): Promise<{ readonly truncated: boolean }> => {
+    const deadline = Date.now() + GRID_LOAD_TIMEOUT_MS;
+    const capped = (): boolean =>
+      Date.now() >= deadline || countGridEntries() >= MAX_GRID_ENTRIES;
+
+    while (!capped()) {
+      if (typeof window.scrollTo !== "function") {
+        break;
+      }
+      const before = countGridEntries();
+      window.scrollTo(0, document.body?.scrollHeight ?? 0);
+      const grew = await pollUntil(() => countGridEntries() > before, 5_000);
+      if (!grew) {
+        break;
+      }
+    }
+
+    return { truncated: capped() };
+  };
+
+  const readProfile = async (handle: string): Promise<DriverPageResult> => {
+    const autoSpans = Array.from(document.querySelectorAll(AUTO_SPAN_SELECTOR));
+    const bioNode = document.querySelector(BIO_SELECTOR);
+    // The display name is whichever header span[dir="auto"] is neither the
+    // bio nor one of the three count spans.
+    const displayNameSpan = autoSpans.find((span) => {
+      const text = trimOnly(span.textContent);
+      return span !== bioNode && text !== "" && !isCountText(text);
+    });
+    const displayName = trimOnly(displayNameSpan?.textContent).slice(0, 256);
+    if (!displayName) {
+      return failure("waiting", "Instagram has not shown the profile yet.");
+    }
+    const category =
+      clean(document.querySelector(CATEGORY_SELECTOR)?.textContent) || null;
+    const bio = bioTextFrom(bioNode).slice(0, 1_000);
+    const externalLink =
+      clean(document.querySelector(EXTERNAL_LINK_SELECTOR)?.textContent) ||
+      null;
+    const counts = {
+      posts: readCount(autoSpans, " posts"),
+      followers: readCount(autoSpans, " followers"),
+      following: readCount(autoSpans, " following"),
+    };
+    const { truncated } = await loadGridEntries();
+    const posts = readGridEntries().slice(0, MAX_GRID_ENTRIES);
+    return {
+      ...baseData("instagram_profile", bio || displayName),
+      canonicalTarget: `https://www.instagram.com/${handle}/`,
+      handle,
+      displayName,
+      category,
+      bio,
+      externalLink,
+      counts,
+      posts,
+      truncated,
+    };
+  };
+
   if (options.action === "read_profile") {
     const handle = path.match(/^\/([A-Za-z0-9_.]{1,30})\/?$/u)?.[1];
     if (!handle || RESERVED_PROFILE_PATHS.has(handle.toLowerCase())) {
@@ -318,22 +487,7 @@ export function runInstagramPage(
         "This target is not an Instagram profile page. Use read_post for a single post.",
       );
     }
-    const displayName = clean(
-      metaContent("og:title")?.match(/^(.*?)\s*\(@/u)?.[1],
-    ).slice(0, 256);
-    if (!displayName) {
-      return failure("waiting", "Instagram has not shown the profile yet.");
-    }
-    const bio = clean(
-      document.querySelector('header span[dir="auto"]')?.textContent,
-    ).slice(0, 1_000);
-    return {
-      ...baseData("instagram_profile", bio || displayName),
-      canonicalTarget: `https://www.instagram.com/${handle}/`,
-      handle,
-      displayName,
-      bio,
-    };
+    return readProfile(handle);
   }
 
   const readPost = async (): Promise<DriverPageResult> => {

@@ -303,14 +303,17 @@ fn extract_post_id(platform: Platform, url: &Url) -> Option<String> {
             let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
             (!digits.is_empty()).then_some(digits)
         }
-        // Both /p/<shortcode>/ and /reel/<shortcode>/ address a post.
+        // A post's shortcode sits right after a `p` or `reel` segment, either
+        // bare (/p/<shortcode>/) or with the author's handle in front
+        // (/<username>/p/<shortcode>/), which is the shape Instagram's own
+        // post grid links use.
         Platform::Instagram => {
-            let mut segments = url.path_segments()?;
-            let prefix = segments.next()?;
-            if prefix != "p" && prefix != "reel" {
-                return None;
-            }
-            let shortcode = segments.next()?;
+            let segments: Vec<&str> = url.path_segments()?.collect();
+            let shortcode = match segments.as_slice() {
+                [kind, shortcode, ..] if *kind == "p" || *kind == "reel" => *shortcode,
+                [_username, kind, shortcode, ..] if *kind == "p" || *kind == "reel" => *shortcode,
+                _ => return None,
+            };
             is_valid_post_id(platform, shortcode).then(|| shortcode.to_owned())
         }
     }
@@ -1429,6 +1432,29 @@ mod tests {
             by_shortcode.target_url,
             "https://www.instagram.com/p/CxYz_1-2Ab/"
         );
+    }
+
+    #[test]
+    fn instagram_read_post_accepts_a_username_prefixed_p_or_reel_url() {
+        let by_post = parse_create_job_request(&json!({
+            "platform": "instagram", "action": "read_post",
+            "targetUrl": "https://www.instagram.com/onenigaofficial1/p/CxYz_1-2Ab/",
+            "payload": {}
+        }))
+        .unwrap();
+        assert_eq!(
+            by_post.target_url,
+            "https://www.instagram.com/onenigaofficial1/p/CxYz_1-2Ab/"
+        );
+        assert_eq!(by_post.payload["postId"], "CxYz_1-2Ab");
+
+        let by_reel = parse_create_job_request(&json!({
+            "platform": "instagram", "action": "read_post",
+            "targetUrl": "https://www.instagram.com/onenigaofficial1/reel/CxYz_1-2Ab/",
+            "payload": {}
+        }))
+        .unwrap();
+        assert_eq!(by_reel.payload["postId"], "CxYz_1-2Ab");
     }
 
     #[test]

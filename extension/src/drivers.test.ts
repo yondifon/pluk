@@ -1285,3 +1285,266 @@ test("stops loading Instagram comments at the 300 cap and marks the result trunc
   expect(result).toMatchObject({ state: "ready", truncated: true });
   expect((result as unknown as { comments: unknown[] }).comments).toHaveLength(300);
 });
+
+function instagramCountSpan(
+  abbreviated: string,
+  exact: string,
+  suffix: string,
+): FixtureNode {
+  const inner = node(abbreviated, { title: exact });
+  return node(`${abbreviated}${suffix}`, { dir: "auto" }, { "span[title]": [inner] });
+}
+
+function instagramBioSpan(lines: readonly string[]): FixtureNode {
+  const children: FixtureNode[] = [];
+  lines.forEach((line, index) => {
+    if (index > 0) {
+      const br = node("");
+      Object.defineProperty(br, "tagName", { value: "BR" });
+      children.push(br);
+    }
+    const text = node(line);
+    Object.defineProperty(text, "nodeType", { value: 3 });
+    children.push(text);
+  });
+  const bio = node(lines.join(""), { dir: "auto" });
+  Object.defineProperty(bio, "childNodes", { value: children });
+  return bio;
+}
+
+function instagramGridAnchor(
+  username: string,
+  kind: "p" | "reel",
+  shortcode: string,
+  caption: string,
+  options: { readonly clip?: boolean; readonly pinned?: boolean } = {},
+): FixtureNode {
+  const img = node("", { alt: caption });
+  const svgSelectors: Record<string, FixtureNode[]> = {};
+  if (options.clip) {
+    svgSelectors['svg[aria-label="Clip"]'] = [node("")];
+  }
+  if (options.pinned) {
+    svgSelectors['svg[aria-label="Pinned post icon"]'] = [node("")];
+  }
+  return node(
+    "",
+    { href: `/${username}/${kind}/${shortcode}/` },
+    {
+      "div._aagu > div._aagv img": [img],
+      ...svgSelectors,
+    },
+  );
+}
+
+test("reads a full Instagram profile header with posts, counts, bio line breaks, and an external link", async () => {
+  const displayNameSpan = node("Michael  Rapheal 🙂⭐️", { dir: "auto" });
+  const categoryDiv = node("Public figure");
+  const bioSpan = instagramBioSpan(["Coffee first.", "Then the world."]);
+  const externalLinkAnchor = node("example.com/profile", {
+    href: "https://l.instagram.com/?u=https%3A%2F%2Fexample.com%2Fprofile",
+  });
+  const postsSpan = instagramCountSpan("60.5K", "60,599", " posts");
+  const followersSpan = instagramCountSpan("1.2M", "1,204,552", " followers");
+  const followingSpan = instagramCountSpan("180", "180", " following");
+  const gridAnchor = instagramGridAnchor(
+    "onenigaofficial1",
+    "p",
+    "CxYz_1-2Ab",
+    "Sunset walk\n#golden #hour",
+  );
+  const restore = installPage(
+    "",
+    "Profile",
+    "https://www.instagram.com/onenigaofficial1/",
+    {
+      'header span[dir="auto"]': [
+        bioSpan,
+        displayNameSpan,
+        postsSpan,
+        followersSpan,
+        followingSpan,
+      ],
+      'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
+      "div._ap3a._aaco._aacu._aacy": [categoryDiv],
+      'a[href^="https://l.instagram.com/?u="]': [externalLinkAnchor],
+      "div._ac7v a[href]": [gridAnchor],
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_profile",
+    targetUrl: "https://www.instagram.com/onenigaofficial1/",
+  });
+  restore();
+  expect(result).toMatchObject({
+    state: "ready",
+    kind: "instagram_profile",
+    canonicalTarget: "https://www.instagram.com/onenigaofficial1/",
+    handle: "onenigaofficial1",
+    displayName: "Michael  Rapheal 🙂⭐️",
+    category: "Public figure",
+    bio: "Coffee first.\nThen the world.",
+    externalLink: "example.com/profile",
+    counts: {
+      posts: { exact: "60,599", label: "60.5K" },
+      followers: { exact: "1,204,552", label: "1.2M" },
+      following: { exact: "180", label: "180" },
+    },
+    truncated: false,
+  });
+  expect((result as unknown as { posts: unknown[] }).posts).toEqual([
+    {
+      shortcode: "CxYz_1-2Ab",
+      canonicalTarget:
+        "https://www.instagram.com/onenigaofficial1/p/CxYz_1-2Ab/",
+      caption: "Sunset walk\n#golden #hour",
+      kind: "post",
+      pinned: false,
+    },
+  ]);
+});
+
+test("reads an Instagram profile with no category and no external link", async () => {
+  const displayNameSpan = node("Jane Doe", { dir: "auto" });
+  const bioSpan = instagramBioSpan(["Just one line."]);
+  const postsSpan = instagramCountSpan("12", "12", " posts");
+  const followersSpan = instagramCountSpan("340", "340", " followers");
+  const followingSpan = instagramCountSpan("50", "50", " following");
+  const restore = installPage(
+    "",
+    "Profile",
+    "https://www.instagram.com/janedoe/",
+    {
+      'header span[dir="auto"]': [
+        displayNameSpan,
+        postsSpan,
+        followersSpan,
+        followingSpan,
+      ],
+      'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
+      "div._ac7v a[href]": [],
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_profile",
+    targetUrl: "https://www.instagram.com/janedoe/",
+  });
+  restore();
+  expect(result).toMatchObject({
+    state: "ready",
+    kind: "instagram_profile",
+    handle: "janedoe",
+    displayName: "Jane Doe",
+    category: null,
+    bio: "Just one line.",
+    externalLink: null,
+    truncated: false,
+  });
+  expect((result as unknown as { posts: unknown[] }).posts).toEqual([]);
+});
+
+test("loads an Instagram grid across two scrolls before it settles", async () => {
+  const displayNameSpan = node("Jane Doe", { dir: "auto" });
+  const bioSpan = instagramBioSpan(["Bio."]);
+  const anchors: FixtureNode[] = [
+    instagramGridAnchor("janedoe", "p", "First001", "First"),
+  ];
+  const pageSelectors: Record<string, FixtureNode[]> = {
+    'header span[dir="auto"]': [displayNameSpan],
+    'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
+    "div._ac7v a[href]": anchors,
+  };
+  const restore = installPage(
+    "",
+    "Profile",
+    "https://www.instagram.com/janedoe/",
+    pageSelectors,
+  );
+  let scrollCalls = 0;
+  Object.defineProperty(globalThis.window, "scrollTo", {
+    configurable: true,
+    value: () => {
+      scrollCalls += 1;
+      if (scrollCalls === 1) {
+        anchors.push(instagramGridAnchor("janedoe", "p", "Second002", "Second"));
+        pageSelectors["div._ac7v a[href]"] = [...anchors];
+      } else if (scrollCalls === 2) {
+        anchors.push(instagramGridAnchor("janedoe", "reel", "Third003", "Third"));
+        pageSelectors["div._ac7v a[href]"] = [...anchors];
+        Object.defineProperty(globalThis.window, "scrollTo", {
+          configurable: true,
+          value: undefined,
+        });
+      }
+    },
+  });
+  const result = await runInstagramPage({
+    action: "read_profile",
+    targetUrl: "https://www.instagram.com/janedoe/",
+  });
+  restore();
+  expect(scrollCalls).toBe(2);
+  expect(result).toMatchObject({ state: "ready", truncated: false });
+  expect((result as unknown as { posts: unknown[] }).posts).toHaveLength(3);
+});
+
+test("marks a pinned Instagram reel grid entry", async () => {
+  const displayNameSpan = node("Jane Doe", { dir: "auto" });
+  const bioSpan = instagramBioSpan(["Bio."]);
+  const pinnedReel = instagramGridAnchor(
+    "janedoe",
+    "reel",
+    "Pin001",
+    "Pinned reel",
+    { clip: true, pinned: true },
+  );
+  const restore = installPage(
+    "",
+    "Profile",
+    "https://www.instagram.com/janedoe/",
+    {
+      'header span[dir="auto"]': [displayNameSpan],
+      'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
+      "div._ac7v a[href]": [pinnedReel],
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_profile",
+    targetUrl: "https://www.instagram.com/janedoe/",
+  });
+  restore();
+  expect((result as unknown as { posts: unknown[] }).posts).toEqual([
+    {
+      shortcode: "Pin001",
+      canonicalTarget: "https://www.instagram.com/janedoe/reel/Pin001/",
+      caption: "Pinned reel",
+      kind: "reel",
+      pinned: true,
+    },
+  ]);
+});
+
+test("caps an Instagram grid at 120 entries and marks it truncated", async () => {
+  const displayNameSpan = node("Jane Doe", { dir: "auto" });
+  const bioSpan = instagramBioSpan(["Bio."]);
+  const anchors = Array.from({ length: 130 }, (_, index) =>
+    instagramGridAnchor("janedoe", "p", `Shortcode${index}`, `Caption ${index}`),
+  );
+  const restore = installPage(
+    "",
+    "Profile",
+    "https://www.instagram.com/janedoe/",
+    {
+      'header span[dir="auto"]': [displayNameSpan],
+      'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
+      "div._ac7v a[href]": anchors,
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_profile",
+    targetUrl: "https://www.instagram.com/janedoe/",
+  });
+  restore();
+  expect(result).toMatchObject({ state: "ready", truncated: true });
+  expect((result as unknown as { posts: unknown[] }).posts).toHaveLength(120);
+});
