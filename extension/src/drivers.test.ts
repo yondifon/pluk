@@ -1343,7 +1343,7 @@ function instagramGridAnchor(
 
 test("reads a full Instagram profile header with posts, counts, bio line breaks, and an external link", async () => {
   const displayNameSpan = node("Michael  Rapheal 🙂⭐️", { dir: "auto" });
-  const categoryDiv = node("Public figure", { dir: "auto" });
+  const categoryDiv = node("Public figure");
   const bioSpan = instagramBioSpan(["Coffee first.", "Then the world."]);
   const externalLinkAnchor = node("example.com/profile", {
     href: "https://l.instagram.com/?u=https%3A%2F%2Fexample.com%2Fprofile",
@@ -1370,7 +1370,7 @@ test("reads a full Instagram profile header with posts, counts, bio line breaks,
         followingSpan,
       ],
       'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
-      '._ap3a._aaco._aacu._aacy[dir="auto"]': [categoryDiv],
+      "div._ap3a._aaco._aacu._aacy": [categoryDiv],
       'a[href^="https://l.instagram.com/?u="]': [externalLinkAnchor],
       "div._ac7v a[href]": [gridAnchor],
     },
@@ -1579,35 +1579,50 @@ test("reads exact counts, verified state, and multiple links from a captured Ins
     "CxYz_1-2Ab",
     "Sunset walk",
   );
-  const capturedBody = {
+  const capturedProfileBody = {
     data: {
-      xig_user_by_igid_v2: {
-        user_dict: {
-          username: "onenigaofficial1",
-          follower_count: 148_449_900,
-          following_count: 115,
-          media_count: 27_942,
-          is_verified: true,
-          is_private: false,
-          bio_links: [
-            { title: "Shop", url: "https://example.com/shop" },
-            { title: "Site", url: "https://example.com" },
-          ],
-        },
-        polaris_ordered_timeline_connection: {
-          edges: [
-            {
-              node: {
-                __typename: "XIGPolarisCarouselMedia",
-                media_dict: {
-                  code: "CxYz_1-2Ab",
-                  like_count: 4_200,
-                  comment_count: 31,
-                },
+      user: {
+        username: "onenigaofficial1",
+        follower_count: 148_449_900,
+        following_count: 115,
+        media_count: 27_942,
+        is_verified: true,
+        is_private: false,
+        bio_links: [
+          {
+            title: "Shop",
+            link_type: "external",
+            is_pinned: true,
+            link_id: "1",
+            lynx_url:
+              "https://l.instagram.com/?u=https%3A%2F%2Fexample.com%2Fshop&e=AT0",
+          },
+          {
+            title: "Site",
+            link_type: "external",
+            is_pinned: false,
+            link_id: "2",
+            lynx_url: "https://l.instagram.com/?u=https%3A%2F%2Fexample.com&e=AT1",
+          },
+        ],
+      },
+    },
+  };
+  const capturedGridBody = {
+    data: {
+      xdt_api__v1__feed__user_timeline_graphql_connection: {
+        edges: [
+          {
+            node: {
+              __typename: "XIGPolarisCarouselMedia",
+              media_dict: {
+                code: "CxYz_1-2Ab",
+                like_count: 4_200,
+                comment_count: 31,
               },
             },
-          ],
-        },
+          },
+        ],
       },
     },
   };
@@ -1621,7 +1636,12 @@ test("reads exact counts, verified state, and multiple links from a captured Ins
       "div._ac7v a[href]": [gridAnchor],
     },
     undefined,
-    { "pluk-instagram-captures": instagramCaptureElement([capturedBody]) },
+    {
+      "pluk-instagram-captures": instagramCaptureElement([
+        capturedProfileBody,
+        capturedGridBody,
+      ]),
+    },
   );
   const result = await runInstagramPage({
     action: "read_profile",
@@ -1681,13 +1701,25 @@ test("falls back to scraping when the Instagram capture element is absent", asyn
   });
 });
 
-test("finds the Instagram category in an h1 as readily as a div", async () => {
-  const displayNameSpan = node("Jane Doe", { dir: "auto" });
+test("reads a captured Instagram business address without treating it as the category", async () => {
+  const displayNameSpan = node("Man City", { dir: "auto" });
   const bioSpan = instagramBioSpan(["Bio."]);
-  const categoryHeading = node("Etihad Stadium, Manchester, United Kingdom M11 3FF", {
-    dir: "auto",
-  });
-  Object.defineProperty(categoryHeading, "tagName", { value: "H1" });
+  const capturedProfileBody = {
+    data: {
+      user: {
+        username: "mancity",
+        follower_count: 57_008_870,
+        following_count: 807,
+        media_count: 44_371,
+        is_verified: true,
+        is_private: false,
+        category: "",
+        address_street: "Etihad Stadium",
+        city_name: "Manchester, United Kingdom",
+        zip: "M11 3FF",
+      },
+    },
+  };
   const restore = installPage(
     "",
     "Profile",
@@ -1695,8 +1727,11 @@ test("finds the Instagram category in an h1 as readily as a div", async () => {
     {
       'header span[dir="auto"]': [displayNameSpan],
       'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
-      '._ap3a._aaco._aacu._aacy[dir="auto"]': [categoryHeading],
       "div._ac7v a[href]": [],
+    },
+    undefined,
+    {
+      "pluk-instagram-captures": instagramCaptureElement([capturedProfileBody]),
     },
   );
   const result = await runInstagramPage({
@@ -1706,7 +1741,8 @@ test("finds the Instagram category in an h1 as readily as a div", async () => {
   restore();
   expect(result).toMatchObject({
     state: "ready",
-    category: "Etihad Stadium, Manchester, United Kingdom M11 3FF",
+    category: null,
+    address: "Etihad Stadium, Manchester, United Kingdom, M11 3FF",
   });
 });
 

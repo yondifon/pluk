@@ -85,6 +85,20 @@ export function runInstagramPage(
     return null;
   };
 
+  // Instagram never links out directly: an anchor's href and a bio link's
+  // `lynx_url` are both `l.instagram.com` redirects carrying the real
+  // destination in a `u=` query param.
+  const decodeRedirectUrl = (href: string): string | null => {
+    try {
+      const target = new URL(href, "https://www.instagram.com/").searchParams.get(
+        "u",
+      );
+      return target ? decodeURIComponent(target) : null;
+    } catch {
+      return null;
+    }
+  };
+
   interface CapturedEngagement {
     readonly likes: number | null;
     readonly views: number | null;
@@ -118,11 +132,13 @@ export function runInstagramPage(
     readonly verified: boolean | null;
     readonly private: boolean | null;
     readonly links: readonly CapturedLink[];
+    readonly address: string | null;
   }
 
-  // Matched on `username` alongside `follower_count`/`media_count` together,
-  // since either field alone could belong to an unrelated captured object
-  // (a suggested account, a comment author, and so on).
+  // Matched on `username` alongside `follower_count`, since either field
+  // alone could belong to an unrelated captured object (a suggested
+  // account, a comment author, and so on). The object's own path is not
+  // trusted: it has moved once already between Meta's own query shapes.
   const findCapturedProfile = (
     captures: readonly CaptureEntry[],
     handle: string,
@@ -136,8 +152,7 @@ export function runInstagramPage(
         if (
           typeof candidate.username === "string" &&
           candidate.username.toLowerCase() === handle.toLowerCase() &&
-          typeof candidate.follower_count === "number" &&
-          typeof candidate.media_count === "number"
+          typeof candidate.follower_count === "number"
         ) {
           found = candidate;
         }
@@ -158,17 +173,15 @@ export function runInstagramPage(
       }
       const link = item as Record<string, unknown>;
       const url =
-        typeof link.url === "string"
-          ? link.url
-          : typeof link.lynx_url === "string"
-            ? link.lynx_url
-            : null;
+        typeof link.lynx_url === "string" ? decodeRedirectUrl(link.lynx_url) : null;
       if (!url) {
         continue;
       }
       const label = typeof link.title === "string" && link.title ? link.title : url;
       links.push({ label, url });
     }
+    const addressParts = [record.address_street, record.city_name, record.zip]
+      .filter((part): part is string => typeof part === "string" && part !== "");
     return {
       followers: firstNumber(record, ["follower_count"]),
       following: firstNumber(record, ["following_count"]),
@@ -177,6 +190,7 @@ export function runInstagramPage(
         typeof record.is_verified === "boolean" ? record.is_verified : null,
       private: typeof record.is_private === "boolean" ? record.is_private : null,
       links,
+      address: addressParts.length ? addressParts.join(", ") : null,
     };
   };
 
@@ -628,10 +642,7 @@ export function runInstagramPage(
 
   const AUTO_SPAN_SELECTOR = 'header span[dir="auto"]';
   const BIO_SELECTOR = 'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]';
-  // Instagram renders the category as a div on most profiles, but as an h1
-  // on a business account with an address (e.g. a stadium's page): matched
-  // on the class set and dir="auto" so either tag is found.
-  const CATEGORY_SELECTOR = '._ap3a._aaco._aacu._aacy[dir="auto"]';
+  const CATEGORY_SELECTOR = "div._ap3a._aaco._aacu._aacy";
   const EXTERNAL_LINK_SELECTOR = 'a[href^="https://l.instagram.com/?u="]';
   const MULTI_LINK_BUTTON_TEXT = /^.+\s+and\s+\d+\s+more$/iu;
   const COUNT_SUFFIXES = [" posts", " followers", " following"] as const;
@@ -755,18 +766,7 @@ export function runInstagramPage(
     if (!label) {
       return null;
     }
-    let url: string | null = label;
-    try {
-      const target = new URL(
-        anchor.getAttribute("href") ?? "",
-        "https://www.instagram.com/",
-      ).searchParams.get("u");
-      if (target) {
-        url = decodeURIComponent(target);
-      }
-    } catch {
-      // Leave url as the visible label if the href cannot be parsed.
-    }
+    const url = decodeRedirectUrl(anchor.getAttribute("href") ?? "") ?? label;
     return { label, url };
   };
 
@@ -840,6 +840,7 @@ export function runInstagramPage(
       postsCount: capturedProfile?.posts ?? null,
       verified: capturedProfile?.verified ?? null,
       private: capturedProfile?.private ?? null,
+      address: capturedProfile?.address ?? null,
       counts,
       posts,
       source: capturedProfile || usedCapturedEngagement ? "mixed" : "scraped",
