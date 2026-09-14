@@ -7,6 +7,267 @@ export function runInstagramPage(
   const COMMENT_LOAD_TIMEOUT_MS = 45_000;
   const MAX_GRID_ENTRIES = 120;
   const GRID_LOAD_TIMEOUT_MS = 30_000;
+  const GRID_GROWTH_TIMEOUT_MS = 5_000;
+  const CAPTURE_ELEMENT_ID = "pluk-instagram-captures";
+  const CLIP_TYPENAMES = new Set([
+    "XIGPolarisClipsMedia",
+    "XIGPolarisVideoMedia",
+    "XIGPolarisReelMedia",
+  ]);
+  const LIKE_KEYS = [
+    "like_count",
+    "comment_like_count",
+    "edge_media_preview_like_count",
+  ] as const;
+  const VIEW_KEYS = ["view_count", "play_count", "video_view_count"] as const;
+  const COMMENT_COUNT_KEYS = [
+    "comment_count",
+    "edge_media_to_comment_count",
+  ] as const;
+
+  interface CaptureEntry {
+    readonly url: string;
+    readonly method: string;
+    readonly receivedAt: number;
+    readonly body: unknown;
+  }
+
+  // The capture layer (a separate MAIN-world content script) publishes
+  // Instagram's own fetch/XHR JSON responses into this hidden element so the
+  // driver can read exact counts instead of scraping the rendered markup.
+  const readCaptures = (): readonly CaptureEntry[] => {
+    const raw = document.getElementById(CAPTURE_ELEMENT_ID)?.textContent;
+    if (!raw) {
+      return [];
+    }
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as CaptureEntry[]) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  // Depth-first walk over every plain object nested in a captured JSON body.
+  // Instagram's response shapes are not stable enough to key a fixed path
+  // against, so fields are located by name wherever they appear instead.
+  const walkObjects = (
+    value: unknown,
+    visit: (candidate: Record<string, unknown>) => void,
+    depth = 0,
+  ): void => {
+    if (depth > 14 || value === null || typeof value !== "object") {
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        walkObjects(item, visit, depth + 1);
+      }
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    visit(record);
+    for (const key of Object.keys(record)) {
+      walkObjects(record[key], visit, depth + 1);
+    }
+  };
+
+  const firstNumber = (
+    record: Record<string, unknown>,
+    keys: readonly string[],
+  ): number | null => {
+    for (const key of keys) {
+      const value = record[key];
+      if (typeof value === "number") {
+        return value;
+      }
+    }
+    return null;
+  };
+
+  interface CapturedEngagement {
+    readonly likes: number | null;
+    readonly views: number | null;
+    readonly commentCount: number | null;
+  }
+
+  const engagementFromObject = (
+    record: Record<string, unknown>,
+    includeViews: boolean,
+  ): CapturedEngagement => ({
+    likes: firstNumber(record, LIKE_KEYS),
+    views: includeViews ? firstNumber(record, VIEW_KEYS) : null,
+    commentCount: firstNumber(record, COMMENT_COUNT_KEYS),
+  });
+
+  const NO_ENGAGEMENT: CapturedEngagement = {
+    likes: null,
+    views: null,
+    commentCount: null,
+  };
+
+  interface CapturedLink {
+    readonly label: string;
+    readonly url: string;
+  }
+
+  interface CapturedProfile {
+    readonly followers: number | null;
+    readonly following: number | null;
+    readonly posts: number | null;
+    readonly verified: boolean | null;
+    readonly private: boolean | null;
+    readonly links: readonly CapturedLink[];
+  }
+
+  // Matched on `username` alongside `follower_count`/`media_count` together,
+  // since either field alone could belong to an unrelated captured object
+  // (a suggested account, a comment author, and so on).
+  const findCapturedProfile = (
+    captures: readonly CaptureEntry[],
+    handle: string,
+  ): CapturedProfile | null => {
+    let found: Record<string, unknown> | null = null;
+    for (const entry of captures) {
+      walkObjects(entry.body, (candidate) => {
+        if (found) {
+          return;
+        }
+        if (
+          typeof candidate.username === "string" &&
+          candidate.username.toLowerCase() === handle.toLowerCase() &&
+          typeof candidate.follower_count === "number" &&
+          typeof candidate.media_count === "number"
+        ) {
+          found = candidate;
+        }
+      });
+      if (found) {
+        break;
+      }
+    }
+    if (!found) {
+      return null;
+    }
+    const record: Record<string, unknown> = found;
+    const bioLinks = Array.isArray(record.bio_links) ? record.bio_links : [];
+    const links: CapturedLink[] = [];
+    for (const item of bioLinks) {
+      if (item === null || typeof item !== "object") {
+        continue;
+      }
+      const link = item as Record<string, unknown>;
+      const url =
+        typeof link.url === "string"
+          ? link.url
+          : typeof link.lynx_url === "string"
+            ? link.lynx_url
+            : null;
+      if (!url) {
+        continue;
+      }
+      const label = typeof link.title === "string" && link.title ? link.title : url;
+      links.push({ label, url });
+    }
+    return {
+      followers: firstNumber(record, ["follower_count"]),
+      following: firstNumber(record, ["following_count"]),
+      posts: firstNumber(record, ["media_count"]),
+      verified:
+        typeof record.is_verified === "boolean" ? record.is_verified : null,
+      private: typeof record.is_private === "boolean" ? record.is_private : null,
+      links,
+    };
+  };
+
+  // Keyed by shortcode so each grid entry's engagement is attached to the
+  // right post; `media_dict` and its `__typename` sibling arrive together in
+  // the same node, so both are read off that one matched object.
+  const findCapturedGridEntries = (
+    captures: readonly CaptureEntry[],
+  ): ReadonlyMap<string, CapturedEngagement> => {
+    const result = new Map<string, CapturedEngagement>();
+    for (const entry of captures) {
+      walkObjects(entry.body, (candidate) => {
+        const mediaDict =
+          candidate.media_dict !== null && typeof candidate.media_dict === "object"
+            ? (candidate.media_dict as Record<string, unknown>)
+            : null;
+        if (!mediaDict || typeof mediaDict.code !== "string" || result.has(mediaDict.code)) {
+          return;
+        }
+        const typename =
+          typeof candidate.__typename === "string" ? candidate.__typename : "";
+        result.set(mediaDict.code, engagementFromObject(mediaDict, CLIP_TYPENAMES.has(typename)));
+      });
+    }
+    return result;
+  };
+
+  const findCapturedPostEngagement = (
+    captures: readonly CaptureEntry[],
+    shortcode: string,
+  ): CapturedEngagement | null => {
+    let found: Record<string, unknown> | null = null;
+    let foundTypename = "";
+    for (const entry of captures) {
+      walkObjects(entry.body, (candidate) => {
+        if (found) {
+          return;
+        }
+        const code =
+          typeof candidate.code === "string"
+            ? candidate.code
+            : typeof candidate.shortcode === "string"
+              ? candidate.shortcode
+              : null;
+        if (code !== shortcode) {
+          return;
+        }
+        if (
+          firstNumber(candidate, LIKE_KEYS) === null &&
+          firstNumber(candidate, COMMENT_COUNT_KEYS) === null
+        ) {
+          return;
+        }
+        found = candidate;
+        foundTypename =
+          typeof candidate.__typename === "string" ? candidate.__typename : "";
+      });
+      if (found) {
+        break;
+      }
+    }
+    return found ? engagementFromObject(found, CLIP_TYPENAMES.has(foundTypename)) : null;
+  };
+
+  // Not confirmed against a live logged-in page: Instagram's comment and
+  // reply endpoints were not captured, so this matches defensively on an
+  // identifier plus a like-count-shaped field rather than a known path.
+  const findCapturedCommentLikes = (
+    captures: readonly CaptureEntry[],
+  ): ReadonlyMap<string, number> => {
+    const result = new Map<string, number>();
+    for (const entry of captures) {
+      walkObjects(entry.body, (candidate) => {
+        const id =
+          typeof candidate.pk === "string" || typeof candidate.pk === "number"
+            ? String(candidate.pk)
+            : typeof candidate.id === "string"
+              ? candidate.id
+              : null;
+        if (id === null || result.has(id) || typeof candidate.text !== "string") {
+          return;
+        }
+        const likes = firstNumber(candidate, LIKE_KEYS);
+        if (likes !== null) {
+          result.set(id, likes);
+        }
+      });
+    }
+    return result;
+  };
+
   // "p" and "reel" are Instagram's own post routes, so they can never be a
   // real profile handle even though the pattern would otherwise accept them.
   const RESERVED_PROFILE_PATHS = new Set(["p", "reel"]);
@@ -108,28 +369,40 @@ export function runInstagramPage(
     readonly postedAt: string | null;
     readonly engagement: string | null;
     readonly text: string;
+    readonly likes: number | null;
+    readonly views: number | null;
+    readonly commentCount: number | null;
   }
 
-  const readMainPost = (shortcode: string): ReadPost | null => {
+  const readMainPost = (
+    shortcode: string,
+  ): { readonly post: ReadPost; readonly captured: boolean } | null => {
     const author = authorFromMeta();
     const postedAt = mainPostTime();
     if (!author && !postedAt) {
       return null;
     }
+    const captured = findCapturedPostEngagement(readCaptures(), shortcode);
     return {
-      postId: shortcode,
-      targetUrl: options.targetUrl,
-      canonicalTarget: canonicalPostTarget(shortcode),
-      author: author ?? "",
-      postedAt,
-      engagement: engagementFromMeta(),
-      text: captionFromMeta(),
+      post: {
+        postId: shortcode,
+        targetUrl: options.targetUrl,
+        canonicalTarget: canonicalPostTarget(shortcode),
+        author: author ?? "",
+        postedAt,
+        engagement: engagementFromMeta(),
+        text: captionFromMeta(),
+        ...(captured ?? NO_ENGAGEMENT),
+      },
+      captured: captured !== null,
     };
   };
 
   // Instagram's SPA can land the navigation before it has drawn the post, so
   // an absent post is read again until it appears or the deadline passes.
-  const awaitMainPost = async (shortcode: string): Promise<ReadPost | null> => {
+  const awaitMainPost = async (
+    shortcode: string,
+  ): Promise<{ readonly post: ReadPost; readonly captured: boolean } | null> => {
     const deadline = Date.now() + 5_000;
     for (;;) {
       const found = readMainPost(shortcode);
@@ -145,7 +418,7 @@ export function runInstagramPage(
     readonly author: string;
     readonly text: string;
     readonly postedAt: string | null;
-    readonly likes: string | null;
+    readonly likes: number | null;
     readonly replies: readonly ReadComment[];
   }
 
@@ -173,12 +446,15 @@ export function runInstagramPage(
   };
 
   // No selector for a comment's like count was captured live; this scans a
-  // row's own text for the count pattern Instagram renders next to it.
-  const likesFromNode = (node: Element): string | null => {
+  // row's own text for the count pattern Instagram renders next to it. The
+  // matched text is always a plain digit run, never an abbreviation, so it
+  // converts to an exact integer rather than reporting the rendered string.
+  const likesFromNode = (node: Element): number | null => {
     for (const el of Array.from(node.querySelectorAll("span, button"))) {
       const text = clean(el.textContent);
       if (/^\d[\d,.]*\s*likes?$/iu.test(text)) {
-        return text;
+        const digits = text.replace(/\D/gu, "");
+        return digits ? Number.parseInt(digits, 10) : null;
       }
     }
     return null;
@@ -197,26 +473,34 @@ export function runInstagramPage(
     );
   };
 
-  const readComment = (node: Element, isReply: boolean): ReadComment => ({
-    commentId: commentIdFromNode(node),
-    author: authorFromNode(node),
-    text: clean(node.querySelector("span._ap3a")?.textContent).slice(0, 2_000),
-    postedAt:
-      node.querySelector("time[datetime]")?.getAttribute("datetime") ?? null,
-    likes: likesFromNode(node),
-    replies: isReply
-      ? []
-      : repliesFor(node).map((reply) => readComment(reply, true)),
-  });
+  const readComment = (
+    node: Element,
+    isReply: boolean,
+    capturedLikes: ReadonlyMap<string, number>,
+  ): ReadComment => {
+    const commentId = commentIdFromNode(node);
+    return {
+      commentId,
+      author: authorFromNode(node),
+      text: clean(node.querySelector("span._ap3a")?.textContent).slice(0, 2_000),
+      postedAt:
+        node.querySelector("time[datetime]")?.getAttribute("datetime") ?? null,
+      likes: capturedLikes.get(commentId) ?? likesFromNode(node),
+      replies: isReply
+        ? []
+        : repliesFor(node).map((reply) => readComment(reply, true, capturedLikes)),
+    };
+  };
 
   const readComments = (): ReadComment[] => {
     const root = commentListRoot();
     if (!root) {
       return [];
     }
+    const capturedLikes = findCapturedCommentLikes(readCaptures());
     return Array.from(root.querySelectorAll(":scope > li"))
       .filter(isCommentRow)
-      .map((node) => readComment(node, false));
+      .map((node) => readComment(node, false, capturedLikes));
   };
 
   const countCommentRows = (): number => {
@@ -344,8 +628,12 @@ export function runInstagramPage(
 
   const AUTO_SPAN_SELECTOR = 'header span[dir="auto"]';
   const BIO_SELECTOR = 'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]';
-  const CATEGORY_SELECTOR = "div._ap3a._aaco._aacu._aacy";
+  // Instagram renders the category as a div on most profiles, but as an h1
+  // on a business account with an address (e.g. a stadium's page): matched
+  // on the class set and dir="auto" so either tag is found.
+  const CATEGORY_SELECTOR = '._ap3a._aaco._aacu._aacy[dir="auto"]';
   const EXTERNAL_LINK_SELECTOR = 'a[href^="https://l.instagram.com/?u="]';
+  const MULTI_LINK_BUTTON_TEXT = /^.+\s+and\s+\d+\s+more$/iu;
   const COUNT_SUFFIXES = [" posts", " followers", " following"] as const;
 
   const isCountText = (text: string): boolean =>
@@ -380,61 +668,126 @@ export function runInstagramPage(
     readonly caption: string;
     readonly kind: "reel" | "post";
     readonly pinned: boolean;
+    readonly likes: number | null;
+    readonly views: number | null;
+    readonly commentCount: number | null;
   }
 
   const GRID_ENTRY_HREF_PATTERN =
     /^\/[A-Za-z0-9_.]{1,30}\/(p|reel)\/([A-Za-z0-9_-]+)\/?$/u;
 
-  const readGridEntry = (anchor: Element): GridEntry | null => {
+  const readGridEntry = (
+    anchor: Element,
+    capturedEngagement: ReadonlyMap<string, CapturedEngagement>,
+  ): GridEntry | null => {
     const href = anchor.getAttribute("href") ?? "";
     const match = href.match(GRID_ENTRY_HREF_PATTERN);
     if (!match) {
       return null;
     }
     const [, kindSegment, entryShortcode] = match;
+    const shortcode = entryShortcode ?? "";
     const caption = trimOnly(
       anchor.querySelector("div._aagu > div._aagv img")?.getAttribute("alt"),
     );
     const isClip = anchor.querySelector('svg[aria-label="Clip"]') !== null;
     const pinned =
       anchor.querySelector('svg[aria-label="Pinned post icon"]') !== null;
+    const captured = capturedEngagement.get(shortcode) ?? NO_ENGAGEMENT;
     return {
-      shortcode: entryShortcode ?? "",
+      shortcode,
       canonicalTarget: `https://www.instagram.com${href.endsWith("/") ? href : `${href}/`}`,
       caption,
       kind: isClip || kindSegment === "reel" ? "reel" : "post",
       pinned,
+      ...captured,
     };
   };
 
-  const readGridEntries = (): GridEntry[] =>
+  const readGridEntries = (
+    capturedEngagement: ReadonlyMap<string, CapturedEngagement>,
+  ): GridEntry[] =>
     Array.from(document.querySelectorAll("div._ac7v a[href]"))
-      .map(readGridEntry)
+      .map((anchor) => readGridEntry(anchor, capturedEngagement))
       .filter((entry): entry is GridEntry => entry !== null);
 
-  const countGridEntries = (): number => readGridEntries().length;
+  const countGridEntries = (): number =>
+    document.querySelectorAll("div._ac7v a[href]").length;
 
   // Scrolled to the bottom repeatedly until a scroll adds nothing new, the
   // same growth-polling shape `loadAllComments` uses for its own load-more
   // button, bounded here by entry count and wall time instead of a cap click.
+  // A scroll that stops growing before the cap or the deadline is not proof
+  // the account is exhausted, since a slow fetch can still be in flight; that
+  // "stalled" exit is reported truncated too, unlike a genuine end of scroll.
   const loadGridEntries = async (): Promise<{ readonly truncated: boolean }> => {
     const deadline = Date.now() + GRID_LOAD_TIMEOUT_MS;
     const capped = (): boolean =>
       Date.now() >= deadline || countGridEntries() >= MAX_GRID_ENTRIES;
 
+    let stalled = false;
     while (!capped()) {
       if (typeof window.scrollTo !== "function") {
         break;
       }
       const before = countGridEntries();
       window.scrollTo(0, document.body?.scrollHeight ?? 0);
-      const grew = await pollUntil(() => countGridEntries() > before, 5_000);
+      const grew = await pollUntil(
+        () => countGridEntries() > before,
+        GRID_GROWTH_TIMEOUT_MS,
+      );
       if (!grew) {
+        stalled = true;
         break;
       }
     }
 
-    return { truncated: capped() };
+    return { truncated: capped() || stalled };
+  };
+
+  interface ExternalLink {
+    readonly label: string;
+    readonly url: string | null;
+  }
+
+  const parseExternalLinkAnchor = (anchor: Element): ExternalLink | null => {
+    const label = clean(anchor.textContent);
+    if (!label) {
+      return null;
+    }
+    let url: string | null = label;
+    try {
+      const target = new URL(
+        anchor.getAttribute("href") ?? "",
+        "https://www.instagram.com/",
+      ).searchParams.get("u");
+      if (target) {
+        url = decodeURIComponent(target);
+      }
+    } catch {
+      // Leave url as the visible label if the href cannot be parsed.
+    }
+    return { label, url };
+  };
+
+  // A single link renders as an anchor with the real destination in its
+  // `u=` redirect param. More than one link collapses into a plain button
+  // reading "example.com and 1 more" with no href for any of them, so that
+  // case is surfaced as one descriptive entry rather than an invented list.
+  const readExternalLinksFromDom = (): ExternalLink[] => {
+    const anchor = document.querySelector(EXTERNAL_LINK_SELECTOR);
+    if (anchor) {
+      const parsed = parseExternalLinkAnchor(anchor);
+      return parsed ? [parsed] : [];
+    }
+    const multiButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => MULTI_LINK_BUTTON_TEXT.test(clean(button.textContent)),
+    );
+    if (!multiButton) {
+      return [];
+    }
+    const label = clean(multiButton.textContent);
+    return label ? [{ label, url: null }] : [];
   };
 
   const readProfile = async (handle: string): Promise<DriverPageResult> => {
@@ -453,16 +806,26 @@ export function runInstagramPage(
     const category =
       clean(document.querySelector(CATEGORY_SELECTOR)?.textContent) || null;
     const bio = bioTextFrom(bioNode).slice(0, 1_000);
-    const externalLink =
-      clean(document.querySelector(EXTERNAL_LINK_SELECTOR)?.textContent) ||
-      null;
     const counts = {
       posts: readCount(autoSpans, " posts"),
       followers: readCount(autoSpans, " followers"),
       following: readCount(autoSpans, " following"),
     };
+    const captures = readCaptures();
+    const capturedProfile = findCapturedProfile(captures, handle);
+    const links = capturedProfile?.links.length
+      ? capturedProfile.links
+      : readExternalLinksFromDom();
+    const externalLink = links[0]?.label ?? links[0]?.url ?? null;
+    const capturedGridEngagement = findCapturedGridEntries(captures);
     const { truncated } = await loadGridEntries();
-    const posts = readGridEntries().slice(0, MAX_GRID_ENTRIES);
+    const posts = readGridEntries(capturedGridEngagement).slice(
+      0,
+      MAX_GRID_ENTRIES,
+    );
+    const usedCapturedEngagement = posts.some(
+      (entry) => entry.likes !== null || entry.views !== null || entry.commentCount !== null,
+    );
     return {
       ...baseData("instagram_profile", bio || displayName),
       canonicalTarget: `https://www.instagram.com/${handle}/`,
@@ -471,8 +834,15 @@ export function runInstagramPage(
       category,
       bio,
       externalLink,
+      links,
+      followers: capturedProfile?.followers ?? null,
+      following: capturedProfile?.following ?? null,
+      postsCount: capturedProfile?.posts ?? null,
+      verified: capturedProfile?.verified ?? null,
+      private: capturedProfile?.private ?? null,
       counts,
       posts,
+      source: capturedProfile || usedCapturedEngagement ? "mixed" : "scraped",
       truncated,
     };
   };
@@ -504,11 +874,18 @@ export function runInstagramPage(
       );
     }
     const { truncated } = await loadAllComments();
+    const comments = readComments();
+    const usedCommentCapture = comments.some(
+      (comment) =>
+        comment.likes !== null ||
+        comment.replies.some((reply) => reply.likes !== null),
+    );
     return {
-      ...baseData("instagram_post", target.text),
-      canonicalTarget: target.canonicalTarget,
-      post: target,
-      comments: readComments(),
+      ...baseData("instagram_post", target.post.text),
+      canonicalTarget: target.post.canonicalTarget,
+      post: target.post,
+      comments,
+      source: target.captured || usedCommentCapture ? "mixed" : "scraped",
       truncated,
     };
   };
@@ -525,9 +902,10 @@ export function runInstagramPage(
       return failure("waiting", "Instagram has not shown the post yet.");
     }
     return {
-      ...baseData("instagram_post", target.text),
-      canonicalTarget: target.canonicalTarget,
-      post: target,
+      ...baseData("instagram_post", target.post.text),
+      canonicalTarget: target.post.canonicalTarget,
+      post: target.post,
+      source: target.captured ? "mixed" : "scraped",
     };
   };
 

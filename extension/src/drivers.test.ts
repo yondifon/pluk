@@ -179,6 +179,7 @@ function installPage(
     showUi: boolean | undefined,
     value: string | undefined,
   ) => boolean,
+  elementsById: Readonly<Record<string, string>> = {},
 ): () => void {
   const globals = globalThis as unknown as Record<string, unknown>;
   const previousDocument = globals.document;
@@ -192,6 +193,9 @@ function installPage(
     },
     querySelectorAll(selector: string) {
       return selectors[selector] ?? [];
+    },
+    getElementById(id: string) {
+      return id in elementsById ? { textContent: elementsById[id] } : null;
     },
   };
   const parsed = new URL(url);
@@ -1339,7 +1343,7 @@ function instagramGridAnchor(
 
 test("reads a full Instagram profile header with posts, counts, bio line breaks, and an external link", async () => {
   const displayNameSpan = node("Michael  Rapheal 🙂⭐️", { dir: "auto" });
-  const categoryDiv = node("Public figure");
+  const categoryDiv = node("Public figure", { dir: "auto" });
   const bioSpan = instagramBioSpan(["Coffee first.", "Then the world."]);
   const externalLinkAnchor = node("example.com/profile", {
     href: "https://l.instagram.com/?u=https%3A%2F%2Fexample.com%2Fprofile",
@@ -1366,7 +1370,7 @@ test("reads a full Instagram profile header with posts, counts, bio line breaks,
         followingSpan,
       ],
       'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
-      "div._ap3a._aaco._aacu._aacy": [categoryDiv],
+      '._ap3a._aaco._aacu._aacy[dir="auto"]': [categoryDiv],
       'a[href^="https://l.instagram.com/?u="]': [externalLinkAnchor],
       "div._ac7v a[href]": [gridAnchor],
     },
@@ -1400,6 +1404,9 @@ test("reads a full Instagram profile header with posts, counts, bio line breaks,
       caption: "Sunset walk\n#golden #hour",
       kind: "post",
       pinned: false,
+      likes: null,
+      views: null,
+      commentCount: null,
     },
   ]);
 });
@@ -1520,6 +1527,9 @@ test("marks a pinned Instagram reel grid entry", async () => {
       caption: "Pinned reel",
       kind: "reel",
       pinned: true,
+      likes: null,
+      views: null,
+      commentCount: null,
     },
   ]);
 });
@@ -1548,6 +1558,267 @@ test("caps an Instagram grid at 120 entries and marks it truncated", async () =>
   expect(result).toMatchObject({ state: "ready", truncated: true });
   expect((result as unknown as { posts: unknown[] }).posts).toHaveLength(120);
 });
+
+function instagramCaptureElement(bodies: readonly unknown[]): string {
+  return JSON.stringify(
+    bodies.map((body) => ({
+      url: "https://www.instagram.com/graphql/query",
+      method: "POST",
+      receivedAt: Date.now(),
+      body,
+    })),
+  );
+}
+
+test("reads exact counts, verified state, and multiple links from a captured Instagram profile response", async () => {
+  const displayNameSpan = node("On E. Niga", { dir: "auto" });
+  const bioSpan = instagramBioSpan(["Bio."]);
+  const gridAnchor = instagramGridAnchor(
+    "onenigaofficial1",
+    "p",
+    "CxYz_1-2Ab",
+    "Sunset walk",
+  );
+  const capturedBody = {
+    data: {
+      xig_user_by_igid_v2: {
+        user_dict: {
+          username: "onenigaofficial1",
+          follower_count: 148_449_900,
+          following_count: 115,
+          media_count: 27_942,
+          is_verified: true,
+          is_private: false,
+          bio_links: [
+            { title: "Shop", url: "https://example.com/shop" },
+            { title: "Site", url: "https://example.com" },
+          ],
+        },
+        polaris_ordered_timeline_connection: {
+          edges: [
+            {
+              node: {
+                __typename: "XIGPolarisCarouselMedia",
+                media_dict: {
+                  code: "CxYz_1-2Ab",
+                  like_count: 4_200,
+                  comment_count: 31,
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+  const restore = installPage(
+    "",
+    "Profile",
+    "https://www.instagram.com/onenigaofficial1/",
+    {
+      'header span[dir="auto"]': [displayNameSpan],
+      'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
+      "div._ac7v a[href]": [gridAnchor],
+    },
+    undefined,
+    { "pluk-instagram-captures": instagramCaptureElement([capturedBody]) },
+  );
+  const result = await runInstagramPage({
+    action: "read_profile",
+    targetUrl: "https://www.instagram.com/onenigaofficial1/",
+  });
+  restore();
+  expect(result).toMatchObject({
+    state: "ready",
+    source: "mixed",
+    followers: 148_449_900,
+    following: 115,
+    postsCount: 27_942,
+    verified: true,
+    private: false,
+    links: [
+      { label: "Shop", url: "https://example.com/shop" },
+      { label: "Site", url: "https://example.com" },
+    ],
+  });
+  expect((result as unknown as { posts: [{ likes: number; commentCount: number }] }).posts).toEqual([
+    expect.objectContaining({ likes: 4_200, commentCount: 31 }),
+  ]);
+});
+
+test("falls back to scraping when the Instagram capture element is absent", async () => {
+  const displayNameSpan = node("Jane Doe", { dir: "auto" });
+  const bioSpan = instagramBioSpan(["Bio."]);
+  const externalLinkAnchor = node("example.com/profile", {
+    href: "https://l.instagram.com/?u=https%3A%2F%2Fexample.com%2Fprofile",
+  });
+  const restore = installPage(
+    "",
+    "Profile",
+    "https://www.instagram.com/janedoe/",
+    {
+      'header span[dir="auto"]': [displayNameSpan],
+      'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
+      'a[href^="https://l.instagram.com/?u="]': [externalLinkAnchor],
+      "div._ac7v a[href]": [],
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_profile",
+    targetUrl: "https://www.instagram.com/janedoe/",
+  });
+  restore();
+  expect(result).toMatchObject({
+    state: "ready",
+    source: "scraped",
+    followers: null,
+    following: null,
+    postsCount: null,
+    verified: null,
+    private: null,
+    externalLink: "example.com/profile",
+    links: [{ label: "example.com/profile", url: "https://example.com/profile" }],
+  });
+});
+
+test("finds the Instagram category in an h1 as readily as a div", async () => {
+  const displayNameSpan = node("Jane Doe", { dir: "auto" });
+  const bioSpan = instagramBioSpan(["Bio."]);
+  const categoryHeading = node("Etihad Stadium, Manchester, United Kingdom M11 3FF", {
+    dir: "auto",
+  });
+  Object.defineProperty(categoryHeading, "tagName", { value: "H1" });
+  const restore = installPage(
+    "",
+    "Profile",
+    "https://www.instagram.com/mancity/",
+    {
+      'header span[dir="auto"]': [displayNameSpan],
+      'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
+      '._ap3a._aaco._aacu._aacy[dir="auto"]': [categoryHeading],
+      "div._ac7v a[href]": [],
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_profile",
+    targetUrl: "https://www.instagram.com/mancity/",
+  });
+  restore();
+  expect(result).toMatchObject({
+    state: "ready",
+    category: "Etihad Stadium, Manchester, United Kingdom M11 3FF",
+  });
+});
+
+test("returns a multi-link profile's whole list instead of the single-link shape", async () => {
+  const displayNameSpan = node("Man City", { dir: "auto" });
+  const bioSpan = instagramBioSpan(["Bio."]);
+  const multiLinkButton = node("bio.mancity.com and 1 more");
+  const restore = installPage(
+    "",
+    "Profile",
+    "https://www.instagram.com/mancity/",
+    {
+      'header span[dir="auto"]': [displayNameSpan],
+      'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
+      button: [multiLinkButton],
+      "div._ac7v a[href]": [],
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_profile",
+    targetUrl: "https://www.instagram.com/mancity/",
+  });
+  restore();
+  expect(
+    (result as unknown as { links: readonly unknown[] }).links,
+  ).toEqual([{ label: "bio.mancity.com and 1 more", url: null }]);
+});
+
+test("reads captured likes, views, and comment count for an Instagram post and its comments", async () => {
+  const commentRow = node(
+    "Comment one",
+    {},
+    {
+      "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })],
+      'a[href*="/c/"]': [node("", { href: "/p/ABC123/c/c1/" })],
+    },
+  );
+  const commentList = node(
+    "",
+    {},
+    { li: [commentRow], ":scope > li": [commentRow] },
+  );
+  const capturedPost = {
+    data: {
+      xdt_shortcode_media: {
+        code: "ABC123",
+        __typename: "XIGPolarisClipsMedia",
+        like_count: 500,
+        comment_count: 12,
+        view_count: 9_999,
+      },
+      comments: [{ pk: "c1", text: "Comment one", comment_like_count: 7 }],
+    },
+  };
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    {
+      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
+      ul: [commentList],
+    },
+    undefined,
+    { "pluk-instagram-captures": instagramCaptureElement([capturedPost]) },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+  });
+  restore();
+  expect(result).toMatchObject({
+    state: "ready",
+    source: "mixed",
+    post: { likes: 500, views: 9_999, commentCount: 12 },
+  });
+  expect(
+    (result as unknown as { comments: ReadonlyArray<{ likes: number }> }).comments,
+  ).toEqual([expect.objectContaining({ likes: 7 })]);
+});
+
+test("reports an Instagram grid run that stalls before the cap or deadline as truncated", async () => {
+  const displayNameSpan = node("Jane Doe", { dir: "auto" });
+  const bioSpan = instagramBioSpan(["Bio."]);
+  const anchors: FixtureNode[] = [
+    instagramGridAnchor("janedoe", "p", "First001", "First"),
+  ];
+  const pageSelectors: Record<string, FixtureNode[]> = {
+    'header span[dir="auto"]': [displayNameSpan],
+    'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
+    "div._ac7v a[href]": anchors,
+  };
+  const restore = installPage(
+    "",
+    "Profile",
+    "https://www.instagram.com/janedoe/",
+    pageSelectors,
+  );
+  Object.defineProperty(globalThis.window, "scrollTo", {
+    configurable: true,
+    value: () => {
+      // Never grows: simulates a fetch that never resolves within the poll.
+    },
+  });
+  const result = await runInstagramPage({
+    action: "read_profile",
+    targetUrl: "https://www.instagram.com/janedoe/",
+  });
+  restore();
+  expect(result).toMatchObject({ state: "ready", truncated: true });
+  expect((result as unknown as { posts: unknown[] }).posts).toHaveLength(1);
+}, 8_000);
 
 // Chrome injects a page script by its source text, so anything it reads from
 // module scope is gone by the time it runs. Evaluating each script in
