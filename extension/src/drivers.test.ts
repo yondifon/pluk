@@ -1130,101 +1130,69 @@ test("reads an Instagram post with no comments", async () => {
   });
 });
 
-test("loads two pages of Instagram comments before the Load More button disappears", async () => {
-  const commentRow = (text: string): FixtureNode =>
-    node(text, {}, { "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })] });
-  const c1 = commentRow("Comment one");
-  const loadMoreButton = node(
-    "",
-    {},
-    { 'svg[aria-label="Load more comments"]': [node("")] },
-  );
-  const listSelectors: Record<string, FixtureNode[]> = {
-    li: [c1],
-    ":scope > li": [c1],
-    button: [loadMoreButton],
+// Instagram returns every comment, top level or reply, in the same shape;
+// only a reply carries `parent_comment_id`.
+function instagramCommentNode(
+  pk: string,
+  text: string,
+  username: string,
+  extra: Record<string, unknown> = {},
+): unknown {
+  return {
+    __typename: "XDTCommentDict",
+    pk,
+    text,
+    created_at: 1_700_000_000,
+    comment_like_count: 7,
+    child_comment_count: 0,
+    parent_comment_id: null,
+    user: { username, is_verified: false },
+    ...extra,
   };
-  let clicks = 0;
-  Object.defineProperty(loadMoreButton, "click", {
-    value: () => {
-      clicks += 1;
-      if (clicks === 1) {
-        const c2 = commentRow("Comment two");
-        listSelectors.li = [c1, c2];
-        listSelectors[":scope > li"] = [c1, c2];
-      } else {
-        const c3 = commentRow("Comment three");
-        listSelectors.li = [...listSelectors.li, c3];
-        listSelectors[":scope > li"] = [...listSelectors[":scope > li"], c3];
-        delete listSelectors.button;
-      }
-    },
-  });
-  const commentList = node("", {}, listSelectors);
-  const restore = installPage(
-    "",
-    "Post",
-    "https://www.instagram.com/p/ABC123/",
-    {
-      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
-      ul: [commentList],
-    },
-  );
-  const result = await runInstagramPage({
-    action: "read_post",
-    targetUrl: "https://www.instagram.com/p/ABC123/",
-    postId: "ABC123",
-  });
-  restore();
-  expect(clicks).toBe(2);
-  expect(result).toMatchObject({ state: "ready", truncated: false });
-  expect((result as unknown as { comments: unknown[] }).comments).toHaveLength(3);
-});
+}
 
-test("expands a collapsed Instagram reply thread", async () => {
-  const replyLi = node(
-    "Reply text",
-    {},
-    { "time[datetime]": [node("", { datetime: "2024-01-01T00:05:00Z" })] },
-  );
-  const replyUlSelectors: Record<string, FixtureNode[]> = { ":scope > li": [] };
-  const replyUl = node("", {}, replyUlSelectors);
-  const c1 = node(
-    "Comment one",
-    {},
-    {
-      "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })],
-      "ul._a9ym": [replyUl],
+function instagramCommentsBody(nodes: readonly unknown[]): unknown {
+  return {
+    data: {
+      xdt_api__v1__media__media_id__comments__connection: {
+        edges: nodes.map((node_) => ({ node: node_ })),
+        page_info: { end_cursor: null, has_next_page: false },
+      },
     },
-  );
-  const listSelectors: Record<string, FixtureNode[]> = {
-    li: [c1],
-    ":scope > li": [c1],
   };
-  const toggleButton = node("");
-  const toggleSpan = node("View replies (1)");
-  Object.defineProperty(toggleSpan, "closest", {
-    value: (selector: string) => (selector === "button" ? toggleButton : null),
-  });
-  Object.defineProperty(toggleButton, "click", {
-    value: () => {
-      Object.defineProperty(toggleSpan, "textContent", {
-        configurable: true,
-        value: "Hide replies",
-      });
-      replyUlSelectors[":scope > li"] = [replyLi];
-      listSelectors.li = [c1, replyLi];
-    },
-  });
-  listSelectors["span._a9yi"] = [toggleSpan];
-  const commentList = node("", {}, listSelectors);
+}
+
+test("reads Instagram comments and their replies from captured responses", async () => {
   const restore = installPage(
     "",
     "Post",
     "https://www.instagram.com/p/ABC123/",
+    { 'meta[property="og:title"]': [instagramOgTitle("janedoe")] },
+    undefined,
     {
-      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
-      ul: [commentList],
+      "pluk-instagram-captures": instagramCaptureElement([
+        instagramCommentsBody([
+          instagramCommentNode("111", "Comment one", "alice", {
+            child_comment_count: 1,
+          }),
+          instagramCommentNode("222", "Comment two", "bob"),
+        ]),
+        {
+          data: {
+            xdt_api__v1__media__media_id__comments__parent_comment_id__child_comments__connection:
+              {
+                edges: [
+                  {
+                    node: instagramCommentNode("333", "A reply", "carol", {
+                      parent_comment_id: "111",
+                    }),
+                  },
+                ],
+                page_info: { end_cursor: null, has_next_page: false },
+              },
+          },
+        },
+      ]),
     },
   );
   const result = await runInstagramPage({
@@ -1233,50 +1201,47 @@ test("expands a collapsed Instagram reply thread", async () => {
     postId: "ABC123",
   });
   restore();
-  const comments = (
-    result as unknown as { comments: ReadonlyArray<{ replies: unknown[] }> }
-  ).comments;
-  expect(comments).toHaveLength(1);
-  expect(comments[0]?.replies).toHaveLength(1);
   expect(result).toMatchObject({ state: "ready", truncated: false });
+  const comments = (
+    result as unknown as {
+      comments: ReadonlyArray<{
+        commentId: string;
+        author: string;
+        text: string;
+        likes: number | null;
+        postedAt: string | null;
+        replies: ReadonlyArray<{ author: string; text: string }>;
+      }>;
+    }
+  ).comments;
+  expect(comments).toHaveLength(2);
+  expect(comments[0]).toMatchObject({
+    commentId: "111",
+    author: "alice",
+    text: "Comment one",
+    likes: 7,
+    postedAt: "2023-11-14T22:13:20.000Z",
+  });
+  expect(comments[0]?.replies).toEqual([
+    expect.objectContaining({ author: "carol", text: "A reply" }),
+  ]);
+  expect(comments[1]?.replies).toEqual([]);
 });
 
 test("stops loading Instagram comments at the 300 cap and marks the result truncated", async () => {
-  const makeBatch = (count: number, offset: number): FixtureNode[] =>
-    Array.from({ length: count }, (_, index) =>
-      node(`Comment ${offset + index}`, {}, {
-        "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })],
-      }),
-    );
-  const initial = makeBatch(100, 0);
-  const listSelectors: Record<string, FixtureNode[]> = {
-    li: initial,
-    ":scope > li": initial,
-    button: [
-      node(
-        "",
-        {},
-        { 'svg[aria-label="Load more comments"]': [node("")] },
-      ),
-    ],
-  };
-  let clicks = 0;
-  Object.defineProperty(listSelectors.button[0], "click", {
-    value: () => {
-      clicks += 1;
-      const next = makeBatch(100, listSelectors.li.length);
-      listSelectors.li = [...listSelectors.li, ...next];
-      listSelectors[":scope > li"] = listSelectors.li;
-    },
-  });
-  const commentList = node("", {}, listSelectors);
+  const nodes = Array.from({ length: 400 }, (_, index) =>
+    instagramCommentNode(String(index), `Comment ${index}`, "alice"),
+  );
   const restore = installPage(
     "",
     "Post",
     "https://www.instagram.com/p/ABC123/",
+    { 'meta[property="og:title"]': [instagramOgTitle("janedoe")] },
+    undefined,
     {
-      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
-      ul: [commentList],
+      "pluk-instagram-captures": instagramCaptureElement([
+        instagramCommentsBody(nodes),
+      ]),
     },
   );
   const result = await runInstagramPage({
@@ -1285,7 +1250,6 @@ test("stops loading Instagram comments at the 300 cap and marks the result trunc
     postId: "ABC123",
   });
   restore();
-  expect(clicks).toBe(2);
   expect(result).toMatchObject({ state: "ready", truncated: true });
   expect((result as unknown as { comments: unknown[] }).comments).toHaveLength(300);
 });
@@ -1457,8 +1421,9 @@ function instagramTimelineCaptureBody(shortcode: string): unknown {
       edges: [
         {
           node: {
-            __typename: "XIGPolarisCarouselMedia",
-            media_dict: { code: shortcode },
+            __typename: "XDTMediaDict",
+            code: shortcode,
+            taken_at: 1_700_000_000,
           },
         },
       ],
@@ -1565,7 +1530,8 @@ test("caps an accumulated Instagram grid at 600 entries and marks it truncated",
   const edges = Array.from({ length: 601 }, (_, index) => ({
     node: {
       __typename: "XIGPolarisCarouselMedia",
-      media_dict: { code: `Shortcode${index}` },
+      code: `Shortcode${index}`,
+      taken_at: 1_700_000_000,
     },
   }));
   const restore = installPage(
@@ -1646,12 +1612,11 @@ test("reads exact counts, verified state, and multiple links from a captured Ins
         edges: [
           {
             node: {
-              __typename: "XIGPolarisCarouselMedia",
-              media_dict: {
-                code: "CxYz_1-2Ab",
-                like_count: 4_200,
-                comment_count: 31,
-              },
+              __typename: "XDTMediaDict",
+              code: "CxYz_1-2Ab",
+              taken_at: 1_700_000_000,
+              like_count: 4_200,
+              comment_count: 31,
             },
           },
         ],
@@ -1804,19 +1769,6 @@ test("returns a multi-link profile's whole list instead of the single-link shape
 });
 
 test("reads captured likes, views, and comment count for an Instagram post and its comments", async () => {
-  const commentRow = node(
-    "Comment one",
-    {},
-    {
-      "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })],
-      'a[href*="/c/"]': [node("", { href: "/p/ABC123/c/c1/" })],
-    },
-  );
-  const commentList = node(
-    "",
-    {},
-    { li: [commentRow], ":scope > li": [commentRow] },
-  );
   const capturedPost = {
     data: {
       xdt_shortcode_media: {
@@ -1827,7 +1779,15 @@ test("reads captured likes, views, and comment count for an Instagram post and i
         comment_count: 12,
         view_count: 9_999,
       },
-      comments: [{ pk: "c1", text: "Comment one", comment_like_count: 7 }],
+      xdt_api__v1__media__media_id__comments__connection: {
+        edges: [
+          {
+            node: instagramCommentNode("c1", "Comment one", "alice", {
+              comment_like_count: 7,
+            }),
+          },
+        ],
+      },
     },
   };
   const restore = installPage(
@@ -1836,7 +1796,6 @@ test("reads captured likes, views, and comment count for an Instagram post and i
     "https://www.instagram.com/p/ABC123/",
     {
       'meta[property="og:title"]': [instagramOgTitle("janedoe")],
-      ul: [commentList],
     },
     undefined,
     { "pluk-instagram-captures": instagramCaptureElement([capturedPost]) },
@@ -1854,7 +1813,7 @@ test("reads captured likes, views, and comment count for an Instagram post and i
   });
   expect(
     (result as unknown as { comments: ReadonlyArray<{ likes: number }> }).comments,
-  ).toEqual([expect.objectContaining({ likes: 7 })]);
+  ).toEqual([expect.objectContaining({ likes: 7, author: "alice" })]);
 });
 
 test("reads an Instagram post from JSON embedded in the page's own HTML when nothing was captured", async () => {

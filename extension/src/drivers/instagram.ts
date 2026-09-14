@@ -62,7 +62,7 @@ export function runInstagramPage(
     visit: (candidate: Record<string, unknown>) => void,
     depth = 0,
   ): void => {
-    if (depth > 14 || value === null || typeof value !== "object") {
+    if (depth > 24 || value === null || typeof value !== "object") {
       return;
     }
     if (Array.isArray(value)) {
@@ -204,13 +204,17 @@ export function runInstagramPage(
     readonly shortcode: string;
     readonly caption: string;
     readonly kind: "reel" | "post";
+    readonly pinned: boolean;
     readonly postedAt: string | null;
   }
 
   const isVideoLikeMedia = (
     mediaDict: Record<string, unknown>,
     typename: string,
-  ): boolean => CLIP_TYPENAMES.has(typename) || mediaDict.product_type === "clips";
+  ): boolean =>
+    CLIP_TYPENAMES.has(typename) ||
+    mediaDict.product_type === "clips" ||
+    mediaDict.media_type === 2;
 
   // Instagram nests a media's caption as either a plain string or a
   // `{ text }` object depending on the endpoint that returned it.
@@ -238,9 +242,30 @@ export function runInstagramPage(
       shortcode: mediaDict.code as string,
       caption: captionFromMediaDict(mediaDict),
       kind: isVideoLike ? "reel" : "post",
+      pinned:
+        Array.isArray(mediaDict.timeline_pinned_user_ids) &&
+        mediaDict.timeline_pinned_user_ids.length > 0,
       postedAt: takenAt !== null ? new Date(takenAt * 1_000).toISOString() : null,
       ...engagementFromObject(mediaDict, isVideoLike),
     };
+  };
+
+  // A timeline edge carries its media on the node itself; the logged-out
+  // profile query wraps the same fields in a `media_dict` instead. `taken_at`
+  // separates a real media object from the id-only references that share the
+  // `code` field elsewhere in the same response.
+  const gridMediaFrom = (
+    candidate: Record<string, unknown>,
+  ): Record<string, unknown> | null => {
+    const nested =
+      candidate.media_dict !== null && typeof candidate.media_dict === "object"
+        ? (candidate.media_dict as Record<string, unknown>)
+        : null;
+    const media = nested ?? candidate;
+    return typeof media.code === "string" &&
+      typeof media.taken_at === "number"
+      ? media
+      : null;
   };
 
   // Drains whatever timeline pages are currently buffered into a
@@ -253,22 +278,23 @@ export function runInstagramPage(
   ): void => {
     for (const entry of captures) {
       walkObjects(entry.body, (candidate) => {
-        const mediaDict =
-          candidate.media_dict !== null && typeof candidate.media_dict === "object"
-            ? (candidate.media_dict as Record<string, unknown>)
-            : null;
-        if (!mediaDict || typeof mediaDict.code !== "string" || accumulator.has(mediaDict.code)) {
+        const mediaDict = gridMediaFrom(candidate);
+        if (!mediaDict || accumulator.has(mediaDict.code as string)) {
           return;
         }
         const typename =
-          typeof candidate.__typename === "string" ? candidate.__typename : "";
-        accumulator.set(mediaDict.code, buildCapturedGridEntry(mediaDict, typename));
+          typeof mediaDict.__typename === "string" ? mediaDict.__typename : "";
+        accumulator.set(
+          mediaDict.code as string,
+          buildCapturedGridEntry(mediaDict, typename),
+        );
       });
     }
   };
 
   interface CapturedPost extends CapturedEngagement {
     readonly author: string | null;
+    readonly caption: string;
     readonly postedAt: string | null;
   }
 
@@ -335,6 +361,7 @@ export function runInstagramPage(
     const takenAt = firstNumber(record, ["taken_at"]);
     return {
       author: usernameFromRecord(record),
+      caption: captionFromMediaDict(record),
       postedAt: takenAt !== null ? new Date(takenAt * 1_000).toISOString() : null,
       ...engagementFromObject(record, CLIP_TYPENAMES.has(foundTypename)),
     };
@@ -383,31 +410,33 @@ export function runInstagramPage(
     return digits ? Number.parseInt(digits, 10) : null;
   };
 
-  // Not confirmed against a live logged-in page: Instagram's comment and
-  // reply endpoints were not captured, so this matches defensively on an
-  // identifier plus a like-count-shaped field rather than a known path.
-  const findCapturedCommentLikes = (
+  // Instagram returns every comment, top level or reply, as the same
+  // `XDTCommentDict` shape; only a reply carries `parent_comment_id`.
+  const isCommentDict = (
+    candidate: Record<string, unknown>,
+  ): boolean =>
+    typeof candidate.text === "string" &&
+    typeof candidate.created_at === "number" &&
+    (typeof candidate.pk === "string" || typeof candidate.pk === "number") &&
+    candidate.user !== null &&
+    typeof candidate.user === "object";
+
+  const findCapturedComments = (
     captures: readonly CaptureEntry[],
-  ): ReadonlyMap<string, number> => {
-    const result = new Map<string, number>();
+  ): readonly Record<string, unknown>[] => {
+    const byId = new Map<string, Record<string, unknown>>();
     for (const entry of captures) {
       walkObjects(entry.body, (candidate) => {
-        const id =
-          typeof candidate.pk === "string" || typeof candidate.pk === "number"
-            ? String(candidate.pk)
-            : typeof candidate.id === "string"
-              ? candidate.id
-              : null;
-        if (id === null || result.has(id) || typeof candidate.text !== "string") {
+        if (!isCommentDict(candidate)) {
           return;
         }
-        const likes = firstNumber(candidate, LIKE_KEYS);
-        if (likes !== null) {
-          result.set(id, likes);
+        const id = String(candidate.pk);
+        if (!byId.has(id)) {
+          byId.set(id, candidate);
         }
       });
     }
-    return result;
+    return Array.from(byId.values());
   };
 
   // "p" and "reel" are Instagram's own post routes, so they can never be a
@@ -541,7 +570,7 @@ export function runInstagramPage(
         author,
         postedAt,
         engagement,
-        text: captionFromMeta(),
+        text: jsonPost?.caption || captionFromMeta(),
         likes: jsonPost?.likes ?? null,
         views: jsonPost?.views ?? null,
         commentCount:
@@ -626,60 +655,102 @@ export function runInstagramPage(
     );
   };
 
-  const readComment = (
-    node: Element,
-    isReply: boolean,
-    capturedLikes: ReadonlyMap<string, number>,
+  const readComment = (node: Element, isReply: boolean): ReadComment => ({
+    commentId: commentIdFromNode(node),
+    author: authorFromNode(node),
+    text: clean(node.querySelector("span._ap3a")?.textContent).slice(0, 2_000),
+    postedAt:
+      node.querySelector("time[datetime]")?.getAttribute("datetime") ?? null,
+    likes: likesFromNode(node),
+    replies: isReply ? [] : repliesFor(node).map((reply) => readComment(reply, true)),
+  });
+
+  const commentFromCaptured = (
+    record: Record<string, unknown>,
+    replies: readonly ReadComment[],
   ): ReadComment => {
-    const commentId = commentIdFromNode(node);
+    const createdAt = firstNumber(record, ["created_at"]);
+    const user = record.user as Record<string, unknown>;
     return {
-      commentId,
-      author: authorFromNode(node),
-      text: clean(node.querySelector("span._ap3a")?.textContent).slice(0, 2_000),
+      commentId: String(record.pk),
+      author: typeof user.username === "string" ? user.username : "",
+      text: trimOnly(record.text as string).slice(0, 2_000),
       postedAt:
-        node.querySelector("time[datetime]")?.getAttribute("datetime") ?? null,
-      likes: capturedLikes.get(commentId) ?? likesFromNode(node),
-      replies: isReply
-        ? []
-        : repliesFor(node).map((reply) => readComment(reply, true, capturedLikes)),
+        createdAt !== null ? new Date(createdAt * 1_000).toISOString() : null,
+      likes: firstNumber(record, LIKE_KEYS),
+      replies,
     };
   };
 
+  // A post page renders its first comments server side and fetches the rest,
+  // so both the embedded state and the captured pages have to be read for a
+  // reply to find the parent it belongs under.
+  const readCapturedComments = (): ReadComment[] => {
+    const records = findCapturedComments([
+      ...readCaptures(),
+      ...embeddedJsonEntries(),
+    ]);
+    if (records.length === 0) {
+      return [];
+    }
+    const repliesByParent = new Map<string, ReadComment[]>();
+    for (const record of records) {
+      const parent = record.parent_comment_id;
+      if (typeof parent !== "string" || !parent) {
+        continue;
+      }
+      const bucket = repliesByParent.get(parent) ?? [];
+      bucket.push(commentFromCaptured(record, []));
+      repliesByParent.set(parent, bucket);
+    }
+    return records
+      .filter((record) => typeof record.parent_comment_id !== "string")
+      .map((record) =>
+        commentFromCaptured(record, repliesByParent.get(String(record.pk)) ?? []),
+      );
+  };
+
   const readComments = (): ReadComment[] => {
+    const captured = readCapturedComments();
+    if (captured.length > 0) {
+      return captured;
+    }
     const root = commentListRoot();
     if (!root) {
       return [];
     }
-    const capturedLikes = findCapturedCommentLikes(readCaptures());
     return Array.from(root.querySelectorAll(":scope > li"))
       .filter(isCommentRow)
-      .map((node) => readComment(node, false, capturedLikes));
+      .map((node) => readComment(node, false));
   };
 
+  // Counts what has actually been fetched, not what is rendered: the panel
+  // virtualises its rows, so a DOM count stops growing long before the
+  // comments do.
   const countCommentRows = (): number => {
+    const captured = findCapturedComments(readCaptures()).length;
+    if (captured > 0) {
+      return captured;
+    }
     const root = commentListRoot();
     return root ? root.querySelectorAll("li").length : 0;
   };
 
-  const loadMoreCommentsButton = (): Element | null => {
-    const scope = commentListRoot() ?? document;
-    return (
-      Array.from(scope.querySelectorAll("button")).find(
-        (button) =>
-          button.querySelector('svg[aria-label="Load more comments"]') !==
-          null,
-      ) ?? null
-    );
-  };
+  // The comment panel is its own scroll region, and scrolling it is what
+  // makes Instagram fetch the next page. It is the only element on the post
+  // page that both overflows and scrolls.
+  const commentScroller = (): Element | null =>
+    Array.from(document.querySelectorAll("div")).find(
+      (node) =>
+        /auto|scroll/u.test(getComputedStyle(node).overflowY) &&
+        node.scrollHeight > node.clientHeight + 40,
+    ) ?? null;
 
   const collapsedReplyButton = (): Element | null => {
-    const root = commentListRoot();
-    if (!root) {
-      return null;
-    }
-    for (const span of Array.from(root.querySelectorAll("span._a9yi"))) {
-      if (/^view replies/iu.test(clean(span.textContent))) {
-        return span.closest("button") ?? span;
+    const root = commentListRoot() ?? document;
+    for (const node of Array.from(root.querySelectorAll("span, button"))) {
+      if (/^view (all \d+ )?repl(y|ies)/iu.test(clean(node.textContent))) {
+        return node.closest("button") ?? node;
       }
     }
     return null;
@@ -709,7 +780,7 @@ export function runInstagramPage(
   // until the grid is scrolled. Without this, a freshly loaded post can
   // show neither a comment row nor a "Load more" button to click.
   const ensureCommentsFetched = async (): Promise<void> => {
-    if (countCommentRows() > 0 || loadMoreCommentsButton()) {
+    if (countCommentRows() > 0) {
       return;
     }
     const root = commentListRoot() as unknown as {
@@ -721,10 +792,7 @@ export function runInstagramPage(
     if (typeof window.scrollTo === "function") {
       window.scrollTo(0, document.body?.scrollHeight ?? 0);
     }
-    await pollUntil(
-      () => countCommentRows() > 0 || loadMoreCommentsButton() !== null,
-      COMMENT_FETCH_TRIGGER_TIMEOUT_MS,
-    );
+    await pollUntil(() => countCommentRows() > 0, COMMENT_FETCH_TRIGGER_TIMEOUT_MS);
   };
 
   const loadAllComments = async (): Promise<{ readonly truncated: boolean }> => {
@@ -734,32 +802,28 @@ export function runInstagramPage(
       Date.now() >= deadline || countCommentRows() >= MAX_COMMENTS;
 
     while (!capped()) {
-      const button = loadMoreCommentsButton();
-      if (!button) {
+      const scroller = commentScroller();
+      if (!scroller) {
         break;
       }
       const before = countCommentRows();
-      clickElement(button);
-      const grew = await pollUntil(
-        () => countCommentRows() > before || !loadMoreCommentsButton(),
-        5_000,
-      );
+      scroller.scrollTop = scroller.scrollHeight;
+      const grew = await pollUntil(() => countCommentRows() > before, 5_000);
       if (!grew) {
         break;
       }
     }
 
+    const expanded = new Set<Element>();
     while (!capped()) {
       const button = collapsedReplyButton();
-      if (!button) {
+      if (!button || expanded.has(button)) {
         break;
       }
+      expanded.add(button);
       const before = countCommentRows();
       clickElement(button);
-      const grew = await pollUntil(() => countCommentRows() > before, 5_000);
-      if (!grew) {
-        break;
-      }
+      await pollUntil(() => countCommentRows() > before, 5_000);
     }
 
     return { truncated: capped() };
@@ -894,7 +958,7 @@ export function runInstagramPage(
     canonicalTarget: `https://www.instagram.com/${handle}/${captured.kind}/${captured.shortcode}/`,
     caption: captured.caption,
     kind: captured.kind,
-    pinned: false,
+    pinned: captured.pinned,
     postedAt: captured.postedAt,
     likes: captured.likes,
     views: captured.views,
@@ -1131,7 +1195,7 @@ export function runInstagramPage(
       );
     }
     const { truncated } = await loadAllComments();
-    const comments = readComments();
+    const comments = readComments().slice(0, MAX_COMMENTS);
     const usedCommentCapture = comments.some(
       (comment) =>
         comment.likes !== null ||
