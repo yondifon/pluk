@@ -5,6 +5,10 @@ export function runInstagramPage(
 ): DriverPageResult | Promise<DriverPageResult> {
   const MAX_COMMENTS = 300;
   const COMMENT_LOAD_TIMEOUT_MS = 45_000;
+  // A page that does not grow is not a page that is finished: Instagram drops
+  // a scroll while a fetch is already in flight, so a miss is retried before
+  // the run gives up on the thread.
+  const COMMENT_SCROLL_ATTEMPTS = 4;
   const COMMENT_FETCH_TRIGGER_TIMEOUT_MS = 2_000;
   const MAX_GRID_ENTRIES = 600;
   const GRID_LOAD_TIMEOUT_MS = 90_000;
@@ -813,19 +817,23 @@ export function runInstagramPage(
     await ensureCommentsFetched();
     const deadline = Date.now() + COMMENT_LOAD_TIMEOUT_MS;
     const capped = (): boolean =>
-      Date.now() >= deadline || countCommentRows() >= MAX_COMMENTS;
+      Date.now() >= deadline ||
+      countCommentRows() >= MAX_COMMENTS ||
+      (commentCount !== null && countCommentRows() >= commentCount);
 
-    while (!capped()) {
+    let misses = 0;
+    while (!capped() && misses < COMMENT_SCROLL_ATTEMPTS) {
       const scroller = commentScroller();
       if (!scroller) {
         break;
       }
       const before = countCommentRows();
+      // Instagram fetches on the scroll event, not on the position, so a
+      // panel already sitting at the bottom has to be moved off it first.
+      scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight * 2);
       scroller.scrollTop = scroller.scrollHeight;
       const grew = await pollUntil(() => countCommentRows() > before, 5_000);
-      if (!grew) {
-        break;
-      }
+      misses = grew ? 0 : misses + 1;
     }
 
     const expanded = new Set<Element>();
