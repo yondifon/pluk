@@ -20,6 +20,7 @@ pub const MAX_ID_LENGTH: usize = 256;
 /// to the Instagram grid's own 600-entry cap, the largest of the driver's
 /// result lists.
 pub const MAX_RESULT_ARRAY_LEN: usize = 600;
+pub const MAX_DEBUG_GLOB_LEN: usize = 200;
 pub const HEARTBEAT_INTERVAL_MS: i64 = 20_000;
 pub const MAX_CLOCK_SKEW_MS: i64 = 30_000;
 
@@ -548,32 +549,47 @@ fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResu
     Ok(json!({ "kind": "empty" }))
 }
 
-/// Take the `debug` flag off a payload so the action's own parser sees the
-/// shape it expects. Anything but a boolean is refused.
-fn split_debug(value: Option<&Value>) -> ValidationResult<(Option<Value>, bool)> {
+/// Take the `debug` request off a payload so the action's own parser sees the
+/// shape it expects. `true` asks for everything; a glob asks for the captured
+/// responses whose URL matches it.
+fn split_debug(value: Option<&Value>) -> ValidationResult<(Option<Value>, Option<Value>)> {
     let Some(object) = value.and_then(Value::as_object) else {
-        return Ok((value.cloned(), false));
+        return Ok((value.cloned(), None));
     };
     let mut object = object.clone();
     let debug = match object.remove("debug") {
-        None => false,
-        Some(Value::Bool(value)) => value,
-        Some(_) => return Err(invalid("debug must be true or false.")),
+        None | Some(Value::Bool(false)) => None,
+        Some(Value::Bool(true)) => Some(Value::Bool(true)),
+        Some(Value::String(glob)) if is_debug_glob(&glob) => Some(Value::String(glob)),
+        Some(_) => {
+            return Err(invalid(
+                "debug must be true, false, or a URL glob of at most 200 characters.",
+            ));
+        }
     };
     Ok((Some(Value::Object(object)), debug))
 }
 
-/// Mark a payload whose failure should come back with a screenshot and the
-/// page's HTML. Absent when not asked for, so the wire shape stays as before.
-fn with_debug(mut payload: Value, debug: bool) -> Value {
-    if debug {
-        payload["debug"] = Value::Bool(true);
+/// Mark a payload whose job should carry the extra diagnostics back. Absent
+/// when not asked for, so the wire shape stays as before.
+fn with_debug(mut payload: Value, debug: Option<Value>) -> Value {
+    if let Some(debug) = debug {
+        payload["debug"] = debug;
     }
     payload
 }
 
+fn is_debug_glob(glob: &str) -> bool {
+    !glob.is_empty() && glob.len() <= MAX_DEBUG_GLOB_LEN
+}
+
 fn debug_is_flag(object: &Map<String, Value>) -> bool {
-    object.get("debug").is_none_or(Value::is_boolean)
+    match object.get("debug") {
+        None => true,
+        Some(Value::Bool(_)) => true,
+        Some(Value::String(glob)) => is_debug_glob(glob),
+        Some(_) => false,
+    }
 }
 
 /// The posts a compose request becomes: `thread` as given, or `text` cut
@@ -1469,6 +1485,40 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(by_handle.target_url, "https://www.instagram.com/jack/");
+    }
+
+    #[test]
+    fn debug_takes_a_flag_or_a_url_glob() {
+        let all = parse_create_job_request(&json!({
+            "platform": "instagram", "action": "read_profile",
+            "payload": { "username": "jack", "debug": true }
+        }))
+        .unwrap();
+        assert_eq!(all.payload["debug"], json!(true));
+
+        let matching = parse_create_job_request(&json!({
+            "platform": "instagram", "action": "read_profile",
+            "payload": { "username": "jack", "debug": "*/graphql*" }
+        }))
+        .unwrap();
+        assert_eq!(matching.payload["debug"], json!("*/graphql*"));
+
+        let off = parse_create_job_request(&json!({
+            "platform": "instagram", "action": "read_profile",
+            "payload": { "username": "jack", "debug": false }
+        }))
+        .unwrap();
+        assert!(off.payload.get("debug").is_none());
+
+        for refused in [json!(1), json!(""), json!("x".repeat(MAX_DEBUG_GLOB_LEN + 1))] {
+            assert!(
+                parse_create_job_request(&json!({
+                    "platform": "instagram", "action": "read_profile",
+                    "payload": { "username": "jack", "debug": refused }
+                }))
+                .is_err()
+            );
+        }
     }
 
     #[test]

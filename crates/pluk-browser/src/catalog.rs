@@ -2,7 +2,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::protocol::{
-    Action, DEFAULT_JOB_TTL_MS, MAX_JOB_TTL_MS, MAX_TEXT_LENGTH, MIN_JOB_TTL_MS, Platform,
+    Action, MAX_DEBUG_GLOB_LEN, DEFAULT_JOB_TTL_MS, MAX_JOB_TTL_MS, MAX_TEXT_LENGTH, MIN_JOB_TTL_MS, Platform,
     fixed_compose_target, fixed_feed_target, fixed_trends_target, hostnames,
 };
 
@@ -153,9 +153,10 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                         "description": "Exact reply text, submitted verbatim and never generated here.",
                     },
                     "debug": {
-                        "type": "boolean",
+                        "type": ["boolean", "string"],
                         "required": false,
-                        "description": "When the page refuses it, attach a screenshot and the page's HTML to the failed job so the refusal can be read.",
+                        "maxLength": MAX_DEBUG_GLOB_LEN,
+                        "description": "Attach what the page was doing to the job. `true` attaches everything read off the page; a URL glob such as `*/graphql*` attaches only the responses the page fetched whose address matches it.",
                     },
                 },
             },
@@ -183,9 +184,10 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                         "description": "The posts of a thread, in order, each under 280 weighted characters. Pass this or text, not both.",
                     },
                     "debug": {
-                        "type": "boolean",
+                        "type": ["boolean", "string"],
                         "required": false,
-                        "description": "When the page refuses it, attach a screenshot and the page's HTML to the failed job so the refusal can be read.",
+                        "maxLength": MAX_DEBUG_GLOB_LEN,
+                        "description": "Attach what the page was doing to the job. `true` attaches everything read off the page; a URL glob such as `*/graphql*` attaches only the responses the page fetched whose address matches it.",
                     },
                 },
                 "description": format!(
@@ -212,9 +214,10 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                         "description": "Exact post identifier to read. Provide this or targetUrl, not neither; the missing one is derived.",
                     },
                     "debug": {
-                        "type": "boolean",
+                        "type": ["boolean", "string"],
                         "required": false,
-                        "description": "When the page refuses it, attach a screenshot and the page's HTML to the failed job so the refusal can be read.",
+                        "maxLength": MAX_DEBUG_GLOB_LEN,
+                        "description": "Attach what the page was doing to the job. `true` attaches everything read off the page; a URL glob such as `*/graphql*` attaches only the responses the page fetched whose address matches it.",
                     },
                 },
             },
@@ -238,9 +241,10 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                         "description": "Handle to read, with or without a leading @. Resolved to this site's canonical profile URL.",
                     },
                     "debug": {
-                        "type": "boolean",
+                        "type": ["boolean", "string"],
                         "required": false,
-                        "description": "When the page refuses it, attach a screenshot and the page's HTML to the failed job so the refusal can be read.",
+                        "maxLength": MAX_DEBUG_GLOB_LEN,
+                        "description": "Attach what the page was doing to the job. `true` attaches everything read off the page; a URL glob such as `*/graphql*` attaches only the responses the page fetched whose address matches it.",
                     },
                 },
             },
@@ -264,9 +268,10 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                 "required": true,
                 "properties": {
                     "debug": {
-                        "type": "boolean",
+                        "type": ["boolean", "string"],
                         "required": false,
-                        "description": "When the page refuses it, attach a screenshot and the page's HTML to the failed job so the refusal can be read.",
+                        "maxLength": MAX_DEBUG_GLOB_LEN,
+                        "description": "Attach what the page was doing to the job. `true` attaches everything read off the page; a URL glob such as `*/graphql*` attaches only the responses the page fetched whose address matches it.",
                     },
                 },
                 "description": "Empty unless debug is wanted.",
@@ -281,9 +286,10 @@ fn args_schema(platform: Platform, action: Action) -> Value {
             "required": true,
             "properties": {
                 "debug": {
-                    "type": "boolean",
+                    "type": ["boolean", "string"],
                     "required": false,
-                    "description": "When the page refuses it, attach a screenshot and the page's HTML to the failed job so the refusal can be read.",
+                    "maxLength": MAX_DEBUG_GLOB_LEN,
+                    "description": "Attach what the page was doing to the job. `true` attaches everything read off the page; a URL glob such as `*/graphql*` attaches only the responses the page fetched whose address matches it.",
                 },
             },
             "description": "Empty unless debug is wanted.",
