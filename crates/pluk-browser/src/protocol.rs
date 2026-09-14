@@ -999,7 +999,7 @@ fn parse_capabilities(value: Option<&Value>) -> ValidationResult<Vec<ExtensionCa
     Ok(result)
 }
 
-fn parse_result_data(value: Option<&Value>) -> ValidationResult<Value> {
+pub(crate) fn parse_result_data(value: Option<&Value>) -> ValidationResult<Value> {
     let object = value
         .and_then(Value::as_object)
         .ok_or_else(|| invalid("Result data is missing or exceeds its bounds."))?;

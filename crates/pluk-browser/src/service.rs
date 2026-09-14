@@ -43,7 +43,7 @@ use crate::protocol::{
     MAX_ID_LENGTH, MAX_MESSAGE_BYTES, MAX_SCREENSHOT_BYTES, MAX_URL_LENGTH, PROTOCOL_VERSION, Platform,
     ProtocolError, ResultMessage, canonicalize_target_url, is_allowed_extension_origin,
     make_command, make_heartbeat, make_heartbeat_ack, make_ready_envelope, parse_command_envelope,
-    parse_create_job_request, parse_extension_message,
+    parse_create_job_request, parse_extension_message, parse_result_data,
 };
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -740,9 +740,10 @@ impl BrowserState {
         Ok(())
     }
 
-    /// Drop the paired connection and fail whatever it was running. Returns
-    /// the abandoned job's id so the caller can record it once the queue lock
-    /// is free.
+    /// Drop the paired connection and settle whatever it was running: a
+    /// success if its extract made it into the store first, `disconnected`
+    /// otherwise. Returns the abandoned job's id so the caller can record it
+    /// once the queue lock is free.
     fn disconnect_locked(
         &self,
         integration_id: &str,
@@ -760,17 +761,53 @@ impl BrowserState {
             return Ok(None);
         };
         active.timer.abort();
-        self.store.browser_for(integration_id).mark_in_flight(
-            &active.job.id,
-            &active.job.command_id,
-            "unknown",
-            &ProtocolErrorView {
-                code: "disconnected".to_owned(),
-                message: "The browser extension disconnected before this job completed.".to_owned(),
-            },
-            self.now(),
-        )?;
+        let error = ProtocolErrorView {
+            code: "disconnected".to_owned(),
+            message: "The browser extension disconnected before this job completed.".to_owned(),
+        };
+        let now = self.now();
+        match self.recovered_result(integration_id, &active.job) {
+            Some(result) => {
+                self.store.browser_for(integration_id).complete_job(JobCompletion {
+                    id: &active.job.id,
+                    command_id: &active.job.command_id,
+                    outcome: "succeeded",
+                    result: Some(&result),
+                    error: Some(&error),
+                    now,
+                })?;
+            }
+            None => {
+                self.store.browser_for(integration_id).mark_in_flight(
+                    &active.job.id,
+                    &active.job.command_id,
+                    "unknown",
+                    &error,
+                    now,
+                )?;
+            }
+        }
         Ok(Some(active.job.id))
+    }
+
+    /// A page can finish and write its extract before the socket carrying the
+    /// result drops. Reach for that extract rather than throwing the read
+    /// away: if it parses as a valid result for the job's action, the job
+    /// settles as a success carrying it (the `disconnected` error still rides
+    /// along, so the caller can tell the connection dropped even though the
+    /// data made it back).
+    fn recovered_result(&self, integration_id: &str, job: &Job) -> Option<Value> {
+        let artifact = self
+            .store
+            .browser_for(integration_id)
+            .extract_artifact(&job.id)
+            .ok()??;
+        let data: Value = serde_json::from_slice(&artifact.data).ok()?;
+        let data = parse_result_data(Some(&data)).ok()?;
+        if job.action == Action::SubmitPost.as_str() && !is_valid_submit_post_data(&data) {
+            return None;
+        }
+        Some(data)
     }
 
     fn handle_result(&self, integration_id: &str, connection_id: &str, result: ResultMessage) {
@@ -854,38 +891,10 @@ impl BrowserState {
                 }),
             );
         }
-        if job.action == Action::SubmitPost.as_str() {
-            let valid = result
-                .data
-                .as_ref()
-                .and_then(Value::as_object)
-                .is_some_and(|data| {
-                    let Some(posted_id) = data.get("postedId").and_then(Value::as_str) else {
-                        return false;
-                    };
-                    let Some(posted_url) = data.get("postedUrl").and_then(Value::as_str) else {
-                        return false;
-                    };
-                    let Some(path) = Url::parse(posted_url)
-                        .ok()
-                        .map(|value| value.path().trim_end_matches('/').to_owned())
-                    else {
-                        return false;
-                    };
-                    data.get("kind").and_then(Value::as_str) == Some("submission")
-                        && data.get("platform").and_then(Value::as_str) == Some("x")
-                        && !posted_id.is_empty()
-                        && posted_id.len() <= MAX_ID_LENGTH
-                        && posted_id.chars().all(|value| value.is_ascii_digit())
-                        && posted_url.len() <= MAX_URL_LENGTH
-                        && canonicalize_target_url(posted_url, Platform::X).is_ok()
-                        && path
-                            .rsplit_once("/status/")
-                            .is_some_and(|(_, value)| value == posted_id)
-                });
-            if !valid {
-                return ("unknown", None, Some(invalid_result()));
-            }
+        if job.action == Action::SubmitPost.as_str()
+            && !result.data.as_ref().is_some_and(is_valid_submit_post_data)
+        {
+            return ("unknown", None, Some(invalid_result()));
         }
         ("succeeded", result.data.clone(), None)
     }
@@ -1814,6 +1823,36 @@ fn invalid_result() -> ProtocolErrorView {
     }
 }
 
+/// Whether `data` is a submission result worth trusting as a posted X status:
+/// a numeric id and a status URL for that same platform and id, both within
+/// the protocol's own bounds.
+fn is_valid_submit_post_data(data: &Value) -> bool {
+    data.as_object().is_some_and(|data| {
+        let Some(posted_id) = data.get("postedId").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(posted_url) = data.get("postedUrl").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(path) = Url::parse(posted_url)
+            .ok()
+            .map(|value| value.path().trim_end_matches('/').to_owned())
+        else {
+            return false;
+        };
+        data.get("kind").and_then(Value::as_str) == Some("submission")
+            && data.get("platform").and_then(Value::as_str) == Some("x")
+            && !posted_id.is_empty()
+            && posted_id.len() <= MAX_ID_LENGTH
+            && posted_id.chars().all(|value| value.is_ascii_digit())
+            && posted_url.len() <= MAX_URL_LENGTH
+            && canonicalize_target_url(posted_url, Platform::X).is_ok()
+            && path
+                .rsplit_once("/status/")
+                .is_some_and(|(_, value)| value == posted_id)
+    })
+}
+
 impl BridgeError {
     fn new(code: &str, message: &str) -> Self {
         Self {
@@ -2160,6 +2199,67 @@ mod tests {
         )
         .await;
         wait_for_status(&fixture.state, &job.id, "succeeded").await;
+    }
+
+    /// A page can finish and upload its extract before the socket carrying
+    /// the result drops. The job must not read as a bare failure once that
+    /// happens: it settles as a success carrying the extract, with the
+    /// `disconnected` error still attached so the caller can tell the
+    /// connection dropped.
+    #[tokio::test]
+    async fn disconnect_settles_a_job_carrying_its_recovered_extract() {
+        let fixture = Fixture::start().await;
+        let mut socket = pair(&fixture, &["inspect"]).await;
+        let job = fixture
+            .state
+            .create_job(LEGACY, &job_request(json!({
+                "platform":"x","action":"inspect","targetUrl":"https://x.com/status/42","payload":{}
+            })))
+            .unwrap();
+        next_command(&mut socket).await;
+        fixture
+            .state
+            .store
+            .browser_for(LEGACY)
+            .create_artifact(
+                &job.id,
+                "extract",
+                "application/json",
+                br#"{"kind":"page","title":"Recovered"}"#,
+                now_millis(),
+            )
+            .unwrap();
+
+        drop(socket);
+
+        let settled = wait_for_status(&fixture.state, &job.id, "succeeded").await;
+        assert_eq!(
+            settled.result,
+            Some(json!({"kind":"page","title":"Recovered"}))
+        );
+        assert_eq!(settled.error.unwrap().code, "disconnected");
+    }
+
+    /// Without a usable extract to fall back on, a disconnect stays exactly
+    /// what it always was: an `unknown` job with a `disconnected` error and
+    /// no result.
+    #[tokio::test]
+    async fn disconnect_without_an_extract_still_reports_disconnected() {
+        let fixture = Fixture::start().await;
+        let mut socket = pair(&fixture, &["inspect"]).await;
+        let job = fixture
+            .state
+            .create_job(LEGACY, &job_request(json!({
+                "platform":"x","action":"inspect","targetUrl":"https://x.com/status/42","payload":{}
+            })))
+            .unwrap();
+        next_command(&mut socket).await;
+
+        drop(socket);
+
+        let settled = wait_for_status(&fixture.state, &job.id, "unknown").await;
+        assert!(settled.result.is_none());
+        assert_eq!(settled.error.unwrap().code, "disconnected");
     }
 
     /// The activity log carries what the page answered, not just that it was

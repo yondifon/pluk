@@ -897,19 +897,19 @@ impl BrowserStore<'_> {
         self.conn.query_row(
             "SELECT id, job_id, kind, content_type, bytes, data, created_at, expires_at FROM browser_artifacts WHERE id = ? AND expires_at > ? AND EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.id = browser_artifacts.job_id AND browser_jobs.integration_id = ?)",
             params![id, now_millis(), self.integration_id.as_str()],
-            |row| {
-                let metadata = Artifact {
-                    id: row.get(0)?,
-                    job_id: row.get(1)?,
-                    kind: row.get(2)?,
-                    content_type: row.get(3)?,
-                    bytes: row.get(4)?,
-                    created_at: row.get(6)?,
-                    expires_at: row.get(7)?,
-                };
-                let data: Vec<u8> = row.get(5)?;
-                Ok(ArtifactBody { metadata, data })
-            },
+            read_artifact_body,
+        ).optional().map_err(BrowserError::from)
+    }
+
+    /// The extract a job's page handed back, if any. A job that uploads a
+    /// debug capture writes a second `extract` artifact after this one, so
+    /// this reads the earliest to reach for the one the driver actually
+    /// produced as its result.
+    pub fn extract_artifact(&mut self, job_id: &str) -> Result<Option<ArtifactBody>, BrowserError> {
+        self.conn.query_row(
+            "SELECT id, job_id, kind, content_type, bytes, data, created_at, expires_at FROM browser_artifacts WHERE job_id = ? AND kind = 'extract' AND expires_at > ? AND EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.id = browser_artifacts.job_id AND browser_jobs.integration_id = ?) ORDER BY created_at ASC LIMIT 1",
+            params![job_id, now_millis(), self.integration_id.as_str()],
+            read_artifact_body,
         ).optional().map_err(BrowserError::from)
     }
 
@@ -1280,6 +1280,22 @@ fn read_artifact(row: &rusqlite::Row<'_>) -> rusqlite::Result<Artifact> {
         created_at: row.get(5)?,
         expires_at: row.get(6)?,
     })
+}
+
+/// Matches the column order every `ArtifactBody` query selects in:
+/// metadata columns, then `data`, then the remaining metadata columns.
+fn read_artifact_body(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtifactBody> {
+    let metadata = Artifact {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        kind: row.get(2)?,
+        content_type: row.get(3)?,
+        bytes: row.get(4)?,
+        created_at: row.get(6)?,
+        expires_at: row.get(7)?,
+    };
+    let data: Vec<u8> = row.get(5)?;
+    Ok(ArtifactBody { metadata, data })
 }
 
 fn to_draft(row: DraftRow) -> rusqlite::Result<Draft> {
