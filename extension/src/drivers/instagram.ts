@@ -5,8 +5,8 @@ export function runInstagramPage(
 ): DriverPageResult | Promise<DriverPageResult> {
   const MAX_COMMENTS = 300;
   const COMMENT_LOAD_TIMEOUT_MS = 45_000;
-  const MAX_GRID_ENTRIES = 120;
-  const GRID_LOAD_TIMEOUT_MS = 30_000;
+  const MAX_GRID_ENTRIES = 600;
+  const GRID_LOAD_TIMEOUT_MS = 90_000;
   const GRID_GROWTH_TIMEOUT_MS = 5_000;
   const CAPTURE_ELEMENT_ID = "pluk-instagram-captures";
   const CLIP_TYPENAMES = new Set([
@@ -35,8 +35,10 @@ export function runInstagramPage(
   // The capture layer (a separate MAIN-world content script) publishes
   // Instagram's own fetch/XHR JSON responses into this hidden element so the
   // driver can read exact counts instead of scraping the rendered markup.
-  const readCaptures = (): readonly CaptureEntry[] => {
-    const raw = document.getElementById(CAPTURE_ELEMENT_ID)?.textContent;
+  const captureRawText = (): string | null =>
+    document.getElementById(CAPTURE_ELEMENT_ID)?.textContent ?? null;
+
+  const parseCaptureText = (raw: string | null): readonly CaptureEntry[] => {
     if (!raw) {
       return [];
     }
@@ -47,6 +49,9 @@ export function runInstagramPage(
       return [];
     }
   };
+
+  const readCaptures = (): readonly CaptureEntry[] =>
+    parseCaptureText(captureRawText());
 
   // Depth-first walk over every plain object nested in a captured JSON body.
   // Instagram's response shapes are not stable enough to key a fixed path
@@ -194,28 +199,71 @@ export function runInstagramPage(
     };
   };
 
-  // Keyed by shortcode so each grid entry's engagement is attached to the
-  // right post; `media_dict` and its `__typename` sibling arrive together in
-  // the same node, so both are read off that one matched object.
-  const findCapturedGridEntries = (
+  interface CapturedGridEntry extends CapturedEngagement {
+    readonly shortcode: string;
+    readonly caption: string;
+    readonly kind: "reel" | "post";
+    readonly postedAt: string | null;
+  }
+
+  const isVideoLikeMedia = (
+    mediaDict: Record<string, unknown>,
+    typename: string,
+  ): boolean => CLIP_TYPENAMES.has(typename) || mediaDict.product_type === "clips";
+
+  // Instagram nests a media's caption as either a plain string or a
+  // `{ text }` object depending on the endpoint that returned it.
+  const captionFromMediaDict = (mediaDict: Record<string, unknown>): string => {
+    const caption = mediaDict.caption;
+    if (typeof caption === "string") {
+      return clean(caption);
+    }
+    if (caption !== null && typeof caption === "object") {
+      const text = (caption as Record<string, unknown>).text;
+      if (typeof text === "string") {
+        return clean(text);
+      }
+    }
+    return "";
+  };
+
+  const buildCapturedGridEntry = (
+    mediaDict: Record<string, unknown>,
+    typename: string,
+  ): CapturedGridEntry => {
+    const isVideoLike = isVideoLikeMedia(mediaDict, typename);
+    const takenAt = firstNumber(mediaDict, ["taken_at"]);
+    return {
+      shortcode: mediaDict.code as string,
+      caption: captionFromMediaDict(mediaDict),
+      kind: isVideoLike ? "reel" : "post",
+      postedAt: takenAt !== null ? new Date(takenAt * 1_000).toISOString() : null,
+      ...engagementFromObject(mediaDict, isVideoLike),
+    };
+  };
+
+  // Drains whatever timeline pages are currently buffered into a
+  // shortcode-keyed accumulator that outlives any single capture snapshot:
+  // the capture element keeps only the last 40 responses, so a long scroll
+  // evicts early pages that must already have been merged in by then.
+  const drainCapturedGridEntries = (
     captures: readonly CaptureEntry[],
-  ): ReadonlyMap<string, CapturedEngagement> => {
-    const result = new Map<string, CapturedEngagement>();
+    accumulator: Map<string, CapturedGridEntry>,
+  ): void => {
     for (const entry of captures) {
       walkObjects(entry.body, (candidate) => {
         const mediaDict =
           candidate.media_dict !== null && typeof candidate.media_dict === "object"
             ? (candidate.media_dict as Record<string, unknown>)
             : null;
-        if (!mediaDict || typeof mediaDict.code !== "string" || result.has(mediaDict.code)) {
+        if (!mediaDict || typeof mediaDict.code !== "string" || accumulator.has(mediaDict.code)) {
           return;
         }
         const typename =
           typeof candidate.__typename === "string" ? candidate.__typename : "";
-        result.set(mediaDict.code, engagementFromObject(mediaDict, CLIP_TYPENAMES.has(typename)));
+        accumulator.set(mediaDict.code, buildCapturedGridEntry(mediaDict, typename));
       });
     }
-    return result;
   };
 
   const findCapturedPostEngagement = (
@@ -679,6 +727,7 @@ export function runInstagramPage(
     readonly caption: string;
     readonly kind: "reel" | "post";
     readonly pinned: boolean;
+    readonly postedAt: string | null;
     readonly likes: number | null;
     readonly views: number | null;
     readonly commentCount: number | null;
@@ -687,73 +736,117 @@ export function runInstagramPage(
   const GRID_ENTRY_HREF_PATTERN =
     /^\/[A-Za-z0-9_.]{1,30}\/(p|reel)\/([A-Za-z0-9_-]+)\/?$/u;
 
-  const readGridEntry = (
-    anchor: Element,
-    capturedEngagement: ReadonlyMap<string, CapturedEngagement>,
-  ): GridEntry | null => {
+  // The DOM grid carries none of a captured page's engagement or timing
+  // data; this is the fallback used only when scrolling never produced a
+  // single captured timeline response to accumulate from instead.
+  const readGridEntryFromDom = (anchor: Element): GridEntry | null => {
     const href = anchor.getAttribute("href") ?? "";
     const match = href.match(GRID_ENTRY_HREF_PATTERN);
     if (!match) {
       return null;
     }
     const [, kindSegment, entryShortcode] = match;
-    const shortcode = entryShortcode ?? "";
     const caption = trimOnly(
       anchor.querySelector("div._aagu > div._aagv img")?.getAttribute("alt"),
     );
     const isClip = anchor.querySelector('svg[aria-label="Clip"]') !== null;
     const pinned =
       anchor.querySelector('svg[aria-label="Pinned post icon"]') !== null;
-    const captured = capturedEngagement.get(shortcode) ?? NO_ENGAGEMENT;
     return {
-      shortcode,
+      shortcode: entryShortcode ?? "",
       canonicalTarget: `https://www.instagram.com${href.endsWith("/") ? href : `${href}/`}`,
       caption,
       kind: isClip || kindSegment === "reel" ? "reel" : "post",
       pinned,
-      ...captured,
+      postedAt: null,
+      ...NO_ENGAGEMENT,
     };
   };
 
-  const readGridEntries = (
-    capturedEngagement: ReadonlyMap<string, CapturedEngagement>,
-  ): GridEntry[] =>
+  const readGridEntriesFromDom = (): GridEntry[] =>
     Array.from(document.querySelectorAll("div._ac7v a[href]"))
-      .map((anchor) => readGridEntry(anchor, capturedEngagement))
+      .map(readGridEntryFromDom)
       .filter((entry): entry is GridEntry => entry !== null);
 
-  const countGridEntries = (): number =>
-    document.querySelectorAll("div._ac7v a[href]").length;
+  // Instagram's own permalink shape is `/<username>/<p|reel>/<shortcode>/`;
+  // a captured timeline entry carries the shortcode but not that permalink,
+  // so it is rebuilt from the profile handle this read is already scoped to.
+  const gridEntryFromCaptured = (
+    handle: string,
+    captured: CapturedGridEntry,
+  ): GridEntry => ({
+    shortcode: captured.shortcode,
+    canonicalTarget: `https://www.instagram.com/${handle}/${captured.kind}/${captured.shortcode}/`,
+    caption: captured.caption,
+    kind: captured.kind,
+    pinned: false,
+    postedAt: captured.postedAt,
+    likes: captured.likes,
+    views: captured.views,
+    commentCount: captured.commentCount,
+  });
 
-  // Scrolled to the bottom repeatedly until a scroll adds nothing new, the
-  // same growth-polling shape `loadAllComments` uses for its own load-more
-  // button, bounded here by entry count and wall time instead of a cap click.
-  // A scroll that stops growing before the cap or the deadline is not proof
-  // the account is exhausted, since a slow fetch can still be in flight; that
+  const resolveGridTruncation = (
+    postCount: number,
+    mediaCount: number | null,
+    capped: boolean,
+    stalled: boolean,
+  ): boolean => (mediaCount !== null ? postCount < mediaCount : capped || stalled);
+
+  // Scrolling makes Instagram fetch the next timeline page; growth is
+  // decided by a new page landing in the capture element, never by counting
+  // DOM nodes, since the grid only renders what it has already fetched. A
+  // scroll that stops growing before the cap or the deadline is not proof
+  // the account is exhausted (a fetch can still be in flight), so that
   // "stalled" exit is reported truncated too, unlike a genuine end of scroll.
-  const loadGridEntries = async (): Promise<{ readonly truncated: boolean }> => {
+  //
+  // The capture element keeps only its last 40 responses, so a scroll run
+  // long enough to pass that many pages would otherwise lose the earliest
+  // ones; every newly landed page is drained into `accumulator` as it
+  // arrives rather than read once at the end.
+  const loadGridPosts = async (
+    handle: string,
+    mediaCount: number | null,
+  ): Promise<{ readonly posts: GridEntry[]; readonly truncated: boolean }> => {
+    const accumulator = new Map<string, CapturedGridEntry>();
+    let lastRaw = captureRawText();
+    drainCapturedGridEntries(parseCaptureText(lastRaw), accumulator);
+
     const deadline = Date.now() + GRID_LOAD_TIMEOUT_MS;
     const capped = (): boolean =>
-      Date.now() >= deadline || countGridEntries() >= MAX_GRID_ENTRIES;
+      Date.now() >= deadline || accumulator.size >= MAX_GRID_ENTRIES;
 
     let stalled = false;
     while (!capped()) {
       if (typeof window.scrollTo !== "function") {
         break;
       }
-      const before = countGridEntries();
       window.scrollTo(0, document.body?.scrollHeight ?? 0);
-      const grew = await pollUntil(
-        () => countGridEntries() > before,
-        GRID_GROWTH_TIMEOUT_MS,
-      );
+      const sizeBefore = accumulator.size;
+      const grew = await pollUntil(() => {
+        const raw = captureRawText();
+        if (raw !== lastRaw) {
+          lastRaw = raw;
+          drainCapturedGridEntries(parseCaptureText(raw), accumulator);
+        }
+        return accumulator.size > sizeBefore;
+      }, GRID_GROWTH_TIMEOUT_MS);
       if (!grew) {
         stalled = true;
         break;
       }
     }
 
-    return { truncated: capped() || stalled };
+    const posts =
+      accumulator.size > 0
+        ? Array.from(accumulator.values())
+            .slice(0, MAX_GRID_ENTRIES)
+            .map((captured) => gridEntryFromCaptured(handle, captured))
+        : readGridEntriesFromDom().slice(0, MAX_GRID_ENTRIES);
+    return {
+      posts,
+      truncated: resolveGridTruncation(posts.length, mediaCount, capped(), stalled),
+    };
   };
 
   interface ExternalLink {
@@ -817,11 +910,9 @@ export function runInstagramPage(
       ? capturedProfile.links
       : readExternalLinksFromDom();
     const externalLink = links[0]?.label ?? links[0]?.url ?? null;
-    const capturedGridEngagement = findCapturedGridEntries(captures);
-    const { truncated } = await loadGridEntries();
-    const posts = readGridEntries(capturedGridEngagement).slice(
-      0,
-      MAX_GRID_ENTRIES,
+    const { posts, truncated } = await loadGridPosts(
+      handle,
+      capturedProfile?.posts ?? null,
     );
     const usedCapturedEngagement = posts.some(
       (entry) => entry.likes !== null || entry.views !== null || entry.commentCount !== null,

@@ -1404,6 +1404,7 @@ test("reads a full Instagram profile header with posts, counts, bio line breaks,
       caption: "Sunset walk\n#golden #hour",
       kind: "post",
       pinned: false,
+      postedAt: null,
       likes: null,
       views: null,
       commentCount: null,
@@ -1450,22 +1451,38 @@ test("reads an Instagram profile with no category and no external link", async (
   expect((result as unknown as { posts: unknown[] }).posts).toEqual([]);
 });
 
-test("loads an Instagram grid across two scrolls before it settles", async () => {
+function instagramTimelineCaptureBody(shortcode: string): unknown {
+  return {
+    data: {
+      edges: [
+        {
+          node: {
+            __typename: "XIGPolarisCarouselMedia",
+            media_dict: { code: shortcode },
+          },
+        },
+      ],
+    },
+  };
+}
+
+test("accumulates an Instagram grid across two scrolls from newly landed timeline captures", async () => {
   const displayNameSpan = node("Jane Doe", { dir: "auto" });
   const bioSpan = instagramBioSpan(["Bio."]);
-  const anchors: FixtureNode[] = [
-    instagramGridAnchor("janedoe", "p", "First001", "First"),
-  ];
-  const pageSelectors: Record<string, FixtureNode[]> = {
-    'header span[dir="auto"]': [displayNameSpan],
-    'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
-    "div._ac7v a[href]": anchors,
+  const capturesState: Record<string, string> = {
+    "pluk-instagram-captures": instagramCaptureElement([]),
   };
   const restore = installPage(
     "",
     "Profile",
     "https://www.instagram.com/janedoe/",
-    pageSelectors,
+    {
+      'header span[dir="auto"]': [displayNameSpan],
+      'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
+      "div._ac7v a[href]": [],
+    },
+    undefined,
+    capturesState,
   );
   let scrollCalls = 0;
   Object.defineProperty(globalThis.window, "scrollTo", {
@@ -1473,11 +1490,14 @@ test("loads an Instagram grid across two scrolls before it settles", async () =>
     value: () => {
       scrollCalls += 1;
       if (scrollCalls === 1) {
-        anchors.push(instagramGridAnchor("janedoe", "p", "Second002", "Second"));
-        pageSelectors["div._ac7v a[href]"] = [...anchors];
+        capturesState["pluk-instagram-captures"] = instagramCaptureElement([
+          instagramTimelineCaptureBody("First001"),
+        ]);
       } else if (scrollCalls === 2) {
-        anchors.push(instagramGridAnchor("janedoe", "reel", "Third003", "Third"));
-        pageSelectors["div._ac7v a[href]"] = [...anchors];
+        capturesState["pluk-instagram-captures"] = instagramCaptureElement([
+          instagramTimelineCaptureBody("First001"),
+          instagramTimelineCaptureBody("Second002"),
+        ]);
         Object.defineProperty(globalThis.window, "scrollTo", {
           configurable: true,
           value: undefined,
@@ -1492,7 +1512,11 @@ test("loads an Instagram grid across two scrolls before it settles", async () =>
   restore();
   expect(scrollCalls).toBe(2);
   expect(result).toMatchObject({ state: "ready", truncated: false });
-  expect((result as unknown as { posts: unknown[] }).posts).toHaveLength(3);
+  expect(
+    (result as unknown as { posts: ReadonlyArray<{ shortcode: string }> }).posts.map(
+      (post) => post.shortcode,
+    ),
+  ).toEqual(["First001", "Second002"]);
 });
 
 test("marks a pinned Instagram reel grid entry", async () => {
@@ -1527,6 +1551,7 @@ test("marks a pinned Instagram reel grid entry", async () => {
       caption: "Pinned reel",
       kind: "reel",
       pinned: true,
+      postedAt: null,
       likes: null,
       views: null,
       commentCount: null,
@@ -1534,12 +1559,15 @@ test("marks a pinned Instagram reel grid entry", async () => {
   ]);
 });
 
-test("caps an Instagram grid at 120 entries and marks it truncated", async () => {
+test("caps an accumulated Instagram grid at 600 entries and marks it truncated", async () => {
   const displayNameSpan = node("Jane Doe", { dir: "auto" });
   const bioSpan = instagramBioSpan(["Bio."]);
-  const anchors = Array.from({ length: 130 }, (_, index) =>
-    instagramGridAnchor("janedoe", "p", `Shortcode${index}`, `Caption ${index}`),
-  );
+  const edges = Array.from({ length: 601 }, (_, index) => ({
+    node: {
+      __typename: "XIGPolarisCarouselMedia",
+      media_dict: { code: `Shortcode${index}` },
+    },
+  }));
   const restore = installPage(
     "",
     "Profile",
@@ -1547,7 +1575,11 @@ test("caps an Instagram grid at 120 entries and marks it truncated", async () =>
     {
       'header span[dir="auto"]': [displayNameSpan],
       'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
-      "div._ac7v a[href]": anchors,
+      "div._ac7v a[href]": [],
+    },
+    undefined,
+    {
+      "pluk-instagram-captures": instagramCaptureElement([{ data: { edges } }]),
     },
   );
   const result = await runInstagramPage({
@@ -1556,7 +1588,7 @@ test("caps an Instagram grid at 120 entries and marks it truncated", async () =>
   });
   restore();
   expect(result).toMatchObject({ state: "ready", truncated: true });
-  expect((result as unknown as { posts: unknown[] }).posts).toHaveLength(120);
+  expect((result as unknown as { posts: unknown[] }).posts).toHaveLength(600);
 });
 
 function instagramCaptureElement(bodies: readonly unknown[]): string {
@@ -1827,24 +1859,26 @@ test("reads captured likes, views, and comment count for an Instagram post and i
 test("reports an Instagram grid run that stalls before the cap or deadline as truncated", async () => {
   const displayNameSpan = node("Jane Doe", { dir: "auto" });
   const bioSpan = instagramBioSpan(["Bio."]);
-  const anchors: FixtureNode[] = [
-    instagramGridAnchor("janedoe", "p", "First001", "First"),
-  ];
-  const pageSelectors: Record<string, FixtureNode[]> = {
-    'header span[dir="auto"]': [displayNameSpan],
-    'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
-    "div._ac7v a[href]": anchors,
-  };
   const restore = installPage(
     "",
     "Profile",
     "https://www.instagram.com/janedoe/",
-    pageSelectors,
+    {
+      'header span[dir="auto"]': [displayNameSpan],
+      'span._ap3a._aaco._aacu._aacx._aad7._aade[dir="auto"]': [bioSpan],
+      "div._ac7v a[href]": [],
+    },
+    undefined,
+    {
+      "pluk-instagram-captures": instagramCaptureElement([
+        instagramTimelineCaptureBody("First001"),
+      ]),
+    },
   );
   Object.defineProperty(globalThis.window, "scrollTo", {
     configurable: true,
     value: () => {
-      // Never grows: simulates a fetch that never resolves within the poll.
+      // No new response ever lands: simulates a fetch that never resolves.
     },
   });
   const result = await runInstagramPage({

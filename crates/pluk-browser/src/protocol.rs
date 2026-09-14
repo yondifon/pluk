@@ -16,6 +16,10 @@ pub const DEFAULT_JOB_TTL_MS: i64 = 2 * 60 * 1000;
 pub const MAX_TEXT_LENGTH: usize = 4_000;
 pub const MAX_URL_LENGTH: usize = 2_048;
 pub const MAX_ID_LENGTH: usize = 256;
+/// The longest array a result's JSON can carry anywhere in its tree. Sized
+/// to the Instagram grid's own 600-entry cap, the largest of the driver's
+/// result lists.
+pub const MAX_RESULT_ARRAY_LEN: usize = 600;
 pub const HEARTBEAT_INTERVAL_MS: i64 = 20_000;
 pub const MAX_CLOCK_SKEW_MS: i64 = 30_000;
 
@@ -1231,7 +1235,8 @@ fn is_bounded_json(value: &Value, depth: usize) -> bool {
         Value::Number(number) => number.is_f64() || number.is_i64() || number.is_u64(),
         Value::String(value) => value.chars().count() <= MAX_EXTRACT_BYTES,
         Value::Array(values) => {
-            values.len() <= 100 && values.iter().all(|item| is_bounded_json(item, depth + 1))
+            values.len() <= MAX_RESULT_ARRAY_LEN
+                && values.iter().all(|item| is_bounded_json(item, depth + 1))
         }
         Value::Object(object) => {
             object.len() <= 64
@@ -1591,5 +1596,32 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn a_result_array_up_to_600_entries_passes_and_one_more_fails() {
+        let within_bound = json!({
+            "version": 1,
+            "type": "result",
+            "jobId": "job-1",
+            "commandId": "command-1",
+            "issuedAt": 100,
+            "expiresAt": 200,
+            "outcome": "succeeded",
+            "data": { "kind": "instagram_profile", "posts": vec![json!({}); MAX_RESULT_ARRAY_LEN] }
+        });
+        assert!(parse_extension_message(&within_bound).is_ok());
+
+        let over_bound = json!({
+            "version": 1,
+            "type": "result",
+            "jobId": "job-1",
+            "commandId": "command-1",
+            "issuedAt": 100,
+            "expiresAt": 200,
+            "outcome": "succeeded",
+            "data": { "kind": "instagram_profile", "posts": vec![json!({}); MAX_RESULT_ARRAY_LEN + 1] }
+        });
+        assert!(parse_extension_message(&over_bound).is_err());
     }
 }
