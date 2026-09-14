@@ -24,7 +24,13 @@ export const MAX_URL_LENGTH = 2_048;
 export const MAX_ID_LENGTH = 256;
 export const MAX_RESULT_TEXT_LENGTH = 8_000;
 export const MAX_THREAD_PARTS = 25;
+export const MAX_DEBUG_GLOB_LEN = 200;
 export const HEARTBEAT_INTERVAL_MS = 20_000;
+
+/** `true` attaches everything read off the page; a URL glob such as
+ * `*\/graphql*` attaches only the captured responses whose address
+ * matches it. */
+export type DebugRequest = true | string;
 
 export const PLATFORMS = ["x", "instagram"] as const;
 export type Platform = (typeof PLATFORMS)[number];
@@ -182,8 +188,7 @@ function extractPostId(platform: Platform, url: URL): string | null {
 
 export interface EmptyPayload {
   readonly kind: "empty";
-  /** Attach a screenshot and the page's HTML to the job when it fails. */
-  readonly debug?: true;
+  readonly debug?: DebugRequest;
 }
 
 export interface ReplyPayload {
@@ -195,8 +200,7 @@ export interface ReplyPayload {
 export interface ReadPostPayload {
   readonly kind: "read_post";
   readonly postId: string;
-  /** Attach a screenshot and the page's HTML to the job when it fails. */
-  readonly debug?: true;
+  readonly debug?: DebugRequest;
 }
 
 export interface SubmissionPayload {
@@ -204,8 +208,7 @@ export interface SubmissionPayload {
   readonly draftId: string;
   readonly postId: string;
   readonly text: string;
-  /** Attach a screenshot and the page's HTML to the job when it fails. */
-  readonly debug?: true;
+  readonly debug?: DebugRequest;
 }
 
 export interface ComposePayload {
@@ -221,8 +224,7 @@ export interface PostSubmissionPayload {
   readonly text: string;
   /** The posts to send, in order. More than one makes a thread. */
   readonly parts: readonly string[];
-  /** Attach a screenshot and the page's HTML to the job when it fails. */
-  readonly debug?: true;
+  readonly debug?: DebugRequest;
 }
 
 // `post` and `reply` requests never reach the extension as commands: Pluk
@@ -826,7 +828,7 @@ function parseCommandPayload(
   if (action === "submit_post") {
     if (
       !hasOnlyKeys(value, ["kind", "draftId", "text", "parts"], ["debug"]) ||
-      !isDebugFlag(value.debug) ||
+      !isDebugRequest(value.debug) ||
       value.kind !== "post_submission" ||
       !isIdentifier(value.draftId) ||
       !isString(value.text, MAX_TEXT_LENGTH) ||
@@ -841,14 +843,14 @@ function parseCommandPayload(
         draftId: value.draftId,
         text: value.text,
         parts: value.parts,
-        ...(value.debug === true ? { debug: true } : {}),
+        ...debugField(value.debug),
       },
     };
   }
   if (action === "read_post") {
     if (
       !hasOnlyKeys(value, ["kind", "postId"], ["debug"]) ||
-      !isDebugFlag(value.debug) ||
+      !isDebugRequest(value.debug) ||
       value.kind !== "read_post" ||
       !isIdentifier(value.postId)
     ) {
@@ -859,14 +861,14 @@ function parseCommandPayload(
       value: {
         kind: "read_post",
         postId: value.postId,
-        ...(value.debug === true ? { debug: true } : {}),
+        ...debugField(value.debug),
       },
     };
   }
   if (action === "submit_reply") {
     if (
       !hasOnlyKeys(value, ["kind", "draftId", "postId", "text"], ["debug"]) ||
-      !isDebugFlag(value.debug) ||
+      !isDebugRequest(value.debug) ||
       value.kind !== "submission" ||
       !isIdentifier(value.draftId) ||
       !isIdentifier(value.postId) ||
@@ -881,13 +883,13 @@ function parseCommandPayload(
         draftId: value.draftId,
         postId: value.postId,
         text: value.text,
-        ...(value.debug === true ? { debug: true } : {}),
+        ...debugField(value.debug),
       },
     };
   }
   if (
     !hasOnlyKeys(value, ["kind"], ["debug"]) ||
-    !isDebugFlag(value.debug) ||
+    !isDebugRequest(value.debug) ||
     value.kind !== "empty"
   ) {
     return invalid("This command does not accept a payload.");
@@ -896,13 +898,33 @@ function parseCommandPayload(
     ok: true,
     value: {
       kind: "empty",
-      ...(value.debug === true ? { debug: true } : {}),
+      ...debugField(value.debug),
     },
   };
 }
 
-function isDebugFlag(value: unknown): boolean {
-  return value === undefined || typeof value === "boolean";
+function isDebugGlob(value: string): boolean {
+  return value.length > 0 && value.length <= MAX_DEBUG_GLOB_LEN;
+}
+
+function isDebugRequest(value: unknown): boolean {
+  return (
+    value === undefined ||
+    typeof value === "boolean" ||
+    (typeof value === "string" && isDebugGlob(value))
+  );
+}
+
+/** `false` and absent both mean "off" and are dropped from the parsed
+ * payload; only `true` or a valid glob survive onto it. */
+function debugField(value: unknown): { readonly debug: DebugRequest } | Record<string, never> {
+  if (value === true) {
+    return { debug: true };
+  }
+  if (typeof value === "string" && isDebugGlob(value)) {
+    return { debug: value };
+  }
+  return {};
 }
 
 /** The posts of a thread on the wire: one to 25 bounded strings. */

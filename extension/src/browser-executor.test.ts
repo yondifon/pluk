@@ -32,6 +32,7 @@ let executeScriptImpl: (targetUrl: string) => DriverPageResult = (
   url: targetUrl,
   title: "Home / X",
 });
+let lastDriverDebug: unknown;
 
 const storage = new Map<string, unknown>();
 
@@ -120,9 +121,12 @@ const mockChrome = {
   },
   scripting: {
     executeScript: async (details: {
-      readonly args: readonly [{ readonly targetUrl: string }];
+      readonly args: readonly [
+        { readonly targetUrl: string; readonly debug?: unknown },
+      ];
     }) => {
       const [options] = details.args;
+      lastDriverDebug = options.debug;
       return [{ frameId: 0, result: executeScriptImpl(options.targetUrl) }];
     },
   },
@@ -139,6 +143,7 @@ beforeEach(() => {
   focusEmulationCalls = [];
   debuggerAttachCalls = 0;
   debuggerDetachCalls = 0;
+  lastDriverDebug = undefined;
   captureVisibleTabImpl = () => Promise.resolve("data:image/png;base64,AA==");
   executeScriptImpl = (targetUrl) => ({
     state: "ready",
@@ -243,6 +248,29 @@ test("a debug read_post also uploads the Instagram capture buffer as its own art
   ]);
   expect(result.debugCapturesArtifactId).toBe("extract-artifact");
   expect(result).not.toHaveProperty("debugCaptures");
+});
+
+test("a debug glob is passed through to the driver instead of being collapsed to a boolean", async () => {
+  executeScriptImpl = (targetUrl) => ({
+    state: "ready",
+    kind: "instagram_post",
+    url: targetUrl,
+    title: "Post",
+    post: { author: "mancity" },
+    debugCaptures: '{"requested":"*/graphql*","matched":[]}',
+  });
+  const executor = new BrowserExecutor();
+  const sink = makeSink();
+  const command: CommandEnvelope = {
+    ...makeCommand("read_post", "https://www.instagram.com/p/ABC123/"),
+    platform: "instagram",
+    payload: { kind: "read_post", postId: "ABC123", debug: "*/graphql*" },
+  };
+
+  const result = await executor.run(command, sink);
+
+  expect(lastDriverDebug).toBe("*/graphql*");
+  expect(result.debugCapturesArtifactId).toBe("extract-artifact");
 });
 
 test("submit_reply emulates focus on the automation tab only while it runs and succeeds without a screenshot even when capture would fail", async () => {

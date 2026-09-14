@@ -1078,8 +1078,42 @@ export function runInstagramPage(
         ? "mixed"
         : "scraped";
 
-  const debugFields = (): { readonly debugCaptures?: string } =>
-    options.debug ? { debugCaptures: captureRawText() ?? "" } : {};
+  // `*` and `?` are the only wildcards a debug glob carries, so the rest of
+  // the string is matched literally rather than pulling in a glob library.
+  const matchesGlob = (value: string, glob: string): boolean => {
+    const pattern = glob.replace(/[.*+?^${}()|[\]\\]/gu, (char) =>
+      char === "*" ? ".*" : char === "?" ? "." : `\\${char}`,
+    );
+    return new RegExp(`^${pattern}$`, "u").test(value);
+  };
+
+  // `debug: true` attaches every captured response; a glob narrows that to
+  // the ones whose URL matches it. A glob that matched nothing still says
+  // so, alongside every URL that was actually recorded, rather than
+  // attaching an empty blob with no explanation.
+  const debugFields = (): { readonly debugCaptures?: string } => {
+    const request = options.debug;
+    if (request === undefined) {
+      return {};
+    }
+    const captures = readCaptures();
+    const matched =
+      request === true
+        ? captures
+        : captures.filter((entry) => matchesGlob(entry.url, request));
+    return {
+      debugCaptures: JSON.stringify({
+        requested: request,
+        matched,
+        ...(matched.length === 0
+          ? {
+              note: "No captured response matched this request.",
+              recordedUrls: captures.map((entry) => entry.url),
+            }
+          : {}),
+      }),
+    };
+  };
 
   const readPost = async (): Promise<DriverPageResult> => {
     const requestedPostId = options.postId ?? shortcode;

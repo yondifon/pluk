@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   canonicalizeTargetUrl,
   DRIVER_CONTRACTS,
+  MAX_DEBUG_GLOB_LEN,
   MAX_SCREENSHOT_BYTES,
   makeReadyEnvelope,
   parseCommandEnvelope,
@@ -143,6 +144,45 @@ test("accepts immediate X post submission payloads without a schedule", () => {
       payload: { ...envelope.payload, scheduledAt: null },
     }),
   ).toMatchObject({ ok: false, error: { code: "invalid_schema" } });
+});
+
+test("accepts a debug flag or a URL glob but rejects anything else", () => {
+  const baseEnvelope = (debug: unknown) => {
+    const now = Date.now();
+    return {
+      version: 1,
+      type: "command",
+      jobId: "job-1",
+      commandId: "command-1",
+      platform: "instagram",
+      action: "read_post",
+      targetUrl: "https://www.instagram.com/p/ABC123/",
+      issuedAt: now,
+      expiresAt: now + 60_000,
+      payload: { kind: "read_post", postId: "ABC123", debug },
+    };
+  };
+
+  expect(parseCommandEnvelope(baseEnvelope(true))).toMatchObject({
+    ok: true,
+    value: { payload: { debug: true } },
+  });
+  expect(parseCommandEnvelope(baseEnvelope("*/graphql*"))).toMatchObject({
+    ok: true,
+    value: { payload: { debug: "*/graphql*" } },
+  });
+  const droppedFalse = parseCommandEnvelope(baseEnvelope(false));
+  expect(droppedFalse.ok).toBe(true);
+  expect(
+    droppedFalse.ok ? droppedFalse.value.payload : undefined,
+  ).not.toHaveProperty("debug");
+
+  for (const invalid of [1, "", "x".repeat(MAX_DEBUG_GLOB_LEN + 1)]) {
+    expect(parseCommandEnvelope(baseEnvelope(invalid))).toMatchObject({
+      ok: false,
+      error: { code: "invalid_schema" },
+    });
+  }
 });
 
 test("rejects the removed native scheduling result", () => {

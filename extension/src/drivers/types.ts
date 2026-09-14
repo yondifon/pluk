@@ -1,4 +1,4 @@
-import type { Action, CommandEnvelope, Platform } from "../protocol";
+import type { Action, CommandEnvelope, DebugRequest, Platform } from "../protocol";
 
 export type DriverPageState =
   | "ready"
@@ -18,8 +18,9 @@ export interface DriverScriptOptions {
   readonly text?: string;
   /** The posts of a thread, in order. Absent or one entry for a plain post. */
   readonly parts?: readonly string[];
-  /** Attach the page's raw capture buffer to a successful read too. */
-  readonly debug?: boolean;
+  /** Attach the page's capture buffer to a successful read too, filtered to
+   * a URL glob when `debug` is a string rather than `true`. */
+  readonly debug?: DebugRequest;
 }
 
 export interface DriverPageResult {

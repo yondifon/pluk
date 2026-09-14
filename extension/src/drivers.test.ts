@@ -2010,7 +2010,7 @@ test("triggers Instagram to fetch comments by scrolling the panel into view when
   expect((result as unknown as { comments: unknown[] }).comments).toHaveLength(1);
 });
 
-test("attaches the raw capture buffer to a debug read_post result", async () => {
+test("explains a debug read_post result when nothing at all was captured", async () => {
   const commentRow = node(
     "Comment one",
     {},
@@ -2039,7 +2039,161 @@ test("attaches the raw capture buffer to a debug read_post result", async () => 
     debug: true,
   });
   restore();
-  expect(result).toMatchObject({ state: "ready", debugCaptures: "[]" });
+  expect(result).toMatchObject({
+    state: "ready",
+    debugCaptures: JSON.stringify({
+      requested: true,
+      matched: [],
+      note: "No captured response matched this request.",
+      recordedUrls: [],
+    }),
+  });
+});
+
+test("attaches every captured response to a debug read_post result when debug is true", async () => {
+  const commentRow = node(
+    "Comment one",
+    {},
+    { "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })] },
+  );
+  const commentList = node(
+    "",
+    {},
+    { li: [commentRow], ":scope > li": [commentRow] },
+  );
+  const graphqlEntry = {
+    url: "https://www.instagram.com/graphql/query",
+    method: "POST",
+    receivedAt: 1,
+    body: { data: {} },
+  };
+  const likersEntry = {
+    url: "https://www.instagram.com/api/v1/media/likers/",
+    method: "GET",
+    receivedAt: 2,
+    body: {},
+  };
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    {
+      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
+      ul: [commentList],
+    },
+    undefined,
+    { "pluk-instagram-captures": JSON.stringify([graphqlEntry, likersEntry]) },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+    debug: true,
+  });
+  restore();
+  const parsed = JSON.parse(
+    (result as unknown as { debugCaptures: string }).debugCaptures,
+  );
+  expect(parsed).toEqual({ requested: true, matched: [graphqlEntry, likersEntry] });
+});
+
+test("attaches only the captured responses matching a debug glob", async () => {
+  const commentRow = node(
+    "Comment one",
+    {},
+    { "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })] },
+  );
+  const commentList = node(
+    "",
+    {},
+    { li: [commentRow], ":scope > li": [commentRow] },
+  );
+  const graphqlEntry = {
+    url: "https://www.instagram.com/graphql/query",
+    method: "POST",
+    receivedAt: 1,
+    body: { data: {} },
+  };
+  const likersEntry = {
+    url: "https://www.instagram.com/api/v1/media/likers/",
+    method: "GET",
+    receivedAt: 2,
+    body: {},
+  };
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    {
+      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
+      ul: [commentList],
+    },
+    undefined,
+    { "pluk-instagram-captures": JSON.stringify([graphqlEntry, likersEntry]) },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+    debug: "*/graphql*",
+  });
+  restore();
+  const parsed = JSON.parse(
+    (result as unknown as { debugCaptures: string }).debugCaptures,
+  );
+  expect(parsed).toEqual({ requested: "*/graphql*", matched: [graphqlEntry] });
+});
+
+test("explains a debug glob that matched nothing instead of attaching an empty blob", async () => {
+  const commentRow = node(
+    "Comment one",
+    {},
+    { "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })] },
+  );
+  const commentList = node(
+    "",
+    {},
+    { li: [commentRow], ":scope > li": [commentRow] },
+  );
+  const graphqlEntry = {
+    url: "https://www.instagram.com/graphql/query",
+    method: "POST",
+    receivedAt: 1,
+    body: { data: {} },
+  };
+  const likersEntry = {
+    url: "https://www.instagram.com/api/v1/media/likers/",
+    method: "GET",
+    receivedAt: 2,
+    body: {},
+  };
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    {
+      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
+      ul: [commentList],
+    },
+    undefined,
+    { "pluk-instagram-captures": JSON.stringify([graphqlEntry, likersEntry]) },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+    debug: "*/reels_media*",
+  });
+  restore();
+  const parsed = JSON.parse(
+    (result as unknown as { debugCaptures: string }).debugCaptures,
+  );
+  expect(parsed).toEqual({
+    requested: "*/reels_media*",
+    matched: [],
+    note: "No captured response matched this request.",
+    recordedUrls: [graphqlEntry.url, likersEntry.url],
+  });
 });
 
 test("reports an Instagram grid run that stalls before the cap or deadline as truncated", async () => {

@@ -55,7 +55,7 @@ function trustedClickRequest(
 }
 
 function wantsDebug(payload: CommandEnvelope["payload"]): boolean {
-  return payload.debug === true;
+  return payload.debug !== undefined;
 }
 
 interface TabState {
@@ -802,7 +802,7 @@ function makeDriverScriptOptions(
   command: CommandEnvelope,
   targetUrl: string,
 ): DriverScriptOptions {
-  const debug = wantsDebug(command.payload);
+  const debug = command.payload.debug;
   if (command.payload.kind === "read_post") {
     return {
       action: command.action,
