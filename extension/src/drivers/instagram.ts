@@ -1,17 +1,15 @@
 import type { DriverPageResult, DriverScriptOptions } from "./types";
 
-const MAX_COMMENTS = 300;
-const COMMENT_LOAD_TIMEOUT_MS = 45_000;
-const MAX_GRID_ENTRIES = 120;
-const GRID_LOAD_TIMEOUT_MS = 30_000;
-
-// "p" and "reel" are Instagram's own post routes, so they can never be a
-// real profile handle even though the pattern would otherwise accept them.
-const RESERVED_PROFILE_PATHS = new Set(["p", "reel"]);
-
 export function runInstagramPage(
   options: DriverScriptOptions,
 ): DriverPageResult | Promise<DriverPageResult> {
+  const MAX_COMMENTS = 300;
+  const COMMENT_LOAD_TIMEOUT_MS = 45_000;
+  const MAX_GRID_ENTRIES = 120;
+  const GRID_LOAD_TIMEOUT_MS = 30_000;
+  // "p" and "reel" are Instagram's own post routes, so they can never be a
+  // real profile handle even though the pattern would otherwise accept them.
+  const RESERVED_PROFILE_PATHS = new Set(["p", "reel"]);
   const clean = (value: string | null | undefined): string =>
     (value ?? "").replace(/\s+/gu, " ").trim();
   // Trims only the ends: some captured text (a profile's display name) keeps

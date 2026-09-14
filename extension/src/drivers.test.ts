@@ -1548,3 +1548,27 @@ test("caps an Instagram grid at 120 entries and marks it truncated", async () =>
   expect(result).toMatchObject({ state: "ready", truncated: true });
   expect((result as unknown as { posts: unknown[] }).posts).toHaveLength(120);
 });
+
+// Chrome injects a page script by its source text, so anything it reads from
+// module scope is gone by the time it runs. Evaluating each script in
+// isolation is the only check that catches that.
+test.each([
+  ["x", runXPage],
+  ["instagram", runInstagramPage],
+])("the %s page script is self-contained", async (_platform, script) => {
+  const isolated = new Function(`return (${script.toString()})`)() as (
+    options: unknown,
+  ) => unknown;
+  const restore = installPage("", "", "https://example.com/someone/", {});
+  try {
+    await isolated({
+      action: "read_profile",
+      targetUrl: "https://example.com/someone/",
+      username: "someone",
+    });
+  } catch (error) {
+    expect((error as Error).message).not.toMatch(/is not defined/u);
+  } finally {
+    restore();
+  }
+});
