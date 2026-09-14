@@ -1,13 +1,22 @@
 import { BrowserBridge } from "./connection";
+import { registerInstagramCapture } from "./capture-registration";
 
 const bridge = new BrowserBridge();
 
 chrome.runtime.onInstalled.addListener(() => {
   void bridge.initialize();
+  void registerInstagramCapture();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   void bridge.initialize();
+  void registerInstagramCapture();
+});
+
+// Registering at startup can precede the user granting Instagram access, so
+// the registration is retried once permission is actually available.
+chrome.permissions.onAdded.addListener(() => {
+  void registerInstagramCapture();
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -35,3 +44,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 void bridge.initialize();
+void registerInstagramCapture();

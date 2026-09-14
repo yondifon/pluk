@@ -23,6 +23,7 @@ declare namespace chrome {
 
     function contains(permissions: Permissions): Promise<boolean>;
     function request(permissions: Permissions): Promise<boolean>;
+    const onAdded: Event<(permissions: Permissions) => void>;
   }
 
   namespace runtime {
@@ -65,6 +66,25 @@ declare namespace chrome {
       readonly func: (...args: Args) => Result;
       readonly args: Args;
     }): Promise<readonly InjectionResult<Awaited<Result>>[]>;
+
+    type ExecutionWorld = "ISOLATED" | "MAIN";
+    type RunAt = "document_start" | "document_end" | "document_idle";
+
+    interface RegisteredContentScript {
+      readonly id: string;
+      readonly matches?: readonly string[];
+      readonly js?: readonly string[];
+      readonly runAt?: RunAt;
+      readonly world?: ExecutionWorld;
+      readonly persistAcrossSessions?: boolean;
+    }
+
+    function registerContentScripts(
+      scripts: readonly RegisteredContentScript[],
+    ): Promise<void>;
+    function unregisterContentScripts(filter: {
+      readonly ids?: readonly string[];
+    }): Promise<void>;
   }
 
   namespace storage {
