@@ -218,6 +218,33 @@ test("capture still attaches a screenshot", async () => {
   expect(result.screenshotArtifactId).toBe("screenshot-artifact");
 });
 
+test("a debug read_post also uploads the Instagram capture buffer as its own artifact", async () => {
+  executeScriptImpl = (targetUrl) => ({
+    state: "ready",
+    kind: "instagram_post",
+    url: targetUrl,
+    title: "Post",
+    post: { author: "mancity" },
+    debugCaptures: "[]",
+  });
+  const executor = new BrowserExecutor();
+  const sink = makeSink();
+  const command: CommandEnvelope = {
+    ...makeCommand("read_post", "https://www.instagram.com/p/ABC123/"),
+    platform: "instagram",
+    payload: { kind: "read_post", postId: "ABC123", debug: true },
+  };
+
+  const result = await executor.run(command, sink);
+
+  expect(sink.uploads).toEqual([
+    { kind: "extract", contentType: "application/json" },
+    { kind: "extract", contentType: "application/json" },
+  ]);
+  expect(result.debugCapturesArtifactId).toBe("extract-artifact");
+  expect(result).not.toHaveProperty("debugCaptures");
+});
+
 test("submit_reply emulates focus on the automation tab only while it runs and succeeds without a screenshot even when capture would fail", async () => {
   captureVisibleTabImpl = () => Promise.reject(new Error("quota exceeded"));
   const executor = new BrowserExecutor();

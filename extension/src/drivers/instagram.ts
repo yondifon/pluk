@@ -5,6 +5,7 @@ export function runInstagramPage(
 ): DriverPageResult | Promise<DriverPageResult> {
   const MAX_COMMENTS = 300;
   const COMMENT_LOAD_TIMEOUT_MS = 45_000;
+  const COMMENT_FETCH_TRIGGER_TIMEOUT_MS = 2_000;
   const MAX_GRID_ENTRIES = 600;
   const GRID_LOAD_TIMEOUT_MS = 90_000;
   const GRID_GROWTH_TIMEOUT_MS = 5_000;
@@ -266,10 +267,35 @@ export function runInstagramPage(
     }
   };
 
-  const findCapturedPostEngagement = (
+  interface CapturedPost extends CapturedEngagement {
+    readonly author: string | null;
+    readonly postedAt: string | null;
+  }
+
+  // A media object's poster sits either directly on a `username` field or
+  // nested under `owner`/`user`, depending on which endpoint returned it.
+  const usernameFromRecord = (record: Record<string, unknown>): string | null => {
+    if (typeof record.username === "string" && record.username) {
+      return record.username;
+    }
+    for (const key of ["owner", "user"] as const) {
+      const nested = record[key];
+      if (nested !== null && typeof nested === "object") {
+        const username = (nested as Record<string, unknown>).username;
+        if (typeof username === "string" && username) {
+          return username;
+        }
+      }
+    }
+    return null;
+  };
+
+  // Matches the post's own media object by shortcode, then reads whatever
+  // of its author, timestamp and engagement that object happens to carry.
+  const findCapturedPost = (
     captures: readonly CaptureEntry[],
     shortcode: string,
-  ): CapturedEngagement | null => {
+  ): CapturedPost | null => {
     let found: Record<string, unknown> | null = null;
     let foundTypename = "";
     for (const entry of captures) {
@@ -286,10 +312,12 @@ export function runInstagramPage(
         if (code !== shortcode) {
           return;
         }
-        if (
-          firstNumber(candidate, LIKE_KEYS) === null &&
-          firstNumber(candidate, COMMENT_COUNT_KEYS) === null
-        ) {
+        const hasSignal =
+          firstNumber(candidate, LIKE_KEYS) !== null ||
+          firstNumber(candidate, COMMENT_COUNT_KEYS) !== null ||
+          firstNumber(candidate, ["taken_at"]) !== null ||
+          usernameFromRecord(candidate) !== null;
+        if (!hasSignal) {
           return;
         }
         found = candidate;
@@ -300,7 +328,59 @@ export function runInstagramPage(
         break;
       }
     }
-    return found ? engagementFromObject(found, CLIP_TYPENAMES.has(foundTypename)) : null;
+    if (!found) {
+      return null;
+    }
+    const record: Record<string, unknown> = found;
+    const takenAt = firstNumber(record, ["taken_at"]);
+    return {
+      author: usernameFromRecord(record),
+      postedAt: takenAt !== null ? new Date(takenAt * 1_000).toISOString() : null,
+      ...engagementFromObject(record, CLIP_TYPENAMES.has(foundTypename)),
+    };
+  };
+
+  // Instagram embeds a large JSON state blob directly in a post page's own
+  // HTML on first load; when nothing was fetched for the capture layer to
+  // intercept, this is checked before falling back to the page's rendered
+  // markup. The capture element is excluded so it is never read as if it
+  // were the page's own embedded state.
+  const embeddedJsonEntries = (): readonly CaptureEntry[] =>
+    Array.from(document.querySelectorAll('script[type="application/json"]'))
+      .filter((script) => script.getAttribute("id") !== CAPTURE_ELEMENT_ID)
+      .map((script): CaptureEntry | null => {
+        try {
+          return {
+            url: "",
+            method: "GET",
+            receivedAt: 0,
+            body: JSON.parse(script.textContent ?? ""),
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter((entry): entry is CaptureEntry => entry !== null);
+
+  // The post URL's own username segment (`/<handle>/p|reel/<shortcode>/`)
+  // is the cheapest reliable author source: it costs no parsing of
+  // Instagram's own unstable text, and is absent only from the bare
+  // `/p/<shortcode>/` canonical form.
+  const authorFromPath = (value: string): string | null =>
+    value.match(/^\/([A-Za-z0-9_.]{1,30})\/(?:p|reel)\//u)?.[1] ?? null;
+
+  // Instagram never abbreviates a comment count the way it abbreviates
+  // likes and views, so a plain digit run next to "comment(s)" in the
+  // engagement string is exact and safe to parse as an integer.
+  const exactCommentCountFromEngagement = (
+    engagement: string | null,
+  ): number | null => {
+    if (!engagement) {
+      return null;
+    }
+    const match = engagement.match(/([\d,]+)\s*comments?\b/iu);
+    const digits = match?.[1]?.replace(/,/gu, "");
+    return digits ? Number.parseInt(digits, 10) : null;
   };
 
   // Not confirmed against a live logged-in page: Instagram's comment and
@@ -436,27 +516,38 @@ export function runInstagramPage(
     readonly commentCount: number | null;
   }
 
+  type PostSource = "captured" | "embedded" | "scraped";
+
   const readMainPost = (
     shortcode: string,
-  ): { readonly post: ReadPost; readonly captured: boolean } | null => {
-    const author = authorFromMeta();
-    const postedAt = mainPostTime();
+  ): { readonly post: ReadPost; readonly source: PostSource } | null => {
+    const capturedPost = findCapturedPost(readCaptures(), shortcode);
+    const embeddedPost = capturedPost
+      ? null
+      : findCapturedPost(embeddedJsonEntries(), shortcode);
+    const jsonPost = capturedPost ?? embeddedPost;
+    const engagement = engagementFromMeta();
+    const author =
+      jsonPost?.author ?? authorFromPath(path) ?? authorFromMeta() ?? "";
+    const postedAt = jsonPost?.postedAt ?? mainPostTime();
     if (!author && !postedAt) {
       return null;
     }
-    const captured = findCapturedPostEngagement(readCaptures(), shortcode);
     return {
       post: {
         postId: shortcode,
         targetUrl: options.targetUrl,
         canonicalTarget: canonicalPostTarget(shortcode),
-        author: author ?? "",
+        author,
         postedAt,
-        engagement: engagementFromMeta(),
+        engagement,
         text: captionFromMeta(),
-        ...(captured ?? NO_ENGAGEMENT),
+        likes: jsonPost?.likes ?? null,
+        views: jsonPost?.views ?? null,
+        commentCount:
+          jsonPost?.commentCount ?? exactCommentCountFromEngagement(engagement),
       },
-      captured: captured !== null,
+      source: capturedPost ? "captured" : embeddedPost ? "embedded" : "scraped",
     };
   };
 
@@ -464,7 +555,7 @@ export function runInstagramPage(
   // an absent post is read again until it appears or the deadline passes.
   const awaitMainPost = async (
     shortcode: string,
-  ): Promise<{ readonly post: ReadPost; readonly captured: boolean } | null> => {
+  ): Promise<{ readonly post: ReadPost; readonly source: PostSource } | null> => {
     const deadline = Date.now() + 5_000;
     for (;;) {
       const found = readMainPost(shortcode);
@@ -613,7 +704,31 @@ export function runInstagramPage(
   const clickElement = (element: Element): void =>
     (element as HTMLElement).click();
 
+  // Instagram does not fetch a post's comments until the comment panel is
+  // scrolled into view, exactly as it withholds the next timeline page
+  // until the grid is scrolled. Without this, a freshly loaded post can
+  // show neither a comment row nor a "Load more" button to click.
+  const ensureCommentsFetched = async (): Promise<void> => {
+    if (countCommentRows() > 0 || loadMoreCommentsButton()) {
+      return;
+    }
+    const root = commentListRoot() as unknown as {
+      readonly scrollIntoView?: () => void;
+    } | null;
+    if (typeof root?.scrollIntoView === "function") {
+      root.scrollIntoView();
+    }
+    if (typeof window.scrollTo === "function") {
+      window.scrollTo(0, document.body?.scrollHeight ?? 0);
+    }
+    await pollUntil(
+      () => countCommentRows() > 0 || loadMoreCommentsButton() !== null,
+      COMMENT_FETCH_TRIGGER_TIMEOUT_MS,
+    );
+  };
+
   const loadAllComments = async (): Promise<{ readonly truncated: boolean }> => {
+    await ensureCommentsFetched();
     const deadline = Date.now() + COMMENT_LOAD_TIMEOUT_MS;
     const capped = (): boolean =>
       Date.now() >= deadline || countCommentRows() >= MAX_COMMENTS;
@@ -950,6 +1065,22 @@ export function runInstagramPage(
     return readProfile(handle);
   }
 
+  // Reports whichever of the three sources actually won: a scraped post
+  // whose comment likes were captured still reports "mixed" rather than
+  // claiming the post's own fields came from JSON they did not come from.
+  const resolvePostSource = (
+    postSource: PostSource,
+    usedCommentCapture: boolean,
+  ): string =>
+    postSource !== "scraped"
+      ? postSource
+      : usedCommentCapture
+        ? "mixed"
+        : "scraped";
+
+  const debugFields = (): { readonly debugCaptures?: string } =>
+    options.debug ? { debugCaptures: captureRawText() ?? "" } : {};
+
   const readPost = async (): Promise<DriverPageResult> => {
     const requestedPostId = options.postId ?? shortcode;
     if (!requestedPostId || shortcode !== requestedPostId) {
@@ -977,8 +1108,9 @@ export function runInstagramPage(
       canonicalTarget: target.post.canonicalTarget,
       post: target.post,
       comments,
-      source: target.captured || usedCommentCapture ? "mixed" : "scraped",
+      source: resolvePostSource(target.source, usedCommentCapture),
       truncated,
+      ...debugFields(),
     };
   };
 
@@ -997,7 +1129,8 @@ export function runInstagramPage(
       ...baseData("instagram_post", target.post.text),
       canonicalTarget: target.post.canonicalTarget,
       post: target.post,
-      source: target.captured ? "mixed" : "scraped",
+      source: resolvePostSource(target.source, false),
+      ...debugFields(),
     };
   };
 

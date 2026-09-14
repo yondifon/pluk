@@ -154,10 +154,12 @@ export class BrowserExecutor {
     const page =
       (await this.readInPlace(context, driver, options, command.platform)) ??
       (await this.readAfterNavigation(context, driver, command, options, targetUrl.value, sink));
+    const { debugCaptures, ...pageData } = page.data;
     let extractArtifactId: string;
     let screenshotArtifactId: string | undefined;
+    let debugCapturesArtifactId: string | undefined;
     try {
-      const extract = serializeExtract(page.data);
+      const extract = serializeExtract(pageData);
       extractArtifactId = await sink.upload(
         command.jobId,
         "extract",
@@ -177,6 +179,14 @@ export class BrowserExecutor {
           screenshot,
         );
       }
+      if (wantsDebug(command.payload) && typeof debugCaptures === "string") {
+        debugCapturesArtifactId = await sink.upload(
+          command.jobId,
+          "extract",
+          "application/json",
+          new TextEncoder().encode(debugCaptures),
+        );
+      }
     } catch (error) {
       if (SUBMIT_ACTIONS.has(command.action)) {
         throw uncertainSubmissionError();
@@ -185,11 +195,14 @@ export class BrowserExecutor {
     }
 
     return {
-      ...page.data,
+      ...pageData,
       url: page.url,
       title: page.title,
       extractArtifactId,
       ...(screenshotArtifactId === undefined ? {} : { screenshotArtifactId }),
+      ...(debugCapturesArtifactId === undefined
+        ? {}
+        : { debugCapturesArtifactId }),
     };
   }
 
@@ -789,11 +802,13 @@ function makeDriverScriptOptions(
   command: CommandEnvelope,
   targetUrl: string,
 ): DriverScriptOptions {
+  const debug = wantsDebug(command.payload);
   if (command.payload.kind === "read_post") {
     return {
       action: command.action,
       targetUrl,
       postId: command.payload.postId,
+      debug,
     };
   }
   if (command.payload.kind === "submission") {
@@ -802,6 +817,7 @@ function makeDriverScriptOptions(
       targetUrl,
       postId: command.payload.postId,
       text: command.payload.text,
+      debug,
     };
   }
   if (command.payload.kind === "post_submission") {
@@ -810,9 +826,10 @@ function makeDriverScriptOptions(
       targetUrl,
       text: command.payload.text,
       parts: command.payload.parts,
+      debug,
     };
   }
-  return { action: command.action, targetUrl };
+  return { action: command.action, targetUrl, debug };
 }
 
 function parseDriverPageResult(value: unknown): DriverPageResult | null {

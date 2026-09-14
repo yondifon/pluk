@@ -18,6 +18,8 @@ export interface DriverScriptOptions {
   readonly text?: string;
   /** The posts of a thread, in order. Absent or one entry for a plain post. */
   readonly parts?: readonly string[];
+  /** Attach the page's raw capture buffer to a successful read too. */
+  readonly debug?: boolean;
 }
 
 export interface DriverPageResult {

@@ -1822,6 +1822,7 @@ test("reads captured likes, views, and comment count for an Instagram post and i
       xdt_shortcode_media: {
         code: "ABC123",
         __typename: "XIGPolarisClipsMedia",
+        owner: { username: "mancity" },
         like_count: 500,
         comment_count: 12,
         view_count: 9_999,
@@ -1848,12 +1849,197 @@ test("reads captured likes, views, and comment count for an Instagram post and i
   restore();
   expect(result).toMatchObject({
     state: "ready",
-    source: "mixed",
-    post: { likes: 500, views: 9_999, commentCount: 12 },
+    source: "captured",
+    post: { author: "mancity", likes: 500, views: 9_999, commentCount: 12 },
   });
   expect(
     (result as unknown as { comments: ReadonlyArray<{ likes: number }> }).comments,
   ).toEqual([expect.objectContaining({ likes: 7 })]);
+});
+
+test("reads an Instagram post from JSON embedded in the page's own HTML when nothing was captured", async () => {
+  const commentRow = node(
+    "Comment one",
+    {},
+    { "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })] },
+  );
+  const commentList = node(
+    "",
+    {},
+    { li: [commentRow], ":scope > li": [commentRow] },
+  );
+  const embeddedScript = node(
+    JSON.stringify({
+      require: [
+        {
+          data: {
+            xdt_shortcode_media: {
+              code: "ABC123",
+              __typename: "XIGPolarisVideoMedia",
+              owner: { username: "mancity" },
+              like_count: 300,
+              comment_count: 8,
+              view_count: 4_444,
+            },
+          },
+        },
+      ],
+    }),
+  );
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    {
+      'meta[property="og:title"]': [instagramOgTitle("someoneelse")],
+      'script[type="application/json"]': [embeddedScript],
+      ul: [commentList],
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+  });
+  restore();
+  expect(result).toMatchObject({
+    state: "ready",
+    source: "embedded",
+    post: { author: "mancity", likes: 300, views: 4_444, commentCount: 8 },
+  });
+});
+
+test("falls back to og:description for an exact comment count without turning an abbreviated like count into an integer", async () => {
+  const commentRow = node(
+    "Comment one",
+    {},
+    { "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })] },
+  );
+  const commentList = node(
+    "",
+    {},
+    { li: [commentRow], ":scope > li": [commentRow] },
+  );
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    {
+      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
+      'meta[property="og:description"]': [
+        node("", {
+          content:
+            '136K likes, 1,638 comments - janedoe on September 13, 2026: "Great day at the match"',
+        }),
+      ],
+      ul: [commentList],
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+  });
+  restore();
+  expect(result).toMatchObject({
+    state: "ready",
+    source: "scraped",
+    post: {
+      commentCount: 1_638,
+      likes: null,
+      engagement: "136K likes, 1,638 comments",
+      text: "Great day at the match",
+    },
+  });
+});
+
+test("reads the posting account's handle straight from the post URL when nothing else names an author", async () => {
+  const commentRow = node(
+    "Comment one",
+    {},
+    { "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })] },
+  );
+  const commentList = node(
+    "",
+    {},
+    { li: [commentRow], ":scope > li": [commentRow] },
+  );
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/mancity/reel/DdPfl0kOUKy/",
+    { ul: [commentList] },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/mancity/reel/DdPfl0kOUKy/",
+    postId: "DdPfl0kOUKy",
+  });
+  restore();
+  expect(result).toMatchObject({ state: "ready", post: { author: "mancity" } });
+});
+
+test("triggers Instagram to fetch comments by scrolling the panel into view when none have rendered yet", async () => {
+  const commentRow = (text: string): FixtureNode =>
+    node(text, {}, { "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })] });
+  const listSelectors: Record<string, FixtureNode[]> = { li: [], ":scope > li": [] };
+  const commentList = node("", {}, listSelectors);
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    {
+      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
+      ul: [commentList],
+    },
+  );
+  Object.defineProperty(globalThis.window, "scrollTo", {
+    configurable: true,
+    value: () => {
+      const c1 = commentRow("Comment one");
+      listSelectors.li = [c1];
+      listSelectors[":scope > li"] = [c1];
+    },
+  });
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+  });
+  restore();
+  expect((result as unknown as { comments: unknown[] }).comments).toHaveLength(1);
+});
+
+test("attaches the raw capture buffer to a debug read_post result", async () => {
+  const commentRow = node(
+    "Comment one",
+    {},
+    { "time[datetime]": [node("", { datetime: "2024-01-01T00:00:00Z" })] },
+  );
+  const commentList = node(
+    "",
+    {},
+    { li: [commentRow], ":scope > li": [commentRow] },
+  );
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    {
+      'meta[property="og:title"]': [instagramOgTitle("janedoe")],
+      ul: [commentList],
+    },
+    undefined,
+    { "pluk-instagram-captures": instagramCaptureElement([]) },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+    debug: true,
+  });
+  restore();
+  expect(result).toMatchObject({ state: "ready", debugCaptures: "[]" });
 });
 
 test("reports an Instagram grid run that stalls before the cap or deadline as truncated", async () => {
