@@ -2212,3 +2212,38 @@ test.each([
     restore();
   }
 });
+
+test("marks an Instagram comment read truncated when the post has more comments than were loaded", async () => {
+  const restore = installPage(
+    "",
+    "Post",
+    "https://www.instagram.com/p/ABC123/",
+    { 'meta[property="og:title"]': [instagramOgTitle("mancity")] },
+    undefined,
+    {
+      "pluk-instagram-captures": instagramCaptureElement([
+        {
+          data: {
+            xdt_shortcode_media: {
+              code: "ABC123",
+              owner: { username: "mancity" },
+              like_count: 10,
+              comment_count: 1_290,
+            },
+          },
+        },
+        instagramCommentsBody([
+          instagramCommentNode("1", "Only one", "alice"),
+        ]),
+      ]),
+    },
+  );
+  const result = await runInstagramPage({
+    action: "read_post",
+    targetUrl: "https://www.instagram.com/p/ABC123/",
+    postId: "ABC123",
+  });
+  restore();
+  expect(result).toMatchObject({ state: "ready", truncated: true });
+  expect((result as unknown as { comments: unknown[] }).comments).toHaveLength(1);
+});

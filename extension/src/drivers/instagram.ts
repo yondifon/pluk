@@ -562,6 +562,9 @@ export function runInstagramPage(
     if (!author && !postedAt) {
       return null;
     }
+    const likes = jsonPost?.likes ?? null;
+    const commentCount =
+      jsonPost?.commentCount ?? exactCommentCountFromEngagement(engagement);
     return {
       post: {
         postId: shortcode,
@@ -569,12 +572,14 @@ export function runInstagramPage(
         canonicalTarget: canonicalPostTarget(shortcode),
         author,
         postedAt,
-        engagement,
+        // Instagram's Open Graph description lags the live counts badly, so
+        // it is reported only when the page's own JSON gave no counts and it
+        // is therefore the source of whatever is reported here.
+        engagement: jsonPost === null ? engagement : null,
         text: jsonPost?.caption || captionFromMeta(),
-        likes: jsonPost?.likes ?? null,
+        likes,
         views: jsonPost?.views ?? null,
-        commentCount:
-          jsonPost?.commentCount ?? exactCommentCountFromEngagement(engagement),
+        commentCount,
       },
       source: capturedPost ? "captured" : embeddedPost ? "embedded" : "scraped",
     };
@@ -726,9 +731,13 @@ export function runInstagramPage(
 
   // Counts what has actually been fetched, not what is rendered: the panel
   // virtualises its rows, so a DOM count stops growing long before the
-  // comments do.
+  // comments do. It has to read the same two sources the reader does, or a
+  // load that is working reads as stalled.
   const countCommentRows = (): number => {
-    const captured = findCapturedComments(readCaptures()).length;
+    const captured = findCapturedComments([
+      ...readCaptures(),
+      ...embeddedJsonEntries(),
+    ]).length;
     if (captured > 0) {
       return captured;
     }
@@ -737,7 +746,7 @@ export function runInstagramPage(
   };
 
   // The comment panel is its own scroll region, and scrolling it is what
-  // makes Instagram fetch the next page. It is the only element on the post
+  // makes Instagram fetch the next page. It is the only element on a post
   // page that both overflows and scrolls.
   const commentScroller = (): Element | null =>
     Array.from(document.querySelectorAll("div")).find(
@@ -795,7 +804,12 @@ export function runInstagramPage(
     await pollUntil(() => countCommentRows() > 0, COMMENT_FETCH_TRIGGER_TIMEOUT_MS);
   };
 
-  const loadAllComments = async (): Promise<{ readonly truncated: boolean }> => {
+  // The post's own comment count is what decides truncation: a scroll that
+  // stops growing is not proof the thread is exhausted, and on a post with
+  // only a handful of comments it is not proof of anything at all.
+  const loadAllComments = async (
+    commentCount: number | null,
+  ): Promise<{ readonly truncated: boolean }> => {
     await ensureCommentsFetched();
     const deadline = Date.now() + COMMENT_LOAD_TIMEOUT_MS;
     const capped = (): boolean =>
@@ -826,7 +840,10 @@ export function runInstagramPage(
       await pollUntil(() => countCommentRows() > before, 5_000);
     }
 
-    return { truncated: capped() };
+    return {
+      truncated:
+        commentCount !== null ? countCommentRows() < commentCount : capped(),
+    };
   };
 
   const page = meta();
@@ -1194,7 +1211,7 @@ export function runInstagramPage(
         "The requested Instagram post was not visible. No post data was returned.",
       );
     }
-    const { truncated } = await loadAllComments();
+    const { truncated } = await loadAllComments(target.post.commentCount);
     const comments = readComments().slice(0, MAX_COMMENTS);
     const usedCommentCapture = comments.some(
       (comment) =>
