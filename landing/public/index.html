@@ -3,23 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pluk — database access for coding agents</title>
-  <meta name="description" content="A macOS menu bar app that turns Postgres, MySQL, and SQLite into local MCP endpoints, so your coding agent can query them without holding your credentials.">
+  <title>Pluk — Local MCP Endpoints for Coding Agents</title>
+  <meta name="description" content="Pluk is a free macOS menu bar app that turns your databases, Linear, Sentry, and SSH into local MCP endpoints. Your coding agent reaches your tools while credentials stay on your machine.">
   <link rel="canonical" href="https://pluk.desgn.space/">
 
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://pluk.desgn.space/">
   <meta property="og:site_name" content="Pluk">
-  <meta property="og:title" content="Pluk — database access for coding agents">
-  <meta property="og:description" content="A macOS menu bar app that turns Postgres, MySQL, and SQLite into local MCP endpoints, so your coding agent can query them without holding your credentials.">
+  <meta property="og:title" content="Pluk — Local MCP Endpoints for Coding Agents">
+  <meta property="og:description" content="Turn your databases, Linear, Sentry, and SSH into local MCP endpoints for coding agents. Free macOS app that keeps your credentials on your machine.">
   <meta property="og:image" content="https://pluk.desgn.space/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Pluk — a toggle switch mark above the words “Let your coding agent query your database.”">
+  <meta property="og:image:alt" content="Pluk — a toggle switch mark above the words "Let your coding agent query your database."">
 
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Pluk — database access for coding agents">
-  <meta name="twitter:description" content="A macOS menu bar app that turns Postgres, MySQL, and SQLite into local MCP endpoints, so your coding agent can query them without holding your credentials.">
+  <meta name="twitter:title" content="Pluk — Local MCP Endpoints for Coding Agents">
+  <meta name="twitter:description" content="Turn your databases, Linear, Sentry, and SSH into local MCP endpoints for coding agents. Free macOS app that keeps your credentials on your machine.">
   <meta name="twitter:image" content="https://pluk.desgn.space/og.png">
 
   <meta name="color-scheme" content="light">
@@ -28,58 +28,205 @@
   <link rel="preload" href="fonts/syne-var.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="fonts/inter-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles.css">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://pluk.desgn.space/#software",
+        "name": "Pluk",
+        "url": "https://pluk.desgn.space/",
+        "operatingSystem": "macOS",
+        "applicationCategory": "DeveloperApplication",
+        "description": "A macOS menu bar app that turns your databases, Linear, Sentry, and SSH into local MCP endpoints, so your coding agent can reach them without holding your credentials.",
+        "downloadUrl": "https://github.com/yondifon/pluk/releases/latest/download/Pluk_universal.dmg",
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "publisher": {
+          "@type": "Organization",
+          "@id": "https://pluk.desgn.space/#publisher",
+          "name": "yondifon",
+          "url": "https://github.com/yondifon"
+        }
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://pluk.desgn.space/#website",
+        "url": "https://pluk.desgn.space/",
+        "name": "Pluk",
+        "description": "Local MCP endpoints for coding agents",
+        "publisher": {
+          "@id": "https://pluk.desgn.space/#publisher"
+        }
+      }
+    ]
+  }
+  </script>
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
 
   <main id="main">
+
+    <!-- Hero -->
     <section class="hero">
       <div class="wrap">
         <p class="brand">
-          <svg class="brand__mark" viewBox="40 200 432 112" aria-hidden="true" focusable="false">
+          <svg class="brand__mark" viewBox="40 206 432 100" aria-hidden="true" focusable="false">
             <rect x="40" y="232" width="432" height="48" rx="24" fill="currentColor"/>
-            <rect x="148" y="200" width="216" height="112" rx="56" fill="currentColor"/>
-            <circle cx="312" cy="256" r="40" fill="var(--gold)"/>
+            <rect x="148" y="206" width="216" height="100" rx="50" fill="currentColor"/>
+            <rect x="164" y="222" width="184" height="68" rx="34" fill="var(--mark-bg)"/>
+            <circle cx="314" cy="256" r="32" fill="var(--gold)"/>
           </svg>
           <span>Pluk</span>
         </p>
 
         <p class="eyebrow">Open source · Local MCP endpoints</p>
 
-        <h1>Let your coding agent query your database.</h1>
+        <h1>Let your coding agent reach your tools.</h1>
 
-        <p class="lede">A macOS menu bar app that turns Postgres, MySQL, and SQLite into local <a href="https://modelcontextprotocol.io">MCP</a> endpoints. Your credentials stay on your machine.</p>
+        <p class="lede">Pluk is a macOS menu bar app that turns your databases, Linear, Sentry, and SSH into local <a href="https://modelcontextprotocol.io">MCP</a> endpoints. Your coding agent talks to your real tools — while every credential stays on your machine.</p>
 
         <p class="cta-row">
-          <a class="btn" href="https://github.com/yondifon/pluk/releases/download/v0.1.1/Pluk_0.1.1_universal.dmg">Download for macOS</a>
-          <span class="cta-meta">Version 0.1.1 · Apple Silicon and Intel · macOS 14 or later</span>
+          <a class="btn" href="https://github.com/yondifon/pluk/releases/latest/download/Pluk_universal.dmg">Download for macOS</a>
+          <span class="cta-meta">Apple Silicon and Intel · macOS 14 or later</span>
         </p>
 
-        <p class="note">macOS today; Windows and Linux are coming. Pluk is open source — <a href="https://github.com/yondifon/pluk">read the code on GitHub</a>.</p>
+        <p class="note">macOS today. Windows and Linux are next. Pluk is open source — <a href="https://github.com/yondifon/pluk">read the code on GitHub</a>.</p>
       </div>
     </section>
 
-    <section class="band" aria-labelledby="about-title">
+    <!-- How it works -->
+    <section class="band" aria-labelledby="how-title">
       <div class="wrap">
-        <h2 id="about-title">What it does</h2>
-        <ul class="grid">
-          <li class="card card--lead">
+        <h2 id="how-title">How it works</h2>
+        <ol class="steps">
+          <li class="step">
             <span class="tag">01</span>
-            <p>Connect a database once. Pluk gives it a local URL you paste into your coding agent.</p>
+            <h3>Install and launch</h3>
+            <p>Open the <code>.dmg</code>, drag Pluk to Applications, and launch it. It lives in your menu bar — no dock icon, no window in the way.</p>
           </li>
-          <li class="card">
+          <li class="step">
             <span class="tag">02</span>
-            <p>A read-only policy blocks writes before they reach the database.</p>
+            <h3>Connect a tool</h3>
+            <p>Pick a tool — your Postgres database, your Linear workspace, an SSH host — and enter its credentials once. Pluk starts a local MCP endpoint for it on your machine.</p>
+          </li>
+          <li class="step">
+            <span class="tag">03</span>
+            <h3>Paste the URL into your agent</h3>
+            <p>Pluk gives you a <code>localhost</code> URL. Paste it into your coding agent's MCP config. The agent can now reach that tool — through Pluk, on your machine, under your control.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- What connects -->
+    <section class="section" aria-labelledby="tools-title">
+      <div class="wrap">
+        <h2 id="tools-title">What connects</h2>
+        <p class="section-lede">Every tool gets the same setup: enter credentials once, get a local URL, paste it into your agent.</p>
+        <ul class="grid grid--tools">
+          <li class="card">
+            <span class="tag">DB</span>
+            <h3>Postgres</h3>
+            <p>Query tables, inspect schemas, explore data — your agent reads your database without holding connection strings.</p>
           </li>
           <li class="card">
-            <span class="tag">03</span>
-            <p>Every call is recorded on your machine, allowed or blocked.</p>
+            <span class="tag">DB</span>
+            <h3>MySQL</h3>
+            <p>Same interface as Postgres. One tool config, one local endpoint, full read access.</p>
           </li>
-          <li class="card card--wide">
-            <span class="tag">04</span>
-            <p>Linear, Sentry, and SSH connect the same way.</p>
+          <li class="card">
+            <span class="tag">DB</span>
+            <h3>SQLite</h3>
+            <p>Point it at a <code>.db</code> file. The agent queries it through Pluk — never touches the file directly.</p>
+          </li>
+          <li class="card">
+            <span class="tag">API</span>
+            <h3>Linear</h3>
+            <p>Your agent reads issues, projects, and cycles from Linear. Your API key never leaves your machine.</p>
+          </li>
+          <li class="card">
+            <span class="tag">API</span>
+            <h3>Sentry</h3>
+            <p>Pull error reports and stack traces into your agent's context while debugging.</p>
+          </li>
+          <li class="card">
+            <span class="tag">SSH</span>
+            <h3>SSH</h3>
+            <p>Give your agent access to a remote host over SSH. Keys stay in your keychain, not in your agent config.</p>
           </li>
         </ul>
+      </div>
+    </section>
+
+    <!-- Why local matters -->
+    <section class="band band--dark" aria-labelledby="why-title">
+      <div class="wrap">
+        <h2 id="why-title">Why local matters</h2>
+        <p class="section-lede section-lede--on-dark">Pluk runs entirely on your machine. There is no cloud relay, no account to create, and no data leaving your laptop unless you say so.</p>
+        <ul class="grid grid--reasons">
+          <li class="card card--lead">
+            <span class="tag">Credentials</span>
+            <p>Your database passwords, API tokens, and SSH keys live on your machine and nowhere else. Pluk connects locally — nothing is sent to a remote server.</p>
+          </li>
+          <li class="card">
+            <span class="tag">Read-only by default</span>
+            <p>A built-in read-only policy blocks write operations before they leave your machine. Your agent can read your data; it cannot change it unless you choose to allow that.</p>
+          </li>
+          <li class="card">
+            <span class="tag">Full audit log</span>
+            <p>Every call your agent makes — allowed or blocked — is recorded locally. You can review exactly what was requested and what was returned.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- After you download -->
+    <section class="section" aria-labelledby="after-title">
+      <div class="wrap">
+        <h2 id="after-title">After you download</h2>
+        <dl class="faq">
+          <div class="faq-item">
+            <dt>What do I install?</dt>
+            <dd>A single <code>.dmg</code> file. Drag Pluk to your Applications folder. No Homebrew formula, no npm package, no Docker image.</dd>
+          </div>
+          <div class="faq-item">
+            <dt>Where does it run?</dt>
+            <dd>In your menu bar. Pluk starts local servers on <code>localhost</code> — one per connected tool. It uses no resources when idle.</dd>
+          </div>
+          <div class="faq-item">
+            <dt>Which agents work with it?</dt>
+            <dd>Any coding agent that supports MCP endpoints: Claude Code, Cursor, Windsurf, Antigravity, and others. If the agent can take an MCP server URL, it works with Pluk.</dd>
+          </div>
+          <div class="faq-item">
+            <dt>What does it cost?</dt>
+            <dd>Nothing. Pluk is free software, released under the <a href="https://github.com/yondifon/pluk/blob/main/LICENSE.md">GNU Affero General Public License v3.0</a>.</dd>
+          </div>
+          <div class="faq-item">
+            <dt>What about Windows and Linux?</dt>
+            <dd>macOS is first. Windows and Linux builds are coming next.</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- Final CTA -->
+    <section class="section section--cta" aria-labelledby="download-title">
+      <div class="wrap wrap--center">
+        <h2 id="download-title">Ready to try it?</h2>
+        <p class="section-lede">Download Pluk, connect a tool, and paste the URL into your agent. That is the whole setup.</p>
+        <p class="cta-row cta-row--center">
+          <a class="btn" href="https://github.com/yondifon/pluk/releases/latest/download/Pluk_universal.dmg">Download for macOS</a>
+          <span class="cta-meta">Apple Silicon and Intel · macOS 14 or later</span>
+        </p>
+        <p class="note note--center">Free and open source. <a href="https://github.com/yondifon/pluk">View on GitHub</a>.</p>
       </div>
     </section>
   </main>
@@ -87,10 +234,11 @@
   <footer class="site-footer">
     <div class="wrap">
       <p class="footer-brand">
-        <svg class="brand__mark" viewBox="40 200 432 112" aria-hidden="true" focusable="false">
+        <svg class="brand__mark" viewBox="40 206 432 100" aria-hidden="true" focusable="false">
           <rect x="40" y="232" width="432" height="48" rx="24" fill="currentColor"/>
-          <rect x="148" y="200" width="216" height="112" rx="56" fill="currentColor"/>
-          <circle cx="312" cy="256" r="40" fill="var(--gold)"/>
+          <rect x="148" y="206" width="216" height="100" rx="50" fill="currentColor"/>
+          <rect x="164" y="222" width="184" height="68" rx="34" fill="var(--mark-bg)"/>
+          <circle cx="314" cy="256" r="32" fill="var(--gold)"/>
         </svg>
         <span>Pluk</span>
       </p>

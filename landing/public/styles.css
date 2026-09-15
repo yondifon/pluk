@@ -30,6 +30,10 @@
   --green: #88d498;
   --focus: #2f6fed;
 
+  /* The mark's inner track is a hole cut in the pill, so it carries whatever
+     sits behind the lockup rather than a colour of its own. */
+  --mark-bg: var(--canvas);
+
   --border: 3px solid #000;
   --shadow-sm: 3px 3px 0 0 #000;
   --shadow: 5px 5px 0 0 #000;
@@ -62,7 +66,8 @@ body {
 }
 
 h1,
-h2 {
+h2,
+h3 {
   margin: 0;
   font-family: var(--display);
 }
@@ -71,9 +76,16 @@ p {
   margin: 0;
 }
 
-ul {
+ul,
+ol,
+dl,
+dd {
   margin: 0;
   padding: 0;
+}
+
+ul,
+ol {
   list-style: none;
 }
 
@@ -82,6 +94,14 @@ a {
   text-decoration: underline;
   text-decoration-thickness: 2px;
   text-underline-offset: 3px;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.9375em;
+  background: rgba(0, 0, 0, 0.06);
+  padding: 0.125em 0.375em;
+  border-radius: 3px;
 }
 
 ::selection {
@@ -124,7 +144,13 @@ a {
   padding-inline: clamp(1.25rem, 4vw, 3rem);
 }
 
-/* Hero */
+.wrap--center {
+  text-align: center;
+}
+
+/* ------------------------------------------------------------------ */
+/* Hero                                                               */
+/* ------------------------------------------------------------------ */
 
 .hero {
   padding-block: clamp(3.5rem, 9vw, 6rem) clamp(4rem, 9vw, 6.5rem);
@@ -179,6 +205,10 @@ h1 {
   margin-block-start: 2.5rem;
 }
 
+.cta-row--center {
+  justify-content: center;
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -221,7 +251,41 @@ h1 {
   font-size: 1rem;
 }
 
-/* The one chapter band: a change of fill and a hard edge, not whitespace. */
+.note--center {
+  margin-inline: auto;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sections (generic white sections)                                   */
+/* ------------------------------------------------------------------ */
+
+.section {
+  padding-block: clamp(3rem, 7vw, 4.5rem) clamp(3.5rem, 8vw, 5rem);
+  border-top: var(--border);
+}
+
+.section-lede {
+  margin-block-start: 1rem;
+  max-width: 52ch;
+  font-size: 1.1875rem;
+  line-height: 1.55;
+}
+
+.section-lede--on-dark {
+  color: var(--canvas);
+}
+
+.section--cta {
+  text-align: center;
+}
+
+.section--cta .section-lede {
+  margin-inline: auto;
+}
+
+/* ------------------------------------------------------------------ */
+/* Band: green chapter break (How it works) and dark band              */
+/* ------------------------------------------------------------------ */
 
 .band {
   background: var(--green);
@@ -230,12 +294,57 @@ h1 {
   padding-block: clamp(3rem, 7vw, 4.5rem) clamp(3.5rem, 8vw, 5rem);
 }
 
+.band--dark {
+  background: var(--ink);
+  color: var(--canvas);
+}
+
 h2 {
   font-weight: 800;
   font-size: clamp(1.875rem, 4.4vw, 2.75rem);
   line-height: 1.05;
   letter-spacing: -0.03em;
 }
+
+h3 {
+  font-weight: 700;
+  font-size: 1.1875rem;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+}
+
+/* ------------------------------------------------------------------ */
+/* Steps (How it works)                                                */
+/* ------------------------------------------------------------------ */
+
+.steps {
+  counter-reset: step;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin-block-start: clamp(2rem, 4vw, 2.75rem);
+}
+
+.step {
+  background: var(--canvas);
+  border: var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.5rem;
+}
+
+.step h3 {
+  margin-block-start: 1rem;
+}
+
+.step p {
+  margin-block-start: 0.625rem;
+  font-size: 1rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Card grid (What connects, Why local matters)                        */
+/* ------------------------------------------------------------------ */
 
 .grid {
   display: grid;
@@ -259,14 +368,23 @@ h2 {
   grid-column: span 2;
 }
 
-.card p {
+.card h3 {
   margin-block-start: 1rem;
+}
+
+.card p {
+  margin-block-start: 0.625rem;
   font-size: 1rem;
 }
 
 .card--lead p {
   font-size: 1.1875rem;
   line-height: 1.5;
+}
+
+/* Dark band cards need ink backgrounds to stay readable */
+.band--dark .card {
+  color: var(--ink);
 }
 
 .tag {
@@ -283,9 +401,52 @@ h2 {
   padding: 0.5rem 0.625rem;
 }
 
-/* Footer — the loudest block on the page. */
+/* ------------------------------------------------------------------ */
+/* Tools grid — 2 cols for wider cards at desktop, 3 on very wide      */
+/* ------------------------------------------------------------------ */
+
+.grid--tools {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* ------------------------------------------------------------------ */
+/* FAQ / After you download                                            */
+/* ------------------------------------------------------------------ */
+
+.faq {
+  margin-block-start: clamp(2rem, 4vw, 2.75rem);
+  display: grid;
+  gap: 0;
+}
+
+.faq-item {
+  border-top: var(--border);
+  padding-block: 1.25rem 1.5rem;
+}
+
+.faq-item:last-child {
+  border-bottom: var(--border);
+}
+
+.faq-item dt {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 1.1875rem;
+  line-height: 1.3;
+}
+
+.faq-item dd {
+  margin-block-start: 0.375rem;
+  max-width: 52ch;
+  font-size: 1rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Footer — the loudest block on the page.                             */
+/* ------------------------------------------------------------------ */
 
 .site-footer {
+  --mark-bg: var(--ink);
   background: var(--ink);
   color: var(--canvas);
   padding-block: clamp(3rem, 7vw, 4.5rem) clamp(3rem, 6vw, 4rem);
@@ -302,8 +463,10 @@ h2 {
   letter-spacing: -0.04em;
 }
 
+/* The mark runs 4.3x as wide as it is tall, so it is held well below the
+   wordmark's height or it out-widths the name beside it. */
 .footer-brand .brand__mark {
-  height: clamp(2.25rem, 6.5vw, 4rem);
+  height: clamp(1.5rem, 4vw, 2.5rem);
 }
 
 .footer-links {
@@ -329,6 +492,18 @@ h2 {
   font-size: 0.875rem;
 }
 
+/* ------------------------------------------------------------------ */
+/* Code on dark backgrounds                                            */
+/* ------------------------------------------------------------------ */
+
+.band--dark code {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* ------------------------------------------------------------------ */
+/* Hover states                                                        */
+/* ------------------------------------------------------------------ */
+
 @media (hover: hover) and (pointer: fine) {
   a:hover {
     background: var(--ink);
@@ -341,6 +516,11 @@ h2 {
     color: var(--ink);
   }
 
+  .band--dark a:hover {
+    background: var(--canvas);
+    color: var(--ink);
+  }
+
   .btn:hover,
   .skip:hover {
     background: var(--gold);
@@ -348,8 +528,13 @@ h2 {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Responsive                                                          */
+/* ------------------------------------------------------------------ */
+
 @media (max-width: 760px) {
-  .grid {
+  .grid,
+  .steps {
     grid-template-columns: 1fr;
   }
 
@@ -357,7 +542,26 @@ h2 {
   .card--wide {
     grid-column: auto;
   }
+
+  .grid--tools {
+    grid-template-columns: 1fr;
+  }
 }
+
+@media (min-width: 761px) and (max-width: 960px) {
+  .grid--tools {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .steps {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Reduced motion                                                      */
+/* ------------------------------------------------------------------ */
 
 @media (prefers-reduced-motion: reduce) {
   *,

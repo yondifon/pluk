@@ -4,7 +4,7 @@ DIST      := dist
 VERSION   := $(shell cat VERSION 2>/dev/null | tr -d ' \n')
 COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: dev deps build build-ui extension bundle bundle-unsigned bundle-signed publish _publish major minor fix check-publish-tools install test lint clean sync-version check-tauri help
+.PHONY: dev deps build build-ui extension bundle bundle-unsigned bundle-signed publish _publish major minor fix check-publish-tools install test lint clean sync-version check-tauri deploy-landing help
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:
@@ -17,6 +17,7 @@ help:
 	@printf "  make publish [major|minor|fix]  Bump version, then universal build, sign, notarize, staple, verify, GitHub release\n"
 	@printf "  make install          Build bundles and install Pluk.app to /Applications (macOS)\n"
 	@printf "  make extension        Build the Chrome extension into extension/dist\n"
+	@printf "  make deploy-landing   Deploy the landing page to Cloudflare\n"
 	@printf "  make test             cargo test --workspace + extension tests\n"
 	@printf "  make lint             cargo clippy + frontend and extension typecheck\n"
 	@printf "  make clean            Remove dist/ and build artefacts\n"
@@ -173,6 +174,15 @@ install: bundle
 		( echo "no bundle found — check dist/bundle or target/release/bundle"; exit 1 )
 	@printf "→ installed /Applications/$(APP).app — launching\n"
 	@open "/Applications/$(APP).app" 2>/dev/null || true
+
+# ── Landing (Cloudflare Workers) ────────────────────────────────────────────
+# landing/public is static and carries no version — the download button points at
+# the Pluk_universal.dmg every release uploads, so the page outlives each release.
+# Credentials come from the deployer's own Cloudflare login (bunx wrangler login)
+# or CLOUDFLARE_API_TOKEN — see landing/README.md.
+deploy-landing:
+	@printf "→ deploying landing/public to Cloudflare\n"
+	cd landing && bunx wrangler deploy
 
 # ── Test / Lint ─────────────────────────────────────────────────────────────
 test:

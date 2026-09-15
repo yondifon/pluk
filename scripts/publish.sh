@@ -147,10 +147,15 @@ git push origin "$(git rev-parse --abbrev-ref HEAD)"
 git push origin "$TAG"
 
 echo "=== Publishing GitHub release ==="
+# The dmg ships twice: under its versioned name for this tag, and under a name
+# that never changes, so the landing page can link straight at the installer via
+# /releases/latest/download/ and stay untouched across releases.
+STABLE_DMG="$BUNDLE_DIR/Pluk_universal.dmg"
+cp "$DMG_PATH" "$STABLE_DMG"
 if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
-    gh release upload "$TAG" "$DMG_PATH" "$UPDATER_ARCHIVE" "$UPDATER_SIG" "$MANIFEST" --repo "$GH_REPO" --clobber
+    gh release upload "$TAG" "$DMG_PATH" "$STABLE_DMG" "$UPDATER_ARCHIVE" "$UPDATER_SIG" "$MANIFEST" --repo "$GH_REPO" --clobber
 else
-    gh release create "$TAG" "$DMG_PATH" "$UPDATER_ARCHIVE" "$UPDATER_SIG" "$MANIFEST" \
+    gh release create "$TAG" "$DMG_PATH" "$STABLE_DMG" "$UPDATER_ARCHIVE" "$UPDATER_SIG" "$MANIFEST" \
         --repo "$GH_REPO" --title "$APP_NAME $VERSION" --generate-notes
 fi
 
