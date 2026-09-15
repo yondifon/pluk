@@ -1,0 +1,23 @@
+[package]
+name = "pluk-browser"
+description = "Browser control for Pluk: the X job queue, draft flow, and the extension WebSocket"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+pluk-store = { path = "../pluk-store" }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "ws"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+percent-encoding = "2"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tokio-tungstenite = "0.24"

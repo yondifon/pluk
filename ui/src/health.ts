@@ -1,5 +1,5 @@
 /**
- * Health transition detection — only fire toasts when crossing between
+ * Health transition detection: only fire toasts when crossing between
  * working and failing. Mirrors `swift/Sources/ConnectionStore.swift#emitHealthTransitions`.
  */
 

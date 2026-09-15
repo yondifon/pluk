@@ -170,7 +170,7 @@ export function formatFanOutMessage(key: string, result: FanOutResult): { kind: 
     if (added.length === 1) {
       return { kind: "success", message: `Added “${key}” to ${added[0].path}` };
     }
-    return { kind: "success", message: `“${key}” already in ${skipped[0].path} — left unchanged` };
+    return { kind: "success", message: `“${key}” already in ${skipped[0].path}, left unchanged` };
   }
 
   const parts: string[] = [];

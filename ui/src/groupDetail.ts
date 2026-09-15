@@ -1,5 +1,5 @@
 /**
- * Group detail screen — header, tabs (Logs/Overview), MCP endpoint and agent
+ * Group detail screen: header, tabs (Logs/Overview), MCP endpoint and agent
  * install, member list with slug-derived tool prefix.
  */
 
@@ -121,7 +121,7 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
     wrap.setAttribute("aria-labelledby", "tab-overview");
 
     // A group has one endpoint that fans out to every member, so one server
-    // entry — the same section an integration shows.
+    // entry, the same section an integration shows.
     const mcp = document.createElement("section");
     renderMcpSection(
       mcp,

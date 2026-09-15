@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wande</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="page-header">
+        <p class="eyebrow">PLUK</p>
+        <h1>Wande</h1>
+        <p class="lede">Let Pluk read and post on X in a Chrome window you are signed in to.</p>
+      </header>
+
+      <section class="panel" aria-labelledby="connection-heading">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">01</p>
+            <h2 id="connection-heading">Connect to Pluk</h2>
+          </div>
+          <div
+            class="status-chip"
+            id="status-chip"
+            data-state="not_configured"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="status-label">Not connected</span>
+          </div>
+        </div>
+        <p class="section-copy">
+          Add Wande in Pluk, then paste the Pluk ID it shows. It stays on this
+          computer.
+        </p>
+
+        <form id="connection-form" novalidate>
+          <div class="field">
+            <label for="pluk-id">Pluk ID</label>
+            <input
+              id="pluk-id"
+              name="token"
+              type="text"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              placeholder="Paste your Pluk ID"
+              aria-describedby="pluk-id-error"
+              required
+            />
+            <p class="field-error" id="pluk-id-error" aria-live="polite"></p>
+          </div>
+
+          <label class="check-row" for="keep-connected">
+            <input id="keep-connected" name="enabled" type="checkbox" />
+            <span>
+              <strong>Stay connected</strong>
+              <small>Reconnect on its own after Chrome or Pluk restarts.</small>
+            </span>
+          </label>
+
+          <details class="advanced">
+            <summary>Pluk’s address</summary>
+            <div class="field">
+              <label for="server-url">Address</label>
+              <input
+                id="server-url"
+                name="serverUrl"
+                type="url"
+                inputmode="url"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="http://127.0.0.1:4242"
+                aria-describedby="server-url-help server-url-error"
+              />
+              <p class="field-help" id="server-url-help">
+                Wande finds this on its own. Set it only if Pluk is somewhere
+                else.
+              </p>
+              <p class="field-error" id="server-url-error" aria-live="polite"></p>
+            </div>
+          </details>
+
+          <div class="form-actions">
+            <button class="button button-primary" type="submit" id="save-button">
+              Save changes
+            </button>
+            <p class="action-feedback" id="save-feedback" aria-live="polite"></p>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel" aria-labelledby="access-heading">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">02</p>
+            <h2 id="access-heading">Site access</h2>
+          </div>
+          <span class="section-count" id="access-count" aria-live="polite">
+            Checking access...
+          </span>
+        </div>
+        <p class="section-copy">
+          Pluk needs access to the exact HTTPS hosts listed below. It never
+          reads your passwords or cookies.
+        </p>
+        <button class="button button-secondary" type="button" id="grant-button">
+          Grant site access
+        </button>
+        <p class="action-feedback" id="permission-feedback" aria-live="polite"></p>
+        <ul class="site-list" id="site-list"></ul>
+      </section>
+
+      <section class="panel" aria-labelledby="capture-heading">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">03</p>
+            <h2 id="capture-heading">Screenshot capture</h2>
+          </div>
+          <span class="section-count" id="capture-count" aria-live="polite">
+            Checking access...
+          </span>
+        </div>
+        <p class="section-copy">
+          Only a screenshot needs this. Reading and posting never do.
+        </p>
+        <p class="permission-note">
+          Chrome only allows screenshots without you present if the extension
+          can access all sites. Clicking the extension icon grants access for
+          that page alone.
+        </p>
+        <button
+          class="button button-secondary"
+          type="button"
+          id="capture-grant-button"
+        >
+          Grant screenshot capture
+        </button>
+        <p class="action-feedback" id="capture-feedback" aria-live="polite"></p>
+      </section>
+
+      <section class="panel panel-plain" aria-labelledby="jobs-heading">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">04</p>
+            <h2 id="jobs-heading">How this works</h2>
+          </div>
+        </div>
+        <ol class="job-list">
+          <li>Pluk opens one ordinary Chrome window and reuses the sign-ins you already have.</li>
+          <li>One page at a time, and each one has to stay on an allowed site.</li>
+          <li>Sign in inside that window. Pluk never reads passwords, cookies, or page scripts.</li>
+        </ol>
+      </section>
+
+      <footer class="page-footer">
+        <span>Chrome 116 or newer</span>
+        <span aria-hidden="true">|</span>
+        <span>Stays on this computer</span>
+      </footer>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

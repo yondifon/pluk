@@ -53,10 +53,11 @@ impl ServerHandle {
             pluk_server::AppState::new(store.clone(), registry.clone(), owners, health);
         let mut state_inner = rate_state;
         state_inner.cancels = cancels;
-        let state = Arc::new(state_inner);
 
         let p = port.unwrap_or_else(pluk_server::ServerConfig::default_port);
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], p));
+        state_inner.attach_browser(p).map_err(std::io::Error::other)?;
+        let state = Arc::new(state_inner);
 
         let serve_state = state.clone();
         let serve_shutdown = shutdown.clone();

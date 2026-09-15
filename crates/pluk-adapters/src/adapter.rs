@@ -99,6 +99,10 @@ pub trait Adapter: Send + Sync {
     fn policy_kind(&self) -> PolicyKind;
     /// Shown in the UI beside the MCP URL.
     fn agent_hint(&self) -> &str;
+    /// Whether any tool for this adapter executes a shell command.
+    fn runs_commands(&self) -> bool {
+        false
+    }
     /// The fixed tool set, published once for the catalog/UI. Each tool is
     /// individually toggled on/off and may carry its own settings.
     fn tool_specs(&self) -> &[ToolSpec];

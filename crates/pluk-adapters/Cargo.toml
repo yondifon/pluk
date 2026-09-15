@@ -6,6 +6,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+pluk-browser = { path = "../pluk-browser" }
 pluk-store = { path = "../pluk-store" }
 pluk-policy = { path = "../pluk-policy" }
 pluk-db = { path = "../pluk-db" }

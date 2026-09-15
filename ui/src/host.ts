@@ -22,13 +22,13 @@ export function hasHost(): boolean {
 
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const call = tauri()?.core?.invoke;
-  if (!call) throw new Error(`No Pluk host attached — cannot run ${cmd}`);
+  if (!call) throw new Error(`No Pluk host attached, cannot run ${cmd}`);
   return (await call(cmd, args)) as T;
 }
 
 /**
  * Native folder chooser. Resolves to the chosen path, or null when the user
- * cancels. Throws when the chooser cannot open — a caller must tell the user
+ * cancels. Throws when the chooser cannot open. A caller must tell the user
  * that, not mistake it for a cancellation.
  */
 export async function pickDirectory(title: string): Promise<string | null> {

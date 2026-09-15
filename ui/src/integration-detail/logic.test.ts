@@ -161,7 +161,7 @@ describe("mcp key", () => {
     expect(mcpKey("Marketing DB", "production")).toBe("marketing-db-production");
   });
   test("collapses punctuation runs into one dash", () => {
-    expect(mcpKey("Acme — Analytics (EU)", "local")).toBe("acme-analytics-eu-local");
+    expect(mcpKey("Acme, Analytics (EU)", "local")).toBe("acme-analytics-eu-local");
   });
   test("omits the suffix when there is no environment", () => {
     expect(mcpKey("All Databases", null)).toBe("all-databases");

@@ -1,4 +1,6 @@
-export type TabId = "logs" | "overview" | "tools";
+export type TabId = "agentSetup" | "logs" | "overview" | "tools";
+
+export const INTEGRATION_TAB_ORDER: TabId[] = ["overview", "agentSetup", "logs", "tools"];
 
 /** Latest handler per tab strip, so reused buttons never call a stale closure. */
 const selectHandlers = new WeakMap<HTMLElement, (id: string) => void>();
@@ -48,15 +50,24 @@ export function renderTabList(
   }
 }
 
+const TAB_LABELS: Record<TabId, string> = {
+  agentSetup: "Agent setup",
+  logs: "Logs",
+  overview: "Overview",
+  tools: "Tools",
+};
+
 export function renderTabs(
   container: HTMLElement,
+  tabs: TabId[],
   selected: TabId,
   onSelect: (id: TabId) => void,
 ): void {
-  renderTabList(container, [
-    { id: "logs", label: "Logs" },
-    { id: "overview", label: "Overview" },
-    { id: "tools", label: "Tools" },
-  ], selected, (id) => onSelect(id as TabId));
+  renderTabList(
+    container,
+    tabs.map((id) => ({ id, label: TAB_LABELS[id] })),
+    selected,
+    (id) => onSelect(id as TabId),
+  );
   container.setAttribute("aria-label", "Integration sections");
 }

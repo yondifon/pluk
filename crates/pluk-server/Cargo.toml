@@ -14,6 +14,7 @@ path = "src/bin/pluk-serverd.rs"
 
 [dependencies]
 pluk-adapters = { path = "../pluk-adapters" }
+pluk-browser = { path = "../pluk-browser" }
 pluk-core = { path = "../pluk-core" }
 pluk-store = { path = "../pluk-store" }
 rmcp = { version = "3.1", default-features = false, features = ["server", "transport-streamable-http-server"] }

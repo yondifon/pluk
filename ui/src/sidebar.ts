@@ -1,4 +1,5 @@
 import "./sidebar.css";
+import { fadeScrollbar } from "./scrollbar";
 import type { Group, Integration, AdapterManifest, Environment, Health } from "./types";
 import { envLabel } from "./types";
 import { adapterColor, glyphElement, hexToRgba } from "./glyph";
@@ -241,6 +242,7 @@ export function createSidebar(
   const list = document.createElement("div");
   list.className = "sidebar-list";
   list.setAttribute("role", "list");
+  fadeScrollbar(list);
 
   function showConfirm(kind: "integration" | "group", id: string, name: string) {
     confirmModal({

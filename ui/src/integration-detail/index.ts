@@ -1,12 +1,13 @@
 import { renderHeader } from "./header";
+import { renderAgentSetup } from "./agent-setup";
 import { renderOverview } from "./overview";
 import { renderTools } from "./tools";
 import { type InjectFn } from "./mcp-section";
-import { renderTabs, type TabId } from "./tabs";
+import { INTEGRATION_TAB_ORDER, renderTabs, type TabId } from "./tabs";
 import { mountActivityLog } from "../activityLog/activityLog";
 import { humanizeHealthError } from "../health";
 import { toast, type PendingToast } from "../toast";
-import type { AdapterManifest, ConnHealth, Integration } from "./types";
+import { type AdapterManifest, type ConnHealth, type Integration } from "./types";
 
 export type DetailActions = {
   onEdit: () => void;
@@ -22,6 +23,7 @@ export function mountIntegrationDetail(
   manifest: AdapterManifest | null | undefined,
   health: ConnHealth | null | undefined,
   actions: DetailActions,
+  openAt?: TabId,
 ): { destroy: () => void; updateHealth: (next: ConnHealth | null | undefined) => void } {
   root.innerHTML = "";
   root.className = "integration-detail";
@@ -33,11 +35,15 @@ export function mountIntegrationDetail(
   root.append(headerEl, tabsEl, contentEl);
 
   let currentHealth: ConnHealth | null | undefined = health ?? null;
-  let selectedTab: TabId = "logs";
+  const tabs: TabId[] = INTEGRATION_TAB_ORDER;
+  const landing: TabId = "logs";
+  let selectedTab: TabId = openAt && tabs.includes(openAt) ? openAt : landing;
   let testing = false;
   const logsMount = document.createElement("div");
   logsMount.className = "logs-mount";
   let logs: { destroy: () => void } | null = null;
+  let overview: { destroy: () => void } | null = null;
+  let agentSetup: { destroy: () => void } | null = null;
 
   function reportTestFailure(error: string, pending: PendingToast): void {
     currentHealth = { status: "error", error, at: Date.now() };
@@ -77,11 +83,15 @@ export function mountIntegrationDetail(
       onDelete: actions.onDelete,
     });
 
-    renderTabs(tabsEl, selectedTab, (id) => {
+    renderTabs(tabsEl, tabs, selectedTab, (id) => {
       selectedTab = id;
       render();
     });
 
+    overview?.destroy();
+    overview = null;
+    agentSetup?.destroy();
+    agentSetup = null;
     contentEl.innerHTML = "";
     if (selectedTab === "logs") {
       const panel = document.createElement("div");
@@ -97,12 +107,18 @@ export function mountIntegrationDetail(
       const overviewWrap = document.createElement("div");
       overviewWrap.setAttribute("role", "tabpanel");
       overviewWrap.setAttribute("aria-labelledby", "tab-overview");
-      renderOverview(overviewWrap, integration, manifest ?? null, { inject: actions.inject });
+      overview = renderOverview(overviewWrap, integration, manifest ?? null);
       contentEl.appendChild(overviewWrap);
+    } else if (selectedTab === "agentSetup") {
+      const panel = document.createElement("div");
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-labelledby", "tab-agentSetup");
+      agentSetup = renderAgentSetup(panel, integration, manifest ?? null, actions.inject);
+      contentEl.appendChild(panel);
     } else {
       const panel = document.createElement("div");
       panel.setAttribute("role", "tabpanel");
-       panel.setAttribute("aria-labelledby", "tab-tools");
+      panel.setAttribute("aria-labelledby", "tab-tools");
       renderTools(panel, integration, manifest ?? null);
       contentEl.appendChild(panel);
     }
@@ -121,6 +137,10 @@ export function mountIntegrationDetail(
       });
     },
     destroy() {
+      overview?.destroy();
+      overview = null;
+      agentSetup?.destroy();
+      agentSetup = null;
       logs?.destroy();
       logs = null;
       root.innerHTML = "";

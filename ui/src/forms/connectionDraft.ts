@@ -157,7 +157,7 @@ export function applyEnvironmentDefaults(draft: ConnectionDraft): ConnectionDraf
   if (!isSeededQueryMode(draft)) return draft;
   if (draft.environment !== "development" && draft.environment !== "local") return draft;
   // Only for SQL adapters: check by policyKind already ensures SQL; spec adds
-  // "for development and local SQL integrations only" — already covered.
+  // "for development and local SQL integrations only", already covered.
   return {
     ...draft,
     toolConfig: {

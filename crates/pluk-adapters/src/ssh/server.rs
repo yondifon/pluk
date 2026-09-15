@@ -175,7 +175,7 @@ pub fn register_ssh_server(
         let mut props = Map::new();
         props.insert("command".into(), serde_json::json!({"type":"string","description":"The command to run, e.g. `docker compose ps`"}));
         props.insert("working_dir".into(), serde_json::json!({"type":"string","description":"Directory to run in, e.g. /srv/app. Optional — a plain path, no spaces or shell characters."}));
-        props.insert("timeout".into(), serde_json::json!({"type":"number","description": format!("Max seconds to wait before aborting the command (default 60).")}));
+        props.insert("timeout".into(), serde_json::json!({"type":"number","description": "Max seconds to wait before aborting the command (default 60)."}));
         let schema = object_schema(props, &["command"]);
         let conn_c = conn.clone();
         let owner_c = owner_id.to_string();

@@ -1,46 +1,58 @@
-import { mcpKey, mcpUrl, overviewRows } from "./logic";
-import { renderMcpSection, type InjectFn } from "./mcp-section";
-import type { AdapterManifest, Integration } from "./types";
+import { overviewRows } from "./logic";
+import { renderBrowserAccess } from "./browser-access";
+import { mountWandePosts } from "./wande-posts";
+import { WANDE_TYPE, type AdapterManifest, type Integration } from "./types";
 
 export function renderOverview(
   container: HTMLElement,
   integration: Integration,
   manifest: AdapterManifest | null | undefined,
-  deps: { inject: InjectFn },
-): void {
+): { destroy: () => void } {
   container.innerHTML = "";
   container.className = "overview-tab stack-lg";
 
-  const mcp = document.createElement("section");
-  renderMcpSection(
-    mcp,
-    {
-      key: mcpKey(integration.name, integration.environment ?? "development"),
-      url: mcpUrl(integration.token),
-      agentHint: manifest?.agentHint,
-    },
-    deps.inject,
-  );
+  let browserAccess: { destroy: () => void } | null = null;
+  let posts: { destroy: () => void } | null = null;
+  if (integration.type === WANDE_TYPE) {
+    const browser = document.createElement("section");
+    browserAccess = renderBrowserAccess(browser, integration.id);
+    container.appendChild(browser);
 
-  const config = document.createElement("section");
-  config.className = "ui-card";
-  const cfgTitle = document.createElement("h2");
-  cfgTitle.className = "ui-card-title";
-  cfgTitle.textContent = "Configuration";
-  config.appendChild(cfgTitle);
-
-  for (const [label, value] of overviewRows(integration, manifest ?? null)) {
-    const row = document.createElement("div");
-    row.className = "inspector-row";
-    const l = document.createElement("span");
-    l.className = "inspector-label";
-    l.textContent = label;
-    const v = document.createElement("span");
-    v.className = "mono";
-    v.textContent = value;
-    row.append(l, v);
-    config.appendChild(row);
+    const outbox = document.createElement("div");
+    posts = mountWandePosts(outbox, integration.id);
+    container.appendChild(outbox);
   }
 
-  container.append(mcp, config);
+  if (integration.type !== WANDE_TYPE) {
+    const rows = overviewRows(integration, manifest ?? null);
+    if (rows.length) {
+      const config = document.createElement("section");
+      config.className = "ui-card";
+      const cfgTitle = document.createElement("h2");
+      cfgTitle.className = "ui-card-title";
+      cfgTitle.textContent = "Configuration";
+      config.appendChild(cfgTitle);
+
+      for (const [label, value] of rows) {
+        const row = document.createElement("div");
+        row.className = "inspector-row";
+        const l = document.createElement("span");
+        l.className = "inspector-label";
+        l.textContent = label;
+        const v = document.createElement("span");
+        v.className = "mono";
+        v.textContent = value;
+        row.append(l, v);
+        config.appendChild(row);
+      }
+      container.appendChild(config);
+    }
+  }
+
+  return {
+    destroy() {
+      browserAccess?.destroy();
+      posts?.destroy();
+    },
+  };
 }

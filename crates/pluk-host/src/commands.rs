@@ -252,6 +252,11 @@ pub fn update_integration(
 
 #[tauri::command]
 pub fn delete_integration(state: State<'_, HostState>, id: String) -> CmdResult<bool> {
+    if let Some(browser) = state.shared.browser.as_deref() {
+        browser
+            .disconnect_integration(&id)
+            .map_err(|error| error.message)?;
+    }
     let did = state
         .store
         .delete_integration(&id)
@@ -384,6 +389,7 @@ pub struct AdapterInfo {
     pub category: String,
     pub policy_kind: String,
     pub agent_hint: String,
+    pub runs_commands: bool,
     pub tools: Vec<pluk_adapters::ToolSpec>,
     pub config_fields: Vec<pluk_adapters::ConfigField>,
 }
@@ -401,6 +407,7 @@ pub fn list_adapters(state: State<'_, HostState>) -> Vec<AdapterInfo> {
             category: a.category().to_string(),
             policy_kind: a.policy_kind().as_str().to_string(),
             agent_hint: a.agent_hint().to_string(),
+            runs_commands: a.runs_commands(),
             tools: a.tool_specs().to_vec(),
             config_fields: a.config_fields().to_vec(),
         })

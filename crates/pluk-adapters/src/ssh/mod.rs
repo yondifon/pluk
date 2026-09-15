@@ -74,6 +74,9 @@ impl Adapter for SshAdapter {
     fn agent_hint(&self) -> &str {
         SSH_AGENT_HINT
     }
+    fn runs_commands(&self) -> bool {
+        true
+    }
     fn tool_specs(&self) -> &[ToolSpec] {
         static SPECS: std::sync::OnceLock<Vec<ToolSpec>> = std::sync::OnceLock::new();
         SPECS.get_or_init(ssh_tool_specs)

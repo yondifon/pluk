@@ -3,6 +3,7 @@ import type { ConfigScope, FanOutResult, McpClientId } from "./types";
 import { createButton } from "../primitives";
 import { toast } from "../toast";
 import { hasHost, invoke, pickDirectory } from "../host";
+import { copyText } from "../clipboard";
 
 const CLIENTS: Array<{ id: McpClientId; label: string; supportsProject: boolean; globalPath: string; projectPath: string | null; language: string }> = [
   { id: "opencode", label: "OpenCode", supportsProject: true, globalPath: "~/.config/opencode/opencode.json", projectPath: "opencode.json", language: "json" },
@@ -23,6 +24,7 @@ export type McpSectionSpec = {
   key: string;
   url: string;
   agentHint?: string | null;
+  title?: string;
 };
 
 const TITLE_ID = "mcp-section-title";
@@ -59,31 +61,30 @@ function endpointRow({ url }: McpSectionSpec): HTMLElement {
   urlText.className = "mono endpoint-url";
   urlText.textContent = url;
   urlText.title = url;
-  const copyBtn = createButton("Copy", {
-    variant: "secondary",
-    size: "sm",
+  const copyBtn = createButton("", {
+    icon: "copy",
     ariaLabel: "Copy endpoint URL",
     onClick: async () => {
       await copyText(url);
       toast.success("Endpoint URL copied");
     },
   });
+  copyBtn.classList.add("icon-button");
 
   row.append(label, urlText, copyBtn);
   return row;
 }
 
-function agentHintRow(hint: string): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "inspector-row inspector-row-wrap";
-  const label = document.createElement("span");
-  label.className = "inspector-label";
-  label.textContent = "Agent hint";
-  const value = document.createElement("span");
+function agentHintDisclosure(hint: string): HTMLElement {
+  const disclosure = document.createElement("details");
+  disclosure.className = "agent-hint-disclosure";
+  const summary = document.createElement("summary");
+  summary.textContent = "What the agent is told";
+  const value = document.createElement("p");
   value.className = "hint";
   value.textContent = hint;
-  row.append(label, value);
-  return row;
+  disclosure.append(summary, value);
+  return disclosure;
 }
 
 /** Host errors arrive as plain strings, not Error objects. */
@@ -91,22 +92,9 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    ta.remove();
-  }
-}
-
 /**
- * The endpoint and the install controls are one job — pointing an agent at this
- * server — so they share one card and one heading.
+ * The endpoint and the install controls are one job, pointing an agent at this
+ * server, so they share one card and one heading.
  */
 export function renderMcpSection(
   container: HTMLElement,
@@ -119,10 +107,9 @@ export function renderMcpSection(
   container.setAttribute("aria-labelledby", TITLE_ID);
   const title = document.createElement("h2");
   title.className = "ui-card-title";
-  title.textContent = "MCP endpoint";
+  title.textContent = target.title ?? "MCP endpoint";
   title.id = TITLE_ID;
   container.append(title, endpointRow(target));
-  if (target.agentHint) container.appendChild(agentHintRow(target.agentHint));
 
   let selectedClient: McpClientId | "all" = "all";
   let selectedScope: ConfigScope = "project";
@@ -236,7 +223,7 @@ export function renderMcpSection(
       }
       snippetPre.replaceChildren(list);
       snippetPre.setAttribute("aria-label", "Files Install will write");
-      hint.textContent = t.length ? "Install writes these files." : "";
+      hint.textContent = t.length ? "Install adds Pluk to these files." : "";
     } else {
       const id = selectedClient as McpClientId;
       snippetPre.setAttribute("aria-label", "Configuration snippet");
@@ -262,6 +249,7 @@ export function renderMcpSection(
 
   controls.append(clientLabel, clientSelect, scopeLabel, scopeSelect, spacer, copyBtn, addBtn);
   container.append(divider, controls, snippetPre, hint);
+  if (target.agentHint) container.appendChild(agentHintDisclosure(target.agentHint));
 
   if (!opts?.installed && hasHost()) {
     invoke<McpClientId[]>("list_installed_mcp_clients")
@@ -284,9 +272,9 @@ export function renderMcpSection(
   // One line per client, so the fan-out never hides which file it touched.
   function outcomeDetail({ added, skipped, failed }: FanOutResult): string {
     return [
-      ...added.map((r) => `${r.client} — added to ${r.path}`),
-      ...skipped.map((r) => `${r.client} — already set up in ${r.path}`),
-      ...failed.map((r) => `${r.client} — ${r.reason}`),
+      ...added.map((r) => `${r.client}: added to ${r.path}`),
+      ...skipped.map((r) => `${r.client}: already set up in ${r.path}`),
+      ...failed.map((r) => `${r.client}: ${r.reason}`),
     ].join("\n");
   }
 

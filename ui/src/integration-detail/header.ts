@@ -35,7 +35,7 @@ export function renderHeader(
   const title = document.createElement("h1");
   title.className = "detail-title";
   title.textContent = integration.name;
-  title.title = integration.name;
+  title.setAttribute("data-fullname", integration.name);
 
   const status = deriveStatus(health ?? null);
   const chip = document.createElement("span");

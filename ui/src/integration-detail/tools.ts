@@ -29,7 +29,7 @@ function renderToolList(
     title.textContent = "Tools";
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = "Tool list unavailable — the local connection isn’t responding.";
+    empty.textContent = "Tool list unavailable. The local connection isn’t responding.";
     card.append(title, empty);
     container.appendChild(card);
     return;
@@ -60,7 +60,7 @@ function renderToolList(
     category.textContent = tool.category;
     head.append(dot, name, category);
     row.appendChild(head);
-    const summary = on ? settingsSummary(tool, integration.toolConfig) : "Off — enable in Edit.";
+    const summary = on ? settingsSummary(tool, integration.toolConfig) : "Off. Enable in Edit.";
     if (summary) {
       const body = document.createElement("div");
       body.className = "tool-body";

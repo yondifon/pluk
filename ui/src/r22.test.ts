@@ -7,7 +7,7 @@ import { emptyState } from "./emptyStates";
 describe("slug derivation matches server", () => {
   test("basic cases", () => {
     expect(slug("Metrics DB")).toBe("metrics_db");
-    expect(slug("DB — Production!")).toBe("db_production");
+    expect(slug("DB, Production!")).toBe("db_production");
     expect(slug("")).toBe("member");
     expect(slug("__--__")).toBe("member");
     expect(slug("Hello World")).toBe("hello_world");

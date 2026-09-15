@@ -8,6 +8,7 @@
 # Node/Bun
 node_modules/
 ui/dist/
+extension/dist/
 
 .agents/
 skills-lock.json
@@ -22,3 +23,4 @@ opencode.jsonc
 # Mounted secrets, populated from 1Password — never commit. .env.example and
 # .env.1password (op:// references only, no real values) stay tracked.
 .env
+.mcp.json

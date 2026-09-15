@@ -41,6 +41,53 @@ export function createBadge(text: string, variant = "default"): HTMLSpanElement 
   return badge;
 }
 
+/** The progress line, big step heading, and helper text every wizard screen opens with. */
+export function wizardStepHeader(stepIndex: number, totalSteps: number, title: string, helper: string): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "form-body wizard-step";
+
+  const head = document.createElement("div");
+  head.className = "wizard-head";
+
+  const progress = document.createElement("p");
+  progress.className = "wizard-progress";
+  progress.textContent = `Step ${stepIndex} of ${totalSteps}`;
+  head.appendChild(progress);
+
+  const heading = document.createElement("h2");
+  heading.className = "ui-card-title";
+  heading.textContent = title;
+  heading.tabIndex = -1;
+  head.appendChild(heading);
+
+  const help = document.createElement("p");
+  help.className = "hint";
+  help.textContent = helper;
+  head.appendChild(help);
+
+  wrap.appendChild(head);
+  queueMicrotask(() => heading.focus());
+  return wrap;
+}
+
+/** Back, Cancel, an optional extra control (a "Skip for now" link), then the primary action. */
+export function wizardStepFooter(opts: {
+  onBack: (() => void) | null;
+  onCancel: (() => void) | null;
+  primaryLabel: string;
+  onPrimary: () => void;
+  extra?: HTMLElement;
+}): { el: HTMLElement; primaryButton: HTMLButtonElement } {
+  const footer = document.createElement("div");
+  footer.className = "form-footer";
+  if (opts.onBack) footer.appendChild(createButton("Back", { variant: "secondary", onClick: opts.onBack }));
+  if (opts.onCancel) footer.appendChild(createButton("Cancel", { variant: "secondary", onClick: opts.onCancel }));
+  if (opts.extra) footer.appendChild(opts.extra);
+  const primaryButton = createButton(opts.primaryLabel, { variant: "primary", onClick: opts.onPrimary });
+  footer.appendChild(primaryButton);
+  return { el: footer, primaryButton };
+}
+
 export type MenuItem =
   | { separator: true }
   | { label: string; icon?: IconName; danger?: boolean; onSelect: () => void };

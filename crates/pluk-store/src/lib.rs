@@ -8,6 +8,7 @@
 //! (honors `PLUK_DATA_DIR`), or against any path with [`Store::open`] — tests
 //! isolate themselves that way.
 
+pub mod browser;
 mod codec;
 mod error;
 mod groups;
@@ -46,7 +47,7 @@ pub use query_log::{
 };
 pub use saved_commands::SavedCommandInput;
 pub use saved_queries::SavedQueryInput;
-pub use settings::{LOG_CURSOR_KEY, LOG_RETENTION_DAYS_KEY};
+pub use settings::{BROWSER_PAIRING_TOKEN_KEY, LOG_CURSOR_KEY, LOG_RETENTION_DAYS_KEY};
 
 /// How often the automatic retention purge may run on the insert path. The
 /// TypeScript server purged on every insert; the guarantee that matters — rows

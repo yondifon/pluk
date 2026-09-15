@@ -1,5 +1,5 @@
 /**
- * Syntax highlighting — port of swift/Sources/SyntaxHighlight.swift
+ * Syntax highlighting, port of swift/Sources/SyntaxHighlight.swift
  *
  * Single-pass O(n) scanner for plain text, JSON, TOML, SQL, shell.
  * Console output uses line-level tinting only.
@@ -254,7 +254,7 @@ export function scan(source: string, language: CodeLanguage): SyntaxSpan[] {
   return spans;
 }
 
-// Console scanner — line-level only
+// Console scanner, line-level only
 const severityWords = new Set([
   "denied","err","error","errors","exception","fail","failed","failure","fatal","panic","refused","timeout","unauthorized","unhealthy","warn","warning",
 ]);

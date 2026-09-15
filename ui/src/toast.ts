@@ -1,5 +1,5 @@
 /**
- * Toasts — one stack in the bottom-right corner, newest nearest the corner.
+ * Toasts: one stack in the bottom-right corner, newest nearest the corner.
  * A pending toast resolves into its own success or error, so an action reports
  * once rather than twice. Hovering or focusing the stack expands it and holds
  * every countdown.

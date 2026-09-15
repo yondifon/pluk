@@ -1,5 +1,5 @@
 /**
- * Timestamp handling — port of LogTime in ConnectionLogView.swift
+ * Timestamp handling, port of LogTime in ConnectionLogView.swift
  * Stored as UTC "yyyy-MM-dd HH:mm:ss" (SQLite datetime('now')).
  * Parsed explicitly with POSIX locale, then shown in local time.
  */

@@ -15,6 +15,8 @@ use pluk_policy::default_enabled_for_category;
 #[serde(rename_all = "camelCase")]
 pub struct ToolSpec {
     pub name: String,
+    /// Concise human-readable name for the UI.
+    pub label: String,
     pub description: String,
     /// Coarse class for grouping and default-on (`read`, `write`, `delete`,
     /// `admin`, `inspect`).
@@ -27,6 +29,19 @@ pub struct ToolSpec {
     pub settings: Option<Vec<ConfigField>>,
 }
 
+pub(crate) fn humanize_tool_name(name: &str) -> String {
+    name.split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl ToolSpec {
     /// Build a spec whose default-on state derives from the category: read
     /// and inspect tools ship on; write/delete/admin ship off until opted in.
@@ -35,15 +50,22 @@ impl ToolSpec {
         description: impl Into<String>,
         category: impl Into<String>,
     ) -> Self {
+        let name = name.into();
         let category = category.into();
         let default_enabled = default_enabled_for_category(&category);
         ToolSpec {
-            name: name.into(),
+            label: humanize_tool_name(&name),
+            name,
             description: description.into(),
             category,
             default_enabled,
             settings: None,
         }
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = label.into();
+        self
     }
 
     /// Override the derived default-on state — set `false` on a niche or heavy
@@ -93,7 +115,13 @@ mod tests {
         let value = serde_json::to_value(ToolSpec::new("get", "Get a key", "read")).unwrap();
         assert_eq!(
             value,
-            serde_json::json!({ "name": "get", "description": "Get a key", "category": "read", "defaultEnabled": true })
+            serde_json::json!({ "name": "get", "label": "Get", "description": "Get a key", "category": "read", "defaultEnabled": true })
         );
+    }
+
+    #[test]
+    fn labels_can_be_overridden_for_catalog_specific_names() {
+        let spec = ToolSpec::new("x_reply", "Reply", "write").with_label("Reply");
+        assert_eq!(spec.label, "Reply");
     }
 }

@@ -1,5 +1,8 @@
 export type Environment = "production" | "staging" | "development" | "local";
 
+/** The Wande integration's type (`pluk_browser::INTEGRATION_TYPE`). */
+export const WANDE_TYPE = "wande";
+
 export interface Integration {
   id: string;
   name: string;

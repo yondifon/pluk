@@ -1,6 +1,27 @@
 import { createButton } from "../primitives";
 
 export type ConfirmChoice = "once" | "session" | "always" | "deny";
+export type PostChoice = "postNow" | "queue" | "discard" | "later";
+
+export interface PostQuestion {
+  draftId: string;
+  text: string;
+  /** The posts of a thread, in order. Empty for a plain post. */
+  parts: string[];
+  replyingTo: string | null;
+  canQueue: boolean;
+  /** When the post stops being sendable, in epoch milliseconds. */
+  closesAt: number;
+}
+
+/** The line under a waiting post: how long it stays sendable. */
+export function postCountdownText(secondsLeft: number): string {
+  const seconds = Math.max(0, Math.ceil(secondsLeft));
+  if (seconds === 0) return "Time is up. Nothing was posted.";
+  const minutes = Math.floor(seconds / 60);
+  const rest = String(seconds % 60).padStart(2, "0");
+  return `Nothing goes out until you answer. Expires in ${minutes}:${rest}.`;
+}
 
 export interface ConfirmQuestion {
   integrationId: string;
@@ -40,7 +61,7 @@ export function renderConfirm(
 
   const reason = document.createElement("p");
   reason.className = "confirm-reason";
-  reason.textContent = `Pluk blocks this by default — ${question.reason}`;
+  reason.textContent = `Pluk blocks this by default. ${question.reason}`;
 
   // The countdown is read as it changes, so it is not announced: the
   // consequence of waiting is already in the text above it.
@@ -68,6 +89,74 @@ export function renderConfirm(
       countdown.textContent = countdownText(seconds);
     },
     /** After an answer the window waits to be closed; nothing else to click. */
+    settle() {
+      for (const button of actions.querySelectorAll("button")) button.disabled = true;
+      countdown.textContent = "";
+    },
+  };
+}
+
+/**
+ * A post an agent asked for, put to the person before anything reaches the
+ * page. Every word here comes from Pluk, never from the page.
+ */
+export function renderPost(
+  root: HTMLElement,
+  question: PostQuestion,
+  onAnswer: (choice: PostChoice) => void,
+): { setSecondsLeft: (seconds: number) => void; settle: () => void } {
+  root.innerHTML = "";
+  root.className = "confirm";
+
+  const source = document.createElement("p");
+  source.className = "confirm-source";
+  source.textContent = "Wande";
+
+  const thread = question.parts.length > 1;
+  const title = document.createElement("h1");
+  title.className = "confirm-title";
+  title.textContent = question.replyingTo
+    ? "Send this reply?"
+    : thread
+      ? `Post this thread of ${question.parts.length}?`
+      : "Post this?";
+
+  const text = document.createElement("div");
+  text.className = "confirm-command confirm-post";
+  for (const part of thread ? question.parts : [question.text]) {
+    const block = document.createElement("pre");
+    block.className = "confirm-post-part";
+    block.textContent = part;
+    text.appendChild(block);
+  }
+
+  const context = document.createElement("p");
+  context.className = "confirm-reason";
+  context.textContent = question.replyingTo ? `Replying to ${question.replyingTo}` : "";
+  context.hidden = !question.replyingTo;
+
+  const countdown = document.createElement("p");
+  countdown.className = "confirm-countdown";
+  countdown.setAttribute("aria-hidden", "true");
+
+  const actions = document.createElement("div");
+  actions.className = "confirm-actions";
+  const buttons: Array<[string, PostChoice, "default" | "primary"]> = [
+    ["Discard", "discard", "default"],
+    ...(question.canQueue ? [["Add to queue", "queue", "default"] as [string, PostChoice, "default"]] : []),
+    ["Post now", "postNow", "primary"],
+  ];
+  for (const [label, choice, variant] of buttons) {
+    actions.appendChild(createButton(label, { variant, onClick: () => onAnswer(choice) }));
+  }
+
+  root.append(source, title, text, context, countdown, actions);
+  actions.querySelector<HTMLButtonElement>(".ui-button-primary")?.focus();
+
+  return {
+    setSecondsLeft(seconds: number) {
+      countdown.textContent = postCountdownText(seconds);
+    },
     settle() {
       for (const button of actions.querySelectorAll("button")) button.disabled = true;
       countdown.textContent = "";

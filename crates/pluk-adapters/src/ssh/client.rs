@@ -163,6 +163,7 @@ pub struct ExecResult {
 // Trait for SSH execution, stubable
 #[async_trait::async_trait]
 pub trait SshExecutor: Send + Sync {
+    #[allow(clippy::too_many_arguments)]
     async fn exec(
         &self,
         host: &str,

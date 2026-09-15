@@ -28,6 +28,7 @@ export interface ConfigFieldDef {
 
 export interface ToolDef {
   name: string;
+  label: string;
   description: string;
   category: string;
   defaultEnabled: boolean;
@@ -40,6 +41,7 @@ export interface AdapterManifest {
   category: string;
   policyKind: string;
   agentHint: string;
+  runsCommands: boolean;
   tools: ToolDef[];
   configFields: ConfigFieldDef[];
 }

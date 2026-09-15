@@ -9,6 +9,14 @@ cd ui
 bun install
 ```
 
+Chrome extension:
+
+```bash
+cd extension
+bun install
+bun run build   # writes extension/dist, loadable unpacked
+```
+
 Server/Host (Rust):
 
 ```bash
@@ -30,6 +38,7 @@ Run `make test` to run all tests. The suite covers:
 - **Store layer** — SQLite, migrations, and concurrency handling
 - **Platform layer** — MCP config injection, tray/window management, update checking
 - **Policy engines** — SQL policy (`sql.rs`) and SSH command policy (`ssh/policy.rs`) get direct test coverage — they're what stands between an agent and a production database or shell, so changes there need tests
+- **Browser control** (`crates/pluk-browser/`) — the protocol validators, the job lifecycle, and the compose-then-confirm boundary. The extension's own tests run with `bun test --cwd extension`; `make test` runs both
 
 ## Code style
 

@@ -22,6 +22,7 @@ use pluk_store::Store;
 use pluk_db::factory::{CreateDriverOpts, create_driver};
 use pluk_db::config::SqlConfig as DbSqlConfig;
 
+#[allow(clippy::field_reassign_with_default)]
 fn db_config_from(conn: &Integration) -> DbSqlConfig {
     let mut cfg = DbSqlConfig::default();
     cfg.r#type = conn.r#type.clone();

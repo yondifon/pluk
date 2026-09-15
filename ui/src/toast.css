@@ -7,7 +7,7 @@
 /* visibility flips only once the fade has finished, so collapsing does not blink. */
 .toast[data-hidden] { opacity: 0; visibility: hidden; transition: transform var(--duration-toast) var(--ease-out), opacity var(--duration-toast) var(--ease-out), visibility 0s linear var(--duration-toast); }
 .toast-icon { display: flex; flex-shrink: 0; padding-top: var(--space-xxs); transition: opacity var(--duration-press) var(--ease-out); }
-/* A pending toast resolving swaps spinner for check — fade it in rather than cut. */
+/* A pending toast resolving swaps spinner for check, fade it in rather than cut. */
 @starting-style { .toast-icon { opacity: 0; } }
 .toast[data-variant="success"] .toast-icon { color: var(--status-success); }
 .toast[data-variant="error"] .toast-icon { color: var(--status-danger); }
@@ -24,7 +24,7 @@
 .toast-detail { max-height: calc(var(--toast-detail-height) * var(--zoom-scale)); margin: var(--space-sm) 0 0; overflow: auto; padding: var(--space-sm); border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--surface-secondary-label); font-family: var(--font-mono); font-size: calc(var(--type-caption) * var(--zoom-scale)); white-space: pre-wrap; overflow-wrap: anywhere; }
 .toast-close { flex-shrink: 0; color: var(--surface-tertiary-label); }
 .toast-overflow { position: absolute; right: 0; bottom: 0; padding: var(--space-xxs) var(--space-sm); border-radius: var(--radius-pill); background: var(--surface-control); color: var(--surface-secondary-label); font-size: calc(var(--type-caption2) * var(--zoom-scale)); transform: translate3d(0, var(--toast-y, 0px), 0); transition: transform var(--duration-toast) var(--ease-out); }
-/* Movement goes, the fade stays — a toast still reads as arriving and leaving. */
+/* Movement goes, the fade stays. A toast still reads as arriving and leaving. */
 @media (prefers-reduced-motion: reduce) {
   .toast { transition: opacity var(--duration-exit) linear, visibility 0s linear 0s !important; }
   .toast[data-hidden] { transition: opacity var(--duration-exit) linear, visibility 0s linear var(--duration-exit) !important; }
