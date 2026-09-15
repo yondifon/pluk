@@ -106,6 +106,7 @@
   --surface-hover: rgba(0, 0, 0, 0.06);
   --border-control: rgba(0, 0, 0, 0.14);
   --border-subtle: rgba(0, 0, 0, 0.10);
+  --border-sidebar-edge: rgba(0, 0, 0, 0.04);
   --action-fill: #1a1a1a;
   --action-fill-hover: #383838;
   --action-label: #ffffff;
@@ -159,6 +160,7 @@
     --surface-hover: rgba(255, 255, 255, 0.10);
     --border-control: rgba(255, 255, 255, 0.10);
     --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-sidebar-edge: rgba(255, 255, 255, 0.04);
     --action-fill: #ffffff;
     --action-fill-hover: #e5e5e5;
     --action-label: #1a1a1a;
