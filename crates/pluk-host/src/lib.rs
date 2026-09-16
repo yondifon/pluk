@@ -208,6 +208,7 @@ pub fn run() {
             commands::list_adapters,
             wande::get_pluk_id,
             wande::list_wande_posts,
+            wande::wande_post_image,
             wande::send_wande_post,
             wande::discard_wande_post,
             wande::cancel_queued_wande_post,

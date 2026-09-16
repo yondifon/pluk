@@ -88,13 +88,55 @@ body {
   word-break: break-word;
 }
 
-.confirm-post-part + .confirm-post-part {
+.confirm-post-part + .confirm-post-part,
+.confirm-images + .confirm-post-part {
   padding-top: var(--space-sm);
   border-top: var(--border-width) solid var(--border-subtle);
 }
 
+.confirm-post-part + .confirm-images {
+  padding-top: var(--space-sm);
+}
+
+.confirm-images {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.confirm-image {
+  width: 72px;
+  height: 72px;
+  flex: none;
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+
+.confirm-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.confirm-image-broken {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-color: var(--status-danger);
+}
+
+.confirm-image-broken::after {
+  content: "!";
+  color: var(--surface-secondary-label);
+  font-size: calc(var(--type-body) * var(--zoom-scale));
+  font-weight: 600;
+}
+
 .confirm-reason,
-.confirm-countdown {
+.confirm-countdown,
+.confirm-images-status {
   margin: 0;
   color: var(--surface-secondary-label);
   font-size: calc(var(--type-caption) * var(--zoom-scale));

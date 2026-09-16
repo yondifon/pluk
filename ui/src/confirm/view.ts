@@ -3,11 +3,27 @@ import { createButton } from "../primitives";
 export type ConfirmChoice = "once" | "session" | "always" | "deny";
 export type PostChoice = "postNow" | "queue" | "discard" | "later";
 
+/** One image a post was asked with, as far as this window ever knows: never
+ * a path. The picture itself comes from `loadImage`, one id at a time. */
+export interface DraftImage {
+  id: string;
+  /** Which post of a thread this attaches to (0 for a plain post's one
+   * implicit part). */
+  partIndex: number;
+  ordinal: number;
+  contentType: string;
+  bytes: number;
+}
+
 export interface PostQuestion {
+  integrationId: string;
   draftId: string;
   text: string;
   /** The posts of a thread, in order. Empty for a plain post. */
   parts: string[];
+  /** Every image asked for, across every part. Group by `partIndex` to show
+   * each post its own. */
+  images: DraftImage[];
   replyingTo: string | null;
   canQueue: boolean;
   /** When the post stops being sendable, in epoch milliseconds. */
@@ -96,14 +112,27 @@ export function renderConfirm(
   };
 }
 
+/** The line under a post's images while at least one preview is still
+ * loading, or once one has failed to. */
+function imagesStatusText(pending: number, failed: boolean): string {
+  if (failed) return "Couldn’t load one of these images. Discard and ask again.";
+  if (pending > 0) return "Loading the exact images you’d be sending…";
+  return "";
+}
+
 /**
  * A post an agent asked for, put to the person before anything reaches the
  * page. Every word here comes from Pluk, never from the page.
+ *
+ * `loadImage` fetches one preview by id — the exact bytes this draft was
+ * staged with, never a path this window could point anywhere else. Sending
+ * stays disabled until every image has loaded; Discard never waits on them.
  */
 export function renderPost(
   root: HTMLElement,
   question: PostQuestion,
   onAnswer: (choice: PostChoice) => void,
+  loadImage: (imageId: string) => Promise<string>,
 ): { setSecondsLeft: (seconds: number) => void; settle: () => void } {
   root.innerHTML = "";
   root.className = "confirm";
@@ -121,14 +150,28 @@ export function renderPost(
       ? `Post this thread of ${question.parts.length}?`
       : "Post this?";
 
+  const parts = thread ? question.parts : [question.text];
+  const images = question.images;
   const text = document.createElement("div");
   text.className = "confirm-command confirm-post";
-  for (const part of thread ? question.parts : [question.text]) {
+  const galleries: HTMLElement[] = [];
+  for (const [index, part] of parts.entries()) {
     const block = document.createElement("pre");
     block.className = "confirm-post-part";
     block.textContent = part;
     text.appendChild(block);
+    const partImages = images.filter((image) => image.partIndex === index);
+    if (partImages.length === 0) continue;
+    const gallery = document.createElement("div");
+    gallery.className = "confirm-images";
+    text.appendChild(gallery);
+    galleries[index] = gallery;
   }
+
+  const imagesStatus = document.createElement("p");
+  imagesStatus.className = "confirm-images-status";
+  imagesStatus.setAttribute("role", "status");
+  imagesStatus.hidden = images.length === 0;
 
   const context = document.createElement("p");
   context.className = "confirm-reason";
@@ -141,17 +184,68 @@ export function renderPost(
 
   const actions = document.createElement("div");
   actions.className = "confirm-actions";
-  const buttons: Array<[string, PostChoice, "default" | "primary"]> = [
-    ["Discard", "discard", "default"],
-    ...(question.canQueue ? [["Add to queue", "queue", "default"] as [string, PostChoice, "default"]] : []),
-    ["Post now", "postNow", "primary"],
+  const buttons: Array<[string, PostChoice, "default" | "primary", boolean]> = [
+    ["Discard", "discard", "default", false],
+    ...(question.canQueue
+      ? [["Add to queue", "queue", "default", true] as [string, PostChoice, "default", boolean]]
+      : []),
+    ["Post now", "postNow", "primary", true],
   ];
-  for (const [label, choice, variant] of buttons) {
-    actions.appendChild(createButton(label, { variant, onClick: () => onAnswer(choice) }));
+  const sendButtons: HTMLButtonElement[] = [];
+  for (const [label, choice, variant, waitsOnImages] of buttons) {
+    const button = createButton(label, { variant, onClick: () => onAnswer(choice) });
+    if (waitsOnImages) {
+      button.disabled = images.length > 0;
+      sendButtons.push(button);
+    }
+    actions.appendChild(button);
   }
 
-  root.append(source, title, text, context, countdown, actions);
-  actions.querySelector<HTMLButtonElement>(".ui-button-primary")?.focus();
+  root.append(source, title, text, imagesStatus, context, countdown, actions);
+  (
+    actions.querySelector<HTMLButtonElement>(".ui-button-primary:not(:disabled)") ??
+    actions.querySelector<HTMLButtonElement>(".ui-button:not(:disabled)")
+  )?.focus();
+
+  if (images.length > 0) {
+    let pending = images.length;
+    let failed = false;
+    const updateStatus = () => {
+      imagesStatus.textContent = imagesStatusText(pending, failed);
+    };
+    updateStatus();
+    for (const image of images) {
+      const gallery = galleries[image.partIndex];
+      if (!gallery) continue;
+      const partCount = images.filter((other) => other.partIndex === image.partIndex).length;
+      const frame = document.createElement("div");
+      frame.className = "confirm-image";
+      frame.setAttribute("role", "img");
+      frame.setAttribute("aria-label", `Image ${image.ordinal + 1} of ${partCount}, loading`);
+      gallery.appendChild(frame);
+      loadImage(image.id)
+        .then((dataUrl) => {
+          const picture = document.createElement("img");
+          picture.src = dataUrl;
+          picture.alt = `Image ${image.ordinal + 1} of ${partCount}`;
+          frame.replaceChildren(picture);
+          frame.removeAttribute("role");
+          frame.removeAttribute("aria-label");
+        })
+        .catch(() => {
+          failed = true;
+          frame.classList.add("confirm-image-broken");
+          frame.setAttribute("aria-label", `Image ${image.ordinal + 1} of ${partCount} could not load`);
+        })
+        .finally(() => {
+          pending -= 1;
+          updateStatus();
+          if (pending === 0 && !failed) {
+            for (const button of sendButtons) button.disabled = false;
+          }
+        });
+    }
+  }
 
   return {
     setSecondsLeft(seconds: number) {

@@ -37,7 +37,13 @@ async function showPost(id: string): Promise<void> {
     void invoke("wande_answer", { id, choice });
   };
 
-  const view = renderPost(root, question, answer);
+  const loadImage = (imageId: string) =>
+    invoke<string>("wande_post_image", {
+      integrationId: question.integrationId,
+      draftId: question.draftId,
+      imageId,
+    });
+  const view = renderPost(root, question, answer, loadImage);
   view.setSecondsLeft((question.closesAt - Date.now()) / 1000);
   const ticker = window.setInterval(() => {
     const left = (question.closesAt - Date.now()) / 1000;

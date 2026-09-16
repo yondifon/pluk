@@ -507,6 +507,92 @@ export function runXPage(
     return null;
   };
 
+  // How many pieces of media the composer currently shows attached, however
+  // they got there. Counted, never trusted by content: this is what tells
+  // apart "still uploading", "fully attached", and media Pluk never asked
+  // for.
+  const attachedMediaCount = (scope: Element): number =>
+    scope.querySelectorAll('[data-testid="attachments"] img').length +
+    scope.querySelectorAll('[data-testid="attachments"] video').length;
+
+  const base64ToBytes = (base64: string): Uint8Array<ArrayBuffer> => {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(new ArrayBuffer(binary.length));
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  };
+
+  const extensionFor = (contentType: string): string =>
+    contentType === "image/png" ? "png" : "jpg";
+
+  /**
+   * Reconciles this part's composer against what its own submission was
+   * approved with, and pastes the rest straight into that part's own editor
+   * — the same synthetic, untrusted `paste` a script already uses for text,
+   * now carrying files instead. Nothing is written to the system clipboard
+   * and no clipboard permission is needed: the `DataTransfer` here is built
+   * from scratch and only ever handed to this one dispatched event.
+   *
+   * Any media the composer shows beyond what was approved is refused
+   * outright, images or not: it did not come from this submission's own
+   * staged snapshot, so nothing here can tell what it actually is. Once every
+   * approved image has a matching preview, `null` lets the caller continue.
+   */
+  const guardComposerMedia = (
+    editor: Element,
+    scope: Element,
+    images: readonly { readonly data: string; readonly contentType: string }[],
+  ): DriverPageResult | null => {
+    const existing = attachedMediaCount(scope);
+    if (existing > images.length) {
+      return failure(
+        "unsupported",
+        "The composer already has media Pluk did not attach. Remove it and try again; nothing was submitted.",
+      );
+    }
+    if (images.length === 0 || existing === images.length) {
+      return null;
+    }
+    // A real upload can take far longer to render its preview than one poll:
+    // once this editor carries Pluk's own marker, the paste already
+    // happened, and every later pass here just keeps waiting on it rather
+    // than pasting the files a second time.
+    if (existing > 0 || editor.hasAttribute("data-pluk-pasted")) {
+      return { state: "waiting", message: "Waiting for the image previews to finish loading." };
+    }
+    if (
+      typeof DataTransfer !== "function" ||
+      typeof ClipboardEvent !== "function" ||
+      typeof File !== "function"
+    ) {
+      return failure(
+        "unsupported",
+        "This version of Chrome does not support pasting images into X. Nothing was submitted.",
+      );
+    }
+    const clipboardData = new DataTransfer();
+    images.forEach((image, index) => {
+      const blob = new Blob([base64ToBytes(image.data)], { type: image.contentType });
+      const file = new File([blob], `pluk-${index}.${extensionFor(image.contentType)}`, {
+        type: image.contentType,
+      });
+      clipboardData.items.add(file);
+    });
+    editor.setAttribute("data-pluk-pasted", "true");
+    trace(`pasting ${images.length} image(s)`);
+    emit(
+      editor,
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }),
+    );
+    return { state: "waiting", message: "Waiting for the image previews to finish loading." };
+  };
+
   const notificationSelector = '[role="alert"], [data-testid="toast"]';
 
   const notificationTexts = (): string[] =>
@@ -638,6 +724,10 @@ export function runXPage(
       );
     }
     trace("typed reply");
+    const mediaGuard = guardComposerMedia(composer, scope, options.images ?? []);
+    if (mediaGuard) {
+      return mediaGuard;
+    }
     await new Promise((resolve) =>
       setTimeout(resolve, 600 + Math.random() * 800),
     );
@@ -772,6 +862,12 @@ export function runXPage(
         );
       }
       trace(`typed part ${index + 1}`);
+      // Every part gets its own images, verified attached in that part's own
+      // composer before the thread ever moves on to add the next one.
+      const mediaGuard = guardComposerMedia(composer, scope, options.partImages?.[index] ?? []);
+      if (mediaGuard) {
+        return mediaGuard;
+      }
     }
     if (!composer) {
       return failure(

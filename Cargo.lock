@@ -4094,6 +4094,7 @@ version = "0.1.2"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "objc2",
  "objc2-app-kit",
  "pluk-adapters",
@@ -4171,6 +4172,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "uuid",
 ]

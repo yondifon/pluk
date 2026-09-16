@@ -9,6 +9,8 @@ interface FixtureNode {
   querySelector(selector: string): FixtureNode | null;
   querySelectorAll(selector: string): readonly FixtureNode[];
   getAttribute(name: string): string | null;
+  setAttribute(name: string, value: string): void;
+  hasAttribute(name: string): boolean;
   closest(selector: string): FixtureNode | null;
   contains(other: FixtureNode): boolean;
   getBoundingClientRect(): {
@@ -29,6 +31,7 @@ interface FixtureNode {
 
 let fixturePasteSink: ((text: string) => boolean) | null = null;
 let fixtureSubmitSink: (() => void) | null = null;
+let fixtureImagePasteSink: ((editor: FixtureNode, files: readonly File[]) => void) | null = null;
 
 class HarnessKeyboardEvent {
   readonly type: string;
@@ -56,6 +59,12 @@ class HarnessKeyboardEvent {
 
 class HarnessDataTransfer {
   private text = "";
+  readonly files: File[] = [];
+  readonly items = {
+    add: (file: File): void => {
+      this.files.push(file);
+    },
+  };
 
   setData(format: string, value: string): void {
     if (format === "text/plain") {
@@ -99,6 +108,12 @@ function node(
     getAttribute(name) {
       return this.attributes[name] ?? null;
     },
+    setAttribute(name, value) {
+      (this.attributes as Record<string, string>)[name] = value;
+    },
+    hasAttribute(name) {
+      return name in this.attributes;
+    },
     closest() {
       return null;
     },
@@ -119,9 +134,11 @@ function node(
       readonly metaKey?: boolean;
       readonly ctrlKey?: boolean;
       readonly shiftKey?: boolean;
-      readonly clipboardData?: { getData(format: string): string };
+      readonly clipboardData?: { getData(format: string): string; files?: readonly File[] };
     }) {
-      if (event.type === "paste" && fixturePasteSink) {
+      if (event.type === "paste" && event.clipboardData?.files?.length && fixtureImagePasteSink) {
+        fixtureImagePasteSink(this, event.clipboardData.files);
+      } else if (event.type === "paste" && fixturePasteSink) {
         fixturePasteSink(event.clipboardData?.getData("text/plain") ?? "");
       }
       if (
@@ -234,6 +251,7 @@ function installPage(
   return () => {
     fixturePasteSink = null;
     fixtureSubmitSink = null;
+    fixtureImagePasteSink = null;
     if (previousKeyboardEvent === undefined) {
       delete globals.KeyboardEvent;
     } else {
@@ -1040,6 +1058,225 @@ test("a thread asks for a real press of the plus, then fills the new editor and 
   expect(result).toMatchObject({ state: "submission_succeeded", postedId: "777" });
   expect(typed).toEqual(["One.", "Two."]);
   expect(addClicks).toBe(0);
+  expect(submitClicks).toBe(1);
+});
+
+test("pastes approved images once, then waits rather than pasting again until the preview renders", async () => {
+  let submitClicks = 0;
+  let insertedText = "";
+  let pastedFiles: readonly File[] = [];
+  fixtureImagePasteSink = (_editor, files) => {
+    pastedFiles = files;
+  };
+  const submitButton = node("Post");
+  const composer = node("");
+  const toastLink = node("View", { href: "/owner/status/999" });
+  const toast = node("An earlier X notification.", {}, { 'a[href*="/status/"]': [toastLink] });
+  Object.defineProperty(composer, "focus", { value: () => {} });
+  Object.defineProperty(submitButton, "click", {
+    value: () => {
+      submitClicks += 1;
+      Object.defineProperty(composer, "textContent", { configurable: true, value: "" });
+      Object.defineProperty(toast, "textContent", { configurable: true, value: "Your post was posted." });
+    },
+  });
+  const { scope } = makeComposerScope(composer, submitButton);
+  const restore = installPage(
+    "Compose",
+    "X",
+    "https://x.com/compose/post",
+    {
+      '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
+      '[data-testid="tweetTextarea_0"]': [composer],
+      '[role="alert"], [data-testid="toast"]': [toast],
+    },
+    (_commandId, _showUi, value) => {
+      insertedText += value ?? "";
+      Object.defineProperty(composer, "textContent", { configurable: true, value: insertedText });
+      return true;
+    },
+  );
+  const options = {
+    action: "submit_post" as const,
+    targetUrl: "https://x.com/compose/post",
+    text: "Hello from Wande",
+    partImages: [[{ data: "aGVsbG8=", contentType: "image/png" }]],
+  };
+
+  const first = await runXPage(options);
+  expect(first).toMatchObject({ state: "waiting" });
+  expect(pastedFiles).toHaveLength(1);
+  expect(pastedFiles[0]?.type).toBe("image/png");
+  expect(submitClicks).toBe(0);
+
+  // The paste already happened, but X has not rendered a preview yet:
+  // pasting again would risk attaching the same image twice, so the driver
+  // only waits.
+  pastedFiles = [];
+  const second = await runXPage(options);
+  expect(second).toMatchObject({ state: "waiting" });
+  expect(pastedFiles).toHaveLength(0);
+  expect(submitClicks).toBe(0);
+
+  // The preview has rendered: the submission proceeds and sends once.
+  const preview = node("");
+  (scope.selectors as Record<string, readonly FixtureNode[]>)['[data-testid="attachments"] img'] = [preview];
+  const result = await runXPage(options);
+  restore();
+  expect(result).toMatchObject({ state: "submission_succeeded" });
+  expect(submitClicks).toBe(1);
+});
+
+test("refuses to submit when the composer already carries media Pluk did not approve", async () => {
+  let submitClicks = 0;
+  const submitButton = node("Post");
+  const composer = node("");
+  Object.defineProperty(composer, "focus", { value: () => {} });
+  Object.defineProperty(submitButton, "click", {
+    value: () => {
+      submitClicks += 1;
+    },
+  });
+  const existingMedia = node("");
+  makeComposerScope(composer, submitButton, {
+    '[data-testid="attachments"] img': [existingMedia],
+  });
+  const restore = installPage(
+    "Compose",
+    "X",
+    "https://x.com/compose/post",
+    {
+      '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
+      '[data-testid="tweetTextarea_0"]': [composer],
+    },
+    (_commandId, _showUi, value) => {
+      Object.defineProperty(composer, "textContent", { configurable: true, value: value ?? "" });
+      return true;
+    },
+  );
+  const result = await runXPage({
+    action: "submit_post",
+    targetUrl: "https://x.com/compose/post",
+    text: "Hello from Wande",
+  });
+  restore();
+  expect(result).toMatchObject({
+    state: "unsupported",
+    message:
+      "The composer already has media Pluk did not attach. Remove it and try again; nothing was submitted.",
+  });
+  expect(submitClicks).toBe(0);
+});
+
+test("a thread pastes each part's own distinct images, never twice, with an image-free part in between", async () => {
+  let submitClicks = 0;
+  const typed: string[] = [];
+  let active: FixtureNode | null = null;
+  const pastesByEditor = new Map<FixtureNode, readonly File[]>();
+  fixtureImagePasteSink = (editor, files) => {
+    pastesByEditor.set(editor, files);
+  };
+  const first = node("");
+  const second = node("");
+  const third = node("");
+  const submitButton = node("Post all");
+  const toastLink = node("View", { href: "/owner/status/777" });
+  const toast = node("An earlier X notification.", {}, { 'a[href*="/status/"]': [toastLink] });
+  for (const editor of [first, second, third]) {
+    Object.defineProperty(editor, "focus", { value: () => (active = editor) });
+  }
+  const { scope: firstScope } = makeComposerScope(first, submitButton);
+  // All three post boxes are already open and reachable: this test is about
+  // each part's own images, not re-proving the "+" choreography already
+  // covered by the plain-thread test above.
+  const secondScope = node("", {}, {
+    '[data-testid="tweetTextarea_1"]': [second],
+    '[data-testid="tweetButtonInline"]': [submitButton],
+    '[data-testid="tweetButton"]': [submitButton],
+  });
+  Object.defineProperty(second, "parentElement", { configurable: true, value: secondScope });
+  const thirdScope = node("", {}, {
+    '[data-testid="tweetTextarea_2"]': [third],
+    '[data-testid="tweetButtonInline"]': [submitButton],
+    '[data-testid="tweetButton"]': [submitButton],
+  });
+  Object.defineProperty(third, "parentElement", { configurable: true, value: thirdScope });
+  Object.defineProperty(submitButton, "click", {
+    value: () => {
+      submitClicks += 1;
+      for (const editor of [first, second, third]) {
+        Object.defineProperty(editor, "textContent", { configurable: true, value: "" });
+      }
+      Object.defineProperty(toast, "textContent", { configurable: true, value: "Your post was posted." });
+    },
+  });
+  const restore = installPage(
+    "Compose",
+    "X",
+    "https://x.com/compose/post",
+    {
+      '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
+      '[data-testid="tweetTextarea_0"]': [first],
+      '[data-testid="tweetTextarea_1"]': [second],
+      '[data-testid="tweetTextarea_2"]': [third],
+      '[role="alert"], [data-testid="toast"]': [toast],
+    },
+    (_commandId, _showUi, value) => {
+      typed.push(value ?? "");
+      if (active) {
+        Object.defineProperty(active, "textContent", { configurable: true, value: value ?? "" });
+      }
+      return true;
+    },
+  );
+  const options = {
+    action: "submit_post" as const,
+    targetUrl: "https://x.com/compose/post",
+    text: "One.\n\nTwo.\n\nThree.",
+    parts: ["One.", "Two.", "Three."],
+    partImages: [
+      [{ data: "YQ==", contentType: "image/png" }],
+      [],
+      [
+        { data: "YjE=", contentType: "image/png" },
+        { data: "YjI=", contentType: "image/png" },
+      ],
+    ],
+  };
+
+  // The first post's own image is pasted first.
+  const pausedFirst = await runXPage(options);
+  expect(pausedFirst).toMatchObject({ state: "waiting" });
+  expect(pastesByEditor.get(first)).toHaveLength(1);
+  expect(pastesByEditor.has(second)).toBe(false);
+  expect(pastesByEditor.has(third)).toBe(false);
+  expect(typed).toEqual(["One."]);
+
+  // Its preview has rendered: the thread types the image-free middle post,
+  // then reaches the third and pastes its own, different images — never the
+  // first post's images a second time.
+  (firstScope.selectors as Record<string, readonly FixtureNode[]>)['[data-testid="attachments"] img'] = [node("")];
+  const pausedThird = await runXPage(options);
+  expect(pausedThird).toMatchObject({ state: "waiting" });
+  expect(pastesByEditor.get(third)).toHaveLength(2);
+  expect(pastesByEditor.has(second)).toBe(false);
+  expect(typed).toEqual(["One.", "Two.", "Three."]);
+
+  // Still no preview on the third post: asking again must not paste its
+  // files a second time.
+  pastesByEditor.delete(third);
+  const stillWaitingOnThird = await runXPage(options);
+  expect(stillWaitingOnThird).toMatchObject({ state: "waiting" });
+  expect(pastesByEditor.has(third)).toBe(false);
+
+  (thirdScope.selectors as Record<string, readonly FixtureNode[]>)['[data-testid="attachments"] img'] = [
+    node(""),
+    node(""),
+  ];
+  const result = await runXPage(options);
+  restore();
+  expect(result).toMatchObject({ state: "submission_succeeded", postedId: "777" });
+  expect(typed).toEqual(["One.", "Two.", "Three."]);
   expect(submitClicks).toBe(1);
 });
 

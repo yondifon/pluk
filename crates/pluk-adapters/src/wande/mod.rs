@@ -45,14 +45,15 @@ const GET_JOB: &str = "get_job";
 /// drives the page and is annotated as such.
 const READ: &str = "read";
 
-/// How long a tool call waits for the page, or for the person answering
-/// about a post, before handing back the job id. A post stays answerable
-/// far longer than this; the cap sits under the minute MCP clients give a
-/// call, so the caller gets a "still going" instead of a dead socket.
+/// How long a post call waits for the person answering before handing back
+/// its id. A post stays answerable far longer than this; the cap sits under
+/// the minute MCP clients give a call, so the caller gets a "still going"
+/// instead of a dead socket. Browser jobs never wait: a page can take
+/// minutes, so their id comes back at once.
 const MAX_WAIT: Duration = Duration::from_secs(45);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. Instagram tools are read-only: profiles, posts, and screenshots, no posting or replying there. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. A call waits up to 45 seconds; past that you get a jobId, and get_job returns the outcome once it lands. Pass payload.debug true on x_post or x_reply to have a screenshot and the page HTML attached to the browser job when the page refuses it.";
+const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. Instagram tools are read-only: profiles, posts, and screenshots, no posting or replying there. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. payload.images takes 1 to 4 absolute local PNG or JPEG file paths for a plain post or a reply, each under 5 MiB. For a thread, give each part its own images instead: pass thread as a mix of exact strings and { text, images } objects, and do not also pass the top-level images field — that combination is refused, not guessed at. The user sees exactly those images under each part before deciding, and only sends once every one has loaded. If any part's images fail to attach or upload in the browser, nothing is posted, text included; the user sees why and can try again. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. Read tools hand back a jobId at once; call get_job with it until the page is done. x_post and x_reply wait up to 45 seconds for the user's answer, then hand back an id the same way. Pass payload.debug true on x_post or x_reply to have a screenshot and the page HTML attached to the browser job when the page refuses it.";
 
 const ACCESS: &str = "Reads and posts through a Chrome window the user is signed in to, one page at a time. Every post is shown to the user in full inside Pluk and goes out only if they say so.";
 
@@ -262,6 +263,13 @@ fn lift_required(properties: &Value) -> (Map<String, Value>, Vec<String>) {
                         copy.insert("required".into(), json!(nested_required));
                     }
                 }
+                // An array property's own item schema can carry a nested
+                // `properties` of its own (a thread entry's `{ text, images
+                // }`), which needs the same lift or its inline `required`
+                // booleans reach the wire raw.
+                "items" => {
+                    copy.insert("items".into(), lift_required_within_schema(value));
+                }
                 _ => {
                     copy.insert(key.clone(), value.clone());
                 }
@@ -270,6 +278,27 @@ fn lift_required(properties: &Value) -> (Map<String, Value>, Vec<String>) {
         lifted.insert(name.clone(), Value::Object(copy));
     }
     (lifted, required)
+}
+
+/// Lift `required` within one item schema's own `properties`, the way
+/// [`lift_required`] does for a whole properties map.
+fn lift_required_within_schema(schema: &Value) -> Value {
+    let Some(object) = schema.as_object() else {
+        return schema.clone();
+    };
+    let mut copy = Map::new();
+    for (key, value) in object {
+        if key == "properties" {
+            let (nested, nested_required) = lift_required(value);
+            copy.insert("properties".into(), Value::Object(nested));
+            if !nested_required.is_empty() {
+                copy.insert("required".into(), json!(nested_required));
+            }
+        } else {
+            copy.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(copy)
 }
 
 fn get_job_schema() -> Map<String, Value> {
@@ -305,11 +334,10 @@ async fn run_tool(
         Ok(value) => value,
         Err(message) => return err(message),
     };
-    let deadline = Instant::now() + MAX_WAIT;
     // A post is not browser work yet: the user still has to say whether it
     // goes out, and that answer is this call's real result.
     if let Some(draft_id) = started["draft"]["id"].as_str() {
-        return match settle_post(store, integration_id, draft_id, deadline).await {
+        return match settle_post(store, integration_id, draft_id, Instant::now() + MAX_WAIT).await {
             Ok(Some(draft)) => {
                 report_post(&draft, failed_job(store, integration_id, &draft).await.as_ref())
             }
@@ -320,11 +348,7 @@ async fn run_tool(
     let Some(job_id) = started["job"]["id"].as_str() else {
         return err(NOT_STARTED);
     };
-    match settle_job(store, integration_id, job_id, deadline).await {
-        Ok(Some(job)) => report_job(&job),
-        Ok(None) => handed_off(job_id),
-        Err(message) => err(message),
-    }
+    handed_off(job_id)
 }
 
 /// The id a call handed back names a job or a post waiting on the user; a
@@ -379,26 +403,6 @@ async fn fetch_draft(store: &Store, integration_id: &str, draft_id: &str) -> Res
     Ok(value["draft"].clone())
 }
 
-/// Poll the job the same way an HTTP caller would. `None` when the wait ran
-/// out first, the job itself keeps going.
-async fn settle_job(
-    store: &Store,
-    integration_id: &str,
-    job_id: &str,
-    deadline: Instant,
-) -> Result<Option<Value>, String> {
-    loop {
-        let job = fetch_job(store, integration_id, job_id).await?;
-        if !matches!(job["status"].as_str(), Some("queued" | "running")) {
-            return Ok(Some(job));
-        }
-        if Instant::now() >= deadline {
-            return Ok(None);
-        }
-        sleep(POLL_INTERVAL).await;
-    }
-}
-
 /// Wait for the user's answer about a requested post, and for the post to go
 /// out once they have given it. `None` when the wait ran out first; the post
 /// is still theirs to send from Pluk.
@@ -441,6 +445,9 @@ fn handed_off(id: &str) -> ToolResult {
 }
 
 fn report_job(job: &Value) -> ToolResult {
+    if matches!(job["status"].as_str(), Some("queued" | "running")) {
+        return handed_off(job["id"].as_str().unwrap_or_default());
+    }
     let text = pretty(job);
     if job["status"] == "succeeded" {
         return ok(text);
@@ -730,6 +737,50 @@ mod tests {
         assert!(payload["properties"]["text"].get("required").is_none());
         assert!(payload["properties"]["thread"].get("required").is_none());
         assert!(schema["properties"]["ttlMs"].get("required").is_none());
+    }
+
+    /// A thread entry's own `{ text, images }` schema sits inside `items`,
+    /// not `properties` — the one place `lift_required` used to leave a raw
+    /// boolean `required` on the wire instead of lifting it into an array,
+    /// which got x_post's whole schema rejected outright.
+    #[test]
+    fn a_thread_entrys_own_schema_lifts_required_out_of_items_too() {
+        let compose = pluk_browser::catalog_tools()
+            .into_iter()
+            .find(|tool| tool.id == "x.post")
+            .expect("post is in the catalog");
+        let schema = input_schema(&compose.args_schema);
+        let items = &schema["properties"]["payload"]["properties"]["thread"]["items"];
+        assert_eq!(items["required"], json!(["text"]));
+        assert!(items["properties"]["text"].get("required").is_none());
+        assert!(items["properties"]["images"].get("required").is_none());
+        assert_no_boolean_required(&Value::Object(schema));
+    }
+
+    /// No property anywhere in a published schema may keep its `required` as
+    /// the inline boolean the catalog writes it as; every one must be lifted
+    /// into a `required` array one level up, or a schema-validating client
+    /// refuses the tool outright.
+    fn assert_no_boolean_required(value: &Value) {
+        match value {
+            Value::Object(object) => {
+                if let Some(required) = object.get("required") {
+                    assert!(
+                        required.is_array(),
+                        "found a non-array `required` ({required}) in {object:?}"
+                    );
+                }
+                for nested in object.values() {
+                    assert_no_boolean_required(nested);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    assert_no_boolean_required(item);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Registration is the enable switch, so a fresh integration must not

@@ -1,6 +1,7 @@
 import {
   type Action,
   type CommandEnvelope,
+  type ImageAttachment,
   canonicalizeTargetUrl,
   MAX_EXTRACT_BYTES,
   MAX_SCREENSHOT_BYTES,
@@ -19,7 +20,9 @@ import {
   writeAutomationContext,
 } from "./state";
 
-const NAVIGATION_TIMEOUT_MS = 20_000;
+// How long a clicked link gets to land on its page before the tab is sent
+// there directly instead.
+const LINK_NAVIGATION_WINDOW_MS = 5_000;
 const CAPTURE_INTERVAL_MS = 500;
 const MAX_RESULT_TEXT_LENGTH = 8_000;
 
@@ -70,13 +73,20 @@ interface TabState {
   readonly pendingUrl: string | undefined;
 }
 
-interface ArtifactSink {
+interface HostBridge {
   upload(
     jobId: string,
     kind: "screenshot" | "extract",
     contentType: string,
     body: Uint8Array,
   ): Promise<string>;
+  /** One approved image's exact bytes, fetched by id over the same
+   * authenticated connection everything else here uses — never a local
+   * path, which a browser tab cannot read anyway. */
+  downloadImage(
+    draftId: string,
+    imageId: string,
+  ): Promise<{ readonly data: Uint8Array; readonly contentType: string }>;
 }
 
 interface DebuggerSession {
@@ -90,6 +100,7 @@ export type BrowserErrorCode =
   | "browser_unavailable"
   | "capture_discarded"
   | "document_not_ready"
+  | "image_download_failed"
   | "invalid_target"
   | "login_required"
   | "navigation_in_progress"
@@ -117,7 +128,7 @@ export class BrowserExecutor {
   private chain = Promise.resolve();
   private lastCaptureAt = 0;
 
-  run(command: CommandEnvelope, sink: ArtifactSink): Promise<ResultData> {
+  run(command: CommandEnvelope, sink: HostBridge): Promise<ResultData> {
     const next = this.chain.then(() => this.execute(command, sink));
     this.chain = next.then(
       () => undefined,
@@ -128,7 +139,7 @@ export class BrowserExecutor {
 
   private async execute(
     command: CommandEnvelope,
-    sink: ArtifactSink,
+    sink: HostBridge,
   ): Promise<ResultData> {
     const driver = getSiteDriver(command.platform);
     if (!driver.capabilities.includes(command.action)) {
@@ -150,10 +161,17 @@ export class BrowserExecutor {
     await requireSitePermission(targetUrl.value);
 
     const context = await this.ensureAutomationContext(targetUrl.value);
-    const options = makeDriverScriptOptions(command, targetUrl.value);
+    const options = await makeDriverScriptOptions(command, targetUrl.value, sink);
     const page =
       (await this.readInPlace(context, driver, options, command.platform)) ??
-      (await this.readAfterNavigation(context, driver, command, options, targetUrl.value, sink));
+      (await this.readAfterNavigation(
+        context,
+        driver,
+        command,
+        options,
+        targetUrl.value,
+        sink,
+      ));
     const { debugCaptures, ...pageData } = page.data;
     let extractArtifactId: string;
     let screenshotArtifactId: string | undefined;
@@ -254,13 +272,14 @@ export class BrowserExecutor {
     command: CommandEnvelope,
     options: DriverScriptOptions,
     targetUrl: string,
-    sink: ArtifactSink,
+    sink: HostBridge,
   ): Promise<PageRead> {
     const ready = await this.preparePage(
       context,
       targetUrl,
       command.action,
       command.platform,
+      command.expiresAt,
     );
     if (ready.url === undefined) {
       throw new BrowserExecutionError(
@@ -282,6 +301,7 @@ export class BrowserExecutor {
           options,
           targetUrl,
           command.platform,
+          command.expiresAt,
           session,
         );
       } catch (error) {
@@ -331,7 +351,7 @@ export class BrowserExecutor {
   private async attachDebug(
     context: AutomationContext,
     jobId: string,
-    sink: ArtifactSink,
+    sink: HostBridge,
   ): Promise<string[]> {
     const reason = (error: unknown) =>
       error instanceof Error ? error.message : String(error);
@@ -500,6 +520,7 @@ export class BrowserExecutor {
     targetUrl: string,
     action: Action,
     platform: Platform,
+    deadline: number,
   ): Promise<TabState> {
     const current = await this.readTabState(context);
     if (current.pendingUrl !== undefined && current.pendingUrl !== targetUrl) {
@@ -512,6 +533,24 @@ export class BrowserExecutor {
     const alreadyThere =
       current.url !== undefined &&
       sameDestination(platform, targetUrl, current.url);
+    if (
+      action !== "refresh" &&
+      !alreadyThere &&
+      current.pendingUrl === undefined &&
+      current.status === "complete" &&
+      current.url !== undefined &&
+      isSameAllowedOrigin(targetUrl, current.url, platform)
+    ) {
+      const followed = await this.followLink(
+        context,
+        targetUrl,
+        platform,
+        deadline,
+      );
+      if (followed !== null) {
+        return followed;
+      }
+    }
     const shouldObserveTransition =
       action === "refresh" || !alreadyThere || current.pendingUrl !== undefined;
     let transitionObserved = !shouldObserveTransition;
@@ -555,6 +594,7 @@ export class BrowserExecutor {
         platform,
         current,
         () => transitionObserved,
+        deadline,
       );
     } finally {
       if (shouldObserveTransition) {
@@ -563,14 +603,54 @@ export class BrowserExecutor {
     }
   }
 
+  /** Move within the site the way a person would: click a visible link that
+   * already points at the target, and confirm the tab landed there. `null`
+   * when no such link is on the page or the click did not land in time, so
+   * the caller navigates directly instead. */
+  private async followLink(
+    context: AutomationContext,
+    targetUrl: string,
+    platform: Platform,
+    deadline: number,
+  ): Promise<TabState | null> {
+    let results: readonly chrome.scripting.InjectionResult<boolean>[];
+    try {
+      results = await chrome.scripting.executeScript({
+        target: { tabId: context.tabId },
+        func: clickLinkTo,
+        args: [targetUrl],
+      });
+    } catch {
+      return null;
+    }
+    if (results[0]?.result !== true) {
+      return null;
+    }
+    const landBy = Math.min(deadline, Date.now() + LINK_NAVIGATION_WINDOW_MS);
+    while (Date.now() < landBy) {
+      const state = await this.readTabState(context);
+      rejectUnexpectedNavigation(state, targetUrl, platform);
+      if (
+        state.status === "complete" &&
+        state.pendingUrl === undefined &&
+        state.url !== undefined &&
+        sameDestination(platform, targetUrl, state.url)
+      ) {
+        return state;
+      }
+      await delay(100);
+    }
+    return null;
+  }
+
   private async waitForReady(
     context: AutomationContext,
     targetUrl: string,
     platform: Platform,
     initial: TabState,
     hasObservedTransition: () => boolean,
+    deadline: number,
   ): Promise<TabState> {
-    const deadline = Date.now() + NAVIGATION_TIMEOUT_MS;
     let transitionObserved = hasObservedTransition();
     while (Date.now() < deadline) {
       const state = await this.readTabState(context);
@@ -603,9 +683,9 @@ export class BrowserExecutor {
     options: DriverScriptOptions,
     expectedUrl: string,
     platform: Platform,
+    deadline: number,
     session?: DebuggerSession,
   ): Promise<PageRead> {
-    const deadline = Date.now() + NAVIGATION_TIMEOUT_MS;
     let trustedClicks = 0;
     let lastWait: string | null = null;
     while (Date.now() < deadline) {
@@ -675,6 +755,11 @@ export class BrowserExecutor {
         }
         throw error;
       }
+    }
+    // A submit that runs out of time may already have gone out; saying it
+    // failed would invite the same post a second time.
+    if (SUBMIT_ACTIONS.has(options.action)) {
+      throw uncertainSubmissionError(lastWait ?? undefined);
     }
     throw new BrowserExecutionError(
       "site_markup_changed",
@@ -798,10 +883,17 @@ export class BrowserExecutor {
   }
 }
 
-function makeDriverScriptOptions(
+/** Every image this command's payload names, fetched over the host bridge's
+ * own authenticated connection and base64-encoded, ready for the driver to
+ * paste — a browser tab cannot read a host file path, and none crosses the
+ * bounded WebSocket command channel to begin with. Fetched once, up front,
+ * so a slow or failing download surfaces before any page or composer is
+ * touched, rather than mid-thread. */
+async function makeDriverScriptOptions(
   command: CommandEnvelope,
   targetUrl: string,
-): DriverScriptOptions {
+  sink: HostBridge,
+): Promise<DriverScriptOptions> {
   const debug = command.payload.debug;
   if (command.payload.kind === "read_post") {
     return {
@@ -812,24 +904,53 @@ function makeDriverScriptOptions(
     };
   }
   if (command.payload.kind === "submission") {
+    const { draftId, postId, text, images: requested } = command.payload;
+    const images = requested ? await fetchImages(sink, draftId, requested) : undefined;
     return {
       action: command.action,
       targetUrl,
-      postId: command.payload.postId,
-      text: command.payload.text,
+      postId,
+      text,
+      images,
       debug,
     };
   }
   if (command.payload.kind === "post_submission") {
+    const { draftId, text, parts, partImages: requested } = command.payload;
+    const partImages = requested
+      ? await Promise.all(requested.map((images) => fetchImages(sink, draftId, images)))
+      : undefined;
     return {
       action: command.action,
       targetUrl,
-      text: command.payload.text,
-      parts: command.payload.parts,
+      text,
+      parts,
+      partImages,
       debug,
     };
   }
   return { action: command.action, targetUrl, debug };
+}
+
+async function fetchImages(
+  sink: HostBridge,
+  draftId: string,
+  images: readonly ImageAttachment[],
+): Promise<readonly { readonly data: string; readonly contentType: string }[]> {
+  return Promise.all(
+    images.map(async (image) => {
+      const fetched = await sink.downloadImage(draftId, image.imageId);
+      return { data: bytesToBase64(fetched.data), contentType: fetched.contentType };
+    }),
+  );
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
 }
 
 function parseDriverPageResult(value: unknown): DriverPageResult | null {
@@ -997,6 +1118,57 @@ function pageFromResult(
       ? { ...data, text: data.text.slice(0, MAX_RESULT_TEXT_LENGTH) }
       : data;
   return { data: { kind: data.kind, ...boundedData }, url: finalUrl, title };
+}
+
+/** Runs in the page. Clicks the first visible same-origin link whose
+ * destination is the target — the exact path, or for a post the same status
+ * id under any handle — and reports whether it clicked. Links that open a new
+ * tab, download, or sit inside editable content are never touched. */
+function clickLinkTo(target: string): boolean {
+  const wanted = new URL(target);
+  const postId = (path: string) =>
+    /^(?:\/[A-Za-z0-9_]{1,50})?\/status\/(\d+)\/?$/u.exec(path)?.[1] ?? null;
+  const trimmed = (path: string) => path.replace(/\/+$/u, "") || "/";
+  const wantedPost = postId(wanted.pathname);
+  for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
+    if (!(anchor instanceof HTMLAnchorElement)) {
+      continue;
+    }
+    let href: URL;
+    try {
+      href = new URL(anchor.href, window.location.href);
+    } catch {
+      continue;
+    }
+    const matches =
+      href.origin === window.location.origin &&
+      href.hash === "" &&
+      href.search === wanted.search &&
+      (wantedPost !== null
+        ? postId(href.pathname) === wantedPost
+        : trimmed(href.pathname) === trimmed(wanted.pathname));
+    if (
+      !matches ||
+      anchor.target === "_blank" ||
+      anchor.hasAttribute("download") ||
+      anchor.closest("[contenteditable='true']") !== null
+    ) {
+      continue;
+    }
+    const box = anchor.getBoundingClientRect();
+    const style = window.getComputedStyle(anchor);
+    if (
+      box.width === 0 ||
+      box.height === 0 ||
+      style.visibility === "hidden" ||
+      style.display === "none"
+    ) {
+      continue;
+    }
+    anchor.click();
+    return true;
+  }
+  return false;
 }
 
 /** The same page, allowing for X moving a post from /i/status/<id> to the

@@ -166,6 +166,21 @@ impl BrowserState {
             .map_err(BridgeError::from)
     }
 
+    /// The exact bytes a waiting draft's image was approved with, scoped to
+    /// that one draft. `None` once the draft is gone or the id names no
+    /// image on it — never an arbitrary path.
+    pub fn draft_image(
+        &self,
+        integration_id: &str,
+        draft_id: &str,
+        image_id: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, BridgeError> {
+        self.store
+            .browser_for(integration_id)
+            .read_draft_image(draft_id, image_id)
+            .map_err(BridgeError::from)
+    }
+
     pub fn scheduled_posts(
         &self,
         integration_id: &str,
@@ -347,6 +362,28 @@ impl BrowserState {
                     .collect()
             })
             .unwrap_or_default();
+        // One entry per part, each that part's own images — or, for a reply
+        // (always one part), the single flat `images` list this field always
+        // meant before a thread could give its own parts images.
+        let parts_images: Vec<Vec<String>> = if let Some(part_images) =
+            request.payload.get("partImages").and_then(Value::as_array)
+        {
+            part_images
+                .iter()
+                .map(|entry| {
+                    entry
+                        .as_array()
+                        .map(|images| {
+                            images.iter().filter_map(Value::as_str).map(str::to_owned).collect()
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
+        } else if let Some(images) = request.payload.get("images").and_then(Value::as_array) {
+            vec![images.iter().filter_map(Value::as_str).map(str::to_owned).collect()]
+        } else {
+            vec![Vec::new(); parts.len().max(1)]
+        };
         let input = DraftInput {
             platform: request.platform.as_str(),
             target_url: &request.target_url,
@@ -357,11 +394,13 @@ impl BrowserState {
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
             parts: &parts,
+            parts_images: &parts_images,
             debug: request
                 .payload
                 .get("debug")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            ttl_ms: request.ttl_ms,
         };
         let now = self.now();
         let mut browser = self.store.browser_for(integration_id);
@@ -819,13 +858,19 @@ impl BrowserState {
             return;
         };
         let Some(active) = queue.active.take() else {
+            drop(queues);
+            self.reconcile_late_result(integration_id, &result);
             return;
         };
+        if result.job_id != active.job.id {
+            queue.active = Some(active);
+            drop(queues);
+            self.reconcile_late_result(integration_id, &result);
+            return;
+        }
         if active.connection_id != connection_id
-            || result.job_id != active.job.id
             || result.command_id != active.job.command_id
             || result.expires_at != active.job.expires_at
-            || result.expires_at <= self.now()
             || result.issued_at < active.job.created_at
             || result.issued_at > self.now() + MAX_CLOCK_SKEW_MS
         {
@@ -862,6 +907,39 @@ impl BrowserState {
         drop(queues);
         self.log_job(integration_id, &job_id);
         self.pump(integration_id);
+    }
+
+    /// A result for a job that is no longer running: its deadline passed and
+    /// it was marked `unknown`. A success that still validates against the
+    /// command it answers settles the job; anything else leaves the
+    /// uncertainty in place, because a late failure cannot prove a write did
+    /// not happen.
+    fn reconcile_late_result(&self, integration_id: &str, result: &ResultMessage) {
+        let Ok(Some(job)) = self
+            .store
+            .browser_for(integration_id)
+            .get_job(&result.job_id, self.now())
+        else {
+            return;
+        };
+        if job.command_id != result.command_id
+            || job.expires_at != result.expires_at
+            || result.issued_at < job.created_at
+            || result.issued_at > self.now() + MAX_CLOCK_SKEW_MS
+        {
+            return;
+        }
+        let (status, data, _) = self.validate_result(&job, result);
+        let Some(data) = data.filter(|_| status == "succeeded") else {
+            return;
+        };
+        let settled = self
+            .store
+            .browser_for(integration_id)
+            .reconcile_late_success(&job.id, &job.command_id, &data, self.now());
+        if matches!(settled, Ok(true)) {
+            self.log_job(integration_id, &job.id);
+        }
     }
 
     fn validate_result(
@@ -1060,6 +1138,10 @@ pub fn router(state: BrowserState) -> Router {
         )
         .route("/artifacts/{artifact_id}", get(http_get_artifact))
         .route("/drafts/{draft_id}", get(http_get_draft))
+        .route(
+            "/drafts/{draft_id}/images/{image_id}",
+            get(http_get_draft_image),
+        )
         .route(
             "/drafts/{draft_id}/cancel",
             axum::routing::post(http_cancel_draft),
@@ -1401,6 +1483,44 @@ async fn http_get_draft(
         Ok(None) => api_error(StatusCode::NOT_FOUND, "not_found", "Draft not found."),
         Err(error) => bridge_error_response(error),
     }
+}
+
+/// One image a draft was approved with, as the exact bytes staging
+/// captured — never the live source file. This is how the extension gets
+/// image bytes at all: a job command never carries more than this id, and a
+/// browser tab has no filesystem access to read a host path directly.
+async fn http_get_draft_image(
+    State(state): State<BrowserState>,
+    headers: HeaderMap,
+    AxumPath((draft_id, image_id)): AxumPath<(String, String)>,
+) -> Response {
+    if let Err(response) = state.check_boundary(&headers) {
+        return *response;
+    }
+    let Some(integration_id) = state.authenticated(&headers) else {
+        return unauthorized();
+    };
+    if !is_uuid(&draft_id) || !is_uuid(&image_id) {
+        return api_error(StatusCode::NOT_FOUND, "not_found", "Image not found.");
+    }
+    let body = match state.draft_image(&integration_id, &draft_id, &image_id) {
+        Ok(body) => body,
+        Err(error) => return bridge_error_response(error),
+    };
+    let Some((content_type, data)) = body else {
+        return api_error(StatusCode::NOT_FOUND, "not_found", "Image not found.");
+    };
+    let mut response = Response::new(axum::body::Body::from(data));
+    *response.status_mut() = StatusCode::OK;
+    response
+        .headers_mut()
+        .insert("cache-control", HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        "content-type",
+        HeaderValue::from_str(&content_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    response
 }
 
 async fn http_cancel_draft(
@@ -2560,6 +2680,32 @@ mod tests {
         assert_eq!(command["payload"]["draftId"], draft_id);
         assert_eq!(command["payload"]["text"], "Only if you say so");
         assert!(command["payload"].get("visibleAccountIdentity").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_waiting_posts_image_reads_back_only_by_its_own_draft_and_id() {
+        let fixture = Fixture::start().await;
+        let state = &fixture.state;
+        let sources = tempfile::tempdir().unwrap();
+        let mut bytes = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+        bytes.extend_from_slice(b"pixels");
+        let path = sources.path().join("a.png");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let started = state
+            .start(LEGACY, &job_request(json!({
+                "platform": "x", "action": "post",
+                "payload": { "text": "With an image", "images": [path.to_string_lossy()] }
+            })))
+            .unwrap();
+        let draft_id = started["draft"]["id"].as_str().unwrap().to_owned();
+        let image_id = started["draft"]["images"][0]["id"].as_str().unwrap().to_owned();
+        assert_eq!(started["draft"]["images"][0]["contentType"], "image/png");
+
+        let (content_type, read_back) = state.draft_image(LEGACY, &draft_id, &image_id).unwrap().unwrap();
+        assert_eq!(content_type, "image/png");
+        assert_eq!(read_back, bytes);
+        assert!(state.draft_image(LEGACY, &draft_id, "not-a-real-id").unwrap().is_none());
     }
 
     /// The same words asked for twice are one waiting post, and while one

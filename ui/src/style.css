@@ -89,7 +89,8 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .wande-post-expired { opacity: 0.6; }
 .wande-post-body { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; }
 .wande-post-slot { margin: 0; color: var(--surface-label); font-size: calc(var(--type-headline) * var(--zoom-scale)); font-weight: 600; }
-.wande-post-part + .wande-post-part { padding-top: var(--space-xs); border-top: var(--border-width) solid var(--border-subtle); }
+.wande-post-part + .wande-post-part, .wande-post-images + .wande-post-part { padding-top: var(--space-xs); border-top: var(--border-width) solid var(--border-subtle); }
+.wande-post-part + .wande-post-images { padding-top: var(--space-xs); }
 .wande-post-text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; font-size: calc(var(--type-body) * var(--zoom-scale)); line-height: 1.5; -webkit-user-select: text; user-select: text; }
 .wande-post-footer { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: var(--space-sm); }
 .wande-post-footer > .hint, .wande-post-note { margin: 0; }
@@ -101,6 +102,11 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .wande-post-status-committed { color: var(--status-success); }
 .wande-post-status-released { color: var(--surface-secondary-label); }
 .wande-post-status-unknown { color: var(--status-warning); }
+.wande-post-images { display: flex; gap: var(--space-xs); }
+.wande-post-image { width: 56px; height: 56px; flex: none; overflow: hidden; border: var(--border-width) solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--surface-sunken); }
+.wande-post-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.wande-post-image-broken { display: flex; align-items: center; justify-content: center; border-color: var(--status-danger); }
+.wande-post-image-broken::after { content: "!"; color: var(--surface-secondary-label); font-weight: 600; }
 .field-error { margin-top: var(--space-xs); color: var(--danger-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
 .field-input, .field-select { width: 100%; box-sizing: border-box; min-height: var(--control-target); padding: var(--space-xs) var(--space-sm); border: var(--border-width) solid var(--border-control); border-radius: var(--radius-sm); background: var(--surface-panel); color: var(--surface-label); font: inherit; font-size: calc(var(--type-callout) * var(--zoom-scale)); }
 .field-select { appearance: none; max-width: var(--select-max-width); padding-right: calc(var(--space-lg) + var(--space-xs)); background-image: var(--select-chevron); background-repeat: no-repeat; background-position: right var(--space-xs) center; background-size: var(--space-lg) var(--space-lg); }

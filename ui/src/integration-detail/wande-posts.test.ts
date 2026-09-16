@@ -12,6 +12,7 @@ function waitingPost(overrides: Partial<WandePosts["waiting"][number]> = {}) {
     id: "draft-1",
     text: "First line\nSecond line",
     parts: [],
+    images: [],
     replyingTo: null,
     expiresAt: NOW + 90_000,
     canQueue: true,
@@ -80,6 +81,62 @@ describe("the posts waiting on a person", () => {
     posts.waiting = [waitingPost({ canQueue: false })];
     const { root, destroy } = await mount();
     expect([...root.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Post now", "Discard"]);
+    destroy();
+  });
+
+  test("sending waits on the post's images loading, but Discard never does", async () => {
+    let resolveImage: ((url: string) => void) | undefined;
+    (window as unknown as { __TAURI__: { core: { invoke: unknown } } }).__TAURI__.core.invoke = async (
+      cmd: string,
+      args?: Record<string, unknown>,
+    ) => {
+      calls.push({ cmd, args });
+      if (cmd === "list_wande_posts") return posts;
+      if (cmd === "wande_post_image") return new Promise<string>((resolve) => (resolveImage = resolve));
+      return undefined;
+    };
+    posts.waiting = [
+      waitingPost({ images: [{ id: "img-1", partIndex: 0, ordinal: 0, contentType: "image/png", bytes: 10 }] }),
+    ];
+    const { root, destroy } = await mount();
+    const buttonsNow = () => [...root.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttonsNow().find((b) => b.textContent === "Post now")!.disabled).toBe(true);
+    expect(buttonsNow().find((b) => b.textContent === "Add to queue")!.disabled).toBe(true);
+    expect(buttonsNow().find((b) => b.textContent === "Discard")!.disabled).toBe(false);
+    expect(root.querySelectorAll(".wande-post-image").length).toBe(1);
+    expect(root.querySelector('[role="status"]')!.textContent).toBe(
+      "Loading the exact images you’d be sending…",
+    );
+
+    resolveImage?.("data:image/png;base64,AAAA");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(buttonsNow().find((b) => b.textContent === "Post now")!.disabled).toBe(false);
+    expect(root.querySelector(".wande-post-image img")).not.toBeNull();
+    destroy();
+  });
+
+  test("a thread shows each part's own images, and an image-free middle part carries none", async () => {
+    posts.waiting = [
+      waitingPost({
+        parts: ["First.", "Second.", "Third."],
+        images: [
+          { id: "first-1", partIndex: 0, ordinal: 0, contentType: "image/png", bytes: 10 },
+          { id: "third-1", partIndex: 2, ordinal: 0, contentType: "image/png", bytes: 10 },
+          { id: "third-2", partIndex: 2, ordinal: 1, contentType: "image/png", bytes: 10 },
+        ],
+      }),
+    ];
+    const { root, destroy } = await mount();
+    const partTexts = [...root.querySelectorAll(".wande-post-part")];
+    // Each strip sits right after the part it belongs to, and the
+    // image-free middle part has no strip of its own.
+    expect(partTexts[0]?.nextElementSibling?.className).toBe("wande-post-images");
+    expect(partTexts[1]?.nextElementSibling?.className).not.toBe("wande-post-images");
+    expect(partTexts[2]?.nextElementSibling?.className).toBe("wande-post-images");
+    const galleries = [...root.querySelectorAll(".wande-post-images")];
+    expect(galleries).toHaveLength(2);
+    expect(galleries[0]?.querySelectorAll(".wande-post-image")).toHaveLength(1);
+    expect(galleries[1]?.querySelectorAll(".wande-post-image")).toHaveLength(2);
     destroy();
   });
 

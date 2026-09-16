@@ -20,7 +20,9 @@ use crate::error::{Result, StoreError};
 /// A single migration step: upgrades the database by one version.
 type Step = fn(&mut Connection) -> Result<()>;
 
-const LADDER: &[Step] = &[migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5];
+const LADDER: &[Step] = &[
+    migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
+];
 
 /// Bring `conn` up to the latest version.
 pub(crate) fn run(conn: &mut Connection) -> Result<()> {
@@ -342,6 +344,47 @@ fn migrate_v5(conn: &mut Connection) -> Result<()> {
         [],
     )?;
     tx.pragma_update(None, "user_version", 5)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Version 6: a draft keeps the expiry its caller asked for, so the job its
+/// confirmation starts gets the same window rather than the default.
+fn migrate_v6(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch("ALTER TABLE browser_drafts ADD COLUMN ttl_ms INTEGER;")?;
+    tx.pragma_update(None, "user_version", 6)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Version 7: the images a draft was approved with. Each row names a file
+/// already staged on disk, in the order it attaches; deleting the row is not
+/// enough on its own to remove the file — [`crate::browser::BrowserStore`]
+/// only does that once nothing else references its content hash.
+fn migrate_v7(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS browser_draft_images (
+            id TEXT PRIMARY KEY,
+            integration_id TEXT NOT NULL,
+            draft_id TEXT NOT NULL REFERENCES browser_drafts(id) ON DELETE CASCADE,
+            part_index INTEGER NOT NULL,
+            ordinal INTEGER NOT NULL,
+            content_type TEXT NOT NULL,
+            bytes INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            staged_path TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS browser_draft_images_draft_idx
+            ON browser_draft_images (integration_id, draft_id, ordinal);
+        CREATE INDEX IF NOT EXISTS browser_draft_images_hash_idx
+            ON browser_draft_images (integration_id, staged_path);
+        ",
+    )?;
+    tx.pragma_update(None, "user_version", 7)?;
     tx.commit()?;
     Ok(())
 }

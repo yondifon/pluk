@@ -10,12 +10,13 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::oneshot;
 
 use pluk_browser::{BrowserState, PostAnswer, PostChoice, PostPrompt, PostPrompter};
-use pluk_store::browser::{DRAFT_TTL_MS, Draft, ScheduleReservation};
+use pluk_store::browser::{DRAFT_TTL_MS, Draft, DraftImage, ScheduleReservation};
 
 use crate::commands::HostState;
 
@@ -54,6 +55,9 @@ pub struct WaitingPost {
     pub text: String,
     /// The posts of a thread, in order. Empty for a plain post.
     pub parts: Vec<String>,
+    /// The images this post was asked for, in order. Fetch a preview by id
+    /// with `wande_post_image`; nothing here names a local path.
+    pub images: Vec<DraftImage>,
     /// The post this one replies to, when it is a reply.
     pub replying_to: Option<String>,
     /// When it stops being sendable, in epoch milliseconds.
@@ -79,6 +83,7 @@ impl From<Draft> for WaitingPost {
             expires_at: draft.created_at + DRAFT_TTL_MS,
             replying_to: draft.post_id.is_some().then_some(draft.target_url),
             parts: draft.parts,
+            images: draft.images,
             text: draft.text,
             id: draft.id,
         }
@@ -162,6 +167,28 @@ pub fn list_wande_posts(
         waiting,
         queued,
     })
+}
+
+/// One image a waiting post was approved with, as a data URL the window can
+/// put straight into an `<img>` — the exact bytes staging captured, read
+/// fresh each call. `draft_id` and `image_id` together are the only way in:
+/// there is no path anywhere on this route for the window to reach past its
+/// own draft.
+#[tauri::command]
+pub fn wande_post_image(
+    state: State<'_, HostState>,
+    integration_id: String,
+    draft_id: String,
+    image_id: String,
+) -> CmdResult<String> {
+    let (content_type, bytes) = browser_for(&state, &integration_id)?
+        .draft_image(&integration_id, &draft_id, &image_id)
+        .map_err(|error| error.message)?
+        .ok_or_else(|| "This image is no longer available.".to_string())?;
+    Ok(format!(
+        "data:{content_type};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
 }
 
 #[tauri::command]

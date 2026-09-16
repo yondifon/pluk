@@ -2,8 +2,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::protocol::{
-    Action, MAX_DEBUG_GLOB_LEN, DEFAULT_JOB_TTL_MS, MAX_JOB_TTL_MS, MAX_TEXT_LENGTH, MIN_JOB_TTL_MS, Platform,
-    fixed_compose_target, fixed_feed_target, fixed_trends_target, hostnames,
+    Action, MAX_DEBUG_GLOB_LEN, DEFAULT_JOB_TTL_MS, MAX_IMAGES, MAX_JOB_TTL_MS, MAX_TEXT_LENGTH, MIN_JOB_TTL_MS,
+    Platform, fixed_compose_target, fixed_feed_target, fixed_trends_target, hostnames,
 };
 
 const PLATFORMS: [Platform; 2] = [Platform::X, Platform::Instagram];
@@ -134,6 +134,15 @@ fn args_schema(platform: Platform, action: Action) -> Value {
         "default": DEFAULT_JOB_TTL_MS,
         "description": "Job expiry window in milliseconds.",
     });
+    let images = json!({
+        "type": "array",
+        "required": false,
+        "items": { "type": "string" },
+        "maxItems": MAX_IMAGES,
+        "description": format!(
+            "1 to {MAX_IMAGES} absolute local PNG or JPEG file paths, each under 5 MiB. Shown to the user for approval alongside the text.",
+        ),
+    });
     if action == Action::Reply {
         return json!({
             "targetUrl": target_url,
@@ -152,6 +161,7 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                         "maxLength": MAX_TEXT_LENGTH,
                         "description": "Exact reply text, submitted verbatim and never generated here.",
                     },
+                    "images": images,
                     "debug": {
                         "type": ["boolean", "string"],
                         "required": false,
@@ -179,9 +189,27 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                     "thread": {
                         "type": "array",
                         "required": false,
-                        "items": { "type": "string", "maxLength": MAX_TEXT_LENGTH },
+                        "items": {
+                            "type": ["string", "object"],
+                            "maxLength": MAX_TEXT_LENGTH,
+                            "properties": {
+                                "text": { "type": "string", "required": true, "maxLength": MAX_TEXT_LENGTH },
+                                "images": images,
+                            },
+                        },
                         "maxItems": 25,
-                        "description": "The posts of a thread, in order, each under 280 weighted characters. Pass this or text, not both.",
+                        "description": format!(
+                            "The posts of a thread, in order, each under 280 weighted characters. Pass this or text, not both. Each entry is exact text, or {{ text, images }} to give that one post its own 1 to {MAX_IMAGES} images — every part can carry its own, none included. Do not also pass the top-level images field alongside thread; it is refused as ambiguous.",
+                        ),
+                    },
+                    "images": {
+                        "type": "array",
+                        "required": false,
+                        "items": { "type": "string" },
+                        "maxItems": MAX_IMAGES,
+                        "description": format!(
+                            "1 to {MAX_IMAGES} absolute local PNG or JPEG file paths for a plain, non-thread post. Not accepted together with thread — give each part its own images there instead.",
+                        ),
                     },
                     "debug": {
                         "type": ["boolean", "string"],

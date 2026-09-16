@@ -12,19 +12,25 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use pluk_store::browser::{DRAFT_TTL_MS, Draft};
+use pluk_store::browser::{DRAFT_TTL_MS, Draft, DraftImage};
 use serde::{Deserialize, Serialize};
 
 /// One requested post, as the owner needs to see it before deciding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostPrompt {
+    /// The integration this draft belongs to — needed to fetch an image
+    /// preview, which is scoped to one integration's own drafts.
+    pub integration_id: String,
     /// The draft this decides; the answer is applied to this one only.
     pub draft_id: String,
     /// The full text, verbatim, never an excerpt.
     pub text: String,
     /// The posts of a thread, in order. Empty for a plain post.
     pub parts: Vec<String>,
+    /// The images this post was asked for, in order. Never a path — a
+    /// preview is fetched by id, scoped to this one draft.
+    pub images: Vec<DraftImage>,
     /// The post this replies to, when it is a reply.
     pub replying_to: Option<String>,
     /// Whether taking a later slot is an option for this one.
@@ -36,9 +42,11 @@ pub struct PostPrompt {
 impl PostPrompt {
     pub fn from_draft(draft: &Draft) -> Self {
         PostPrompt {
+            integration_id: draft.integration_id.clone(),
             draft_id: draft.id.clone(),
             text: draft.text.clone(),
             parts: draft.parts.clone(),
+            images: draft.images.clone(),
             replying_to: draft.post_id.is_some().then(|| draft.target_url.clone()),
             can_queue: draft.can_queue(),
             closes_at: draft.created_at + DRAFT_TTL_MS,

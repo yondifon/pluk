@@ -7,11 +7,26 @@ const QUEUE_TITLE_ID = "wande-queue-title";
 const REFRESH_MS = 5000;
 const TICK_MS = 1000;
 
+/** One image a post was asked with, as far as this panel ever knows: never a
+ * path. The picture comes from `wande_post_image`, one id at a time. */
+export interface DraftImage {
+  id: string;
+  /** Which post of a thread this attaches to (0 for a plain post's one
+   * implicit part). */
+  partIndex: number;
+  ordinal: number;
+  contentType: string;
+  bytes: number;
+}
+
 export interface WaitingPost {
   id: string;
   text: string;
   /** The posts of a thread, in order. Empty for a plain post. */
   parts: string[];
+  /** Every image this post was asked for, across every part. Group by
+   * `partIndex` to show each post its own. */
+  images: DraftImage[];
   /** The post this one replies to, when it is a reply. */
   replyingTo: string | null;
   expiresAt: number;
@@ -120,6 +135,64 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
   let painted = "";
   let alive = true;
 
+  // Image previews load once per id and are kept for the life of the panel:
+  // the same bytes every poll would otherwise re-fetch them for no reason.
+  const imageUrls = new Map<string, string>();
+  const imageFailed = new Set<string>();
+  const imageRequests = new Set<string>();
+
+  function ensureImagesLoading(draftId: string, images: DraftImage[]): void {
+    for (const image of images) {
+      if (imageUrls.has(image.id) || imageFailed.has(image.id) || imageRequests.has(image.id)) continue;
+      imageRequests.add(image.id);
+      invoke<string>("wande_post_image", { integrationId, draftId, imageId: image.id })
+        .then((dataUrl) => imageUrls.set(image.id, dataUrl))
+        .catch(() => imageFailed.add(image.id))
+        .finally(() => {
+          imageRequests.delete(image.id);
+          if (alive) render();
+        });
+    }
+  }
+
+  function imagesReady(images: DraftImage[]): boolean {
+    return images.every((image) => imageUrls.has(image.id));
+  }
+
+  function imagesBroken(images: DraftImage[]): boolean {
+    return images.some((image) => imageFailed.has(image.id));
+  }
+
+  /** One part's own image row. `images` is already filtered to that part;
+   * loading is triggered once per post, not per part — see
+   * `ensureImagesLoading`. */
+  function imageStrip(images: DraftImage[]): HTMLElement | null {
+    if (!images.length) return null;
+    const strip = document.createElement("div");
+    strip.className = "wande-post-images";
+    for (const image of images) {
+      const frame = document.createElement("div");
+      const url = imageUrls.get(image.id);
+      if (url) {
+        frame.className = "wande-post-image";
+        const picture = document.createElement("img");
+        picture.src = url;
+        picture.alt = `Image ${image.ordinal + 1} of ${images.length}`;
+        frame.appendChild(picture);
+      } else if (imageFailed.has(image.id)) {
+        frame.className = "wande-post-image wande-post-image-broken";
+        frame.setAttribute("role", "img");
+        frame.setAttribute("aria-label", `Image ${image.ordinal + 1} of ${images.length} could not load`);
+      } else {
+        frame.className = "wande-post-image wande-post-image-loading";
+        frame.setAttribute("role", "img");
+        frame.setAttribute("aria-label", `Image ${image.ordinal + 1} of ${images.length}, loading`);
+      }
+      strip.appendChild(frame);
+    }
+    return strip;
+  }
+
   async function refresh(): Promise<void> {
     try {
       const posts = await invoke<WandePosts>("list_wande_posts", { integrationId });
@@ -227,16 +300,28 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
     render();
   }
 
-  function postBody(post: { text: string; parts?: string[]; replyingTo?: string | null }): HTMLElement {
+  function postBody(post: {
+    text: string;
+    parts?: string[];
+    images?: DraftImage[];
+    replyingTo?: string | null;
+  }): HTMLElement {
     const body = document.createElement("div");
     body.className = "wande-post-body";
     if (post.replyingTo) body.appendChild(line(`Replying to ${post.replyingTo}`, "hint"));
     const parts = post.parts ?? [];
+    const images = post.images ?? [];
     if (parts.length > 1) {
       body.appendChild(line(`Thread of ${parts.length}`, "hint"));
-      for (const part of parts) body.appendChild(line(part, "wande-post-text wande-post-part"));
+      for (const [index, part] of parts.entries()) {
+        body.appendChild(line(part, "wande-post-text wande-post-part"));
+        const strip = imageStrip(images.filter((image) => image.partIndex === index));
+        if (strip) body.appendChild(strip);
+      }
     } else {
       body.appendChild(line(post.text, "wande-post-text"));
+      const strip = imageStrip(images.filter((image) => image.partIndex === 0));
+      if (strip) body.appendChild(strip);
     }
     return body;
   }
@@ -244,7 +329,17 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
   function waitingItem(post: WaitingPost, now: number): HTMLElement {
     const item = document.createElement("li");
     item.className = "wande-post";
+    ensureImagesLoading(post.id, post.images);
     item.appendChild(postBody(post));
+    if (post.images.length && imagesBroken(post.images)) {
+      const broken = line("Couldn’t load one of these images. Discard and ask again.", "wande-post-note");
+      broken.setAttribute("role", "status");
+      item.appendChild(broken);
+    } else if (post.images.length && !imagesReady(post.images)) {
+      const loading = line("Loading the exact images you’d be sending…", "hint");
+      loading.setAttribute("role", "status");
+      item.appendChild(loading);
+    }
 
     const footer = document.createElement("div");
     footer.className = "wande-post-footer";
@@ -254,19 +349,25 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
     countdowns.set(post.id, { element: left, expiresAt: post.expiresAt });
     const actions = document.createElement("div");
     actions.className = "wande-post-actions";
+    // Sending waits on every one of this post's images actually loading, so
+    // what goes out is never a guess at what was approved. Discard never
+    // waits on them.
+    const sendable = imagesReady(post.images) && !imagesBroken(post.images);
     // One post goes out at a time: while one is on its way, the next can
     // only take a queue slot.
-    const buttons = [
+    const buttons: Array<[HTMLButtonElement, boolean]> = [
       ...(sending
         ? []
-        : [createButton("Post now", { variant: "primary", size: "sm", onClick: () => postNow(post) })]),
+        : [[createButton("Post now", { variant: "primary", size: "sm", onClick: () => postNow(post) }), true] as [HTMLButtonElement, boolean]]),
       ...(post.canQueue
-        ? [createButton("Add to queue", { variant: sending ? "primary" : "secondary", size: "sm", onClick: () => addToQueue(post) })]
+        ? [[createButton("Add to queue", { variant: sending ? "primary" : "secondary", size: "sm", onClick: () => addToQueue(post) }), true] as [HTMLButtonElement, boolean]]
         : []),
-      createButton("Discard", { variant: "secondary", size: "sm", onClick: () => discard(post) }),
+      [createButton("Discard", { variant: "secondary", size: "sm", onClick: () => discard(post) }), false],
     ];
-    for (const button of buttons) button.disabled = busy;
-    actions.append(...buttons);
+    for (const [button, waitsOnImages] of buttons) {
+      button.disabled = busy || (waitsOnImages && !sendable);
+    }
+    actions.append(...buttons.map(([button]) => button));
     footer.append(left, actions);
     item.appendChild(footer);
     return item;

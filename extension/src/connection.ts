@@ -30,6 +30,13 @@ const MAX_RECONNECT_DELAY_MS = 30_000;
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
 const ARTIFACT_UPLOAD_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const IMAGE_DOWNLOAD_TIMEOUT_MS = 15_000;
+// Mirrors `pluk_store::browser::images::MAX_IMAGE_BYTES`: this is a
+// deliberately separate bound from `MAX_RESPONSE_BYTES` above, which stays
+// at 64 KiB for every other loopback response. Only a draft image's own
+// dedicated download ever allows more, and only up to what staging itself
+// already capped a single image at.
+const MAX_IMAGE_DOWNLOAD_BYTES = 5 * 1024 * 1024;
 
 interface BridgeSettingsView {
   readonly serverUrl: string;
@@ -391,6 +398,8 @@ export class BrowserBridge {
       data = await this.browserExecutor.run(command, {
         upload: (jobId, kind, contentType, body) =>
           this.uploadArtifact(jobId, kind, contentType, body),
+        downloadImage: (draftId, imageId) =>
+          this.downloadDraftImage(draftId, imageId),
       });
     } catch (caught) {
       error = toProtocolError(caught);
@@ -405,9 +414,6 @@ export class BrowserBridge {
         message:
           "Could not safely record the result. Nothing was retried; check the page before running this again.",
       };
-    }
-    if (Date.now() >= command.expiresAt) {
-      return;
     }
     if (error !== null) {
       await this.sendFailedResult(
@@ -457,8 +463,15 @@ export class BrowserBridge {
     data: ResultData | null,
     error: { readonly code: string; readonly message: string } | null = null,
   ): Promise<void> {
+    // A page can finish after its command expired, or after the socket it
+    // arrived on was replaced. The answer still goes back — the server decides
+    // whether it can settle the job — over whichever connection is live now.
     if (!this.isCurrentSocket(socket, generation)) {
-      return;
+      if (this.socket === null || !this.serverReady) {
+        return;
+      }
+      socket = this.socket;
+      generation = this.socketGeneration;
     }
     const envelope = {
       version: PROTOCOL_VERSION,
@@ -677,6 +690,66 @@ export class BrowserBridge {
       );
     }
     return id;
+  }
+
+  /** One approved image's exact bytes, fetched by id over this same
+   * authenticated loopback connection — never a host filesystem path, which
+   * a browser tab could not read anyway. Bounded to a single staged image's
+   * own cap, entirely separate from the 64 KiB bound every other response on
+   * this connection keeps. */
+  private async downloadDraftImage(
+    draftId: string,
+    imageId: string,
+  ): Promise<{ readonly data: Uint8Array; readonly contentType: string }> {
+    if (!this.settings.enabled || this.settings.token === "") {
+      throw new BrowserExecutionError(
+        "image_download_failed",
+        "Not connected to Pluk, so the confirmed images could not be fetched.",
+      );
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), IMAGE_DOWNLOAD_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(
+        `${this.settings.serverUrl}/wande/drafts/${encodeURIComponent(draftId)}/images/${encodeURIComponent(imageId)}`,
+        {
+          method: "GET",
+          headers: { Authorization: `Bearer ${this.settings.token}` },
+          credentials: "omit",
+          signal: controller.signal,
+        },
+      );
+    } catch {
+      throw new BrowserExecutionError(
+        "image_download_failed",
+        "Pluk did not respond to the request for a confirmed image. Nothing was submitted.",
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!response.ok) {
+      throw new BrowserExecutionError(
+        "image_download_failed",
+        "Pluk could not return one of the confirmed images. Nothing was submitted.",
+      );
+    }
+    const length = response.headers.get("content-length");
+    if (length !== null && Number(length) > MAX_IMAGE_DOWNLOAD_BYTES) {
+      throw new BrowserExecutionError(
+        "image_download_failed",
+        "Pluk returned an oversized image. Nothing was submitted.",
+      );
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > MAX_IMAGE_DOWNLOAD_BYTES || buffer.byteLength === 0) {
+      throw new BrowserExecutionError(
+        "image_download_failed",
+        "Pluk returned an invalid image. Nothing was submitted.",
+      );
+    }
+    return { data: new Uint8Array(buffer), contentType };
   }
 }
 

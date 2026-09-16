@@ -184,6 +184,9 @@ function makeSink() {
       uploads.push({ kind, contentType });
       return `${kind}-artifact`;
     },
+    downloadImage: async (_draftId: string, _imageId: string) => {
+      throw new Error("no image download expected in this test");
+    },
   };
 }
 

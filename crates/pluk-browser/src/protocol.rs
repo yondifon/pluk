@@ -12,10 +12,15 @@ pub const MAX_EXTRACT_BYTES: usize = 256 * 1024;
 pub const MAX_HTML_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_JOB_TTL_MS: i64 = 5 * 60 * 1000;
 pub const MIN_JOB_TTL_MS: i64 = 1_000;
-pub const DEFAULT_JOB_TTL_MS: i64 = 2 * 60 * 1000;
+pub const DEFAULT_JOB_TTL_MS: i64 = pluk_store::browser::DEFAULT_JOB_TTL_MS;
 pub const MAX_TEXT_LENGTH: usize = 4_000;
 pub const MAX_URL_LENGTH: usize = 2_048;
 pub const MAX_ID_LENGTH: usize = 256;
+/// How many local images a post or reply can carry, and how long a staged
+/// path is ever allowed to be. Mirrors [`pluk_store::browser::images`], the
+/// layer that actually stages and validates them.
+pub const MAX_IMAGES: usize = pluk_store::browser::images::MAX_IMAGES;
+pub const MAX_IMAGE_PATH_LENGTH: usize = pluk_store::browser::images::MAX_SOURCE_PATH_LENGTH;
 /// The longest array a result's JSON can carry anywhere in its tree. Sized
 /// to the Instagram grid's own 600-entry cap, the largest of the driver's
 /// result lists.
@@ -464,6 +469,20 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
     }
     let target_url_field = object.get("targetUrl").and_then(Value::as_str);
     let (payload_field, debug) = split_debug(object.get("payload"))?;
+    let uses_thread = payload_field
+        .as_ref()
+        .and_then(Value::as_object)
+        .is_some_and(|object| object.contains_key("thread"));
+    let (payload_field, images) = if action == Action::Post || action == Action::Reply {
+        split_images(payload_field.as_ref())?
+    } else {
+        (payload_field, None)
+    };
+    if action == Action::Post && uses_thread && images.is_some() {
+        return Err(invalid(
+            "images cannot be given alongside thread; put each part's own images inside that part as { text, images }.",
+        ));
+    }
     let payload_field = payload_field.as_ref();
     let (target_url, payload) = if action == Action::ReadProfile {
         resolve_profile_target(platform, target_url_field, payload_field)?
@@ -485,6 +504,7 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
         let payload = parse_public_payload(payload_field, action)?;
         (target_url, payload)
     };
+    let payload = with_images(payload, images, action);
     let ttl_ms = object
         .get("ttlMs")
         .map(number_as_i64)
@@ -510,13 +530,17 @@ fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResu
         .and_then(Value::as_object)
         .ok_or_else(|| invalid("Payload must be an object."))?;
     if action == Action::Post {
-        let parts = parse_post_parts(object)?;
+        let (parts, parts_images) = parse_post_parts(object)?;
         let text = if parts.len() == 1 {
             parts[0].clone()
         } else {
             parts.join("\n\n")
         };
-        return Ok(json!({ "kind": "compose", "text": text, "parts": parts }));
+        let mut payload = json!({ "kind": "compose", "text": text, "parts": parts });
+        if parts_images.iter().any(|images| !images.is_empty()) {
+            payload["partImages"] = json!(parts_images);
+        }
+        return Ok(payload);
     }
     if action == Action::Reply {
         if !has_only_keys(object, &["postId", "text"]) {
@@ -579,6 +603,41 @@ fn with_debug(mut payload: Value, debug: Option<Value>) -> Value {
     payload
 }
 
+/// Take `images` off a payload before the action's own parser sees it, the
+/// way [`split_debug`] takes `debug` off. Only meaningful for the plain,
+/// non-thread shape — a thread gives each of its own parts images instead,
+/// via `{ text, images }`.
+fn split_images(value: Option<&Value>) -> ValidationResult<(Option<Value>, Option<Vec<String>>)> {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return Ok((value.cloned(), None));
+    };
+    let mut object = object.clone();
+    let Some(raw) = object.remove("images") else {
+        return Ok((Some(Value::Object(object)), None));
+    };
+    let images = parse_image_paths(&raw)?;
+    Ok((Some(Value::Object(object)), Some(images)))
+}
+
+/// Put top-level `images` back once the action's own parser has produced its
+/// payload. A reply is always one part, so the images are simply its own; a
+/// post's images become the first part's, matching what this field always
+/// meant before a thread could give its own parts images individually.
+fn with_images(mut payload: Value, images: Option<Vec<String>>, action: Action) -> Value {
+    let Some(images) = images else {
+        return payload;
+    };
+    if action == Action::Reply {
+        payload["images"] = json!(images);
+        return payload;
+    }
+    let part_count = payload["parts"].as_array().map_or(1, Vec::len).max(1);
+    let mut parts_images = vec![Value::Array(Vec::new()); part_count];
+    parts_images[0] = json!(images);
+    payload["partImages"] = json!(parts_images);
+    payload
+}
+
 fn is_debug_glob(glob: &str) -> bool {
     !glob.is_empty() && glob.len() <= MAX_DEBUG_GLOB_LEN
 }
@@ -594,25 +653,69 @@ fn debug_is_flag(object: &Map<String, Value>) -> bool {
 
 /// The posts a compose request becomes: `thread` as given, or `text` cut
 /// into posts that each fit X's limit.
-fn parse_post_parts(object: &Map<String, Value>) -> ValidationResult<Vec<String>> {
+/// The images a single part asked for: 1 to [`MAX_IMAGES`] absolute local
+/// file paths. What they point at is not checked here — staging is where the
+/// bytes actually get read, hashed and validated as a real PNG or JPEG.
+fn parse_image_paths(value: &Value) -> ValidationResult<Vec<String>> {
+    let invalid_images = || invalid("images needs 1 to 4 absolute local file paths.");
+    let items = value
+        .as_array()
+        .filter(|items| !items.is_empty() && items.len() <= MAX_IMAGES)
+        .ok_or_else(invalid_images)?;
+    items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .filter(|value| is_string(value, MAX_IMAGE_PATH_LENGTH) && value.starts_with('/'))
+                .map(str::to_owned)
+                .ok_or_else(invalid_images)
+        })
+        .collect()
+}
+
+/// One entry of a `thread` array: exact text, or exact text paired with that
+/// part's own images. Kept as a union so a thread with no images anywhere in
+/// it reads exactly as it always has.
+fn parse_thread_entry(value: &Value) -> ValidationResult<(String, Vec<String>)> {
+    let thread_error =
+        || invalid("A thread needs 1 to 25 posts, each exact text or { text, images }.");
+    if let Some(text) = value.as_str() {
+        return if is_string(text, MAX_TEXT_LENGTH) {
+            Ok((text.to_owned(), Vec::new()))
+        } else {
+            Err(thread_error())
+        };
+    }
+    let object = value.as_object().ok_or_else(thread_error)?;
+    if !has_only_keys(object, &["text", "images"]) {
+        return Err(thread_error());
+    }
+    let text = object
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|value| is_string(value, MAX_TEXT_LENGTH))
+        .ok_or_else(thread_error)?
+        .to_owned();
+    let images = object.get("images").map(parse_image_paths).transpose()?.unwrap_or_default();
+    Ok((text, images))
+}
+
+/// The posts a compose request becomes, and each one's own images: `thread`
+/// as given, or `text` cut into posts that each fit X's limit (never carries
+/// images of its own — use `thread` for that).
+fn parse_post_parts(object: &Map<String, Value>) -> ValidationResult<(Vec<String>, Vec<Vec<String>>)> {
     if has_only_keys(object, &["thread"]) {
-        let parts: Vec<String> = object
+        let entries = object
             .get("thread")
             .and_then(Value::as_array)
             .filter(|parts| !parts.is_empty() && parts.len() <= MAX_THREAD_PARTS)
-            .ok_or_else(|| invalid("A thread needs 1 to 25 posts, each a string."))?
-            .iter()
-            .map(|part| {
-                part.as_str()
-                    .filter(|value| is_string(value, MAX_TEXT_LENGTH))
-                    .map(str::to_owned)
-                    .ok_or_else(|| invalid("A thread needs 1 to 25 posts, each a string."))
-            })
-            .collect::<Result<_, _>>()?;
-        if let Some((index, part)) = parts
+            .ok_or_else(|| invalid("A thread needs 1 to 25 posts, each exact text or { text, images }."))?;
+        let parsed: Vec<(String, Vec<String>)> =
+            entries.iter().map(parse_thread_entry).collect::<Result<_, _>>()?;
+        if let Some((index, (part, _))) = parsed
             .iter()
             .enumerate()
-            .find(|(_, part)| weighted_length(part) > X_POST_LIMIT)
+            .find(|(_, (part, _))| weighted_length(part) > X_POST_LIMIT)
         {
             return Err(ValidationError {
                 code: "too_long",
@@ -623,7 +726,7 @@ fn parse_post_parts(object: &Map<String, Value>) -> ValidationResult<Vec<String>
                 ),
             });
         }
-        return Ok(parts);
+        return Ok(parsed.into_iter().unzip());
     }
     if !has_only_keys(object, &["text"]) {
         return Err(invalid("Post payload needs exact text, or a thread of posts."));
@@ -633,12 +736,14 @@ fn parse_post_parts(object: &Map<String, Value>) -> ValidationResult<Vec<String>
         .and_then(Value::as_str)
         .filter(|value| is_string(value, MAX_TEXT_LENGTH))
         .ok_or_else(|| invalid("Post payload needs exact text, or a thread of posts."))?;
-    split_into_parts(text).ok_or_else(|| ValidationError {
+    let parts = split_into_parts(text).ok_or_else(|| ValidationError {
         code: "too_long",
         message: format!(
             "This text cannot be cut into posts under X's {X_POST_LIMIT} limit. Pass a thread of shorter posts."
         ),
-    })
+    })?;
+    let parts_images = vec![Vec::new(); parts.len()];
+    Ok((parts, parts_images))
 }
 
 pub fn parse_command_envelope(value: &Value) -> ValidationResult<Value> {
@@ -756,7 +861,8 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
     if action == Action::SubmitPost {
-        if !has_only_keys(object, &["kind", "draftId", "text", "parts", "debug"])
+        let part_count = object.get("parts").and_then(Value::as_array).map_or(0, Vec::len);
+        if !has_only_keys(object, &["kind", "draftId", "text", "parts", "debug", "partImages"])
             || !debug_is_flag(object)
             || object.get("kind").and_then(Value::as_str) != Some("post_submission")
             || !object
@@ -768,13 +874,14 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
                 .and_then(Value::as_str)
                 .is_some_and(|value| is_string(value, MAX_TEXT_LENGTH))
             || !is_thread(object.get("parts"))
+            || !is_part_images(object.get("partImages"), part_count)
         {
             return Err(invalid("Post submission command payload is invalid."));
         }
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
     if action == Action::SubmitReply {
-        if !has_only_keys(object, &["kind", "draftId", "postId", "text", "debug"])
+        if !has_only_keys(object, &["kind", "draftId", "postId", "text", "debug", "images"])
             || !debug_is_flag(object)
             || object.get("kind").and_then(Value::as_str) != Some("submission")
             || !object
@@ -789,6 +896,7 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
                 .get("text")
                 .and_then(Value::as_str)
                 .is_some_and(|value| is_string(value, MAX_TEXT_LENGTH))
+            || !is_image_attachments(object.get("images"))
         {
             return Err(invalid("Submission command payload is invalid."));
         }
@@ -883,7 +991,7 @@ fn parse_result(object: &Map<String, Value>) -> ValidationResult<ResultMessage> 
         .and_then(Value::as_str)
         .filter(|value| is_identifier(value))
         .ok_or_else(|| invalid("Result message has an unsupported shape."))?;
-    let (issued_at, expires_at) = parse_envelope_times(object)?;
+    let (issued_at, expires_at) = parse_result_times(object)?;
     if object.get("outcome").and_then(Value::as_str) == Some("succeeded") {
         if !has_only_keys(
             object,
@@ -1051,7 +1159,10 @@ fn parse_protocol_error(value: Option<&Value>) -> ValidationResult<ProtocolError
     })
 }
 
-fn parse_envelope_times(object: &Map<String, Value>) -> ValidationResult<(i64, i64)> {
+/// A result may be issued after its command expired: the page can finish
+/// past the deadline, and the server decides whether that late answer can
+/// still settle the job against the expiry its command carried.
+fn parse_result_times(object: &Map<String, Value>) -> ValidationResult<(i64, i64)> {
     let issued_at = object
         .get("issuedAt")
         .and_then(number_as_i64_opt)
@@ -1062,6 +1173,11 @@ fn parse_envelope_times(object: &Map<String, Value>) -> ValidationResult<(i64, i
         .and_then(number_as_i64_opt)
         .filter(|value| *value > 0)
         .ok_or_else(|| invalid("Envelope has an unsupported expiry."))?;
+    Ok((issued_at, expires_at))
+}
+
+fn parse_envelope_times(object: &Map<String, Value>) -> ValidationResult<(i64, i64)> {
+    let (issued_at, expires_at) = parse_result_times(object)?;
     if expires_at <= issued_at || expires_at - issued_at > MAX_JOB_TTL_MS {
         return Err(invalid("Envelope has an unsupported expiry."));
     }
@@ -1200,6 +1316,55 @@ fn is_thread(value: Option<&Value>) -> bool {
                 .iter()
                 .all(|part| part.as_str().is_some_and(|value| is_string(value, MAX_TEXT_LENGTH)))
     })
+}
+
+/// One `{ imageId, contentType }` pair naming an image already staged
+/// locally. No image bytes and no local path ever travel this way — a
+/// browser tab could not read a host path anyway. The extension fetches the
+/// actual bytes itself, over its own authenticated connection, by this id.
+fn is_image_attachment_object(item: &Value) -> bool {
+    item.as_object().is_some_and(|object| {
+        has_only_keys(object, &["imageId", "contentType"])
+            && object.get("imageId").and_then(Value::as_str).is_some_and(is_identifier)
+            && matches!(
+                object.get("contentType").and_then(Value::as_str),
+                Some("image/png" | "image/jpeg")
+            )
+    })
+}
+
+/// A list of image attachments: up to [`MAX_IMAGES`], empty allowed only
+/// when a part can legitimately carry none of its own.
+fn is_image_attachment_list(value: &Value, allow_empty: bool) -> bool {
+    value.as_array().is_some_and(|items| {
+        (allow_empty || !items.is_empty())
+            && items.len() <= MAX_IMAGES
+            && items.iter().all(is_image_attachment_object)
+    })
+}
+
+/// The images a reply carries, on the wire to the extension: absent, or 1 to
+/// [`MAX_IMAGES`] attachments. A reply is always one part, so there is
+/// nothing to associate this list with beyond the reply itself.
+fn is_image_attachments(value: Option<&Value>) -> bool {
+    match value {
+        None => true,
+        Some(value) => is_image_attachment_list(value, false),
+    }
+}
+
+/// The images a post carries, on the wire to the extension: absent, or
+/// exactly one list per part — each 0 to [`MAX_IMAGES`] attachments — so an
+/// image-free part is a present, empty entry rather than a gap the extension
+/// has to guess the meaning of.
+fn is_part_images(value: Option<&Value>, expected_parts: usize) -> bool {
+    match value {
+        None => true,
+        Some(value) => value.as_array().is_some_and(|parts| {
+            parts.len() == expected_parts
+                && parts.iter().all(|part| is_image_attachment_list(part, true))
+        }),
+    }
 }
 
 pub fn is_identifier(value: &str) -> bool {
@@ -1567,6 +1732,84 @@ mod tests {
     }
 
     #[test]
+    fn a_post_or_reply_request_accepts_bounded_images_and_rejects_the_rest() {
+        // A plain, non-thread post's top-level images become the one
+        // implicit part's own images.
+        let with_images = parse_create_job_request(&json!({
+            "platform": "x", "action": "post",
+            "payload": { "text": "Short.", "images": ["/tmp/a.png", "/tmp/b.jpg"] }
+        }))
+        .unwrap();
+        assert_eq!(
+            with_images.payload["partImages"],
+            json!([["/tmp/a.png", "/tmp/b.jpg"]])
+        );
+
+        let reply_with_images = parse_create_job_request(&json!({
+            "platform": "x", "action": "reply", "targetUrl": "https://x.com/status/42",
+            "payload": { "postId": "42", "text": "Reply", "images": ["/tmp/a.png"] }
+        }))
+        .unwrap();
+        assert_eq!(reply_with_images.payload["images"], json!(["/tmp/a.png"]));
+
+        // Each thread part can carry its own images, an image-free part
+        // included, and a plain string thread entry keeps working exactly
+        // as before.
+        let thread_with_images = parse_create_job_request(&json!({
+            "platform": "x", "action": "post",
+            "payload": { "thread": [
+                { "text": "First.", "images": ["/tmp/a.png"] },
+                "Second.",
+                { "text": "Third.", "images": ["/tmp/c1.png", "/tmp/c2.png"] },
+            ] }
+        }))
+        .unwrap();
+        assert_eq!(
+            thread_with_images.payload["partImages"],
+            json!([["/tmp/a.png"], [], ["/tmp/c1.png", "/tmp/c2.png"]])
+        );
+
+        let none = parse_create_job_request(&json!({
+            "platform": "x", "action": "post", "payload": { "text": "Short." }
+        }))
+        .unwrap();
+        assert!(none.payload.get("partImages").is_none());
+
+        // Top-level images alongside a thread is ambiguous, not guessed at.
+        let ambiguous = parse_create_job_request(&json!({
+            "platform": "x", "action": "post",
+            "payload": { "thread": ["First.", "Second."], "images": ["/tmp/a.png"] }
+        }))
+        .unwrap_err();
+        assert_eq!(ambiguous.code, "invalid_schema");
+
+        let empty = parse_create_job_request(&json!({
+            "platform": "x", "action": "post", "payload": { "text": "Short.", "images": [] }
+        }))
+        .unwrap_err();
+        assert_eq!(empty.code, "invalid_schema");
+
+        let too_many = parse_create_job_request(&json!({
+            "platform": "x", "action": "post",
+            "payload": { "text": "Short.", "images": ["/a.png", "/b.png", "/c.png", "/d.png", "/e.png"] }
+        }))
+        .unwrap_err();
+        assert_eq!(too_many.code, "invalid_schema");
+
+        let relative = parse_create_job_request(&json!({
+            "platform": "x", "action": "post", "payload": { "text": "Short.", "images": ["a.png"] }
+        }))
+        .unwrap_err();
+        assert_eq!(relative.code, "invalid_schema");
+
+        let wrong_type = parse_create_job_request(&json!({
+            "platform": "x", "action": "read_feed", "payload": { "images": ["/a.png"] }
+        }))
+        .unwrap_err();
+        assert_eq!(wrong_type.code, "invalid_schema");
+    }
+
+    #[test]
     fn a_job_request_cannot_ask_for_a_submission_directly() {
         for action in ["submit_post", "submit_reply"] {
             assert!(
@@ -1603,6 +1846,63 @@ mod tests {
         let mut invalid = envelope;
         invalid["payload"]["scheduledAt"] = Value::Null;
         assert!(parse_command_envelope(&invalid).is_err());
+    }
+
+    #[test]
+    fn a_submit_post_command_accepts_bounded_per_part_image_attachments_and_rejects_the_rest() {
+        let base = |part_images: Value| {
+            json!({
+                "version": 1,
+                "type": "command",
+                "jobId": "job-1",
+                "commandId": "command-1",
+                "platform": "x",
+                "action": "submit_post",
+                "targetUrl": "https://x.com/compose/post",
+                "issuedAt": 1_000,
+                "expiresAt": 61_000,
+                "payload": {
+                    "kind": "post_submission",
+                    "draftId": "draft-1",
+                    "text": "Hello\n\nWorld",
+                    "parts": ["Hello", "World"],
+                    "partImages": part_images,
+                }
+            })
+        };
+        // One entry per part; an image-free part is a present, empty list.
+        // Never a path here either — an id the extension fetches the bytes
+        // for over its own authenticated connection.
+        assert!(
+            parse_command_envelope(&base(json!([
+                [{ "imageId": "img-1", "contentType": "image/png" }],
+                [],
+            ])))
+            .is_ok()
+        );
+        // Both parts empty is fine too.
+        assert!(parse_command_envelope(&base(json!([[], []]))).is_ok());
+        // Wrong length against `parts` is refused outright.
+        assert!(
+            parse_command_envelope(&base(json!([
+                [{ "imageId": "img-1", "contentType": "image/png" }],
+            ])))
+            .is_err()
+        );
+        assert!(
+            parse_command_envelope(&base(json!([
+                [{ "imageId": "img-1", "contentType": "image/gif" }],
+                [],
+            ])))
+            .is_err()
+        );
+        assert!(
+            parse_command_envelope(&base(json!([
+                [{ "path": "/tmp/a.png", "contentType": "image/png" }],
+                [],
+            ])))
+            .is_err()
+        );
     }
 
     #[test]

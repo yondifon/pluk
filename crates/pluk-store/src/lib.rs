@@ -63,14 +63,19 @@ pub struct Store {
     conn: Mutex<rusqlite::Connection>,
     last_purge: Mutex<Option<Instant>>,
     activity: Mutex<query_log::ActivityFeed>,
+    /// Where staged post images are kept. Always beside the database's own
+    /// file, so a copy of one carries the other.
+    images_dir: PathBuf,
 }
 
 impl Store {
     /// Open (creating and migrating if needed) the database at `path`.
     pub fn open(path: &Path) -> Result<Store> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        let files_dir = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        std::fs::create_dir_all(&files_dir)?;
         let mut conn = rusqlite::Connection::open(path)?;
         configure(&mut conn)?;
         migrate::run(&mut conn)?;
@@ -81,6 +86,7 @@ impl Store {
             conn: Mutex::new(conn),
             last_purge: Mutex::new(None),
             activity: Mutex::new(query_log::ActivityFeed::default()),
+            images_dir: files_dir.join("wande-images"),
         })
     }
 

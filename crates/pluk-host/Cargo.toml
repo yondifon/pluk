@@ -10,6 +10,7 @@ tauri-build = { version = "2.6", features = [] }
 
 [dependencies]
 async-trait = "0.1"
+base64 = "0.22"
 tauri = { version = "2.11", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = { version = "2.10", optional = true }

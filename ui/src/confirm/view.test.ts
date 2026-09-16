@@ -8,6 +8,7 @@ import {
   type ConfirmChoice,
   type ConfirmQuestion,
   type PostChoice,
+  type PostQuestion,
 } from "./view";
 
 function question(): ConfirmQuestion {
@@ -79,15 +80,27 @@ describe("the confirm window", () => {
   });
 });
 
+function postQuestion(overrides: Partial<PostQuestion> = {}): PostQuestion {
+  return {
+    integrationId: "wande-1",
+    draftId: "d1",
+    text: "Hello\nworld",
+    parts: [],
+    images: [],
+    replyingTo: null,
+    canQueue: true,
+    closesAt: Date.now() + 60_000,
+    ...overrides,
+  };
+}
+
+const neverLoads = () => new Promise<string>(() => {});
+
 describe("the post window", () => {
   test("shows the exact text and the three answers, Post now first to the keyboard", () => {
     const root = document.createElement("div");
     const answers: PostChoice[] = [];
-    renderPost(
-      root,
-      { draftId: "d1", text: "Hello\nworld", parts: [], replyingTo: null, canQueue: true, closesAt: Date.now() + 60_000 },
-      (choice) => answers.push(choice),
-    );
+    renderPost(root, postQuestion(), (choice) => answers.push(choice), neverLoads);
     expect(root.querySelector(".confirm-title")?.textContent).toBe("Post this?");
     expect(root.querySelector(".confirm-post")?.textContent).toBe("Hello\nworld");
     const buttons = [...root.querySelectorAll<HTMLButtonElement>(".confirm-actions .ui-button")];
@@ -100,8 +113,9 @@ describe("the post window", () => {
     const root = document.createElement("div");
     renderPost(
       root,
-      { draftId: "d2", text: "Thanks", parts: [], replyingTo: "https://x.com/a/status/1", canQueue: false, closesAt: Date.now() },
+      postQuestion({ draftId: "d2", text: "Thanks", replyingTo: "https://x.com/a/status/1", canQueue: false }),
       () => {},
+      neverLoads,
     );
     expect(root.querySelector(".confirm-title")?.textContent).toBe("Send this reply?");
     expect(root.querySelector(".confirm-reason")?.textContent).toBe("Replying to https://x.com/a/status/1");
@@ -115,8 +129,9 @@ describe("the post window", () => {
     const root = document.createElement("div");
     renderPost(
       root,
-      { draftId: "d3", text: "One\n\nTwo", parts: ["One", "Two"], replyingTo: null, canQueue: true, closesAt: Date.now() },
+      postQuestion({ draftId: "d3", text: "One\n\nTwo", parts: ["One", "Two"] }),
       () => {},
+      neverLoads,
     );
     expect(root.querySelector(".confirm-title")?.textContent).toBe("Post this thread of 2?");
     expect([...root.querySelectorAll(".confirm-post-part")].map((b) => b.textContent)).toEqual(["One", "Two"]);
@@ -125,5 +140,79 @@ describe("the post window", () => {
   test("the countdown says nothing goes out on its own", () => {
     expect(postCountdownText(95)).toBe("Nothing goes out until you answer. Expires in 1:35.");
     expect(postCountdownText(0)).toBe("Time is up. Nothing was posted.");
+  });
+
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+  }
+
+  test("sending stays disabled until every image has loaded, but Discard never waits", async () => {
+    const root = document.createElement("div");
+    const images = [
+      { id: "img1", partIndex: 0, ordinal: 0, contentType: "image/png", bytes: 10 },
+      { id: "img2", partIndex: 0, ordinal: 1, contentType: "image/png", bytes: 10 },
+    ];
+    const resolvers = new Map<string, (url: string) => void>();
+    renderPost(
+      root,
+      postQuestion({ images }),
+      () => {},
+      (imageId) => new Promise((resolve) => resolvers.set(imageId, resolve)),
+    );
+    const send = () => [...root.querySelectorAll<HTMLButtonElement>(".confirm-actions .ui-button")];
+    expect(send().find((b) => b.textContent === "Post now")?.disabled).toBe(true);
+    expect(send().find((b) => b.textContent === "Add to queue")?.disabled).toBe(true);
+    expect(send().find((b) => b.textContent === "Discard")?.disabled).toBe(false);
+    expect(root.querySelectorAll(".confirm-image").length).toBe(2);
+
+    resolvers.get("img1")?.("data:image/png;base64,AAAA");
+    await flush();
+    expect(send().find((b) => b.textContent === "Post now")?.disabled).toBe(true);
+
+    resolvers.get("img2")?.("data:image/png;base64,BBBB");
+    await flush();
+    expect(send().find((b) => b.textContent === "Post now")?.disabled).toBe(false);
+    expect(root.querySelectorAll(".confirm-image img").length).toBe(2);
+  });
+
+  test("a broken preview keeps sending disabled", async () => {
+    const root = document.createElement("div");
+    const images = [{ id: "img1", partIndex: 0, ordinal: 0, contentType: "image/png", bytes: 10 }];
+    renderPost(root, postQuestion({ images }), () => {}, () => Promise.reject(new Error("gone")));
+    await flush();
+    const send = [...root.querySelectorAll<HTMLButtonElement>(".confirm-actions .ui-button")].find(
+      (b) => b.textContent === "Post now",
+    );
+    expect(send?.disabled).toBe(true);
+    expect(root.querySelector(".confirm-image-broken")).not.toBeNull();
+  });
+
+  test("a thread shows each part's own images beneath that part, never mixed together", async () => {
+    const root = document.createElement("div");
+    const images = [
+      { id: "first-1", partIndex: 0, ordinal: 0, contentType: "image/png", bytes: 10 },
+      { id: "third-1", partIndex: 2, ordinal: 0, contentType: "image/png", bytes: 10 },
+      { id: "third-2", partIndex: 2, ordinal: 1, contentType: "image/png", bytes: 10 },
+    ];
+    renderPost(
+      root,
+      postQuestion({ parts: ["First.", "Second.", "Third."], images }),
+      () => {},
+      (imageId) => Promise.resolve(`data:image/png;base64,${imageId}`),
+    );
+    await flush();
+    const parts = [...root.querySelectorAll<HTMLElement>(".confirm-post-part, .confirm-images")];
+    // Part order is preserved, and the image-free middle part carries no
+    // gallery at all rather than an empty one.
+    expect(parts.map((el) => el.className)).toEqual([
+      "confirm-post-part",
+      "confirm-images",
+      "confirm-post-part",
+      "confirm-post-part",
+      "confirm-images",
+    ]);
+    const galleries = [...root.querySelectorAll(".confirm-images")];
+    expect(galleries[0]?.querySelectorAll(".confirm-image").length).toBe(1);
+    expect(galleries[1]?.querySelectorAll(".confirm-image").length).toBe(2);
   });
 });

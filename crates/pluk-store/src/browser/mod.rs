@@ -6,7 +6,10 @@
 //! writes a draft and touches nothing else; only `consume_draft` turns one
 //! into a submission job — that is where the publish boundary is enforced.
 
+pub mod images;
 pub mod schedule;
+
+use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -14,11 +17,19 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::Store;
+use images::StagedImage;
 use schedule::{ScheduleSettings, next_slot};
+
+/// Whether a confirmed draft carrying images can actually be turned into a
+/// submission job. The extension attaches them to the composer through its
+/// own debugger session before it types or submits anything; while this is
+/// `false`, [`BrowserStore::consume_draft`] refuses rather than risk
+/// publishing the text alone.
+pub const IMAGE_UPLOAD_IMPLEMENTED: bool = true;
 
 /// Default job expiry, and how long a confirmed submission job stays
 /// dispatchable. A page either answers inside this or it has stalled.
-pub const DEFAULT_JOB_TTL_MS: i64 = 2 * 60 * 1000;
+pub const DEFAULT_JOB_TTL_MS: i64 = 3 * 60 * 1000;
 
 pub const MAX_JOBS: i64 = 1_000;
 pub const MAX_ARTIFACTS: i64 = 2_000;
@@ -94,6 +105,9 @@ pub struct Draft {
     pub text: String,
     /// The posts that go out, in order. One entry for a plain post.
     pub parts: Vec<String>,
+    /// The images this post was asked for. Each carries the part it attaches
+    /// to; a plain post's own images carry part 0.
+    pub images: Vec<DraftImage>,
     /// Whether a failure should carry a screenshot and the page's HTML.
     pub debug: bool,
     pub status: String,
@@ -101,6 +115,21 @@ pub struct Draft {
     pub confirmed_at: Option<i64>,
     pub submitted_at: Option<i64>,
     pub scheduled_at: Option<i64>,
+}
+
+/// One image a draft carries, as far as anything outside this store ever
+/// needs to know: never the staged path underneath it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftImage {
+    pub id: String,
+    /// The post this image attaches to: an index into `parts` (or 0 for a
+    /// plain post's single, implicit part).
+    pub part_index: i64,
+    /// This image's order among the others on the same part.
+    pub ordinal: i64,
+    pub content_type: String,
+    pub bytes: i64,
 }
 
 impl Draft {
@@ -191,8 +220,15 @@ pub struct DraftInput<'a> {
     pub text: &'a str,
     /// The posts of a thread, in order. Empty for a plain post.
     pub parts: &'a [String],
+    /// Each part's own images: 0 to [`images::MAX_IMAGES`] absolute local
+    /// PNG or JPEG paths per entry, staged as part of writing the draft.
+    /// Exactly one entry per part, or exactly one entry (part 0) when
+    /// `parts` is empty — a plain post's own images.
+    pub parts_images: &'a [Vec<String>],
     /// Whether a failure should carry a screenshot and the page's HTML.
     pub debug: bool,
+    /// How long the job its confirmation starts may run.
+    pub ttl_ms: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -221,6 +257,7 @@ pub struct BrowserStore<'a> {
     integration_id: String,
     max_jobs: i64,
     max_artifacts: i64,
+    images_dir: &'a Path,
 }
 
 impl Store {
@@ -236,6 +273,7 @@ impl Store {
             integration_id: integration_id.to_owned(),
             max_jobs: MAX_JOBS,
             max_artifacts: MAX_ARTIFACTS,
+            images_dir: &self.images_dir,
         }
     }
 }
@@ -267,9 +305,14 @@ impl BrowserStore<'_> {
         now: i64,
     ) -> Result<Option<Draft>, BrowserError> {
         self.expire_drafts(now)?;
+        // A request carrying images is never folded into an older pending
+        // draft: the two are not the same ask, even when the text matches.
+        if input.parts_images.iter().any(|part| !part.is_empty()) {
+            return Ok(None);
+        }
         self.conn
             .query_row(
-                "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id FROM browser_drafts WHERE integration_id = ? AND status = 'pending' AND platform = ? AND target_url = ? AND post_id IS ? AND text = ? ORDER BY created_at DESC LIMIT 1",
+                "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id FROM browser_drafts WHERE integration_id = ? AND status = 'pending' AND platform = ? AND target_url = ? AND post_id IS ? AND text = ? AND NOT EXISTS (SELECT 1 FROM browser_draft_images WHERE browser_draft_images.integration_id = browser_drafts.integration_id AND browser_draft_images.draft_id = browser_drafts.id) ORDER BY created_at DESC LIMIT 1",
                 params![
                     self.integration_id.as_str(),
                     input.platform,
@@ -280,9 +323,8 @@ impl BrowserStore<'_> {
                 read_draft_row,
             )
             .optional()?
-            .map(to_draft)
+            .map(|row| self.load_draft(row))
             .transpose()
-            .map_err(BrowserError::from)
     }
 
     /// Whether a post is on its way into the page right now: confirmed to go
@@ -300,6 +342,11 @@ impl BrowserStore<'_> {
 
     /// Write a post that is waiting on a person. Nothing is sent to the
     /// browser until someone confirms it.
+    ///
+    /// Any images are staged and validated first, outside the database
+    /// transaction; if the draft insert that follows fails for any reason,
+    /// bytes this call itself copied (and nothing another draft still
+    /// references) are cleaned up before the error is returned.
     pub fn create_draft(
         &mut self,
         input: &DraftInput<'_>,
@@ -307,7 +354,51 @@ impl BrowserStore<'_> {
     ) -> Result<Draft, BrowserError> {
         self.expire_drafts(now)?;
         self.prune_drafts()?;
+        let expected_parts = input.parts.len().max(1);
+        if input.parts_images.len() != expected_parts {
+            return Err(BrowserError::InvalidData(
+                "Each part needs exactly one images entry, even when it carries none.".to_owned(),
+            ));
+        }
+        let mut staged: Vec<(usize, StagedImage)> = Vec::new();
+        for (part_index, part_images) in input.parts_images.iter().enumerate() {
+            match images::stage_images(self.images_dir, &self.integration_id, part_images) {
+                Ok(part_staged) => {
+                    staged.extend(part_staged.into_iter().map(|image| (part_index, image)));
+                }
+                Err(error) => {
+                    for (_, image) in &staged {
+                        self.drop_staged_if_unreferenced(&image.staged_path);
+                    }
+                    return Err(error);
+                }
+            }
+        }
         let id = Uuid::new_v4().to_string();
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = self.create_draft_transaction(&id, input, &staged, now);
+        match result {
+            Ok(draft) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(draft)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                for (_, image) in &staged {
+                    self.drop_staged_if_unreferenced(&image.staged_path);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn create_draft_transaction(
+        &mut self,
+        id: &str,
+        input: &DraftInput<'_>,
+        staged: &[(usize, StagedImage)],
+        now: i64,
+    ) -> Result<Draft, BrowserError> {
         let kind = if input.post_id.is_some() {
             "reply"
         } else {
@@ -316,7 +407,7 @@ impl BrowserStore<'_> {
         let parts_json = serde_json::to_string(input.parts)
             .map_err(|_| BrowserError::InvalidData("Thread parts could not be stored.".to_owned()))?;
         self.conn.execute(
-            "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, parts_json, debug, status, created_at, integration_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+            "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, parts_json, debug, status, created_at, integration_id, ttl_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
             params![
                 id,
                 input.platform,
@@ -327,15 +418,54 @@ impl BrowserStore<'_> {
                 parts_json,
                 input.debug,
                 now,
-                self.integration_id.as_str()
+                self.integration_id.as_str(),
+                input.ttl_ms
             ],
         )?;
-        self.get_draft_row(&id)?
-            .map(to_draft)
+        let mut next_ordinal: std::collections::HashMap<usize, i64> = std::collections::HashMap::new();
+        for (part_index, image) in staged {
+            let ordinal = next_ordinal.entry(*part_index).or_insert(0);
+            self.conn.execute(
+                "INSERT INTO browser_draft_images (id, integration_id, draft_id, part_index, ordinal, content_type, bytes, sha256, staged_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    Uuid::new_v4().to_string(),
+                    self.integration_id.as_str(),
+                    id,
+                    *part_index as i64,
+                    *ordinal,
+                    image.content_type,
+                    image.bytes,
+                    image.sha256,
+                    image.staged_path.to_string_lossy(),
+                    now,
+                ],
+            )?;
+            *ordinal += 1;
+        }
+        self.get_draft_row(id)?
+            .map(|row| self.load_draft(row))
             .transpose()?
             .ok_or_else(|| {
                 BrowserError::InvalidData("Created draft could not be read back.".to_owned())
             })
+    }
+
+    /// Delete a staged file only once nothing under this integration still
+    /// references its path — another draft may have deduplicated onto the
+    /// same content hash.
+    fn drop_staged_if_unreferenced(&self, staged_path: &std::path::Path) {
+        let path_text = staged_path.to_string_lossy().into_owned();
+        let referenced: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM browser_draft_images WHERE integration_id = ? AND staged_path = ?)",
+                params![self.integration_id.as_str(), path_text],
+                |row| row.get(0),
+            )
+            .unwrap_or(true);
+        if !referenced {
+            images::remove_staged_file(self.images_dir, &self.integration_id, staged_path);
+        }
     }
 
     pub fn create_job(&mut self, request: &JobInput<'_>, now: i64) -> Result<Job, BrowserError> {
@@ -440,6 +570,61 @@ impl BrowserStore<'_> {
         Ok(Completion { accepted: true })
     }
 
+    /// Settle a job that ran past its deadline with the success the browser
+    /// reported afterwards.
+    ///
+    /// Only a job still `unknown` because its deadline passed, under the same
+    /// command, is touched: anything that has moved on since — a person
+    /// resolving the post by hand, a later command — stays as it is. A late
+    /// failure never lands here, since it cannot prove a write did not happen.
+    pub fn reconcile_late_success(
+        &mut self,
+        id: &str,
+        command_id: &str,
+        result: &Value,
+        now: i64,
+    ) -> Result<bool, BrowserError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let outcome = (|| {
+            let changed = self.conn.execute(
+                "UPDATE browser_jobs SET status = 'succeeded', finished_at = ?, error_code = NULL, error_message = NULL, result_json = ? WHERE id = ? AND command_id = ? AND integration_id = ? AND status = 'unknown' AND error_code = 'deadline_exceeded'",
+                params![now, result.to_string(), id, command_id, self.integration_id.as_str()],
+            )?;
+            if changed == 0 {
+                return Ok(false);
+            }
+            let Some((_, _, action, payload_json)) = self.job_identity(id)? else {
+                return Ok(false);
+            };
+            if action == "submit_reply" || action == "submit_post" {
+                let payload: Value = serde_json::from_str(&payload_json).map_err(|_| {
+                    BrowserError::InvalidData("Stored submission payload is invalid.".to_owned())
+                })?;
+                if let Some(draft_id) = payload.get("draftId").and_then(Value::as_str) {
+                    self.conn.execute(
+                        "UPDATE browser_drafts SET status = 'submitted', submitted_at = ? WHERE integration_id = ? AND id = ? AND status = 'unknown'",
+                        params![now, self.integration_id.as_str(), draft_id],
+                    )?;
+                    self.conn.execute(
+                        "UPDATE browser_schedule_reservations SET status = 'committed', committed_at = ? WHERE integration_id = ? AND draft_id = ? AND status = 'unknown'",
+                        params![now, self.integration_id.as_str(), draft_id],
+                    )?;
+                }
+            }
+            Ok(true)
+        })();
+        match outcome {
+            Ok(value) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     pub fn mark_in_flight(
         &mut self,
         id: &str,
@@ -528,6 +713,16 @@ impl BrowserStore<'_> {
         if draft.status != "pending" {
             return Ok(None);
         }
+        let has_images: bool = self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM browser_draft_images WHERE integration_id = ? AND draft_id = ?)",
+            params![self.integration_id.as_str(), draft.id],
+            |row| row.get(0),
+        )?;
+        if has_images && !IMAGE_UPLOAD_IMPLEMENTED {
+            return Err(BrowserError::InvalidData(
+                "This post's images can't be sent yet: image upload into the page isn't wired up. Discard it, or wait for that to land.".to_owned(),
+            ));
+        }
         self.prune_jobs()?;
         let job_id = Uuid::new_v4().to_string();
         let command_id = Uuid::new_v4().to_string();
@@ -556,6 +751,23 @@ impl BrowserStore<'_> {
         } else {
             None
         };
+        let staged = if has_images {
+            self.read_draft_image_refs(&draft.id)?
+        } else {
+            Vec::new()
+        };
+        let image_json = |part_index: usize| -> Value {
+            serde_json::json!(
+                staged
+                    .iter()
+                    .filter(|(part, _, _)| *part == part_index)
+                    .map(|(_, image_id, content_type)| serde_json::json!({
+                        "imageId": image_id,
+                        "contentType": content_type,
+                    }))
+                    .collect::<Vec<_>>()
+            )
+        };
         let (action, mut payload) = if draft.kind == "post" {
             let stored: Vec<String> = serde_json::from_str(&draft.parts_json).unwrap_or_default();
             let parts = if stored.is_empty() {
@@ -563,30 +775,44 @@ impl BrowserStore<'_> {
             } else {
                 stored
             };
-            let payload = serde_json::json!({
+            let mut payload = serde_json::json!({
                 "kind": "post_submission",
                 "draftId": draft.id,
                 "text": draft.text,
-                "parts": parts,
+                "parts": parts.clone(),
             });
+            if has_images {
+                // Every part carries its own list, empty ones included, so
+                // the extension knows exactly which of its composers get
+                // nothing rather than guessing from a shorter array.
+                payload["partImages"] = serde_json::json!(
+                    (0..parts.len()).map(image_json).collect::<Vec<_>>()
+                );
+            }
             ("submit_post", payload)
         } else {
-            (
-                "submit_reply",
-                serde_json::json!({
-                    "kind": "submission",
-                    "draftId": draft.id,
-                    "postId": draft.post_id,
-                    "text": draft.text,
-                }),
-            )
+            let mut payload = serde_json::json!({
+                "kind": "submission",
+                "draftId": draft.id,
+                "postId": draft.post_id,
+                "text": draft.text,
+            });
+            if has_images {
+                payload["images"] = image_json(0);
+            }
+            ("submit_reply", payload)
         };
         if draft.debug {
             payload["debug"] = serde_json::Value::Bool(true);
         }
+        let ttl_ms: i64 = self.conn.query_row(
+            "SELECT COALESCE(ttl_ms, ?) FROM browser_drafts WHERE id = ? AND integration_id = ?",
+            params![DEFAULT_JOB_TTL_MS, draft.id, self.integration_id.as_str()],
+            |row| row.get(0),
+        )?;
         let expires_at = scheduled_at
-            .and_then(|value| value.checked_add(DEFAULT_JOB_TTL_MS))
-            .unwrap_or(now + DEFAULT_JOB_TTL_MS);
+            .and_then(|value| value.checked_add(ttl_ms))
+            .unwrap_or(now + ttl_ms);
         self.conn.execute(
             "INSERT INTO browser_jobs (id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, draft_id, integration_id) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
             params![
@@ -727,7 +953,7 @@ impl BrowserStore<'_> {
 
     pub fn get_draft(&mut self, id: &str) -> Result<Option<Draft>, BrowserError> {
         self.expire_drafts(now_millis())?;
-        Ok(self.get_draft_row(id)?.map(to_draft).transpose()?)
+        self.get_draft_row(id)?.map(|row| self.load_draft(row)).transpose()
     }
 
     /// Every draft still waiting on a confirmation, newest first.
@@ -736,8 +962,78 @@ impl BrowserStore<'_> {
         let mut statement = self.conn.prepare(
             "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id FROM browser_drafts WHERE integration_id = ? AND status = 'pending' ORDER BY created_at DESC",
         )?;
-        let rows = statement.query_map([self.integration_id.as_str()], read_draft_row)?;
-        rows.map(|row| Ok(to_draft(row?)?)).collect()
+        let rows: Vec<DraftRow> = statement
+            .query_map([self.integration_id.as_str()], read_draft_row)?
+            .collect::<Result<_, _>>()?;
+        drop(statement);
+        rows.into_iter().map(|row| self.load_draft(row)).collect()
+    }
+
+    /// A draft's own row plus the images it was asked with, in order.
+    fn load_draft(&self, row: DraftRow) -> Result<Draft, BrowserError> {
+        let images = self.read_draft_images(&row.id)?;
+        Ok(to_draft(row, images)?)
+    }
+
+    fn read_draft_images(&self, draft_id: &str) -> Result<Vec<DraftImage>, BrowserError> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, part_index, ordinal, content_type, bytes FROM browser_draft_images WHERE integration_id = ? AND draft_id = ? ORDER BY part_index ASC, ordinal ASC",
+        )?;
+        let rows = statement.query_map(params![self.integration_id.as_str(), draft_id], |row| {
+            Ok(DraftImage {
+                id: row.get(0)?,
+                part_index: row.get(1)?,
+                ordinal: row.get(2)?,
+                content_type: row.get(3)?,
+                bytes: row.get(4)?,
+            })
+        })?;
+        rows.map(|row| row.map_err(BrowserError::from)).collect()
+    }
+
+    /// The staged file each of a draft's images actually lives at, grouped by
+    /// part and in order within it, for building the submission job's
+    /// payload. Never handed back outside this store.
+    /// Each of a draft's images by part, in order: its id (for the extension
+    /// to fetch the bytes over its own authenticated connection — never a
+    /// local path, which a browser tab cannot read anyway) and content type.
+    fn read_draft_image_refs(
+        &self,
+        draft_id: &str,
+    ) -> Result<Vec<(usize, String, String)>, BrowserError> {
+        let mut statement = self.conn.prepare(
+            "SELECT part_index, id, content_type FROM browser_draft_images WHERE integration_id = ? AND draft_id = ? ORDER BY part_index ASC, ordinal ASC",
+        )?;
+        let rows = statement.query_map(params![self.integration_id.as_str(), draft_id], |row| {
+            Ok((row.get::<_, i64>(0)? as usize, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        })?;
+        rows.map(|row| row.map_err(BrowserError::from)).collect()
+    }
+
+    /// The exact bytes and content type of one image a draft was approved
+    /// with — the same snapshot staging captured, never the live source
+    /// file. Scoped to this integration and that one draft; an id that does
+    /// not name an image on it, however it spells a path, reads nothing.
+    pub fn read_draft_image(
+        &self,
+        draft_id: &str,
+        image_id: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, BrowserError> {
+        let row: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT content_type, staged_path FROM browser_draft_images WHERE integration_id = ? AND draft_id = ? AND id = ?",
+                params![self.integration_id.as_str(), draft_id, image_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((content_type, staged_path)) = row else {
+            return Ok(None);
+        };
+        let bytes = std::fs::read(&staged_path).map_err(|error| {
+            BrowserError::InvalidData(format!("Could not read staged image: {error}"))
+        })?;
+        Ok(Some((content_type, bytes)))
     }
 
     pub fn get_schedule_settings(&self) -> Result<ScheduleSettings, BrowserError> {
@@ -1123,10 +1419,16 @@ impl BrowserStore<'_> {
             return Ok(());
         }
         let remove = count - self.max_jobs + 1;
-        self.conn.execute(
-            "DELETE FROM browser_drafts WHERE integration_id = ? AND id IN (SELECT id FROM browser_drafts WHERE integration_id = ? AND status NOT IN ('pending', 'confirmed') AND NOT EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.draft_id = browser_drafts.id) ORDER BY created_at ASC LIMIT ?)",
-            params![self.integration_id.as_str(), self.integration_id.as_str(), remove],
-        )?;
+        let candidate_ids: Vec<String> = {
+            let mut statement = self.conn.prepare(
+                "SELECT id FROM browser_drafts WHERE integration_id = ? AND status NOT IN ('pending', 'confirmed') AND NOT EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.draft_id = browser_drafts.id) ORDER BY created_at ASC LIMIT ?",
+            )?;
+            let rows = statement.query_map(params![self.integration_id.as_str(), remove], |row| row.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        for id in &candidate_ids {
+            self.prune_one_draft(id)?;
+        }
         let after: i64 = self
             .conn
             .query_row(
@@ -1136,6 +1438,30 @@ impl BrowserStore<'_> {
             )?;
         if after >= self.max_jobs {
             return Err(BrowserError::Full);
+        }
+        Ok(())
+    }
+
+    /// Delete one settled draft, and every staged image it was the last
+    /// reference to. A hash another draft still points at is left alone.
+    fn prune_one_draft(&self, id: &str) -> Result<(), BrowserError> {
+        let mut statement = self.conn.prepare(
+            "SELECT staged_path FROM browser_draft_images WHERE integration_id = ? AND draft_id = ?",
+        )?;
+        let staged_paths: Vec<String> = statement
+            .query_map(params![self.integration_id.as_str(), id], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        drop(statement);
+        self.conn.execute(
+            "DELETE FROM browser_draft_images WHERE integration_id = ? AND draft_id = ?",
+            params![self.integration_id.as_str(), id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM browser_drafts WHERE integration_id = ? AND id = ?",
+            params![self.integration_id.as_str(), id],
+        )?;
+        for staged_path in staged_paths {
+            self.drop_staged_if_unreferenced(Path::new(&staged_path));
         }
         Ok(())
     }
@@ -1298,7 +1624,7 @@ fn read_artifact_body(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtifactBody>
     Ok(ArtifactBody { metadata, data })
 }
 
-fn to_draft(row: DraftRow) -> rusqlite::Result<Draft> {
+fn to_draft(row: DraftRow, images: Vec<DraftImage>) -> rusqlite::Result<Draft> {
     Ok(Draft {
         integration_id: row.integration_id,
         id: row.id,
@@ -1308,6 +1634,7 @@ fn to_draft(row: DraftRow) -> rusqlite::Result<Draft> {
         post_id: row.post_id,
         text: row.text,
         parts: serde_json::from_str(&row.parts_json).unwrap_or_default(),
+        images,
         debug: row.debug,
         status: row.status,
         created_at: row.created_at,
@@ -1356,7 +1683,9 @@ mod tests {
                     post_id: None,
                     text,
                     parts: &[],
+                    parts_images: &[vec![]],
                     debug: false,
+                    ttl_ms: DEFAULT_JOB_TTL_MS,
                 },
                 now,
             )
@@ -1372,7 +1701,9 @@ mod tests {
                     post_id: Some("42"),
                     text,
                     parts: &[],
+                    parts_images: &[vec![]],
                     debug: false,
+                    ttl_ms: DEFAULT_JOB_TTL_MS,
                 },
                 now,
             )
@@ -1429,7 +1760,9 @@ mod tests {
             post_id: None,
             text: "Same words",
             parts: &[],
+            parts_images: &[vec![]],
             debug: false,
+            ttl_ms: DEFAULT_JOB_TTL_MS,
         };
         assert!(store.find_pending_draft(&input, 100).unwrap().is_none());
         let first = store.create_draft(&input, 100).unwrap();
@@ -1457,7 +1790,9 @@ mod tests {
                     post_id: None,
                     text: "First post.\n\nSecond post.",
                     parts: &parts,
+                    parts_images: &[vec![], vec![]],
                     debug: false,
+                    ttl_ms: DEFAULT_JOB_TTL_MS,
                 },
                 100,
             )
@@ -1467,6 +1802,192 @@ mod tests {
         assert_eq!(submission.job.payload["parts"], serde_json::json!(parts));
         let plain = prepare_post_draft(&mut store, "Just one", 100);
         assert!(plain.parts.is_empty());
+    }
+
+    const PNG_MAGIC: [u8; 8] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+    fn write_png(dir: &std::path::Path, name: &str, pixels: &[u8]) -> String {
+        let mut bytes = PNG_MAGIC.to_vec();
+        bytes.extend_from_slice(pixels);
+        let path = dir.join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn approved_images_are_staged_once_and_survive_a_source_edit() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        let sources = tempdir().unwrap();
+        let path_a = write_png(sources.path(), "a.png", b"pixels-a");
+        let path_b = write_png(sources.path(), "b.png", b"pixels-a");
+
+        // Two drafts asking for the same bytes, from different files, land on
+        // one staged file.
+        let first = store
+            .create_draft(
+                &DraftInput {
+                    platform: "x",
+                    target_url: "https://x.com/compose/post",
+                    post_id: None,
+                    text: "First",
+                    parts: &[],
+                    parts_images: &[vec![path_a.clone()]],
+                    debug: false,
+                    ttl_ms: DEFAULT_JOB_TTL_MS,
+                },
+                100,
+            )
+            .unwrap();
+        assert_eq!(first.images.len(), 1);
+        assert_eq!(first.images[0].content_type, "image/png");
+        let second = store
+            .create_draft(
+                &DraftInput {
+                    platform: "x",
+                    target_url: "https://x.com/compose/post",
+                    post_id: None,
+                    text: "Second",
+                    parts: &[],
+                    parts_images: &[vec![path_b]],
+                    debug: false,
+                    ttl_ms: DEFAULT_JOB_TTL_MS,
+                },
+                100,
+            )
+            .unwrap();
+        fn staged_files(store: &BrowserStore<'_>) -> usize {
+            std::fs::read_dir(store.images_dir.join(&store.integration_id))
+                .map(|entries| entries.count())
+                .unwrap_or(0)
+        }
+        assert_eq!(staged_files(&store), 1);
+
+        // Editing the original file after staging must never reach the bytes
+        // either draft was approved with, even once confirmed.
+        std::fs::write(&path_a, b"tampered").unwrap();
+        store.consume_draft(&second.id, 100, false).unwrap();
+        assert_eq!(staged_files(&store), 1);
+        let (_, bytes) = store.read_draft_image(&second.id, &second.images[0].id).unwrap().unwrap();
+        let mut expected = PNG_MAGIC.to_vec();
+        expected.extend_from_slice(b"pixels-a");
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn confirming_a_draft_carries_each_parts_own_images_on_the_submission_job() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        let sources = tempdir().unwrap();
+        let path_first = write_png(sources.path(), "a.png", b"pixels-first");
+        let path_third_a = write_png(sources.path(), "c1.png", b"pixels-third-a");
+        let path_third_b = write_png(sources.path(), "c2.png", b"pixels-third-b");
+        let parts = vec!["First.".to_owned(), "Second.".to_owned(), "Third.".to_owned()];
+        let draft = store
+            .create_draft(
+                &DraftInput {
+                    platform: "x",
+                    target_url: "https://x.com/compose/post",
+                    post_id: None,
+                    text: "First.\n\nSecond.\n\nThird.",
+                    parts: &parts,
+                    parts_images: &[
+                        vec![path_first],
+                        vec![],
+                        vec![path_third_a, path_third_b],
+                    ],
+                    debug: false,
+                    ttl_ms: DEFAULT_JOB_TTL_MS,
+                },
+                100,
+            )
+            .unwrap();
+        assert_eq!(draft.images.iter().filter(|image| image.part_index == 0).count(), 1);
+        assert_eq!(draft.images.iter().filter(|image| image.part_index == 1).count(), 0);
+        assert_eq!(draft.images.iter().filter(|image| image.part_index == 2).count(), 2);
+
+        let submission = store.consume_draft(&draft.id, 100, false).unwrap().unwrap();
+        let part_images = submission.job.payload["partImages"].as_array().unwrap();
+        // One entry per part, every part's own images and nothing more —
+        // an empty middle part stays a real, present empty array.
+        assert_eq!(part_images.len(), 3);
+        assert_eq!(part_images[0].as_array().unwrap().len(), 1);
+        assert_eq!(part_images[1].as_array().unwrap().len(), 0);
+        assert_eq!(part_images[2].as_array().unwrap().len(), 2);
+        assert_eq!(part_images[0][0]["contentType"], "image/png");
+        // Never a local path a browser tab could not read anyway — an id
+        // the extension fetches the bytes for over its own connection.
+        assert_eq!(
+            part_images[0][0]["imageId"],
+            serde_json::json!(draft.images.iter().find(|image| image.part_index == 0).unwrap().id),
+        );
+        assert!(part_images[0][0].get("path").is_none());
+    }
+
+    #[test]
+    fn an_invalid_image_is_rejected_and_leaves_no_draft_behind() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        let sources = tempdir().unwrap();
+        let path = sources.path().join("not-an-image.png");
+        std::fs::write(&path, b"just text").unwrap();
+        let result = store.create_draft(
+            &DraftInput {
+                platform: "x",
+                target_url: "https://x.com/compose/post",
+                post_id: None,
+                text: "Bad image",
+                parts: &[],
+                parts_images: &[vec![path.to_string_lossy().into_owned()]],
+                debug: false,
+                ttl_ms: DEFAULT_JOB_TTL_MS,
+            },
+            100,
+        );
+        assert!(result.is_err());
+        assert!(store.list_pending_drafts(100).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_draft_image_reads_back_only_for_its_own_draft_and_id() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        let sources = tempdir().unwrap();
+        let path = write_png(sources.path(), "a.png", b"pixels");
+        let draft = store
+            .create_draft(
+                &DraftInput {
+                    platform: "x",
+                    target_url: "https://x.com/compose/post",
+                    post_id: None,
+                    text: "With an image",
+                    parts: &[],
+                    parts_images: &[vec![path]],
+                    debug: false,
+                    ttl_ms: DEFAULT_JOB_TTL_MS,
+                },
+                100,
+            )
+            .unwrap();
+        let image_id = &draft.images[0].id;
+        let (content_type, bytes) = store.read_draft_image(&draft.id, image_id).unwrap().unwrap();
+        assert_eq!(content_type, "image/png");
+        assert!(bytes.starts_with(&PNG_MAGIC));
+
+        // Neither a wrong image id nor a wrong draft id reads anything back.
+        assert!(store.read_draft_image(&draft.id, "not-a-real-id").unwrap().is_none());
+        assert!(store.read_draft_image("not-a-real-draft", image_id).unwrap().is_none());
+        let draft_id = draft.id.clone();
+        let image_id = image_id.clone();
+        drop(store);
+
+        // Nor does another integration's own scope, even with the right ids.
+        let other = database.browser_for("other-integration");
+        assert!(other.read_draft_image(&draft_id, &image_id).unwrap().is_none());
     }
 
     #[test]

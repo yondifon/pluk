@@ -17,7 +17,7 @@ export const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 export const MAX_EXTRACT_BYTES = 256 * 1024;
 export const MAX_JOB_TTL_MS = 5 * 60 * 1000;
 export const MIN_JOB_TTL_MS = 1_000;
-export const DEFAULT_JOB_TTL_MS = 2 * 60 * 1000;
+export const DEFAULT_JOB_TTL_MS = 3 * 60 * 1000;
 export const MAX_ENVELOPE_TTL_MS = MAX_JOB_TTL_MS;
 export const MAX_TEXT_LENGTH = 4_000;
 export const MAX_URL_LENGTH = 2_048;
@@ -26,6 +26,9 @@ export const MAX_RESULT_TEXT_LENGTH = 8_000;
 export const MAX_THREAD_PARTS = 25;
 export const MAX_DEBUG_GLOB_LEN = 200;
 export const HEARTBEAT_INTERVAL_MS = 20_000;
+// Mirrors `pluk_store::browser::images::MAX_IMAGES`: how many images a
+// submission can carry per part.
+export const MAX_IMAGES = 4;
 
 /** `true` attaches everything read off the page; a URL glob such as
  * `*\/graphql*` attaches only the captured responses whose address
@@ -203,11 +206,24 @@ export interface ReadPostPayload {
   readonly debug?: DebugRequest;
 }
 
+/** An image already staged on the host, named by its own id — never a local
+ * path, which a browser tab has no way to read anyway. The extension fetches
+ * the actual bytes itself, over its own authenticated connection, by this
+ * id, and the exact bytes it gets back are the ones staging captured. */
+export interface ImageAttachment {
+  readonly imageId: string;
+  readonly contentType: "image/png" | "image/jpeg";
+}
+
 export interface SubmissionPayload {
   readonly kind: "submission";
   readonly draftId: string;
   readonly postId: string;
   readonly text: string;
+  /** Images this reply was approved with, in order. A reply is always one
+   * part, so there is nothing to associate this list with beyond the reply
+   * itself. */
+  readonly images?: readonly ImageAttachment[];
   readonly debug?: DebugRequest;
 }
 
@@ -224,6 +240,10 @@ export interface PostSubmissionPayload {
   readonly text: string;
   /** The posts to send, in order. More than one makes a thread. */
   readonly parts: readonly string[];
+  /** One entry per part, that part's own approved images — an image-free
+   * part is a present, empty entry, so the driver never has to guess what a
+   * shorter array would mean. Same length as `parts`. */
+  readonly partImages?: readonly (readonly ImageAttachment[])[];
   readonly debug?: DebugRequest;
 }
 
@@ -827,12 +847,13 @@ function parseCommandPayload(
   }
   if (action === "submit_post") {
     if (
-      !hasOnlyKeys(value, ["kind", "draftId", "text", "parts"], ["debug"]) ||
+      !hasOnlyKeys(value, ["kind", "draftId", "text", "parts"], ["debug", "partImages"]) ||
       !isDebugRequest(value.debug) ||
       value.kind !== "post_submission" ||
       !isIdentifier(value.draftId) ||
       !isString(value.text, MAX_TEXT_LENGTH) ||
-      !isThread(value.parts)
+      !isThread(value.parts) ||
+      !isPartImages(value.partImages, value.parts.length)
     ) {
       return invalid("Post submission command payload is invalid.");
     }
@@ -843,6 +864,7 @@ function parseCommandPayload(
         draftId: value.draftId,
         text: value.text,
         parts: value.parts,
+        ...partImagesField(value.partImages),
         ...debugField(value.debug),
       },
     };
@@ -867,12 +889,13 @@ function parseCommandPayload(
   }
   if (action === "submit_reply") {
     if (
-      !hasOnlyKeys(value, ["kind", "draftId", "postId", "text"], ["debug"]) ||
+      !hasOnlyKeys(value, ["kind", "draftId", "postId", "text"], ["debug", "images"]) ||
       !isDebugRequest(value.debug) ||
       value.kind !== "submission" ||
       !isIdentifier(value.draftId) ||
       !isIdentifier(value.postId) ||
-      !isString(value.text, MAX_TEXT_LENGTH)
+      !isString(value.text, MAX_TEXT_LENGTH) ||
+      !isImageAttachments(value.images)
     ) {
       return invalid("Submission command payload is invalid.");
     }
@@ -883,6 +906,7 @@ function parseCommandPayload(
         draftId: value.draftId,
         postId: value.postId,
         text: value.text,
+        ...imagesField(value.images),
         ...debugField(value.debug),
       },
     };
@@ -935,6 +959,60 @@ function isThread(value: unknown): value is readonly string[] {
     value.length <= MAX_THREAD_PARTS &&
     value.every((part) => isString(part, MAX_TEXT_LENGTH))
   );
+}
+
+/** A list of `{ imageId, contentType }` pairs naming images already staged,
+ * up to `MAX_IMAGES`. Empty is only allowed for a part that can legitimately
+ * carry none of its own. */
+function isImageAttachmentList(value: unknown, allowEmpty: boolean): value is readonly ImageAttachment[] {
+  return (
+    Array.isArray(value) &&
+    (allowEmpty || value.length > 0) &&
+    value.length <= MAX_IMAGES &&
+    value.every(
+      (item) =>
+        isRecord(item) &&
+        hasOnlyKeys(item, ["imageId", "contentType"]) &&
+        isIdentifier(item.imageId) &&
+        (item.contentType === "image/png" || item.contentType === "image/jpeg"),
+    )
+  );
+}
+
+/** The images a reply carries on the wire: absent, or 1 to `MAX_IMAGES`
+ * attachments. A reply is always one part, so there is nothing to associate
+ * this list with beyond the reply itself. */
+function isImageAttachments(value: unknown): value is readonly ImageAttachment[] | undefined {
+  return value === undefined || isImageAttachmentList(value, false);
+}
+
+/** The images a post carries on the wire: absent, or exactly one list per
+ * part — each 0 to `MAX_IMAGES` attachments — so an image-free part is a
+ * present, empty entry rather than a gap. */
+function isPartImages(
+  value: unknown,
+  expectedParts: number,
+): value is readonly (readonly ImageAttachment[])[] | undefined {
+  if (value === undefined) {
+    return true;
+  }
+  return (
+    Array.isArray(value) &&
+    value.length === expectedParts &&
+    value.every((part) => isImageAttachmentList(part, true))
+  );
+}
+
+function imagesField(
+  value: readonly ImageAttachment[] | undefined,
+): { readonly images: readonly ImageAttachment[] } | Record<string, never> {
+  return value === undefined ? {} : { images: value };
+}
+
+function partImagesField(
+  value: readonly (readonly ImageAttachment[])[] | undefined,
+): { readonly partImages: readonly (readonly ImageAttachment[])[] } | Record<string, never> {
+  return value === undefined ? {} : { partImages: value };
 }
 
 function isBoundedJson(value: unknown, depth = 0): boolean {
@@ -1275,7 +1353,7 @@ function parseResultMessage(
     return invalid("Result message has an unsupported shape.");
   }
   const identifiers = { jobId: value.jobId, commandId: value.commandId };
-  const times = parseEnvelopeTimes(value);
+  const times = parseResultTimes(value);
   if (!times) {
     return invalid("Result message has an unsupported shape.");
   }
@@ -1364,19 +1442,30 @@ function parseFailedResult(
   };
 }
 
-function parseEnvelopeTimes(
+// A result may be issued after its command expired: the page can finish past
+// the deadline, and the server decides whether that late answer can still
+// settle the job.
+function parseResultTimes(
   value: Record<string, unknown>,
 ): { readonly issuedAt: number; readonly expiresAt: number } | null {
   if (!isTimestamp(value.issuedAt) || !isTimestamp(value.expiresAt)) {
     return null;
   }
-  if (value.expiresAt <= value.issuedAt) {
-    return null;
-  }
-  if (value.expiresAt - value.issuedAt > MAX_ENVELOPE_TTL_MS) {
-    return null;
-  }
   return { issuedAt: value.issuedAt, expiresAt: value.expiresAt };
+}
+
+function parseEnvelopeTimes(
+  value: Record<string, unknown>,
+): { readonly issuedAt: number; readonly expiresAt: number } | null {
+  const times = parseResultTimes(value);
+  if (
+    times === null ||
+    times.expiresAt <= times.issuedAt ||
+    times.expiresAt - times.issuedAt > MAX_ENVELOPE_TTL_MS
+  ) {
+    return null;
+  }
+  return times;
 }
 
 export function isAllowedExtensionOrigin(origin: string): boolean {
