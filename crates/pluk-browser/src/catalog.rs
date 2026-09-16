@@ -8,6 +8,10 @@ use crate::protocol::{
 
 const PLATFORMS: [Platform; 2] = [Platform::X, Platform::Instagram];
 
+/// X hands back the replies shown under a post, which the shared read-post
+/// summary does not promise for every platform.
+const X_READ_POST_SUMMARY: &str = "Read one exact post by its URL or its typed post ID. Returns a canonical post target and the replies shown under it, top to bottom, each with its own post ID.";
+
 /// Tool classes, matching the categories the adapter layer groups by.
 const READ: &str = "read";
 const WRITE: &str = "write";
@@ -98,7 +102,11 @@ pub fn tools() -> Vec<ToolSpec> {
                 id: tool_id(platform, action),
                 platform: platform.as_str(),
                 action: action.as_str(),
-                summary,
+                summary: if platform == Platform::X && action == Action::ReadPost {
+                    X_READ_POST_SUMMARY
+                } else {
+                    summary
+                },
                 category,
                 hostnames: hostnames(platform),
                 args_schema: args_schema(platform, action),

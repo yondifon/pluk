@@ -441,8 +441,52 @@ test("reads a typed X profile and refuses a read-post ID that does not match the
       postId: "42",
       canonicalTarget: "https://x.com/janedoe/status/42",
     },
+    replies: [],
   });
   expect(mismatched).toMatchObject({ state: "target_not_found" });
+});
+
+test("reads an X conversation as the root post and its visible replies in page order", () => {
+  const tweet = (handle: string, postId: string, text: string) =>
+    node(
+      text,
+      {},
+      {
+        'a[href*="/status/"]': [node("", { href: `/${handle}/status/${postId}` })],
+        '[data-testid="tweetText"]': [node(text)],
+        '[data-testid="User-Name"]': [node(handle)],
+      },
+    );
+  const restore = installPage(
+    "A conversation",
+    "X",
+    "https://x.com/janedoe/status/42",
+    {
+      'article[data-testid="tweet"]': [
+        tweet("janedoe", "42", "The root post"),
+        tweet("bob", "44", "Second on the page"),
+        tweet("alice", "43", "Third on the page"),
+      ],
+    },
+  );
+  const result = runXPage({
+    action: "read_post",
+    targetUrl: "https://x.com/janedoe/status/42",
+    postId: "42",
+  });
+  restore();
+  expect(result).toMatchObject({
+    state: "ready",
+    post: { postId: "42", text: "The root post" },
+  });
+  const { replies } = result as unknown as {
+    replies: ReadonlyArray<{ postId: string; canonicalTarget: string; text: string }>;
+  };
+  expect(replies.map((reply) => reply.postId)).toEqual(["44", "43"]);
+  expect(replies[0]).toMatchObject({
+    canonicalTarget: "https://x.com/bob/status/44",
+    text: "Second on the page",
+  });
 });
 
 test("submits an exact X reply exactly once into the editor already under the post", async () => {

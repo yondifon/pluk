@@ -1282,6 +1282,7 @@ export function runXPage(
       ...baseData("x_post", target.text),
       canonicalTarget: target.canonicalTarget,
       post: target,
+      replies: posts.filter((post) => post !== target),
     };
   }
   if (
