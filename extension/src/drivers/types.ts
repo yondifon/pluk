@@ -14,6 +14,8 @@ export type DriverPageState =
 export interface DriverScriptOptions {
   readonly action: Action;
   readonly targetUrl: string;
+  /** Stable identity for one submission across the driver's multiple passes. */
+  readonly draftId?: string;
   readonly postId?: string;
   readonly text?: string;
   /** The posts of a thread, in order. Absent or one entry for a plain post. */

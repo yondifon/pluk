@@ -643,10 +643,11 @@ const REPOST_TARGET = "https://x.com/i/status/42";
 
 function repostArticle(
   controls: Readonly<Record<string, readonly FixtureNode[]>>,
+  attributes: Readonly<Record<string, string>> = {},
 ): FixtureNode {
   return node(
     "Visible post",
-    {},
+    attributes,
     {
       'a[href*="/status/"]': [node("", { href: "/owner/status/42" })],
       '[data-testid="tweetText"]': [node("Visible post")],
@@ -677,6 +678,7 @@ function runRepost(): Promise<unknown> {
     runXPage({
       action: "submit_repost",
       targetUrl: REPOST_TARGET,
+      draftId: "draft-1",
       postId: "42",
     }),
   );
@@ -852,11 +854,13 @@ function quotePage(
 function runQuote(
   extra: { readonly parts?: readonly string[]; readonly partImages?: readonly (readonly { readonly data: string; readonly contentType: string }[])[] } = {},
   text = "Worth reading.",
+  draftId = "draft-1",
 ): Promise<unknown> {
   return Promise.resolve(
     runXPage({
       action: "submit_quote",
       targetUrl: REPOST_TARGET,
+      draftId,
       postId: "42",
       text,
       ...extra,
@@ -1055,6 +1059,28 @@ test("gives up on a quote whose composer never opens rather than pressing on", a
     message: "X did not open the quote composer. Nothing was posted.",
   });
 }, 15_000);
+
+test("a new quote attempt ignores markers left by a different attempt", async () => {
+  const repostButton = node("", {
+    "data-testid": "retweet",
+    "data-pluk-repost-menu": "old-draft",
+  });
+  const article = repostArticle(
+    { [QUOTE_BUTTON]: [repostButton] },
+    { "data-pluk-quote": "old-draft" },
+  );
+  const restore = quotePage(article, REPOST_TARGET, {});
+
+  const result = await runQuote({}, "Worth reading.", "new-draft");
+
+  restore();
+  expect(result).toMatchObject({
+    state: "waiting",
+    trustedClick: { x: 25, y: 40 },
+  });
+  expect(repostButton.getAttribute("data-pluk-repost-menu")).toBe("new-draft");
+  expect(article.getAttribute("data-pluk-quote")).toBe("old-draft");
+}, 10_000);
 
 test("refuses X poll and thread composers without submitting", async () => {
   const unsupportedParts: ReadonlyArray<

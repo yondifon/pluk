@@ -914,6 +914,7 @@ async function makeDriverScriptOptions(
     return {
       action: command.action,
       targetUrl,
+      draftId,
       postId,
       text,
       images,
@@ -924,6 +925,7 @@ async function makeDriverScriptOptions(
     return {
       action: command.action,
       targetUrl,
+      draftId: command.payload.draftId,
       postId: command.payload.postId,
       debug,
     };
@@ -939,6 +941,7 @@ async function makeDriverScriptOptions(
     return {
       action: command.action,
       targetUrl,
+      draftId,
       ...(command.payload.kind === "quote_submission"
         ? { postId: command.payload.postId }
         : {}),

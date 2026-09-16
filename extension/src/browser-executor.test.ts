@@ -33,6 +33,7 @@ let executeScriptImpl: (targetUrl: string) => DriverPageResult = (
   title: "Home / X",
 });
 let lastDriverDebug: unknown;
+let lastDriverDraftId: unknown;
 
 const storage = new Map<string, unknown>();
 
@@ -122,11 +123,12 @@ const mockChrome = {
   scripting: {
     executeScript: async (details: {
       readonly args: readonly [
-        { readonly targetUrl: string; readonly debug?: unknown },
+        { readonly targetUrl: string; readonly draftId?: string; readonly debug?: unknown },
       ];
     }) => {
       const [options] = details.args;
       lastDriverDebug = options.debug;
+      lastDriverDraftId = options.draftId;
       return [{ frameId: 0, result: executeScriptImpl(options.targetUrl) }];
     },
   },
@@ -144,6 +146,7 @@ beforeEach(() => {
   debuggerAttachCalls = 0;
   debuggerDetachCalls = 0;
   lastDriverDebug = undefined;
+  lastDriverDraftId = undefined;
   captureVisibleTabImpl = () => Promise.resolve("data:image/png;base64,AA==");
   executeScriptImpl = (targetUrl) => ({
     state: "ready",
@@ -302,6 +305,45 @@ test("submit_reply emulates focus on the automation tab only while it runs and s
   expect(debuggerAttachCalls).toBe(1);
   expect(debuggerDetachCalls).toBe(1);
   expect(submission).not.toHaveProperty("screenshotArtifactId");
+});
+
+test("passes each submission draft id to the driver", async () => {
+  executeScriptImpl = (targetUrl) => ({
+    state: "submission_succeeded",
+    kind: "submission",
+    url: targetUrl,
+    title: "Post / X",
+  });
+  const executor = new BrowserExecutor();
+  const sink = makeSink();
+
+  await executor.run(
+    {
+      ...makeCommand("submit_repost", "https://x.com/status/42"),
+      payload: {
+        kind: "repost_submission",
+        draftId: "repost-draft",
+        postId: "42",
+      },
+    },
+    sink,
+  );
+  expect(lastDriverDraftId).toBe("repost-draft");
+
+  await executor.run(
+    {
+      ...makeCommand("submit_quote", "https://x.com/status/42"),
+      payload: {
+        kind: "quote_submission",
+        draftId: "quote-draft",
+        postId: "42",
+        text: "Quote",
+        parts: ["Quote"],
+      },
+    },
+    sink,
+  );
+  expect(lastDriverDraftId).toBe("quote-draft");
 });
 
 test("a real DOM read failure still surfaces honestly when the site itself denies access", async () => {

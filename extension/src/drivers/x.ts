@@ -668,6 +668,13 @@ export function runXPage(
   const MENU_ASKED = "data-pluk-repost-menu";
   const CONFIRM_ASKED = "data-pluk-repost-confirm";
   const QUOTE_ASKED = "data-pluk-quote";
+  const markerBelongsToAttempt = (element: Element | null, marker: string): boolean =>
+    options.draftId !== undefined && element?.getAttribute(marker) === options.draftId;
+  const markForAttempt = (element: Element, marker: string): void => {
+    if (options.draftId !== undefined) {
+      element.setAttribute(marker, options.draftId);
+    }
+  };
 
   const articleFor = (postId: string): Element | null =>
     Array.from(
@@ -696,7 +703,9 @@ export function runXPage(
   ): Promise<Element | DriverPageResult> => {
     const menuItem =
       choice() ??
-      (repostButton?.hasAttribute(MENU_ASKED) ? await waitFor(choice, 3_000) : null);
+      (markerBelongsToAttempt(repostButton, MENU_ASKED)
+        ? await waitFor(choice, 3_000)
+        : null);
     if (menuItem) {
       return menuItem;
     }
@@ -706,10 +715,10 @@ export function runXPage(
         `X did not expose the repost control on this post. ${nothingDone}`,
       );
     }
-    if (repostButton.hasAttribute(MENU_ASKED)) {
+    if (markerBelongsToAttempt(repostButton, MENU_ASKED)) {
       return failure("unsupported", `X did not open the repost menu. ${nothingDone}`);
     }
-    repostButton.setAttribute(MENU_ASKED, "true");
+    markForAttempt(repostButton, MENU_ASKED);
     trace(`asking for a real press of the repost control for ${requestedPostId}`);
     return pressRequest(repostButton);
   };
@@ -763,7 +772,7 @@ export function runXPage(
     });
     // The article's own button is the only proof: a menu that closed says
     // nothing about what it did.
-    const askedToRepost = article.hasAttribute(CONFIRM_ASKED);
+    const askedToRepost = markerBelongsToAttempt(article, CONFIRM_ASKED);
     if (article.querySelector('[data-testid="unretweet"]')) {
       return done(!askedToRepost);
     }
@@ -792,7 +801,7 @@ export function runXPage(
     if (menuItem.getAttribute("data-testid") === "unretweetConfirm") {
       return done(true);
     }
-    article.setAttribute(CONFIRM_ASKED, "true");
+    markForAttempt(article, CONFIRM_ASKED);
     trace(`asking for a real press of Repost for ${requestedPostId}`);
     return pressRequest(menuItem);
   };
@@ -843,7 +852,7 @@ export function runXPage(
         "The X post to quote was not visible. Nothing was posted.",
       );
     }
-    if (article.hasAttribute(QUOTE_ASKED)) {
+    if (markerBelongsToAttempt(article, QUOTE_ASKED)) {
       const dialog = await waitFor(quoteComposer, 3_000);
       const scope = composerScope();
       if (!dialog || !scope || !dialog.contains(scope)) {
@@ -867,7 +876,7 @@ export function runXPage(
     if ("state" in menuItem) {
       return menuItem;
     }
-    article.setAttribute(QUOTE_ASKED, "true");
+    markForAttempt(article, QUOTE_ASKED);
     trace(`asking for a real press of Quote for ${requestedPostId}`);
     return pressRequest(menuItem);
   };
