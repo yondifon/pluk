@@ -510,23 +510,27 @@ export function runXPage(
   // A quote's composer shows the post it quotes among the attachments, as one
   // control holding that post's author and words. Its avatar and media belong
   // to that post, not to anything attached here.
-  const inQuotedPost = (media: Element): boolean => {
-    const control = media.closest('button, [role="link"]');
-    return (
-      control !== null &&
-      control.querySelector('[data-testid="User-Name"], [data-testid="tweetText"]') !== null
-    );
-  };
+  // X draws the quoted post as a card among the composer's attachments. The
+  // card carries its own images — the author's avatar, a verified badge that
+  // is itself a `role="link"` — so the nearest control above an image is not
+  // reliably the card. The card is found once and asked what it holds.
+  const quotedPostCard = (scope: Element): Element | null =>
+    Array.from(scope.querySelectorAll('[data-testid="attachments"] button')).find(
+      (card) =>
+        card.querySelector('[data-testid="User-Name"], [data-testid="tweetText"]') !== null,
+    ) ?? null;
 
   // How many pieces of media the composer currently shows attached, however
   // they got there. Counted, never trusted by content: this is what tells
   // apart "still uploading", "fully attached", and media Pluk never asked
   // for.
-  const attachedMediaCount = (scope: Element): number =>
-    [
+  const attachedMediaCount = (scope: Element): number => {
+    const card = quotedPostCard(scope);
+    return [
       ...Array.from(scope.querySelectorAll('[data-testid="attachments"] img')),
       ...Array.from(scope.querySelectorAll('[data-testid="attachments"] video')),
-    ].filter((media) => !inQuotedPost(media)).length;
+    ].filter((media) => card === null || !card.contains(media)).length;
+  };
 
   const base64ToBytes = (base64: string): Uint8Array<ArrayBuffer> => {
     const binary = atob(base64);

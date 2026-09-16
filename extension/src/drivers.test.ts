@@ -742,23 +742,27 @@ const QUOTE_ITEM = '[role="menu"] a[role="menuitem"][href="/compose/post"]';
 
 /** X's quote composer as the page shows it once Quote is pressed: the
  * new-post modal, with the quoted post drawn as a card among the attachments.
- * The card's avatar is an image inside that card, not media Pluk attached. */
+ * The card holds the author's avatar and a verified badge, both images inside
+ * that card rather than media Pluk attached. The badge sits in its own
+ * `role="link"`, so the control nearest it is not the card. */
 function quoteComposer(
   editor: FixtureNode,
   submitButton: FixtureNode,
   selectors: Readonly<Record<string, readonly FixtureNode[]>> = {},
 ): { readonly dialog: FixtureNode; readonly scope: FixtureNode } {
+  const avatar = node("");
+  const verifiedBadge = node("");
   const card = node(
     "Owner Visible post",
     {},
     {
       '[data-testid="User-Name"], [data-testid="tweetText"]': [node("Owner")],
+      children: [avatar, verifiedBadge],
     },
   );
-  const avatar = node("");
-  Object.defineProperty(avatar, "closest", { value: () => card });
   const { scope } = makeComposerScope(editor, submitButton, {
-    '[data-testid="attachments"] img': [avatar],
+    '[data-testid="attachments"] img': [avatar, verifiedBadge],
+    '[data-testid="attachments"] button': [card],
     ...selectors,
   });
   const dialog = node(
