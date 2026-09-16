@@ -15,7 +15,7 @@ const WRITE: &str = "write";
 /// Every action the catalog publishes, with the summary an agent reads and
 /// the class its enable-by-default state derives from. A new action declares
 /// its own class here; nothing downstream names actions.
-const ACTIONS: [(Action, &str, &str); 9] = [
+const ACTIONS: [(Action, &str, &str); 11] = [
     (
         Action::Inspect,
         "Read the page context at an exact target URL.",
@@ -54,6 +54,16 @@ const ACTIONS: [(Action, &str, &str); 9] = [
     (
         Action::Reply,
         "Reply to an exact post ID with exact text. It waits in Pluk until the user sends it; no page is touched before then.",
+        WRITE,
+    ),
+    (
+        Action::Repost,
+        "Repost an exact post ID as it stands, adding nothing. It waits in Pluk until the user sends it; no page is touched before then.",
+        WRITE,
+    ),
+    (
+        Action::Quote,
+        "Quote an exact post ID with exact text of your own, optionally with images or as a thread, under the same rules as posting. It waits in Pluk until the user sends it; no page is touched before then.",
         WRITE,
     ),
     (
@@ -169,6 +179,83 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                         "description": "Attach what the page was doing to the job. `true` attaches everything read off the page; a URL glob such as `*/graphql*` attaches only the responses the page fetched whose address matches it.",
                     },
                 },
+            },
+            "ttlMs": ttl_ms,
+        });
+    }
+    if action == Action::Repost {
+        return json!({
+            "payload": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                    "postId": {
+                        "type": "string",
+                        "required": true,
+                        "description": "Exact post identifier to repost.",
+                    },
+                    "debug": {
+                        "type": ["boolean", "string"],
+                        "required": false,
+                        "maxLength": MAX_DEBUG_GLOB_LEN,
+                        "description": "Attach what the page was doing to the job. `true` attaches everything read off the page; a URL glob such as `*/graphql*` attaches only the responses the page fetched whose address matches it.",
+                    },
+                },
+                "description": "No target URL accepted: the post's own page is derived from postId.",
+            },
+            "ttlMs": ttl_ms,
+        });
+    }
+    if action == Action::Quote {
+        return json!({
+            "payload": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                    "postId": {
+                        "type": "string",
+                        "required": true,
+                        "description": "Exact post identifier to quote.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "required": false,
+                        "maxLength": MAX_TEXT_LENGTH,
+                        "description": "Exact quote text, submitted verbatim. Over 280 weighted characters it is cut into a thread at sentence ends. A quote needs text: pass this or thread, not both.",
+                    },
+                    "thread": {
+                        "type": "array",
+                        "required": false,
+                        "items": {
+                            "type": ["string", "object"],
+                            "maxLength": MAX_TEXT_LENGTH,
+                            "properties": {
+                                "text": { "type": "string", "required": true, "maxLength": MAX_TEXT_LENGTH },
+                                "images": images,
+                            },
+                        },
+                        "maxItems": 25,
+                        "description": format!(
+                            "The posts of a quote thread, in order, each under 280 weighted characters; the first is the quote itself. Pass this or text, not both. Each entry is exact text, or {{ text, images }} to give that one post its own 1 to {MAX_IMAGES} images. Do not also pass the top-level images field alongside thread; it is refused as ambiguous.",
+                        ),
+                    },
+                    "images": {
+                        "type": "array",
+                        "required": false,
+                        "items": { "type": "string" },
+                        "maxItems": MAX_IMAGES,
+                        "description": format!(
+                            "1 to {MAX_IMAGES} absolute local PNG or JPEG file paths for a quote that is not a thread. Not accepted together with thread — give each part its own images there instead.",
+                        ),
+                    },
+                    "debug": {
+                        "type": ["boolean", "string"],
+                        "required": false,
+                        "maxLength": MAX_DEBUG_GLOB_LEN,
+                        "description": "Attach what the page was doing to the job. `true` attaches everything read off the page; a URL glob such as `*/graphql*` attaches only the responses the page fetched whose address matches it.",
+                    },
+                },
+                "description": "No target URL accepted: the quoted post's own page is derived from postId.",
             },
             "ttlMs": ttl_ms,
         });
@@ -352,7 +439,7 @@ fn result_schema() -> Value {
                 },
                 "draftId": {
                     "type": ["string", "null"],
-                    "description": "Set for reply and post. The post is put to the user, and their answer is what sends it; read this draft to see what they decided. Nothing here publishes it.",
+                    "description": "Set for reply, repost, quote and post. The post is put to the user, and their answer is what sends it; read this draft to see what they decided. Nothing here publishes it.",
                 },
             },
         },
@@ -377,6 +464,8 @@ mod tests {
                 "x.refresh",
                 "x.capture",
                 "x.reply",
+                "x.repost",
+                "x.quote",
                 "x.post",
                 "instagram.inspect",
                 "instagram.read_profile",
@@ -387,6 +476,8 @@ mod tests {
         );
         // Submissions are reached by confirming a draft, never by invoking a tool.
         assert!(!ids.iter().any(|id| id.ends_with(".submit_reply")));
+        assert!(!ids.iter().any(|id| id.ends_with(".submit_repost")));
+        assert!(!ids.iter().any(|id| id.ends_with(".submit_quote")));
         assert!(!ids.iter().any(|id| id.ends_with(".submit_post")));
     }
 
@@ -418,7 +509,11 @@ mod tests {
         assert!(find_tool("instagram.inspect").is_some());
         assert!(find_tool("instagram.read_post").is_some());
         assert!(find_tool("instagram.read_trends").is_none());
+        assert!(find_tool("x.repost").is_some());
         assert!(find_tool("instagram.post").is_none());
+        assert!(find_tool("instagram.repost").is_none());
+        assert!(find_tool("x.quote").is_some());
+        assert!(find_tool("instagram.quote").is_none());
         assert!(find_tool("linkedin.read_post").is_none());
         assert!(find_tool("gmail.read_feed").is_none());
         assert!(find_tool("tiktok.read_profile").is_none());

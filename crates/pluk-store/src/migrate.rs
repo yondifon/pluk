@@ -22,6 +22,7 @@ type Step = fn(&mut Connection) -> Result<()>;
 
 const LADDER: &[Step] = &[
     migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
+    migrate_v8,
 ];
 
 /// Bring `conn` up to the latest version.
@@ -389,6 +390,53 @@ fn migrate_v7(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 8: a draft can also be a repost or a quote. SQLite cannot change a
+/// `CHECK` in place, so the table is rebuilt with every row and index it had.
+/// Foreign keys are held off across the swap so dropping the old table
+/// cascades into nothing that references it.
+fn migrate_v8(conn: &mut Connection) -> Result<()> {
+    let foreign_keys: bool = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+    conn.pragma_update(None, "foreign_keys", false)?;
+    let rebuilt = rebuild_browser_drafts(conn);
+    conn.pragma_update(None, "foreign_keys", foreign_keys)?;
+    rebuilt
+}
+
+fn rebuild_browser_drafts(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "
+        CREATE TABLE browser_drafts_v8 (
+            id TEXT PRIMARY KEY,
+            platform TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('reply', 'post', 'repost', 'quote')),
+            target_url TEXT NOT NULL,
+            post_id TEXT,
+            text TEXT NOT NULL,
+            parts_json TEXT NOT NULL DEFAULT '[]',
+            debug INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'submitted', 'failed', 'unknown', 'cancelled', 'expired')),
+            created_at INTEGER NOT NULL,
+            confirmed_at INTEGER,
+            submitted_at INTEGER,
+            scheduled_at INTEGER,
+            integration_id TEXT NOT NULL DEFAULT 'browser',
+            ttl_ms INTEGER
+        );
+        INSERT INTO browser_drafts_v8 (id, platform, kind, target_url, post_id, text, parts_json, debug, status, created_at, confirmed_at, submitted_at, scheduled_at, integration_id, ttl_ms)
+            SELECT id, platform, kind, target_url, post_id, text, parts_json, debug, status, created_at, confirmed_at, submitted_at, scheduled_at, integration_id, ttl_ms FROM browser_drafts;
+        DROP TABLE browser_drafts;
+        ALTER TABLE browser_drafts_v8 RENAME TO browser_drafts;
+        CREATE INDEX IF NOT EXISTS browser_drafts_status_idx ON browser_drafts (status, created_at);
+        CREATE INDEX IF NOT EXISTS browser_drafts_integration_status_idx
+            ON browser_drafts (integration_id, status, created_at);
+        ",
+    )?;
+    tx.pragma_update(None, "user_version", 8)?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Columns added to `query_log` over time by the TypeScript ALTER loop. Old
 /// databases may lack any subset; add exactly what is missing and fail loudly
 /// if an ALTER fails for any other reason.
@@ -656,6 +704,41 @@ mod tests {
             ]
         );
         assert_eq!(current_version(&conn).unwrap(), 5);
+    }
+
+    #[test]
+    fn drafts_migration_admits_reposts_and_quotes_and_keeps_what_hangs_off_a_draft() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &LADDER[..7] {
+            step(&mut conn).unwrap();
+        }
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO browser_drafts (id, platform, kind, target_url, text, status, created_at, integration_id, ttl_ms) VALUES ('draft-1', 'x', 'post', 'https://x.com/compose/post', 'Saved post', 'pending', 100, 'wande-1', 5000);
+             INSERT INTO browser_draft_images (id, integration_id, draft_id, part_index, ordinal, content_type, bytes, sha256, staged_path, created_at) VALUES ('image-1', 'wande-1', 'draft-1', 0, 0, 'image/png', 10, 'hash', '/staged', 100);",
+        )
+        .unwrap();
+
+        migrate_v8(&mut conn).unwrap();
+
+        let kept: (String, i64, i64) = conn
+            .query_row(
+                "SELECT text, ttl_ms, (SELECT COUNT(*) FROM browser_draft_images WHERE draft_id = 'draft-1') FROM browser_drafts WHERE id = 'draft-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kept, ("Saved post".to_owned(), 5000, 1));
+        for kind in ["repost", "quote"] {
+            conn.execute(
+                "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, status, created_at) VALUES (?, 'x', ?, 'https://x.com/i/status/42', '42', '', 'pending', 100)",
+                [kind, kind],
+            )
+            .unwrap();
+        }
+        let foreign_keys: bool = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0)).unwrap();
+        assert!(foreign_keys);
+        assert_eq!(current_version(&conn).unwrap(), 8);
     }
 
     fn columns_of(conn: &Connection, table: &str) -> HashSet<String> {

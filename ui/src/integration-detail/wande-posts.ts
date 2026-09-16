@@ -19,6 +19,14 @@ export interface DraftImage {
   bytes: number;
 }
 
+/** The post a quote quotes. Its author and words are there only when Pluk
+ * has already read that post; its address always is. */
+export interface QuotedPost {
+  url: string;
+  author: string | null;
+  text: string | null;
+}
+
 export interface WaitingPost {
   id: string;
   text: string;
@@ -29,6 +37,10 @@ export interface WaitingPost {
   images: DraftImage[];
   /** The post this one replies to, when it is a reply. */
   replyingTo: string | null;
+  /** The post this one shares as it stands, when it is a repost. */
+  reposting: string | null;
+  /** The post this one quotes, when it is a quote. */
+  quoting: QuotedPost | null;
   expiresAt: number;
   canQueue: boolean;
 }
@@ -305,10 +317,23 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
     parts?: string[];
     images?: DraftImage[];
     replyingTo?: string | null;
+    reposting?: string | null;
+    quoting?: QuotedPost | null;
   }): HTMLElement {
     const body = document.createElement("div");
     body.className = "wande-post-body";
+    // A repost carries no words of its own, so the post it shares is all
+    // there is to show.
+    if (post.reposting) {
+      body.appendChild(line("Reposting", "hint"));
+      body.appendChild(line(post.reposting, "wande-post-text"));
+      return body;
+    }
     if (post.replyingTo) body.appendChild(line(`Replying to ${post.replyingTo}`, "hint"));
+    if (post.quoting) {
+      body.appendChild(line(post.quoting.author ? `Quoting ${post.quoting.author}` : "Quoting", "hint"));
+      body.appendChild(line(post.quoting.text ?? post.quoting.url, "hint"));
+    }
     const parts = post.parts ?? [];
     const images = post.images ?? [];
     if (parts.length > 1) {
@@ -358,7 +383,7 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
     const buttons: Array<[HTMLButtonElement, boolean]> = [
       ...(sending
         ? []
-        : [[createButton("Post now", { variant: "primary", size: "sm", onClick: () => postNow(post) }), true] as [HTMLButtonElement, boolean]]),
+        : [[createButton(post.reposting ? "Repost" : "Post now", { variant: "primary", size: "sm", onClick: () => postNow(post) }), true] as [HTMLButtonElement, boolean]]),
       ...(post.canQueue
         ? [[createButton("Add to queue", { variant: sending ? "primary" : "secondary", size: "sm", onClick: () => addToQueue(post) }), true] as [HTMLButtonElement, boolean]]
         : []),

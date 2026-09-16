@@ -507,13 +507,26 @@ export function runXPage(
     return null;
   };
 
+  // A quote's composer shows the post it quotes among the attachments, as one
+  // control holding that post's author and words. Its avatar and media belong
+  // to that post, not to anything attached here.
+  const inQuotedPost = (media: Element): boolean => {
+    const control = media.closest('button, [role="link"]');
+    return (
+      control !== null &&
+      control.querySelector('[data-testid="User-Name"], [data-testid="tweetText"]') !== null
+    );
+  };
+
   // How many pieces of media the composer currently shows attached, however
   // they got there. Counted, never trusted by content: this is what tells
   // apart "still uploading", "fully attached", and media Pluk never asked
   // for.
   const attachedMediaCount = (scope: Element): number =>
-    scope.querySelectorAll('[data-testid="attachments"] img').length +
-    scope.querySelectorAll('[data-testid="attachments"] video').length;
+    [
+      ...Array.from(scope.querySelectorAll('[data-testid="attachments"] img')),
+      ...Array.from(scope.querySelectorAll('[data-testid="attachments"] video')),
+    ].filter((media) => !inQuotedPost(media)).length;
 
   const base64ToBytes = (base64: string): Uint8Array<ArrayBuffer> => {
     const binary = atob(base64);
@@ -642,6 +655,217 @@ export function runXPage(
       "unsupported",
       "The visible X composer contains a poll or thread. Open a plain post or reply composer and try again; nothing was submitted.",
     );
+  };
+
+  // Pluk's own marks on X's controls, so a pass can tell what an earlier one
+  // already asked the browser to press. X redraws an article when it flips to
+  // reposted and the mark goes with it; losing one only costs another press
+  // of the repost button, which opens a menu rather than reposting.
+  const MENU_ASKED = "data-pluk-repost-menu";
+  const CONFIRM_ASKED = "data-pluk-repost-confirm";
+  const QUOTE_ASKED = "data-pluk-quote";
+
+  const articleFor = (postId: string): Element | null =>
+    Array.from(
+      document.querySelectorAll('article[data-testid="tweet"], article'),
+    ).find((candidate) => postIdFromNode(candidate) === postId) ?? null;
+
+  // Whichever choice X's open repost menu is offering: Repost on a post that
+  // is not reposted, Undo repost on one that is.
+  const openMenuChoice = (): Element | null =>
+    document.querySelector(
+      '[role="menu"] [role="menuitem"][data-testid="retweetConfirm"]',
+    ) ??
+    document.querySelector(
+      '[role="menu"] [role="menuitem"][data-testid="unretweetConfirm"]',
+    );
+
+  /**
+   * `choice` in the post's own repost menu, opening that menu first when it
+   * is not already showing. A menu asked for once and still not shown is
+   * given up on rather than asked for again.
+   */
+  const repostMenuItem = async (
+    repostButton: Element | null,
+    choice: () => Element | null,
+    nothingDone: string,
+  ): Promise<Element | DriverPageResult> => {
+    const menuItem =
+      choice() ??
+      (repostButton?.hasAttribute(MENU_ASKED) ? await waitFor(choice, 3_000) : null);
+    if (menuItem) {
+      return menuItem;
+    }
+    if (!repostButton) {
+      return failure(
+        "unsupported",
+        `X did not expose the repost control on this post. ${nothingDone}`,
+      );
+    }
+    if (repostButton.hasAttribute(MENU_ASKED)) {
+      return failure("unsupported", `X did not open the repost menu. ${nothingDone}`);
+    }
+    repostButton.setAttribute(MENU_ASKED, "true");
+    trace(`asking for a real press of the repost control for ${requestedPostId}`);
+    return pressRequest(repostButton);
+  };
+
+  const pressRequest = (control: Element): DriverPageResult => {
+    const rect = control.getBoundingClientRect();
+    return {
+      state: "waiting",
+      trustedClick: {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      },
+    };
+  };
+
+  /**
+   * Shares a post as it stands, through X's own repost menu.
+   *
+   * X honours only a real press on both controls, so each one is asked for
+   * and the script runs again once the browser has delivered it. Only the
+   * post's own button turning into the reposted state counts as done; a post
+   * that already carries it is left exactly as it is.
+   */
+  const submitRepost = async (): Promise<DriverPageResult> => {
+    if (!(await awaitAccount())) {
+      return failure(
+        "account_unverified",
+        "Pluk could not tell which X account is signed in. Open the account menu in that Chrome window and try again; nothing was reposted.",
+      );
+    }
+    if (!requestedPostId || targetUrlPostId !== requestedPostId) {
+      return failure(
+        "target_mismatch",
+        "The confirmed X post is not the visible target. Nothing was reposted.",
+      );
+    }
+    const article = await waitFor(() => articleFor(requestedPostId), 5_000);
+    if (!article) {
+      return failure(
+        "target_not_found",
+        "The X post to repost was not visible. Nothing was reposted.",
+      );
+    }
+    const done = (already: boolean): DriverPageResult => ({
+      state: "submission_succeeded",
+      kind: "repost",
+      ...page,
+      platform: "x",
+      postedId: requestedPostId,
+      alreadyReposted: already,
+    });
+    // The article's own button is the only proof: a menu that closed says
+    // nothing about what it did.
+    const askedToRepost = article.hasAttribute(CONFIRM_ASKED);
+    if (article.querySelector('[data-testid="unretweet"]')) {
+      return done(!askedToRepost);
+    }
+    if (askedToRepost) {
+      const reposted = await waitFor(
+        () => articleFor(requestedPostId)?.querySelector('[data-testid="unretweet"]') ?? null,
+        10_000,
+      );
+      return reposted
+        ? done(false)
+        : failure(
+            "submission_unknown",
+            "X took the repost without showing it on the post. Check X before trying again; Pluk did not retry.",
+          );
+    }
+    const menuItem = await repostMenuItem(
+      article.querySelector('[data-testid="retweet"]'),
+      openMenuChoice,
+      "Nothing was reposted.",
+    );
+    if ("state" in menuItem) {
+      return menuItem;
+    }
+    // An already reposted post offers Undo repost in place of Repost.
+    // Pressing that would take the post down, so it is read as done.
+    if (menuItem.getAttribute("data-testid") === "unretweetConfirm") {
+      return done(true);
+    }
+    article.setAttribute(CONFIRM_ASKED, "true");
+    trace(`asking for a real press of Repost for ${requestedPostId}`);
+    return pressRequest(menuItem);
+  };
+
+  // The Quote choice in X's open repost menu.
+  const quoteMenuChoice = (): Element | null =>
+    document.querySelector('[role="menu"] a[role="menuitem"][href="/compose/post"]');
+
+  // The composer X opens for a quote: the new-post modal, carrying the
+  // quoted post among its attachments.
+  const quoteComposer = (): Element | null =>
+    Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]')).find(
+      (dialog) =>
+        dialog.querySelector('[data-testid="tweetTextarea_0"]') !== null &&
+        dialog.querySelector('[data-testid="attachments"] [data-testid="User-Name"]') !== null,
+    ) ?? null;
+
+  /**
+   * Quotes a post with the confirmed text, images, and thread.
+   *
+   * The Quote choice sits in the same repost menu, and X honours only a real
+   * press on both, so each is asked for and the script runs again. Once X's
+   * quote composer is open it is filled and sent exactly as a new post.
+   */
+  const submitQuote = async (): Promise<DriverPageResult> => {
+    if (!(await awaitAccount())) {
+      return failure(
+        "account_unverified",
+        "Pluk could not tell which X account is signed in. Open the account menu in that Chrome window and try again; nothing was posted.",
+      );
+    }
+    if (!requestedPostId || targetUrlPostId !== requestedPostId) {
+      return failure(
+        "target_mismatch",
+        "The confirmed X post is not the visible target. Nothing was posted.",
+      );
+    }
+    if (!options.text) {
+      return failure(
+        "unsupported",
+        "The quote has no text to post. Nothing was posted.",
+      );
+    }
+    const article = await waitFor(() => articleFor(requestedPostId), 5_000);
+    if (!article) {
+      return failure(
+        "target_not_found",
+        "The X post to quote was not visible. Nothing was posted.",
+      );
+    }
+    if (article.hasAttribute(QUOTE_ASKED)) {
+      const dialog = await waitFor(quoteComposer, 3_000);
+      const scope = composerScope();
+      if (!dialog || !scope || !dialog.contains(scope)) {
+        return failure(
+          "unsupported",
+          "X did not open the quote composer. Nothing was posted.",
+        );
+      }
+      // X draws the quote composer at its own compose address, over the
+      // quoted post's page, and that post is still what this job is on.
+      const landedOn = path.startsWith("/compose/")
+        ? { ...page, url: options.targetUrl }
+        : page;
+      return publishParts(scope, options.text, landedOn);
+    }
+    const menuItem = await repostMenuItem(
+      article.querySelector('[data-testid="retweet"], [data-testid="unretweet"]'),
+      quoteMenuChoice,
+      "Nothing was posted.",
+    );
+    if ("state" in menuItem) {
+      return menuItem;
+    }
+    article.setAttribute(QUOTE_ASKED, "true");
+    trace(`asking for a real press of Quote for ${requestedPostId}`);
+    return pressRequest(menuItem);
   };
 
   // A submission is the one visit the page gets: confirm the signed-in
@@ -789,7 +1013,18 @@ export function runXPage(
         "X did not expose the confirmed post editor. Nothing was submitted.",
       );
     }
-    const parts = options.parts?.length ? options.parts : [options.text];
+    return publishParts(firstScope, options.text, page);
+  };
+
+  // Types every confirmed part into the composer open at `firstScope`, with
+  // each part's own images, and sends them as one post or thread. `landedOn`
+  // is the page the job reports it finished on.
+  const publishParts = async (
+    firstScope: Element,
+    text: string,
+    landedOn: { readonly url: string; readonly title: string },
+  ): Promise<DriverPageResult> => {
+    const parts = options.parts?.length ? options.parts : [text];
     const unsupported = unsupportedComposer(firstScope, parts.length);
     if (unsupported) {
       return unsupported;
@@ -924,7 +1159,7 @@ export function runXPage(
     return {
       state: "submission_succeeded",
       kind: "submission",
-      ...page,
+      ...landedOn,
       platform: "x",
       postedId,
       postedUrl: `https://x.com${href}`,
@@ -963,6 +1198,12 @@ export function runXPage(
 
   if (options.action === "submit_reply") {
     return submit();
+  }
+  if (options.action === "submit_repost") {
+    return submitRepost();
+  }
+  if (options.action === "submit_quote") {
+    return submitQuote();
   }
   if (options.action === "submit_post") {
     return submitCompose();

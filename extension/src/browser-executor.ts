@@ -31,12 +31,17 @@ const MAX_RESULT_TEXT_LENGTH = 8_000;
 // failed screenshot grant can never block reading or posting.
 const SCREENSHOT_ACTIONS = new Set<Action>(["capture"]);
 
-// Both submit actions type the confirmed text into X's editor and publish it
-// on a single click. Any uncertainty past that click (a Chrome failure, an
-// unparsable result) must surface as "unknown", never as a clean failure
-// that invites a retry. The window is never brought forward for it: posting
-// happens behind whatever the owner is doing.
-const SUBMIT_ACTIONS = new Set<Action>(["submit_reply", "submit_post"]);
+// The submit actions drive X's own controls and publish on a single click.
+// Any uncertainty past that click (a Chrome failure, an unparsable result)
+// must surface as "unknown", never as a clean failure that invites a retry.
+// The window is never brought forward for it: posting happens behind
+// whatever the owner is doing.
+const SUBMIT_ACTIONS = new Set<Action>([
+  "submit_reply",
+  "submit_repost",
+  "submit_quote",
+  "submit_post",
+]);
 const MAX_DEBUG_HTML_BYTES = 2 * 1024 * 1024;
 const MAX_TRUSTED_CLICKS = 25;
 const IN_PLACE_ACTIONS = new Set<Action>(["read_post", "inspect"]);
@@ -727,7 +732,7 @@ export class BrowserExecutor {
           if (trustedClicks > MAX_TRUSTED_CLICKS) {
             throw new BrowserExecutionError(
               "site_markup_changed",
-              `The ${platform} page kept asking for more clicks than a thread can need. Nothing was submitted.`,
+              `The ${platform} page kept asking for more clicks than this could need. Nothing was submitted.`,
             );
           }
           // SUBMIT_ACTIONS is the only source of trusted clicks, and
@@ -915,7 +920,18 @@ async function makeDriverScriptOptions(
       debug,
     };
   }
-  if (command.payload.kind === "post_submission") {
+  if (command.payload.kind === "repost_submission") {
+    return {
+      action: command.action,
+      targetUrl,
+      postId: command.payload.postId,
+      debug,
+    };
+  }
+  if (
+    command.payload.kind === "post_submission" ||
+    command.payload.kind === "quote_submission"
+  ) {
     const { draftId, text, parts, partImages: requested } = command.payload;
     const partImages = requested
       ? await Promise.all(requested.map((images) => fetchImages(sink, draftId, images)))
@@ -923,6 +939,9 @@ async function makeDriverScriptOptions(
     return {
       action: command.action,
       targetUrl,
+      ...(command.payload.kind === "quote_submission"
+        ? { postId: command.payload.postId }
+        : {}),
       text,
       parts,
       partImages,

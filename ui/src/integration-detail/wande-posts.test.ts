@@ -14,6 +14,8 @@ function waitingPost(overrides: Partial<WandePosts["waiting"][number]> = {}) {
     parts: [],
     images: [],
     replyingTo: null,
+    reposting: null,
+    quoting: null,
     expiresAt: NOW + 90_000,
     canQueue: true,
     ...overrides,

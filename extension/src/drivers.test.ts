@@ -595,6 +595,419 @@ test("waits for X to enable the reply button instead of giving up while it is st
   expect(submitClicks).toBe(1);
 });
 
+const REPOST_TARGET = "https://x.com/i/status/42";
+
+function repostArticle(
+  controls: Readonly<Record<string, readonly FixtureNode[]>>,
+): FixtureNode {
+  return node(
+    "Visible post",
+    {},
+    {
+      'a[href*="/status/"]': [node("", { href: "/owner/status/42" })],
+      '[data-testid="tweetText"]': [node("Visible post")],
+      '[data-testid="User-Name"]': [node("@owner")],
+      ...controls,
+    },
+  );
+}
+
+function repostPage(
+  article: FixtureNode | null,
+  menu: Readonly<Record<string, readonly FixtureNode[]>> = {},
+): () => void {
+  return installPage("Visible post", "X", REPOST_TARGET, {
+    '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
+    ...(article
+      ? {
+          'article[data-testid="tweet"]': [article],
+          'article[data-testid="tweet"], article': [article],
+        }
+      : {}),
+    ...menu,
+  });
+}
+
+function runRepost(): Promise<unknown> {
+  return Promise.resolve(
+    runXPage({
+      action: "submit_repost",
+      targetUrl: REPOST_TARGET,
+      postId: "42",
+    }),
+  );
+}
+
+/** Swap the controls X draws on a post, keeping the article itself, the way
+ * X redraws the button in place once a repost lands. */
+function setControls(
+  article: FixtureNode,
+  controls: Readonly<Record<string, readonly FixtureNode[]>>,
+): void {
+  const selectors = article.selectors as Record<string, readonly FixtureNode[]>;
+  delete selectors['[data-testid="retweet"]'];
+  delete selectors['[data-testid="unretweet"]'];
+  Object.assign(selectors, controls);
+}
+
+test("reposts an exact X post through its own menu and calls it done only once the post says so", async () => {
+  const repostButton = node("", { "data-testid": "retweet" });
+  const article = repostArticle({ '[data-testid="retweet"]': [repostButton] });
+
+  const restoreEntry = repostPage(article);
+  const asksForMenu = await runRepost();
+  restoreEntry();
+  expect(asksForMenu).toMatchObject({
+    state: "waiting",
+    trustedClick: { x: 25, y: 40 },
+  });
+
+  const confirmItem = node("Repost", { "data-testid": "retweetConfirm" });
+  const restoreMenu = repostPage(article, {
+    '[role="menu"] [role="menuitem"][data-testid="retweetConfirm"]': [
+      confirmItem,
+    ],
+  });
+  const asksForRepost = await runRepost();
+  restoreMenu();
+  expect(asksForRepost).toMatchObject({
+    state: "waiting",
+    trustedClick: { x: 25, y: 40 },
+  });
+
+  setControls(article, {
+    '[data-testid="unretweet"]': [node("", { "data-testid": "unretweet" })],
+  });
+  const restoreDone = repostPage(article);
+  const reposted = await runRepost();
+  restoreDone();
+  expect(reposted).toMatchObject({
+    state: "submission_succeeded",
+    kind: "repost",
+    postedId: "42",
+    alreadyReposted: false,
+  });
+}, 10_000);
+
+test("reports a post X already shows as reposted without touching the undo control", async () => {
+  let undoClicks = 0;
+  const undoButton = node("", { "data-testid": "unretweet" });
+  Object.defineProperty(undoButton, "click", {
+    value: () => {
+      undoClicks += 1;
+    },
+  });
+  const article = repostArticle({ '[data-testid="unretweet"]': [undoButton] });
+  const restore = repostPage(article);
+  const result = await runRepost();
+  restore();
+  expect(result).toMatchObject({
+    state: "submission_succeeded",
+    kind: "repost",
+    alreadyReposted: true,
+  });
+  expect(undoClicks).toBe(0);
+}, 10_000);
+
+test("says nothing was reposted when the post is not on the page", async () => {
+  const restore = repostPage(null);
+  const result = await runRepost();
+  restore();
+  expect(result).toMatchObject({
+    state: "target_not_found",
+    message: "The X post to repost was not visible. Nothing was reposted.",
+  });
+}, 10_000);
+
+test("gives up on a repost whose menu never opens rather than pressing on", async () => {
+  const repostButton = node("", { "data-testid": "retweet" });
+  const article = repostArticle({ '[data-testid="retweet"]': [repostButton] });
+
+  const restoreEntry = repostPage(article);
+  const asksForMenu = await runRepost();
+  restoreEntry();
+  expect(asksForMenu).toMatchObject({ state: "waiting" });
+
+  const restoreSilent = repostPage(article);
+  const result = await runRepost();
+  restoreSilent();
+  expect(result).toMatchObject({
+    state: "unsupported",
+    message: "X did not open the repost menu. Nothing was reposted.",
+  });
+}, 15_000);
+
+const QUOTE_BUTTON = '[data-testid="retweet"], [data-testid="unretweet"]';
+const QUOTE_ITEM = '[role="menu"] a[role="menuitem"][href="/compose/post"]';
+
+/** X's quote composer as the page shows it once Quote is pressed: the
+ * new-post modal, with the quoted post drawn as a card among the attachments.
+ * The card's avatar is an image inside that card, not media Pluk attached. */
+function quoteComposer(
+  editor: FixtureNode,
+  submitButton: FixtureNode,
+  selectors: Readonly<Record<string, readonly FixtureNode[]>> = {},
+): { readonly dialog: FixtureNode; readonly scope: FixtureNode } {
+  const card = node(
+    "Owner Visible post",
+    {},
+    {
+      '[data-testid="User-Name"], [data-testid="tweetText"]': [node("Owner")],
+    },
+  );
+  const avatar = node("");
+  Object.defineProperty(avatar, "closest", { value: () => card });
+  const { scope } = makeComposerScope(editor, submitButton, {
+    '[data-testid="attachments"] img': [avatar],
+    ...selectors,
+  });
+  const dialog = node(
+    "",
+    {},
+    {
+      '[data-testid="tweetTextarea_0"]': [editor],
+      '[data-testid="attachments"] [data-testid="User-Name"]': [node("Owner")],
+      scope: [scope],
+    },
+  );
+  return { dialog, scope };
+}
+
+/** Installs `page` itself, not a copy, so a test can add what X draws next. */
+function quotePage(
+  article: FixtureNode | null,
+  url: string,
+  page: Record<string, readonly FixtureNode[]>,
+  onType: (value: string) => void = () => {},
+): () => void {
+  Object.assign(page, {
+    '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
+    ...(article
+      ? {
+          'article[data-testid="tweet"]': [article],
+          'article[data-testid="tweet"], article': [article],
+        }
+      : {}),
+  });
+  return installPage(
+    "Visible post",
+    "X",
+    url,
+    page,
+    (_commandId, _showUi, value) => {
+      onType(value ?? "");
+      return true;
+    },
+  );
+}
+
+function runQuote(
+  extra: { readonly parts?: readonly string[]; readonly partImages?: readonly (readonly { readonly data: string; readonly contentType: string }[])[] } = {},
+  text = "Worth reading.",
+): Promise<unknown> {
+  return Promise.resolve(
+    runXPage({
+      action: "submit_quote",
+      targetUrl: REPOST_TARGET,
+      postId: "42",
+      text,
+      ...extra,
+    }),
+  );
+}
+
+/** Walks a quote up to X's open composer: a press of the post's repost
+ * control, then a press of Quote in the menu it opens. */
+async function openQuoteComposer(article: FixtureNode): Promise<void> {
+  const restoreEntry = quotePage(article, REPOST_TARGET, {});
+  const asksForMenu = await runQuote();
+  restoreEntry();
+  expect(asksForMenu).toMatchObject({ state: "waiting", trustedClick: { x: 25, y: 40 } });
+
+  const restoreMenu = quotePage(article, REPOST_TARGET, {
+    [QUOTE_ITEM]: [node("Quote", { href: "/compose/post", role: "menuitem" })],
+  });
+  const asksForQuote = await runQuote();
+  restoreMenu();
+  expect(asksForQuote).toMatchObject({ state: "waiting", trustedClick: { x: 25, y: 40 } });
+}
+
+function typingInto(editor: FixtureNode): (value: string) => void {
+  let typed = "";
+  return (value) => {
+    typed += value;
+    Object.defineProperty(editor, "textContent", { configurable: true, value: typed });
+  };
+}
+
+function sentToast(
+  editors: readonly FixtureNode[],
+  submitButton: FixtureNode,
+  postedHref: string,
+): { readonly toast: FixtureNode; readonly clicks: () => number } {
+  let clicks = 0;
+  const toast = node("An earlier X notification.", {}, {
+    'a[href*="/status/"]': [node("View", { href: postedHref })],
+  });
+  Object.defineProperty(submitButton, "click", {
+    value: () => {
+      clicks += 1;
+      for (const editor of editors) {
+        Object.defineProperty(editor, "textContent", { configurable: true, value: "" });
+      }
+      Object.defineProperty(toast, "textContent", { configurable: true, value: "Your post was sent." });
+    },
+  });
+  return { toast, clicks: () => clicks };
+}
+
+test("quotes an exact X post through its repost menu, typing only the confirmed text", async () => {
+  const article = repostArticle({ [QUOTE_BUTTON]: [node("", { "data-testid": "retweet" })] });
+  await openQuoteComposer(article);
+
+  const editor = node("");
+  Object.defineProperty(editor, "focus", { value: () => {} });
+  const submitButton = node("Post");
+  const { toast, clicks } = sentToast([editor], submitButton, "/owner/status/900");
+  const { dialog } = quoteComposer(editor, submitButton);
+  const restore = quotePage(
+    article,
+    "https://x.com/compose/post",
+    {
+      '[role="dialog"][aria-modal="true"]': [dialog],
+      '[data-testid="tweetTextarea_0"]': [editor],
+      '[role="alert"], [data-testid="toast"]': [toast],
+    },
+    typingInto(editor),
+  );
+  const result = await runQuote();
+  restore();
+  expect(result).toMatchObject({
+    state: "submission_succeeded",
+    kind: "submission",
+    url: REPOST_TARGET,
+    postedId: "900",
+    postedUrl: "https://x.com/owner/status/900",
+  });
+  expect(clicks()).toBe(1);
+}, 15_000);
+
+test("attaches a quote's own image without counting the quoted post's card as media", async () => {
+  let pastedFiles: readonly File[] = [];
+  const article = repostArticle({ [QUOTE_BUTTON]: [node("", { "data-testid": "retweet" })] });
+  await openQuoteComposer(article);
+
+  const editor = node("");
+  Object.defineProperty(editor, "focus", { value: () => {} });
+  const submitButton = node("Post");
+  const { toast, clicks } = sentToast([editor], submitButton, "/owner/status/901");
+  const { dialog, scope } = quoteComposer(editor, submitButton);
+  const restore = quotePage(
+    article,
+    "https://x.com/compose/post",
+    {
+      '[role="dialog"][aria-modal="true"]': [dialog],
+      '[data-testid="tweetTextarea_0"]': [editor],
+      '[role="alert"], [data-testid="toast"]': [toast],
+    },
+    typingInto(editor),
+  );
+  fixtureImagePasteSink = (_editor, files) => {
+    pastedFiles = files;
+  };
+  const withImage = { partImages: [[{ data: "aGVsbG8=", contentType: "image/png" }]] };
+
+  const pasting = await runQuote(withImage);
+  expect(pasting).toMatchObject({ state: "waiting" });
+  expect(pastedFiles).toHaveLength(1);
+  expect(clicks()).toBe(0);
+
+  const selectors = scope.selectors as Record<string, readonly FixtureNode[]>;
+  selectors['[data-testid="attachments"] img'] = [
+    ...(selectors['[data-testid="attachments"] img'] ?? []),
+    node(""),
+  ];
+  const result = await runQuote(withImage);
+  restore();
+  expect(result).toMatchObject({ state: "submission_succeeded", postedId: "901" });
+  expect(clicks()).toBe(1);
+}, 15_000);
+
+test("a quote thread asks for the plus, then fills each part and sends them together", async () => {
+  const typed: string[] = [];
+  let active: FixtureNode | null = null;
+  const article = repostArticle({ [QUOTE_BUTTON]: [node("", { "data-testid": "retweet" })] });
+  const thread = { parts: ["One.", "Two."] };
+  await openQuoteComposer(article);
+
+  const first = node("");
+  const second = node("");
+  for (const editor of [first, second]) {
+    Object.defineProperty(editor, "focus", {
+      value: () => {
+        active = editor;
+      },
+    });
+  }
+  const submitButton = node("Post all");
+  const addButton = node("");
+  const { toast, clicks } = sentToast([first, second], submitButton, "/owner/status/902");
+  const { dialog } = quoteComposer(first, submitButton, {
+    '[data-testid="addButton"]': [addButton],
+  });
+  const secondScope = node("", {}, {
+    '[data-testid="tweetTextarea_1"]': [second],
+    '[data-testid="tweetButton"]': [submitButton],
+  });
+  Object.defineProperty(second, "parentElement", { configurable: true, value: secondScope });
+  const page: Record<string, readonly FixtureNode[]> = {
+    '[role="dialog"][aria-modal="true"]': [dialog],
+    '[data-testid="tweetTextarea_0"]': [first],
+    '[data-testid="addButton"]': [addButton],
+    '[role="alert"], [data-testid="toast"]': [toast],
+  };
+  const restore = quotePage(article, "https://x.com/compose/post", page, (value) => {
+    typed.push(value);
+    if (active) {
+      Object.defineProperty(active, "textContent", { configurable: true, value });
+    }
+  });
+
+  const asksForPlus = await runQuote(thread, "One.\n\nTwo.");
+  expect(asksForPlus).toMatchObject({ state: "waiting", trustedClick: { x: 25, y: 40 } });
+  expect(typed).toEqual(["One."]);
+
+  page['[data-testid="tweetTextarea_1"]'] = [second];
+  const result = await runQuote(thread, "One.\n\nTwo.");
+  restore();
+  expect(result).toMatchObject({ state: "submission_succeeded", postedId: "902" });
+  expect(typed).toEqual(["One.", "Two."]);
+  expect(clicks()).toBe(1);
+}, 15_000);
+
+test("says nothing was posted when the post to quote is not on the page", async () => {
+  const restore = quotePage(null, REPOST_TARGET, {});
+  const result = await runQuote();
+  restore();
+  expect(result).toMatchObject({
+    state: "target_not_found",
+    message: "The X post to quote was not visible. Nothing was posted.",
+  });
+}, 10_000);
+
+test("gives up on a quote whose composer never opens rather than pressing on", async () => {
+  const article = repostArticle({ [QUOTE_BUTTON]: [node("", { "data-testid": "retweet" })] });
+  await openQuoteComposer(article);
+
+  const restore = quotePage(article, REPOST_TARGET, {});
+  const result = await runQuote();
+  restore();
+  expect(result).toMatchObject({
+    state: "unsupported",
+    message: "X did not open the quote composer. Nothing was posted.",
+  });
+}, 15_000);
+
 test("refuses X poll and thread composers without submitting", async () => {
   const unsupportedParts: ReadonlyArray<
     Readonly<Record<string, readonly FixtureNode[]>>

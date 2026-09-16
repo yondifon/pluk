@@ -48,11 +48,18 @@ export const ACTIONS = [
   "capture",
   "reply",
   "submit_reply",
+  "repost",
+  "submit_repost",
+  "quote",
+  "submit_quote",
   "post",
   "submit_post",
 ] as const;
 export type Action = (typeof ACTIONS)[number];
-export type PublicAction = Exclude<Action, "submit_reply" | "submit_post">;
+export type PublicAction = Exclude<
+  Action,
+  "submit_reply" | "submit_repost" | "submit_quote" | "submit_post"
+>;
 
 export const DRIVER_CONTRACTS: Record<
   Platform,
@@ -74,6 +81,8 @@ export const DRIVER_CONTRACTS: Record<
       "refresh",
       "capture",
       "submit_reply",
+      "submit_repost",
+      "submit_quote",
       "submit_post",
     ],
   },
@@ -200,6 +209,11 @@ export interface ReplyPayload {
   readonly text: string;
 }
 
+export interface RepostPayload {
+  readonly kind: "repost";
+  readonly postId: string;
+}
+
 export interface ReadPostPayload {
   readonly kind: "read_post";
   readonly postId: string;
@@ -224,6 +238,27 @@ export interface SubmissionPayload {
    * part, so there is nothing to associate this list with beyond the reply
    * itself. */
   readonly images?: readonly ImageAttachment[];
+  readonly debug?: DebugRequest;
+}
+
+/** A repost adds nothing of its own, so the post it shares is the whole of
+ * it. */
+export interface RepostSubmissionPayload {
+  readonly kind: "repost_submission";
+  readonly draftId: string;
+  readonly postId: string;
+  readonly debug?: DebugRequest;
+}
+
+/** A quote is a new post or thread sent through X's quote composer for
+ * `postId`, so it carries the same parts and images a post does. */
+export interface QuoteSubmissionPayload {
+  readonly kind: "quote_submission";
+  readonly draftId: string;
+  readonly postId: string;
+  readonly text: string;
+  readonly parts: readonly string[];
+  readonly partImages?: readonly (readonly ImageAttachment[])[];
   readonly debug?: DebugRequest;
 }
 
@@ -254,6 +289,8 @@ export type CommandPayload =
   | EmptyPayload
   | ReadPostPayload
   | SubmissionPayload
+  | RepostSubmissionPayload
+  | QuoteSubmissionPayload
   | PostSubmissionPayload;
 
 export interface CreateJobRequest {
@@ -263,6 +300,7 @@ export interface CreateJobRequest {
   readonly payload:
     | EmptyPayload
     | ReplyPayload
+    | RepostPayload
     | ReadPostPayload
     | ComposePayload;
   readonly ttlMs: number;
@@ -428,7 +466,13 @@ export function isAction(value: unknown): value is Action {
 }
 
 export function isPublicAction(value: unknown): value is PublicAction {
-  return isAction(value) && value !== "submit_reply" && value !== "submit_post";
+  return (
+    isAction(value) &&
+    value !== "submit_reply" &&
+    value !== "submit_repost" &&
+    value !== "submit_quote" &&
+    value !== "submit_post"
+  );
 }
 
 export function canonicalizeTargetUrl(
@@ -842,7 +886,7 @@ function parseCommandPayload(
   if (!isRecord(value)) {
     return invalid("Command payload must be an object.");
   }
-  if (action === "post" || action === "reply") {
+  if (action === "post" || action === "reply" || action === "quote") {
     return invalid("Posts and replies are dispatched only as submissions.");
   }
   if (action === "submit_post") {
@@ -869,6 +913,32 @@ function parseCommandPayload(
       },
     };
   }
+  if (action === "submit_quote") {
+    if (
+      !hasOnlyKeys(value, ["kind", "draftId", "postId", "text", "parts"], ["debug", "partImages"]) ||
+      !isDebugRequest(value.debug) ||
+      value.kind !== "quote_submission" ||
+      !isIdentifier(value.draftId) ||
+      !isIdentifier(value.postId) ||
+      !isString(value.text, MAX_TEXT_LENGTH) ||
+      !isThread(value.parts) ||
+      !isPartImages(value.partImages, value.parts.length)
+    ) {
+      return invalid("Quote submission command payload is invalid.");
+    }
+    return {
+      ok: true,
+      value: {
+        kind: "quote_submission",
+        draftId: value.draftId,
+        postId: value.postId,
+        text: value.text,
+        parts: value.parts,
+        ...partImagesField(value.partImages),
+        ...debugField(value.debug),
+      },
+    };
+  }
   if (action === "read_post") {
     if (
       !hasOnlyKeys(value, ["kind", "postId"], ["debug"]) ||
@@ -882,6 +952,26 @@ function parseCommandPayload(
       ok: true,
       value: {
         kind: "read_post",
+        postId: value.postId,
+        ...debugField(value.debug),
+      },
+    };
+  }
+  if (action === "submit_repost") {
+    if (
+      !hasOnlyKeys(value, ["kind", "draftId", "postId"], ["debug"]) ||
+      !isDebugRequest(value.debug) ||
+      value.kind !== "repost_submission" ||
+      !isIdentifier(value.draftId) ||
+      !isIdentifier(value.postId)
+    ) {
+      return invalid("Repost submission command payload is invalid.");
+    }
+    return {
+      ok: true,
+      value: {
+        kind: "repost_submission",
+        draftId: value.draftId,
         postId: value.postId,
         ...debugField(value.debug),
       },

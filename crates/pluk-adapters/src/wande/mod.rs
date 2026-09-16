@@ -53,7 +53,7 @@ const READ: &str = "read";
 const MAX_WAIT: Duration = Duration::from_secs(45);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. Instagram tools are read-only: profiles, posts, and screenshots, no posting or replying there. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. payload.images takes 1 to 4 absolute local PNG or JPEG file paths for a plain post or a reply, each under 5 MiB. For a thread, give each part its own images instead: pass thread as a mix of exact strings and { text, images } objects, and do not also pass the top-level images field — that combination is refused, not guessed at. The user sees exactly those images under each part before deciding, and only sends once every one has loaded. If any part's images fail to attach or upload in the browser, nothing is posted, text included; the user sees why and can try again. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. Read tools hand back a jobId at once; call get_job with it until the page is done. x_post and x_reply wait up to 45 seconds for the user's answer, then hand back an id the same way. Pass payload.debug true on x_post or x_reply to have a screenshot and the page HTML attached to the browser job when the page refuses it.";
+const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. Instagram tools are read-only: profiles, posts, and screenshots, no posting or replying there. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. payload.images takes 1 to 4 absolute local PNG or JPEG file paths for a plain post or a reply, each under 5 MiB. For a thread, give each part its own images instead: pass thread as a mix of exact strings and { text, images } objects, and do not also pass the top-level images field — that combination is refused, not guessed at. The user sees exactly those images under each part before deciding, and only sends once every one has loaded. If any part's images fail to attach or upload in the browser, nothing is posted, text included; the user sees why and can try again. x_repost shares a post as it stands, adding nothing: pass the exact post ID and the user decides in Pluk, the same way. A post they have already reposted comes back as done, and nothing undoes a repost. x_quote comments on a post in the user's own feed: pass the exact post ID and the quote's own text, with images or a thread under the same rules as x_post; it waits in Pluk for the user the same way. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. Read tools hand back a jobId at once; call get_job with it until the page is done. x_post and x_reply wait up to 45 seconds for the user's answer, then hand back an id the same way. Pass payload.debug true on x_post or x_reply to have a screenshot and the page HTML attached to the browser job when the page refuses it.";
 
 const ACCESS: &str = "Reads and posts through a Chrome window the user is signed in to, one page at a time. Every post is shown to the user in full inside Pluk and goes out only if they say so.";
 
@@ -668,6 +668,8 @@ mod tests {
                 "x_refresh",
                 "x_capture",
                 "x_reply",
+                "x_repost",
+                "x_quote",
                 "x_post",
                 "instagram_inspect",
                 "instagram_read_profile",
@@ -754,6 +756,45 @@ mod tests {
         assert_eq!(items["required"], json!(["text"]));
         assert!(items["properties"]["text"].get("required").is_none());
         assert!(items["properties"]["images"].get("required").is_none());
+        assert_no_boolean_required(&Value::Object(schema));
+    }
+
+    /// A repost takes the post's ID and nothing else, and its published
+    /// schema has to survive a schema-validating client the way every other
+    /// tool's does.
+    #[test]
+    fn reposting_publishes_a_post_id_and_no_way_to_add_words() {
+        let repost = pluk_browser::catalog_tools()
+            .into_iter()
+            .find(|tool| tool.id == "x.repost")
+            .expect("repost is in the catalog");
+        let schema = input_schema(&repost.args_schema);
+        assert_eq!(schema["required"], json!(["payload"]));
+        assert!(schema["properties"].get("targetUrl").is_none());
+        let payload = &schema["properties"]["payload"];
+        assert_eq!(payload["required"], json!(["postId"]));
+        assert!(payload["properties"].get("text").is_none());
+        assert!(payload["properties"].get("images").is_none());
+        assert_no_boolean_required(&Value::Object(schema));
+    }
+
+    /// A quote names the post it quotes and brings a post's own content, and
+    /// its thread entries' schema must reach the wire valid too.
+    #[test]
+    fn quoting_publishes_a_post_id_with_a_posts_content_and_a_valid_schema() {
+        let quote = pluk_browser::catalog_tools()
+            .into_iter()
+            .find(|tool| tool.id == "x.quote")
+            .expect("quote is in the catalog");
+        let schema = input_schema(&quote.args_schema);
+        assert_eq!(schema["required"], json!(["payload"]));
+        assert!(schema["properties"].get("targetUrl").is_none());
+        let payload = &schema["properties"]["payload"];
+        assert_eq!(payload["required"], json!(["postId"]));
+        for field in ["text", "thread", "images"] {
+            assert!(payload["properties"].get(field).is_some(), "missing {field}");
+        }
+        assert_eq!(payload["properties"]["thread"]["items"]["required"], json!(["text"]));
         assert_no_boolean_required(&Value::Object(schema));
     }
 

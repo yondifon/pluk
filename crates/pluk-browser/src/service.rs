@@ -344,7 +344,10 @@ impl BrowserState {
         integration_id: &str,
         request: &CreateJobRequest,
     ) -> Result<Value, BridgeError> {
-        if !matches!(request.action, Action::Post | Action::Reply) {
+        if !matches!(
+            request.action,
+            Action::Post | Action::Reply | Action::Repost | Action::Quote
+        ) {
             return self
                 .create_job(integration_id, request)
                 .map(|job| json!({ "job": job }));
@@ -386,6 +389,7 @@ impl BrowserState {
         };
         let input = DraftInput {
             platform: request.platform.as_str(),
+            kind: request.action.as_str(),
             target_url: &request.target_url,
             post_id: request.payload.get("postId").and_then(Value::as_str),
             text: request
@@ -843,7 +847,7 @@ impl BrowserState {
             .ok()??;
         let data: Value = serde_json::from_slice(&artifact.data).ok()?;
         let data = parse_result_data(Some(&data)).ok()?;
-        if job.action == Action::SubmitPost.as_str() && !is_valid_submit_post_data(&data) {
+        if publishes_new_post(&job.action) && !is_valid_submit_post_data(&data) {
             return None;
         }
         Some(data)
@@ -969,7 +973,7 @@ impl BrowserState {
                 }),
             );
         }
-        if job.action == Action::SubmitPost.as_str()
+        if publishes_new_post(&job.action)
             && !result.data.as_ref().is_some_and(is_valid_submit_post_data)
         {
             return ("unknown", None, Some(invalid_result()));
@@ -1946,6 +1950,12 @@ fn invalid_result() -> ProtocolErrorView {
 /// Whether `data` is a submission result worth trusting as a posted X status:
 /// a numeric id and a status URL for that same platform and id, both within
 /// the protocol's own bounds.
+/// Whether a job's action sends a post of its own, which only counts as sent
+/// once the page names the post it made.
+fn publishes_new_post(action: &str) -> bool {
+    action == Action::SubmitPost.as_str() || action == Action::SubmitQuote.as_str()
+}
+
 fn is_valid_submit_post_data(data: &Value) -> bool {
     data.as_object().is_some_and(|data| {
         let Some(posted_id) = data.get("postedId").and_then(Value::as_str) else {

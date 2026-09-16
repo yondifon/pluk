@@ -12,7 +12,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use pluk_store::browser::{DRAFT_TTL_MS, Draft, DraftImage};
+use pluk_store::browser::{DRAFT_TTL_MS, Draft, DraftImage, QuotedPost};
 use serde::{Deserialize, Serialize};
 
 /// One requested post, as the owner needs to see it before deciding.
@@ -33,6 +33,12 @@ pub struct PostPrompt {
     pub images: Vec<DraftImage>,
     /// The post this replies to, when it is a reply.
     pub replying_to: Option<String>,
+    /// The post this shares as it stands, when it is a repost. Nothing is
+    /// read off the page before the answer, so this is the post's own
+    /// address and nothing more.
+    pub reposting: Option<String>,
+    /// The post this quotes, when it is a quote.
+    pub quoting: Option<QuotedPost>,
     /// Whether taking a later slot is an option for this one.
     pub can_queue: bool,
     /// When the post stops being sendable, in epoch milliseconds.
@@ -47,7 +53,9 @@ impl PostPrompt {
             text: draft.text.clone(),
             parts: draft.parts.clone(),
             images: draft.images.clone(),
-            replying_to: draft.post_id.is_some().then(|| draft.target_url.clone()),
+            replying_to: (draft.kind == "reply").then(|| draft.target_url.clone()),
+            reposting: (draft.kind == "repost").then(|| draft.target_url.clone()),
+            quoting: draft.quoted.clone(),
             can_queue: draft.can_queue(),
             closes_at: draft.created_at + DRAFT_TTL_MS,
         }

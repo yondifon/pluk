@@ -108,6 +108,10 @@ pub struct Draft {
     /// The images this post was asked for. Each carries the part it attaches
     /// to; a plain post's own images carry part 0.
     pub images: Vec<DraftImage>,
+    /// The post a quote quotes. Nothing is read off the page to ask about
+    /// it, so its author and words are there only when an earlier read in
+    /// this integration already saw that post.
+    pub quoted: Option<QuotedPost>,
     /// Whether a failure should carry a screenshot and the page's HTML.
     pub debug: bool,
     pub status: String,
@@ -115,6 +119,14 @@ pub struct Draft {
     pub confirmed_at: Option<i64>,
     pub submitted_at: Option<i64>,
     pub scheduled_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotedPost {
+    pub url: String,
+    pub author: Option<String>,
+    pub text: Option<String>,
 }
 
 /// One image a draft carries, as far as anything outside this store ever
@@ -215,6 +227,10 @@ pub struct JobInput<'a> {
 #[derive(Clone, Debug)]
 pub struct DraftInput<'a> {
     pub platform: &'a str,
+    /// What the owner is being asked for: `post`, `reply`, `repost` or
+    /// `quote`. Each but a post carries a post ID, so nothing else here
+    /// tells them apart.
+    pub kind: &'a str,
     pub target_url: &'a str,
     pub post_id: Option<&'a str>,
     pub text: &'a str,
@@ -285,11 +301,11 @@ impl BrowserStore<'_> {
             params![now, self.integration_id.as_str()],
         )?;
         self.conn.execute(
-            "UPDATE browser_drafts SET status = 'unknown' WHERE integration_id = ? AND status = 'confirmed' AND id IN (SELECT draft_id FROM browser_jobs WHERE integration_id = ? AND action IN ('submit_reply', 'submit_post') AND status = 'unknown' AND draft_id IS NOT NULL)",
+            "UPDATE browser_drafts SET status = 'unknown' WHERE integration_id = ? AND status = 'confirmed' AND id IN (SELECT draft_id FROM browser_jobs WHERE integration_id = ? AND action IN ('submit_reply', 'submit_repost', 'submit_quote', 'submit_post') AND status = 'unknown' AND draft_id IS NOT NULL)",
             params![self.integration_id.as_str(), self.integration_id.as_str()],
         )?;
         self.conn.execute(
-            "UPDATE browser_schedule_reservations SET status = 'unknown' WHERE integration_id = ? AND status = 'reserved' AND draft_id IN (SELECT draft_id FROM browser_jobs WHERE integration_id = ? AND action IN ('submit_reply', 'submit_post') AND status = 'unknown' AND draft_id IS NOT NULL)",
+            "UPDATE browser_schedule_reservations SET status = 'unknown' WHERE integration_id = ? AND status = 'reserved' AND draft_id IN (SELECT draft_id FROM browser_jobs WHERE integration_id = ? AND action IN ('submit_reply', 'submit_repost', 'submit_quote', 'submit_post') AND status = 'unknown' AND draft_id IS NOT NULL)",
             params![self.integration_id.as_str(), self.integration_id.as_str()],
         )?;
         self.expire_drafts(now)?;
@@ -312,10 +328,11 @@ impl BrowserStore<'_> {
         }
         self.conn
             .query_row(
-                "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id FROM browser_drafts WHERE integration_id = ? AND status = 'pending' AND platform = ? AND target_url = ? AND post_id IS ? AND text = ? AND NOT EXISTS (SELECT 1 FROM browser_draft_images WHERE browser_draft_images.integration_id = browser_drafts.integration_id AND browser_draft_images.draft_id = browser_drafts.id) ORDER BY created_at DESC LIMIT 1",
+                "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id FROM browser_drafts WHERE integration_id = ? AND status = 'pending' AND platform = ? AND kind = ? AND target_url = ? AND post_id IS ? AND text = ? AND NOT EXISTS (SELECT 1 FROM browser_draft_images WHERE browser_draft_images.integration_id = browser_drafts.integration_id AND browser_draft_images.draft_id = browser_drafts.id) ORDER BY created_at DESC LIMIT 1",
                 params![
                     self.integration_id.as_str(),
                     input.platform,
+                    input.kind,
                     input.target_url,
                     input.post_id,
                     input.text
@@ -333,7 +350,7 @@ impl BrowserStore<'_> {
         self.expire_queued(now)?;
         self.conn
             .query_row(
-                "SELECT EXISTS (SELECT 1 FROM browser_jobs WHERE integration_id = ? AND action IN ('submit_post', 'submit_reply') AND status IN ('queued', 'running') AND NOT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE browser_schedule_reservations.integration_id = browser_jobs.integration_id AND browser_schedule_reservations.draft_id = browser_jobs.draft_id AND browser_schedule_reservations.status = 'reserved' AND browser_schedule_reservations.scheduled_at > ?))",
+                "SELECT EXISTS (SELECT 1 FROM browser_jobs WHERE integration_id = ? AND action IN ('submit_post', 'submit_reply', 'submit_repost', 'submit_quote') AND status IN ('queued', 'running') AND NOT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE browser_schedule_reservations.integration_id = browser_jobs.integration_id AND browser_schedule_reservations.draft_id = browser_jobs.draft_id AND browser_schedule_reservations.status = 'reserved' AND browser_schedule_reservations.scheduled_at > ?))",
                 params![self.integration_id.as_str(), now],
                 |row| row.get(0),
             )
@@ -399,11 +416,6 @@ impl BrowserStore<'_> {
         staged: &[(usize, StagedImage)],
         now: i64,
     ) -> Result<Draft, BrowserError> {
-        let kind = if input.post_id.is_some() {
-            "reply"
-        } else {
-            "post"
-        };
         let parts_json = serde_json::to_string(input.parts)
             .map_err(|_| BrowserError::InvalidData("Thread parts could not be stored.".to_owned()))?;
         self.conn.execute(
@@ -411,7 +423,7 @@ impl BrowserStore<'_> {
             params![
                 id,
                 input.platform,
-                kind,
+                input.kind,
                 input.target_url,
                 input.post_id,
                 input.text,
@@ -564,7 +576,7 @@ impl BrowserStore<'_> {
                 self.integration_id.as_str(),
             ],
         )?;
-        if action == "submit_reply" || action == "submit_post" {
+        if is_submission(&action) {
             self.update_submission_status(&payload_json, completion.outcome, completion.now)?;
         }
         Ok(Completion { accepted: true })
@@ -596,7 +608,7 @@ impl BrowserStore<'_> {
             let Some((_, _, action, payload_json)) = self.job_identity(id)? else {
                 return Ok(false);
             };
-            if action == "submit_reply" || action == "submit_post" {
+            if is_submission(&action) {
                 let payload: Value = serde_json::from_str(&payload_json).map_err(|_| {
                     BrowserError::InvalidData("Stored submission payload is invalid.".to_owned())
                 })?;
@@ -655,7 +667,7 @@ impl BrowserStore<'_> {
                     ],
                 )?;
                 if let Some((_, _, action, payload)) = row
-                    && (action == "submit_reply" || action == "submit_post")
+                    && is_submission(&action)
                 {
                     if status == "unknown" {
                         self.mark_submission_unknown(&payload)?;
@@ -768,19 +780,25 @@ impl BrowserStore<'_> {
                     .collect::<Vec<_>>()
             )
         };
-        let (action, mut payload) = if draft.kind == "post" {
+        let (action, mut payload) = if draft.kind == "post" || draft.kind == "quote" {
             let stored: Vec<String> = serde_json::from_str(&draft.parts_json).unwrap_or_default();
             let parts = if stored.is_empty() {
                 vec![draft.text.clone()]
             } else {
                 stored
             };
+            // A quote goes out through the quoted post's own composer, so it
+            // is a post that also names that post.
+            let quote = draft.kind == "quote";
             let mut payload = serde_json::json!({
-                "kind": "post_submission",
+                "kind": if quote { "quote_submission" } else { "post_submission" },
                 "draftId": draft.id,
                 "text": draft.text,
                 "parts": parts.clone(),
             });
+            if quote {
+                payload["postId"] = serde_json::json!(draft.post_id);
+            }
             if has_images {
                 // Every part carries its own list, empty ones included, so
                 // the extension knows exactly which of its composers get
@@ -789,7 +807,16 @@ impl BrowserStore<'_> {
                     (0..parts.len()).map(image_json).collect::<Vec<_>>()
                 );
             }
-            ("submit_post", payload)
+            (if quote { "submit_quote" } else { "submit_post" }, payload)
+        } else if draft.kind == "repost" {
+            (
+                "submit_repost",
+                serde_json::json!({
+                    "kind": "repost_submission",
+                    "draftId": draft.id,
+                    "postId": draft.post_id,
+                }),
+            )
         } else {
             let mut payload = serde_json::json!({
                 "kind": "submission",
@@ -972,7 +999,49 @@ impl BrowserStore<'_> {
     /// A draft's own row plus the images it was asked with, in order.
     fn load_draft(&self, row: DraftRow) -> Result<Draft, BrowserError> {
         let images = self.read_draft_images(&row.id)?;
-        Ok(to_draft(row, images)?)
+        let quoted = match (row.kind.as_str(), &row.post_id) {
+            ("quote", Some(post_id)) => Some(self.quoted_post(&row.platform, post_id, &row.target_url)?),
+            _ => None,
+        };
+        Ok(to_draft(row, images, quoted)?)
+    }
+
+    /// The quoted post as the newest successful read that saw it shows it,
+    /// or only its address when no read did.
+    fn quoted_post(&self, platform: &str, post_id: &str, url: &str) -> Result<QuotedPost, BrowserError> {
+        let mut statement = self.conn.prepare(
+            "SELECT result_json FROM browser_jobs WHERE integration_id = ? AND platform = ? AND status = 'succeeded' AND result_json LIKE ? ORDER BY finished_at DESC LIMIT 10",
+        )?;
+        let results = statement
+            .query_map(
+                params![
+                    self.integration_id.as_str(),
+                    platform,
+                    format!("%\"postId\":\"{post_id}\"%"),
+                ],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let seen = results
+            .iter()
+            .filter_map(|json| serde_json::from_str::<Value>(json).ok())
+            .find_map(|result| {
+                std::iter::once(&result["post"])
+                    .chain(result["posts"].as_array().into_iter().flatten())
+                    .find(|post| post["postId"] == post_id)
+                    .cloned()
+            });
+        let field = |name: &str| {
+            seen.as_ref()
+                .and_then(|post| post[name].as_str())
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        Ok(QuotedPost {
+            url: url.to_owned(),
+            author: field("author"),
+            text: field("text"),
+        })
     }
 
     fn read_draft_images(&self, draft_id: &str) -> Result<Vec<DraftImage>, BrowserError> {
@@ -1390,7 +1459,7 @@ impl BrowserStore<'_> {
             params![now, self.integration_id.as_str(), now],
         )?;
         for (action, payload) in expired {
-            if action == "submit_reply" || action == "submit_post" {
+            if is_submission(&action) {
                 self.update_submission_status(&payload, "expired", now)?;
             }
         }
@@ -1624,7 +1693,11 @@ fn read_artifact_body(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtifactBody>
     Ok(ArtifactBody { metadata, data })
 }
 
-fn to_draft(row: DraftRow, images: Vec<DraftImage>) -> rusqlite::Result<Draft> {
+fn to_draft(
+    row: DraftRow,
+    images: Vec<DraftImage>,
+    quoted: Option<QuotedPost>,
+) -> rusqlite::Result<Draft> {
     Ok(Draft {
         integration_id: row.integration_id,
         id: row.id,
@@ -1635,6 +1708,7 @@ fn to_draft(row: DraftRow, images: Vec<DraftImage>) -> rusqlite::Result<Draft> {
         text: row.text,
         parts: serde_json::from_str(&row.parts_json).unwrap_or_default(),
         images,
+        quoted,
         debug: row.debug,
         status: row.status,
         created_at: row.created_at,
@@ -1658,6 +1732,15 @@ fn read_schedule_reservation(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedu
     })
 }
 
+/// Whether a job action is one that sends an approved draft into the page,
+/// and so settles that draft when it finishes.
+fn is_submission(action: &str) -> bool {
+    matches!(
+        action,
+        "submit_reply" | "submit_repost" | "submit_quote" | "submit_post"
+    )
+}
+
 fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1679,6 +1762,7 @@ mod tests {
             .create_draft(
                 &DraftInput {
                     platform: "x",
+                    kind: "post",
                     target_url: "https://x.com/compose/post",
                     post_id: None,
                     text,
@@ -1697,6 +1781,7 @@ mod tests {
             .create_draft(
                 &DraftInput {
                     platform: "x",
+                    kind: "reply",
                     target_url: "https://x.com/status/42",
                     post_id: Some("42"),
                     text,
@@ -1756,6 +1841,7 @@ mod tests {
         let mut store = database.browser();
         let input = DraftInput {
             platform: "x",
+            kind: "post",
             target_url: "https://x.com/compose/post",
             post_id: None,
             text: "Same words",
@@ -1786,6 +1872,7 @@ mod tests {
             .create_draft(
                 &DraftInput {
                     platform: "x",
+                    kind: "post",
                     target_url: "https://x.com/compose/post",
                     post_id: None,
                     text: "First post.\n\nSecond post.",
@@ -1802,6 +1889,69 @@ mod tests {
         assert_eq!(submission.job.payload["parts"], serde_json::json!(parts));
         let plain = prepare_post_draft(&mut store, "Just one", 100);
         assert!(plain.parts.is_empty());
+    }
+
+    /// A quote shows the post it quotes as an earlier read saw it, and goes
+    /// out as a post that also names that post.
+    #[test]
+    fn a_quote_draft_shows_the_quoted_post_and_submits_through_it() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        let input = DraftInput {
+            platform: "x",
+            kind: "quote",
+            target_url: "https://x.com/i/status/42",
+            post_id: Some("42"),
+            text: "Worth reading.",
+            parts: &[],
+            parts_images: &[vec![]],
+            debug: false,
+            ttl_ms: DEFAULT_JOB_TTL_MS,
+        };
+        let now = now_millis();
+        let unseen = store.create_draft(&input, now).unwrap();
+        assert_eq!(
+            unseen.quoted,
+            Some(QuotedPost {
+                url: "https://x.com/i/status/42".to_owned(),
+                author: None,
+                text: None,
+            })
+        );
+
+        store
+            .conn
+            .execute(
+                "INSERT INTO browser_jobs (id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, finished_at, result_json, integration_id) VALUES ('read-1', 'command-1', 'x', 'read_post', 'https://x.com/i/status/42', '{}', 'succeeded', 50, 60000, 60, ?, ?)",
+                params![
+                    serde_json::json!({
+                        "kind": "x_post",
+                        "post": { "postId": "42", "author": "Owner @owner", "text": "The original." },
+                    })
+                    .to_string(),
+                    store.integration_id.as_str(),
+                ],
+            )
+            .unwrap();
+        let seen = store.get_draft(&unseen.id).unwrap().unwrap();
+        let quoted = seen.quoted.clone().unwrap();
+        assert_eq!(quoted.author.as_deref(), Some("Owner @owner"));
+        assert_eq!(quoted.text.as_deref(), Some("The original."));
+        assert!(!seen.can_queue());
+
+        let submission = store.consume_draft(&unseen.id, now, false).unwrap().unwrap();
+        assert_eq!(submission.job.action, "submit_quote");
+        assert_eq!(
+            submission.job.payload,
+            serde_json::json!({
+                "kind": "quote_submission",
+                "draftId": unseen.id,
+                "postId": "42",
+                "text": "Worth reading.",
+                "parts": ["Worth reading."],
+            })
+        );
     }
 
     const PNG_MAGIC: [u8; 8] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -1829,6 +1979,7 @@ mod tests {
             .create_draft(
                 &DraftInput {
                     platform: "x",
+                    kind: "post",
                     target_url: "https://x.com/compose/post",
                     post_id: None,
                     text: "First",
@@ -1846,6 +1997,7 @@ mod tests {
             .create_draft(
                 &DraftInput {
                     platform: "x",
+                    kind: "post",
                     target_url: "https://x.com/compose/post",
                     post_id: None,
                     text: "Second",
@@ -1889,6 +2041,7 @@ mod tests {
             .create_draft(
                 &DraftInput {
                     platform: "x",
+                    kind: "post",
                     target_url: "https://x.com/compose/post",
                     post_id: None,
                     text: "First.\n\nSecond.\n\nThird.",
@@ -1937,6 +2090,7 @@ mod tests {
         let result = store.create_draft(
             &DraftInput {
                 platform: "x",
+                kind: "post",
                 target_url: "https://x.com/compose/post",
                 post_id: None,
                 text: "Bad image",
@@ -1962,6 +2116,7 @@ mod tests {
             .create_draft(
                 &DraftInput {
                     platform: "x",
+                    kind: "post",
                     target_url: "https://x.com/compose/post",
                     post_id: None,
                     text: "With an image",

@@ -88,6 +88,8 @@ function postQuestion(overrides: Partial<PostQuestion> = {}): PostQuestion {
     parts: [],
     images: [],
     replyingTo: null,
+    reposting: null,
+    quoting: null,
     canQueue: true,
     closesAt: Date.now() + 60_000,
     ...overrides,
@@ -123,6 +125,33 @@ describe("the post window", () => {
       "Discard",
       "Post now",
     ]);
+  });
+
+  test("a quote shows the post it quotes above its own words", () => {
+    const root = document.createElement("div");
+    renderPost(
+      root,
+      postQuestion({
+        text: "Worth reading.",
+        quoting: { url: "https://x.com/i/status/42", author: "Owner @owner", text: "The original." },
+        canQueue: false,
+      }),
+      () => {},
+      neverLoads,
+    );
+    expect(root.querySelector(".confirm-title")?.textContent).toBe("Post this quote?");
+    const quoted = root.querySelector(".confirm-quoted");
+    expect(quoted?.textContent).toBe("Quoting Owner @ownerThe original.");
+    expect(quoted?.nextElementSibling?.className).toContain("confirm-post");
+    expect(root.querySelector(".confirm-post")?.textContent).toBe("Worth reading.");
+
+    renderPost(
+      root,
+      postQuestion({ quoting: { url: "https://x.com/i/status/42", author: null, text: null } }),
+      () => {},
+      neverLoads,
+    );
+    expect(root.querySelector(".confirm-quoted-text")?.textContent).toBe("https://x.com/i/status/42");
   });
 
   test("a thread is shown as the posts it becomes", () => {

@@ -65,6 +65,10 @@ pub enum Action {
     Capture,
     Reply,
     SubmitReply,
+    Repost,
+    SubmitRepost,
+    Quote,
+    SubmitQuote,
     Post,
     SubmitPost,
 }
@@ -81,6 +85,10 @@ impl Action {
             Self::Capture => "capture",
             Self::Reply => "reply",
             Self::SubmitReply => "submit_reply",
+            Self::Repost => "repost",
+            Self::SubmitRepost => "submit_repost",
+            Self::Quote => "quote",
+            Self::SubmitQuote => "submit_quote",
             Self::Post => "post",
             Self::SubmitPost => "submit_post",
         }
@@ -97,10 +105,24 @@ impl Action {
             "capture" => Some(Self::Capture),
             "reply" => Some(Self::Reply),
             "submit_reply" => Some(Self::SubmitReply),
+            "repost" => Some(Self::Repost),
+            "submit_repost" => Some(Self::SubmitRepost),
+            "quote" => Some(Self::Quote),
+            "submit_quote" => Some(Self::SubmitQuote),
             "post" => Some(Self::Post),
             "submit_post" => Some(Self::SubmitPost),
             _ => None,
         }
+    }
+
+    /// Whether this action sends an approved draft into the page. These are
+    /// never a caller's to ask for: a draft the owner confirmed is the only
+    /// thing that dispatches one.
+    pub fn is_submission(self) -> bool {
+        matches!(
+            self,
+            Self::SubmitReply | Self::SubmitRepost | Self::SubmitQuote | Self::SubmitPost
+        )
     }
 
     pub fn is_supported_on(self, platform: Platform) -> bool {
@@ -401,6 +423,62 @@ fn resolve_compose_target(
     canonicalize_target_url(fixed_compose_target(platform), platform)
 }
 
+/// A repost names only the post it shares, so its destination is that post's
+/// own canonical page, derived here the way [`resolve_post_target`] derives
+/// one from a bare post ID.
+fn resolve_repost_target(
+    platform: Platform,
+    target_url: Option<&str>,
+    payload: Option<&Value>,
+) -> ValidationResult<(String, Value)> {
+    if target_url.is_some() {
+        return Err(invalid("This action does not accept a target URL."));
+    }
+    let object = payload
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid("Repost payload needs the post ID to repost."))?;
+    if !has_only_keys(object, &["postId"]) {
+        return Err(invalid("Repost payload needs the post ID to repost."));
+    }
+    let post_id = object
+        .get("postId")
+        .and_then(Value::as_str)
+        .filter(|value| is_valid_post_id(platform, value))
+        .ok_or_else(|| invalid("Repost payload needs the post ID to repost."))?;
+    let canonical = canonicalize_target_url(&canonical_post_url(platform, post_id), platform)?;
+    Ok((canonical, json!({ "kind": "repost", "postId": post_id })))
+}
+
+/// A quote is a new post or thread about one other post: it names that post
+/// the way a repost does, and carries its own words and images the way a post
+/// does.
+fn resolve_quote_target(
+    platform: Platform,
+    target_url: Option<&str>,
+    payload: Option<&Value>,
+) -> ValidationResult<(String, Value)> {
+    if target_url.is_some() {
+        return Err(invalid("This action does not accept a target URL."));
+    }
+    let mut object = payload
+        .and_then(Value::as_object)
+        .cloned()
+        .ok_or_else(|| invalid("Quote payload needs the post ID to quote and exact text."))?;
+    let post_id = object
+        .remove("postId")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .filter(|value| is_valid_post_id(platform, value))
+        .ok_or_else(|| invalid("Quote payload needs the post ID to quote and exact text."))?;
+    let mut payload = parse_public_payload(Some(&Value::Object(object)), Action::Post)?;
+    if payload["text"].as_str().is_none_or(|text| text.trim().is_empty()) {
+        return Err(invalid("A quote needs text of its own."));
+    }
+    payload["kind"] = json!("quote");
+    payload["postId"] = json!(post_id);
+    let canonical = canonicalize_target_url(&canonical_post_url(platform, &post_id), platform)?;
+    Ok((canonical, payload))
+}
+
 fn resolve_profile_target(
     platform: Platform,
     target_url: Option<&str>,
@@ -459,7 +537,7 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
         .ok_or_else(|| invalid("Job request has an unsupported platform or action."))?;
     let action = string_field(object, "action")
         .and_then(Action::from_str)
-        .filter(|action| *action != Action::SubmitReply && *action != Action::SubmitPost)
+        .filter(|action| !action.is_submission())
         .ok_or_else(|| invalid("Job request has an unsupported platform or action."))?;
     if !action.is_supported_on(platform) {
         return Err(ValidationError {
@@ -473,12 +551,12 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
         .as_ref()
         .and_then(Value::as_object)
         .is_some_and(|object| object.contains_key("thread"));
-    let (payload_field, images) = if action == Action::Post || action == Action::Reply {
+    let (payload_field, images) = if matches!(action, Action::Post | Action::Reply | Action::Quote) {
         split_images(payload_field.as_ref())?
     } else {
         (payload_field, None)
     };
-    if action == Action::Post && uses_thread && images.is_some() {
+    if matches!(action, Action::Post | Action::Quote) && uses_thread && images.is_some() {
         return Err(invalid(
             "images cannot be given alongside thread; put each part's own images inside that part as { text, images }.",
         ));
@@ -490,6 +568,10 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
         let target_url = resolve_compose_target(platform, target_url_field)?;
         let payload = parse_public_payload(payload_field, action)?;
         (target_url, payload)
+    } else if action == Action::Repost {
+        resolve_repost_target(platform, target_url_field, payload_field)?
+    } else if action == Action::Quote {
+        resolve_quote_target(platform, target_url_field, payload_field)?
     } else if action == Action::ReadPost {
         resolve_post_target(platform, target_url_field, payload_field)?
     } else if action == Action::ReadFeed || action == Action::ReadTrends {
@@ -834,6 +916,35 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
         }
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
+    if action == Action::Repost {
+        if !has_only_keys(object, &["kind", "postId"])
+            || object.get("kind").and_then(Value::as_str) != Some("repost")
+            || !object
+                .get("postId")
+                .and_then(Value::as_str)
+                .is_some_and(is_identifier)
+        {
+            return Err(invalid("Repost command payload is invalid."));
+        }
+        return Ok(value.cloned().unwrap_or(Value::Null));
+    }
+    if action == Action::SubmitRepost {
+        if !has_only_keys(object, &["kind", "draftId", "postId", "debug"])
+            || !debug_is_flag(object)
+            || object.get("kind").and_then(Value::as_str) != Some("repost_submission")
+            || !object
+                .get("draftId")
+                .and_then(Value::as_str)
+                .is_some_and(is_identifier)
+            || !object
+                .get("postId")
+                .and_then(Value::as_str)
+                .is_some_and(is_identifier)
+        {
+            return Err(invalid("Repost submission command payload is invalid."));
+        }
+        return Ok(value.cloned().unwrap_or(Value::Null));
+    }
     if action == Action::ReadPost {
         if !has_only_keys(object, &["kind", "postId", "debug"])
             || !debug_is_flag(object)
@@ -877,6 +988,32 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
             || !is_part_images(object.get("partImages"), part_count)
         {
             return Err(invalid("Post submission command payload is invalid."));
+        }
+        return Ok(value.cloned().unwrap_or(Value::Null));
+    }
+    if action == Action::SubmitQuote {
+        let part_count = object.get("parts").and_then(Value::as_array).map_or(0, Vec::len);
+        if !has_only_keys(
+            object,
+            &["kind", "draftId", "postId", "text", "parts", "debug", "partImages"],
+        ) || !debug_is_flag(object)
+            || object.get("kind").and_then(Value::as_str) != Some("quote_submission")
+            || !object
+                .get("draftId")
+                .and_then(Value::as_str)
+                .is_some_and(is_identifier)
+            || !object
+                .get("postId")
+                .and_then(Value::as_str)
+                .is_some_and(is_identifier)
+            || !object
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|value| is_string(value, MAX_TEXT_LENGTH))
+            || !is_thread(object.get("parts"))
+            || !is_part_images(object.get("partImages"), part_count)
+        {
+            return Err(invalid("Quote submission command payload is invalid."));
         }
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
@@ -1228,6 +1365,8 @@ fn ready_capabilities(platform: Platform) -> Vec<Action> {
         Action::Refresh,
         Action::Capture,
         Action::SubmitReply,
+        Action::SubmitRepost,
+        Action::SubmitQuote,
         Action::SubmitPost,
     ]
     .into_iter()
@@ -1809,9 +1948,89 @@ mod tests {
         assert_eq!(wrong_type.code, "invalid_schema");
     }
 
+    /// A repost names only the post it shares: the destination is derived
+    /// from that ID, and nothing else on the request is accepted.
+    #[test]
+    fn a_repost_request_derives_the_posts_own_page_and_takes_nothing_else() {
+        let request = parse_create_job_request(&json!({
+            "platform": "x", "action": "repost", "payload": { "postId": "42" }
+        }))
+        .unwrap();
+        assert_eq!(request.target_url, "https://x.com/i/status/42");
+        assert_eq!(request.payload, json!({ "kind": "repost", "postId": "42" }));
+
+        for refused in [
+            json!({ "platform": "x", "action": "repost", "payload": {} }),
+            json!({ "platform": "x", "action": "repost", "payload": { "postId": "not-a-post" } }),
+            json!({
+                "platform": "x", "action": "repost",
+                "payload": { "postId": "42", "text": "extra" }
+            }),
+            json!({
+                "platform": "x", "action": "repost",
+                "targetUrl": "https://x.com/owner/status/42",
+                "payload": { "postId": "42" }
+            }),
+            json!({ "platform": "instagram", "action": "repost", "payload": { "postId": "abc" } }),
+        ] {
+            assert!(
+                parse_create_job_request(&refused).is_err(),
+                "accepted {refused}"
+            );
+        }
+    }
+
+    /// A quote names the post it quotes and brings its own words, images or
+    /// thread under the same rules as a post; the destination is derived.
+    #[test]
+    fn a_quote_request_derives_the_quoted_posts_page_and_takes_a_posts_content() {
+        let request = parse_create_job_request(&json!({
+            "platform": "x", "action": "quote",
+            "payload": { "postId": "42", "text": "Worth reading.", "images": ["/tmp/a.png"] }
+        }))
+        .unwrap();
+        assert_eq!(request.target_url, "https://x.com/i/status/42");
+        assert_eq!(
+            request.payload,
+            json!({
+                "kind": "quote", "postId": "42", "text": "Worth reading.",
+                "parts": ["Worth reading."], "partImages": [["/tmp/a.png"]]
+            })
+        );
+
+        let thread = parse_create_job_request(&json!({
+            "platform": "x", "action": "quote",
+            "payload": { "postId": "42", "thread": ["One.", { "text": "Two.", "images": ["/tmp/b.png"] }] }
+        }))
+        .unwrap();
+        assert_eq!(thread.payload["parts"], json!(["One.", "Two."]));
+        assert_eq!(thread.payload["partImages"], json!([[], ["/tmp/b.png"]]));
+
+        for refused in [
+            json!({ "platform": "x", "action": "quote", "payload": { "postId": "42" } }),
+            json!({ "platform": "x", "action": "quote", "payload": { "postId": "42", "text": "  " } }),
+            json!({ "platform": "x", "action": "quote", "payload": { "text": "No post" } }),
+            json!({
+                "platform": "x", "action": "quote",
+                "payload": { "postId": "42", "thread": ["One.", "Two."], "images": ["/tmp/a.png"] }
+            }),
+            json!({
+                "platform": "x", "action": "quote",
+                "targetUrl": "https://x.com/owner/status/42",
+                "payload": { "postId": "42", "text": "Worth reading." }
+            }),
+            json!({ "platform": "instagram", "action": "quote", "payload": { "postId": "abc", "text": "Hi" } }),
+        ] {
+            assert!(
+                parse_create_job_request(&refused).is_err(),
+                "accepted {refused}"
+            );
+        }
+    }
+
     #[test]
     fn a_job_request_cannot_ask_for_a_submission_directly() {
-        for action in ["submit_post", "submit_reply"] {
+        for action in ["submit_post", "submit_reply", "submit_repost", "submit_quote"] {
             assert!(
                 parse_create_job_request(&json!({
                     "platform": "x", "action": action,
@@ -1820,6 +2039,34 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn a_submit_repost_command_carries_only_its_draft_and_post() {
+        let now = 1_000;
+        let envelope = json!({
+            "version": 1,
+            "type": "command",
+            "jobId": "job-1",
+            "commandId": "command-1",
+            "platform": "x",
+            "action": "submit_repost",
+            "targetUrl": "https://x.com/i/status/42",
+            "issuedAt": now,
+            "expiresAt": now + 60_000,
+            "payload": {
+                "kind": "repost_submission",
+                "draftId": "draft-1",
+                "postId": "42"
+            }
+        });
+        assert!(parse_command_envelope(&envelope).is_ok());
+        let mut with_text = envelope.clone();
+        with_text["payload"]["text"] = json!("Sneaking words in");
+        assert!(parse_command_envelope(&with_text).is_err());
+        let mut wrong_kind = envelope;
+        wrong_kind["payload"]["kind"] = json!("submission");
+        assert!(parse_command_envelope(&wrong_kind).is_err());
     }
 
     #[test]

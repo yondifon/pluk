@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use tokio::sync::oneshot;
 
 use pluk_browser::{BrowserState, PostAnswer, PostChoice, PostPrompt, PostPrompter};
-use pluk_store::browser::{DRAFT_TTL_MS, Draft, DraftImage, ScheduleReservation};
+use pluk_store::browser::{DRAFT_TTL_MS, Draft, DraftImage, QuotedPost, ScheduleReservation};
 
 use crate::commands::HostState;
 
@@ -60,6 +60,10 @@ pub struct WaitingPost {
     pub images: Vec<DraftImage>,
     /// The post this one replies to, when it is a reply.
     pub replying_to: Option<String>,
+    /// The post this one shares as it stands, when it is a repost.
+    pub reposting: Option<String>,
+    /// The post this one quotes, when it is a quote.
+    pub quoting: Option<QuotedPost>,
     /// When it stops being sendable, in epoch milliseconds.
     pub expires_at: i64,
     pub can_queue: bool,
@@ -81,7 +85,9 @@ impl From<Draft> for WaitingPost {
         WaitingPost {
             can_queue: draft.can_queue(),
             expires_at: draft.created_at + DRAFT_TTL_MS,
-            replying_to: draft.post_id.is_some().then_some(draft.target_url),
+            replying_to: (draft.kind == "reply").then(|| draft.target_url.clone()),
+            reposting: (draft.kind == "repost").then_some(draft.target_url),
+            quoting: draft.quoted,
             parts: draft.parts,
             images: draft.images,
             text: draft.text,

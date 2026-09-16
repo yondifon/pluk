@@ -15,6 +15,14 @@ export interface DraftImage {
   bytes: number;
 }
 
+/** The post a quote quotes. Its author and words are there only when Pluk
+ * has already read that post; its address always is. */
+export interface QuotedPost {
+  url: string;
+  author: string | null;
+  text: string | null;
+}
+
 export interface PostQuestion {
   integrationId: string;
   draftId: string;
@@ -25,6 +33,11 @@ export interface PostQuestion {
    * each post its own. */
   images: DraftImage[];
   replyingTo: string | null;
+  /** The post this shares as it stands, when it is a repost. Its address is
+   * all Pluk has: nothing is read off the page before the answer. */
+  reposting: string | null;
+  /** The post this quotes, when it is a quote. */
+  quoting: QuotedPost | null;
   canQueue: boolean;
   /** When the post stops being sendable, in epoch milliseconds. */
   closesAt: number;
@@ -144,13 +157,23 @@ export function renderPost(
   const thread = question.parts.length > 1;
   const title = document.createElement("h1");
   title.className = "confirm-title";
-  title.textContent = question.replyingTo
-    ? "Send this reply?"
-    : thread
-      ? `Post this thread of ${question.parts.length}?`
-      : "Post this?";
+  title.textContent = question.reposting
+    ? "Repost this?"
+    : question.replyingTo
+      ? "Send this reply?"
+      : question.quoting
+        ? thread
+          ? `Post this quote as a thread of ${question.parts.length}?`
+          : "Post this quote?"
+        : thread
+          ? `Post this thread of ${question.parts.length}?`
+          : "Post this?";
 
-  const parts = thread ? question.parts : [question.text];
+  const parts = question.reposting
+    ? [question.reposting]
+    : thread
+      ? question.parts
+      : [question.text];
   const images = question.images;
   const text = document.createElement("div");
   text.className = "confirm-command confirm-post";
@@ -189,7 +212,7 @@ export function renderPost(
     ...(question.canQueue
       ? [["Add to queue", "queue", "default", true] as [string, PostChoice, "default", boolean]]
       : []),
-    ["Post now", "postNow", "primary", true],
+    [question.reposting ? "Repost" : "Post now", "postNow", "primary", true],
   ];
   const sendButtons: HTMLButtonElement[] = [];
   for (const [label, choice, variant, waitsOnImages] of buttons) {
@@ -201,7 +224,16 @@ export function renderPost(
     actions.appendChild(button);
   }
 
-  root.append(source, title, text, imagesStatus, context, countdown, actions);
+  root.append(
+    source,
+    title,
+    ...(question.quoting ? [quotedPost(question.quoting)] : []),
+    text,
+    imagesStatus,
+    context,
+    countdown,
+    actions,
+  );
   (
     actions.querySelector<HTMLButtonElement>(".ui-button-primary:not(:disabled)") ??
     actions.querySelector<HTMLButtonElement>(".ui-button:not(:disabled)")
@@ -256,6 +288,20 @@ export function renderPost(
       countdown.textContent = "";
     },
   };
+}
+
+/** The post a quote quotes, shown above the words that quote it. */
+function quotedPost(post: QuotedPost): HTMLElement {
+  const block = document.createElement("blockquote");
+  block.className = "confirm-quoted";
+  const author = document.createElement("p");
+  author.className = "confirm-quoted-author";
+  author.textContent = post.author ? `Quoting ${post.author}` : "Quoting";
+  const words = document.createElement("p");
+  words.className = "confirm-quoted-text";
+  words.textContent = post.text ?? post.url;
+  block.append(author, words);
+  return block;
 }
 
 /** Shown when there is no longer a question to answer. */
