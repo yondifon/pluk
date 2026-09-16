@@ -520,6 +520,81 @@ test("submits an exact X reply exactly once into the editor already under the po
   expect(submitClicks).toBe(1);
 });
 
+test("waits for X to enable the reply button instead of giving up while it is still disabled", async () => {
+  let submitClicks = 0;
+  let insertedText = "";
+  let disabledReads = 0;
+  const submitButton = node("");
+  const composer = node("");
+  const toast = node("An earlier X notification.");
+  Object.defineProperty(submitButton, "getAttribute", {
+    value: (name: string) => {
+      if (name !== "aria-disabled") {
+        return null;
+      }
+      disabledReads += 1;
+      return disabledReads <= 3 ? "true" : null;
+    },
+  });
+  Object.defineProperty(submitButton, "click", {
+    value: () => {
+      submitClicks += 1;
+      Object.defineProperty(composer, "textContent", {
+        configurable: true,
+        value: "",
+      });
+      Object.defineProperty(toast, "textContent", {
+        configurable: true,
+        value: "Your reply was sent.",
+      });
+    },
+  });
+  Object.defineProperty(composer, "focus", { value: () => {} });
+  makeComposerScope(composer, submitButton);
+  const article = node(
+    "Visible post",
+    {},
+    {
+      'a[href*="/status/"]': [node("", { href: "/owner/status/42" })],
+      '[data-testid="tweetText"]': [node("Visible post")],
+      '[data-testid="User-Name"]': [node("@owner")],
+    },
+  );
+  const restore = installPage(
+    "Visible post",
+    "X",
+    "https://x.com/status/42",
+    {
+      '[data-testid="AppTabBar_Profile_Link"]': [node("", { href: "/owner" })],
+      'article[data-testid="tweet"]': [article],
+      'article[data-testid="tweet"], article': [article],
+      '[data-testid="tweetTextarea_0"]': [composer],
+      '[role="alert"], [data-testid="toast"]': [toast],
+    },
+    (_commandId, _showUi, value) => {
+      insertedText += value ?? "";
+      Object.defineProperty(composer, "textContent", {
+        configurable: true,
+        value: insertedText,
+      });
+      return true;
+    },
+  );
+  const result = await runXPage({
+    action: "submit_reply",
+    targetUrl: "https://x.com/status/42",
+    postId: "42",
+    text: "Thanks for sharing this.",
+  });
+  restore();
+  expect(result).toMatchObject({
+    state: "submission_succeeded",
+    kind: "submission",
+  });
+  expect(disabledReads).toBeGreaterThan(3);
+  expect(submitClicks).toBe(1);
+});
+
 test("refuses X poll and thread composers without submitting", async () => {
   const unsupportedParts: ReadonlyArray<
     Readonly<Record<string, readonly FixtureNode[]>>

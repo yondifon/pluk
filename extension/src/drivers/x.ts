@@ -731,7 +731,9 @@ export function runXPage(
     await new Promise((resolve) =>
       setTimeout(resolve, 600 + Math.random() * 800),
     );
-    const submitButton = composerSubmitButton(scope);
+    // X enables the reply button only once its draft state has taken the
+    // pasted text, which can land after the pause above.
+    const submitButton = await waitFor(() => composerSubmitButton(scope), 5_000);
     if (!submitButton) {
       return failure(
         "unsupported",
