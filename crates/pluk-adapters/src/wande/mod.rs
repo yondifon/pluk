@@ -17,11 +17,11 @@
 //! post or reply starts no job at all: it writes a draft that waits in Pluk,
 //! and the call reads back what the user decided about it.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
-use tokio::time::{Instant, sleep};
+use tokio::time::{Instant, sleep, sleep_until, timeout_at};
 
 use pluk_store::{Integration, Store};
 
@@ -45,26 +45,12 @@ const GET_JOB: &str = "get_job";
 /// drives the page and is annotated as such.
 const READ: &str = "read";
 
-/// How long a post call waits for the person answering before handing back
-/// its id. A post stays answerable far longer than this; the cap sits under
-/// the minute MCP clients give a call, so the caller gets a "still going"
-/// instead of a dead socket. Browser jobs never wait: a page can take
-/// minutes, so their id comes back at once.
 const MAX_WAIT: Duration = Duration::from_secs(45);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. Instagram tools are read-only: profiles, posts, and screenshots, no posting or replying there. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. payload.images takes 1 to 4 absolute local PNG or JPEG file paths for a plain post or a reply, each under 5 MiB. For a thread, give each part its own images instead: pass thread as a mix of exact strings and { text, images } objects, and do not also pass the top-level images field — that combination is refused, not guessed at. The user sees exactly those images under each part before deciding, and only sends once every one has loaded. If any part's images fail to attach or upload in the browser, nothing is posted, text included; the user sees why and can try again. x_repost shares a post as it stands, adding nothing: pass the exact post ID and the user decides in Pluk, the same way. A post they have already reposted comes back as done, and nothing undoes a repost. x_quote comments on a post in the user's own feed: pass the exact post ID and the quote's own text, with images or a thread under the same rules as x_post; it waits in Pluk for the user the same way. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. Read tools hand back a jobId at once; call get_job with it until the page is done. x_post and x_reply wait up to 45 seconds for the user's answer, then hand back an id the same way. Pass payload.debug true on x_post or x_reply to have a screenshot and the page HTML attached to the browser job when the page refuses it.";
+const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. Instagram tools are read-only: profiles, posts, and screenshots, no posting or replying there. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. payload.images takes 1 to 4 absolute local PNG or JPEG file paths for a plain post or a reply, each under 5 MiB. For a thread, give each part its own images instead: pass thread as a mix of exact strings and { text, images } objects, and do not also pass the top-level images field — that combination is refused, not guessed at. The user sees exactly those images under each part before deciding, and only sends once every one has loaded. If any part's images fail to attach or upload in the browser, nothing is posted, text included; the user sees why and can try again. x_repost shares a post as it stands, adding nothing: pass the exact post ID and the user decides in Pluk, the same way. A post they have already reposted comes back as done, and nothing undoes a repost. x_quote comments on a post in the user's own feed: pass the exact post ID and the quote's own text, with images or a thread under the same rules as x_post; it waits in Pluk for the user the same way. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. Read tools and get_job wait up to 45 seconds for a browser result; if a call returns a jobId, call get_job with it to collect the outcome. x_post and x_reply wait up to 45 seconds for the user's answer, then hand back an id the same way. Pass payload.debug true on x_post or x_reply to have a screenshot and the page HTML attached to the browser job when the page refuses it.";
 
 const ACCESS: &str = "Reads and posts through a Chrome window the user is signed in to, one page at a time. Every post is shown to the user in full inside Pluk and goes out only if they say so.";
-
-/// The one failure the user can do something about, and the marker
-/// [`WandeAdapter::humanize_error`] recognises it by.
-const NOT_PAIRED: &str = "Chrome is not connected.";
-
-/// What to tell whoever hit that failure. Shared so a failed connection test
-/// and a refused tool call say the same thing.
-const NOT_PAIRED_HELP: &str =
-    "Chrome isn’t connected. Paste this Pluk ID into Wande in Chrome, then try again.";
 
 const SERVICE_DOWN: &str = "Pluk isn’t answering. Restart Pluk and try again.";
 const NOT_STARTED: &str = "Pluk did not start this. Try again.";
@@ -120,15 +106,10 @@ impl Adapter for WandeAdapter {
     /// Which tools that browser can then run is the catalog's answer, not
     /// this check's.
     async fn test_connection(&self, conn: &Integration) -> Result<(), AdapterError> {
-        match chrome_is_connected(&self.store, &conn.id).await {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(AdapterError::new(NOT_PAIRED)),
-            Err(message) => Err(AdapterError::new(message)),
-        }
-    }
-
-    fn humanize_error(&self, error: &AdapterError) -> Option<String> {
-        (error.message == NOT_PAIRED).then(|| NOT_PAIRED_HELP.to_owned())
+        let status = send(&self.store, &conn.id, reqwest::Method::GET, "/status", None)
+            .await
+            .map_err(AdapterError::new)?;
+        connection_status(&status).map_err(AdapterError::new)
     }
 
     fn instructions(&self, conn: &Integration) -> String {
@@ -155,24 +136,17 @@ impl Adapter for WandeAdapter {
         _owner_id: &str,
     ) -> Result<(), AdapterError> {
         let integration_id = conn.id.clone();
-        for tool in pluk_browser::catalog_tools() {
+        for (tool_id, registration) in registrations() {
             let store = self.store.clone();
             let integration_id = integration_id.clone();
-            let tool_id = tool.id.clone();
+            let tool_id = tool_id.clone();
             host.register_tool(
-                ToolRegistration {
-                    name: mcp_name(&tool.id),
-                    description: tool.summary.to_owned(),
-                    input_schema: input_schema(&tool.args_schema),
-                    annotations: annotations(tool.category),
-                },
+                registration.clone(),
                 Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
                     let store = store.clone();
                     let integration_id = integration_id.clone();
                     let tool_id = tool_id.clone();
-                    Box::pin(async move {
-                        run_tool(&store, &integration_id, &tool_id, args).await
-                    })
+                    Box::pin(async move { run_tool(&store, &integration_id, &tool_id, args).await })
                 }),
             );
         }
@@ -183,7 +157,7 @@ impl Adapter for WandeAdapter {
             ToolRegistration {
                 name: GET_JOB.to_owned(),
                 description: "Read a call's outcome by the jobId it handed back, including what the user decided about a post it wrote.".to_owned(),
-                input_schema: get_job_schema(),
+                input_schema: get_job_schema().clone(),
                 annotations: annotations(READ),
             },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
@@ -201,6 +175,26 @@ impl Adapter for WandeAdapter {
 /// id itself still goes on the wire to `/wande`.
 fn mcp_name(tool_id: &str) -> String {
     tool_id.replace('.', "_")
+}
+
+fn registrations() -> &'static [(String, ToolRegistration)] {
+    static REGISTRATIONS: OnceLock<Vec<(String, ToolRegistration)>> = OnceLock::new();
+    REGISTRATIONS.get_or_init(|| {
+        pluk_browser::catalog_tools()
+            .iter()
+            .map(|tool| {
+                (
+                    tool.id.clone(),
+                    ToolRegistration {
+                        name: mcp_name(&tool.id),
+                        description: tool.summary.to_owned(),
+                        input_schema: input_schema(&tool.args_schema),
+                        annotations: annotations(tool.category),
+                    },
+                )
+            })
+            .collect()
+    })
 }
 
 fn tool_specs() -> Vec<ToolSpec> {
@@ -301,27 +295,22 @@ fn lift_required_within_schema(schema: &Value) -> Value {
     Value::Object(copy)
 }
 
-fn get_job_schema() -> Map<String, Value> {
-    let mut properties = Map::new();
-    properties.insert(
-        "jobId".into(),
-        json!({
-            "type": "string",
-            "description": "The id a call handed back when it was still going.",
-        }),
-    );
-    object_schema(properties, &["jobId"])
+fn get_job_schema() -> &'static Map<String, Value> {
+    static SCHEMA: OnceLock<Map<String, Value>> = OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        let mut properties = Map::new();
+        properties.insert(
+            "jobId".into(),
+            json!({
+                "type": "string",
+                "description": "The id a call handed back when it was still going.",
+            }),
+        );
+        object_schema(properties, &["jobId"])
+    })
 }
 
-async fn run_tool(
-    store: &Store,
-    integration_id: &str,
-    tool_id: &str,
-    args: Value,
-) -> ToolResult {
-    if let Err(message) = require_chrome(store, integration_id).await {
-        return err(message);
-    }
+async fn run_tool(store: &Store, integration_id: &str, tool_id: &str, args: Value) -> ToolResult {
     let started = match send(
         store,
         integration_id,
@@ -338,9 +327,10 @@ async fn run_tool(
     // goes out, and that answer is this call's real result.
     if let Some(draft_id) = started["draft"]["id"].as_str() {
         return match settle_post(store, integration_id, draft_id, Instant::now() + MAX_WAIT).await {
-            Ok(Some(draft)) => {
-                report_post(&draft, failed_job(store, integration_id, &draft).await.as_ref())
-            }
+            Ok(Some(draft)) => report_post(
+                &draft,
+                failed_job(store, integration_id, &draft).await.as_ref(),
+            ),
             Ok(None) => handed_off(draft_id),
             Err(message) => err(message),
         };
@@ -348,7 +338,15 @@ async fn run_tool(
     let Some(job_id) = started["job"]["id"].as_str() else {
         return err(NOT_STARTED);
     };
-    handed_off(job_id)
+    let job_id = job_id.to_owned();
+    match settle_job(started["job"].clone(), Instant::now() + MAX_WAIT, || {
+        fetch_job(store, integration_id, &job_id)
+    })
+    .await
+    {
+        Ok(job) => report_job(&job),
+        Err(message) => err(message),
+    }
 }
 
 /// The id a call handed back names a job or a post waiting on the user; a
@@ -357,26 +355,57 @@ async fn get_job(store: &Store, integration_id: &str, args: Value) -> ToolResult
     let Some(id) = identifier(&args, "jobId") else {
         return err("Pass the jobId a call handed back.");
     };
-    let job = match fetch_job(store, integration_id, id).await {
-        Ok(job) => job,
-        Err(job_missing) => {
+    let deadline = Instant::now() + MAX_WAIT;
+    let job = match timeout_at(deadline, fetch_job(store, integration_id, id)).await {
+        Err(_) => return handed_off(id),
+        Ok(Ok(job)) => job,
+        Ok(Err(job_missing)) => {
             return match fetch_draft(store, integration_id, id).await {
-                Ok(draft) => {
-                    report_post(&draft, failed_job(store, integration_id, &draft).await.as_ref())
-                }
+                Ok(draft) => report_post(
+                    &draft,
+                    failed_job(store, integration_id, &draft).await.as_ref(),
+                ),
                 Err(_) => err(job_missing),
             };
         }
     };
     let Some(draft_id) = job["draftId"].as_str() else {
-        return report_job(&job);
+        return match settle_job(job, deadline, || fetch_job(store, integration_id, id)).await {
+            Ok(job) => report_job(&job),
+            Err(message) => err(message),
+        };
     };
     match fetch_draft(store, integration_id, draft_id).await {
-        Ok(draft) => {
-            report_post(&draft, failed_job(store, integration_id, &draft).await.as_ref())
-        }
+        Ok(draft) => report_post(
+            &draft,
+            failed_job(store, integration_id, &draft).await.as_ref(),
+        ),
         Err(message) => err(message),
     }
+}
+
+async fn settle_job<F, Fut>(
+    mut job: Value,
+    deadline: Instant,
+    mut fetch: F,
+) -> Result<Value, String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<Value, String>>,
+{
+    while matches!(job["status"].as_str(), Some("queued" | "running")) {
+        if Instant::now() >= deadline {
+            break;
+        }
+        match timeout_at(deadline, fetch()).await {
+            Ok(result) => job = result?,
+            Err(_) => break,
+        }
+        if matches!(job["status"].as_str(), Some("queued" | "running")) {
+            sleep_until((Instant::now() + POLL_INTERVAL).min(deadline)).await;
+        }
+    }
+    Ok(job)
 }
 
 async fn fetch_job(store: &Store, integration_id: &str, job_id: &str) -> Result<Value, String> {
@@ -528,17 +557,14 @@ fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
-async fn require_chrome(store: &Store, integration_id: &str) -> Result<(), String> {
-    match chrome_is_connected(store, integration_id).await {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(NOT_PAIRED_HELP.to_owned()),
-        Err(message) => Err(message),
+fn connection_status(status: &Value) -> Result<(), &'static str> {
+    if status["extension"]["connected"] == true {
+        Ok(())
+    } else if status["extension"]["pairingRejectedAt"].is_number() {
+        Err(pluk_browser::PAIRING_REJECTED_HELP)
+    } else {
+        Err(pluk_browser::CHROME_DISCONNECTED_HELP)
     }
-}
-
-async fn chrome_is_connected(store: &Store, integration_id: &str) -> Result<bool, String> {
-    let status = send(store, integration_id, reqwest::Method::GET, "/status", None).await?;
-    Ok(status["extension"]["connected"].as_bool().unwrap_or(false))
 }
 
 /// Ids reach the URL path, so anything that is not one is refused here rather
@@ -792,9 +818,15 @@ mod tests {
         let payload = &schema["properties"]["payload"];
         assert_eq!(payload["required"], json!(["postId"]));
         for field in ["text", "thread", "images"] {
-            assert!(payload["properties"].get(field).is_some(), "missing {field}");
+            assert!(
+                payload["properties"].get(field).is_some(),
+                "missing {field}"
+            );
         }
-        assert_eq!(payload["properties"]["thread"]["items"]["required"], json!(["text"]));
+        assert_eq!(
+            payload["properties"]["thread"]["items"]["required"],
+            json!(["text"])
+        );
         assert_no_boolean_required(&Value::Object(schema));
     }
 

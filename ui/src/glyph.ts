@@ -1,5 +1,14 @@
 import { createIcon } from "./icon";
-import { adapterLogo } from "./adapterLogo";
+
+function loadLogo(element: HTMLElement, type: string, tint = false): void {
+  void import("./adapterLogo").then(({ adapterLogo }) => {
+    const logo = adapterLogo(type);
+    if (logo) {
+      if (tint) element.style.background = hexToRgba(adapterColor(type), 0.14);
+      element.replaceChildren(logo);
+    }
+  });
+}
 
 export const adapterColors: Record<string, string> = {
   postgres: "#4d75a8", // 0.30,0.46,0.66
@@ -54,13 +63,7 @@ export function glyphElement(type: string, size = 12): HTMLElement {
     return wrap;
   }
 
-  const logo = adapterLogo(type);
-  if (logo) {
-    wrap.title = type;
-    wrap.appendChild(logo);
-    return wrap;
-  }
-
+  loadLogo(wrap, type);
   wrap.textContent = adapterAbbrev(type);
   wrap.style.fontFamily = "var(--font-mono)";
   wrap.title = type;
@@ -88,13 +91,7 @@ export function typeBadge(type: string, label: string): HTMLElement {
     return badge;
   }
 
-  const logo = adapterLogo(type);
-  if (logo) {
-    badge.style.background = hexToRgba(adapterColor(type), 0.14);
-    badge.appendChild(logo);
-    return badge;
-  }
-
+  loadLogo(badge, type, true);
   badge.textContent = type === "mssql" ? adapterAbbrev(type) : label.slice(0, 2).toUpperCase();
   return badge;
 }

@@ -24,5 +24,6 @@ pub use catalog::{ToolSpec as CatalogTool, tools as catalog_tools};
 pub use prompt::{PostAnswer, PostChoice, PostPrompt, PostPrompter, set_post_prompter};
 pub use thread::{X_POST_LIMIT, weighted_length};
 pub use service::{
-    BridgeError, BrowserState, INTEGRATION_TYPE, pairing_key, pairing_key_for, router,
+    BridgeError, BrowserState, CHROME_DISCONNECTED_HELP, INTEGRATION_TYPE, PAIRING_REJECTED_HELP,
+    pairing_key, pairing_key_for, router,
 };

@@ -8,7 +8,7 @@
 //! to be able to publish.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use base64::Engine;
 use serde::Serialize;
@@ -177,9 +177,10 @@ pub fn list_wande_posts(
 
 /// One image a waiting post was approved with, as a data URL the window can
 /// put straight into an `<img>` — the exact bytes staging captured, read
-/// fresh each call. `draft_id` and `image_id` together are the only way in:
-/// there is no path anywhere on this route for the window to reach past its
-/// own draft.
+/// once per image and then served from memory. `draft_id` and `image_id`
+/// together are the only way in: there is no path anywhere on this route for
+/// the window to reach past its own draft. Staged bytes are immutable and
+/// named by their content hash, so a cached data URL can never go stale.
 #[tauri::command]
 pub fn wande_post_image(
     state: State<'_, HostState>,
@@ -187,14 +188,23 @@ pub fn wande_post_image(
     draft_id: String,
     image_id: String,
 ) -> CmdResult<String> {
+    static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = format!("{integration_id}/{draft_id}/{image_id}");
+    let mut cache = cache.lock().expect("image cache lock");
+    if let Some(data_url) = cache.get(&key) {
+        return Ok(data_url.clone());
+    }
     let (content_type, bytes) = browser_for(&state, &integration_id)?
         .draft_image(&integration_id, &draft_id, &image_id)
         .map_err(|error| error.message)?
         .ok_or_else(|| "This image is no longer available.".to_string())?;
-    Ok(format!(
+    let data_url = format!(
         "data:{content_type};base64,{}",
         base64::engine::general_purpose::STANDARD.encode(bytes)
-    ))
+    );
+    cache.insert(key, data_url.clone());
+    Ok(data_url)
 }
 
 #[tauri::command]

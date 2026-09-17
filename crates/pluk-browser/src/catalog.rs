@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -91,7 +93,12 @@ pub struct ToolSpec {
     pub result_schema: Value,
 }
 
-pub fn tools() -> Vec<ToolSpec> {
+pub fn tools() -> &'static [ToolSpec] {
+    static TOOLS: OnceLock<Vec<ToolSpec>> = OnceLock::new();
+    TOOLS.get_or_init(build_tools)
+}
+
+fn build_tools() -> Vec<ToolSpec> {
     let mut list = Vec::new();
     for platform in PLATFORMS {
         for (action, summary, category) in ACTIONS {
@@ -130,8 +137,9 @@ pub fn find_tool(id: &str) -> Option<(Platform, Action)> {
         .then_some((platform, action))
 }
 
-pub fn catalog_value() -> Value {
-    json!(tools())
+pub fn catalog_value() -> &'static Value {
+    static CATALOG: OnceLock<Value> = OnceLock::new();
+    CATALOG.get_or_init(|| json!(tools()))
 }
 
 fn tool_id(platform: Platform, action: Action) -> String {
@@ -460,7 +468,7 @@ mod tests {
 
     #[test]
     fn catalog_only_lists_implemented_capabilities() {
-        let ids: Vec<String> = tools().into_iter().map(|tool| tool.id).collect();
+        let ids: Vec<&str> = tools().iter().map(|tool| tool.id.as_str()).collect();
         assert_eq!(
             ids,
             vec![
@@ -491,9 +499,9 @@ mod tests {
 
     #[test]
     fn catalog_publishes_exactly_the_instagram_tools_instagram_supports() {
-        let ids: Vec<String> = tools()
-            .into_iter()
-            .map(|tool| tool.id)
+        let ids: Vec<&str> = tools()
+            .iter()
+            .map(|tool| tool.id.as_str())
             .filter(|id| id.starts_with("instagram."))
             .collect();
         assert_eq!(

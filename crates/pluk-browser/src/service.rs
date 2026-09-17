@@ -50,6 +50,9 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_LIST_LIMIT: i64 = 100;
 const MAX_TOKEN_LENGTH: usize = 256;
 
+pub const CHROME_DISCONNECTED_HELP: &str = "Chrome isn’t connected to Pluk. Open Chrome with Wande enabled, wait a few seconds, then try again — you don’t need to paste your Pluk ID again.";
+pub const PAIRING_REJECTED_HELP: &str = "The Pluk ID Wande is using was not accepted. Copy this integration’s Pluk ID into Wande in Chrome, then try again.";
+
 /// The integration type browser control is configured under. One integration
 /// holds every platform in [`catalog`](crate::catalog), so this never names
 /// one. Activity is recorded against it so it reads like any other
@@ -260,6 +263,29 @@ impl BrowserState {
             return now;
         }
         now_millis()
+    }
+
+    fn require_extension(&self, integration_id: &str) -> Result<(), BridgeError> {
+        let queues = self
+            .queues
+            .lock()
+            .map_err(|_| BridgeError::new("service_unavailable", "Browser control is unavailable."))?;
+        let queue = queues.get(integration_id);
+        if queue.is_some_and(|queue| queue.connection.is_some()) {
+            return Ok(());
+        }
+        if queue.is_some_and(|queue| queue.last_rejected_at.is_some()) {
+            return Err(BridgeError::with_status(
+                "pairing_rejected",
+                PAIRING_REJECTED_HELP,
+                503,
+            ));
+        }
+        Err(BridgeError::with_status(
+            "disconnected",
+            CHROME_DISCONNECTED_HELP,
+            503,
+        ))
     }
 
     #[cfg(test)]
@@ -1376,6 +1402,9 @@ async fn http_create_job(
         Ok(request) => request,
         Err(error) => return api_error(StatusCode::BAD_REQUEST, error.code, &error.message),
     };
+    if let Err(error) = state.require_extension(&integration_id) {
+        return bridge_error_response(error);
+    }
     match state.start(&integration_id, &request) {
         Ok(started) => api_json(StatusCode::ACCEPTED, started),
         Err(error) => bridge_error_response(error),
@@ -1436,6 +1465,9 @@ async fn http_invoke_tool(
         Ok(request) => request,
         Err(error) => return api_error(StatusCode::BAD_REQUEST, error.code, &error.message),
     };
+    if let Err(error) = state.require_extension(&integration_id) {
+        return bridge_error_response(error);
+    }
     match state.start(&integration_id, &request) {
         Ok(started) => api_json(StatusCode::ACCEPTED, started),
         Err(error) => bridge_error_response(error),
@@ -3075,7 +3107,26 @@ mod tests {
                 .is_empty()
         );
 
-        // A valid route dispatches a current action over the existing job store.
+        // Without Chrome, the start routes refuse before queueing anything.
+        let disconnected = invoke(
+            "x.inspect",
+            json!({ "targetUrl": "https://x.com/status/42" }),
+        )
+        .await;
+        assert_eq!(disconnected.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        let refusal: Value = disconnected.json().await.unwrap();
+        assert_eq!(refusal["error"]["code"], "disconnected");
+        assert_eq!(refusal["error"]["message"], CHROME_DISCONNECTED_HELP);
+        assert!(
+            fixture
+                .state
+                .store
+                .browser()
+                .list_jobs(10, fixture.state.now())
+                .unwrap()
+                .is_empty()
+        );
+        let _socket = pair(&fixture, &["inspect", "read_post"]).await;
         let valid = invoke(
             "x.inspect",
             json!({ "targetUrl": "https://x.com/status/42" }),
@@ -3085,7 +3136,7 @@ mod tests {
         let created: Value = valid.json().await.unwrap();
         assert_eq!(created["job"]["platform"], "x");
         assert_eq!(created["job"]["action"], "inspect");
-        assert_eq!(created["job"]["status"], "queued");
+        assert_eq!(created["job"]["status"], "running");
 
         // The typed x.read_post route accepts a post URL alone and derives the post ID.
         let url_only = invoke(

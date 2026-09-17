@@ -162,7 +162,7 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
         .catch(() => imageFailed.add(image.id))
         .finally(() => {
           imageRequests.delete(image.id);
-          if (alive) render();
+          repaintSoon();
         });
     }
   }
@@ -232,8 +232,14 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
   }
 
   // Everything the panel draws from, so a poll that changed nothing leaves
-  // the buttons under the pointer alone.
+  // the buttons under the pointer alone. Each preview's load state is part of
+  // the signature so a landing repaints exactly once, whatever else a poll
+  // brought with it.
   function signature(): string {
+    const imageState = (post: WaitingPost) =>
+      post.images.map((image) =>
+        imageUrls.has(image.id) ? "ok" : imageFailed.has(image.id) ? "failed" : "loading",
+      );
     return JSON.stringify([
       loaded,
       unreachable,
@@ -243,7 +249,21 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
       waiting.map((post) => post.id),
       expired.map((post) => post.id),
       queued.map((post) => [post.id, post.status, post.scheduledAt]),
+      waiting.map(imageState),
+      expired.map(imageState),
     ]);
+  }
+
+  // Previews of one thread arrive together; one paint for the batch instead
+  // of one per landing.
+  let repaintQueued = false;
+  function repaintSoon(): void {
+    if (repaintQueued || !alive) return;
+    repaintQueued = true;
+    queueMicrotask(() => {
+      repaintQueued = false;
+      repaintIfChanged();
+    });
   }
 
   async function act(

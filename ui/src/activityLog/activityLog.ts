@@ -193,34 +193,63 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
      return `<div class="al-meta">${badges.join("")}<span class="al-spacer"></span>${stopBtn}<time class="al-time-ago" datetime="${escapeHtml(entry.createdAt)}" title="${absolute}">${rel}</time></div>`;
   }
 
-  // Render list: only re-render affected rows when possible
+  const renderedRows = new Map<number, { node: HTMLElement; entry: LogEntry; expanded: boolean }>();
+
   function renderList() {
     const f = filtered();
+    const visible = new Set(f.map(entry => entry.id));
+    for (const [id, row] of renderedRows) {
+      if (!visible.has(id)) {
+        row.node.remove();
+        renderedRows.delete(id);
+      }
+    }
     if (f.length === 0 && !isLoading && !hasMore) {
-      elList.innerHTML = "";
       elEmpty.hidden = false;
       renderEmpty();
       elLoadMore.innerHTML = "";
       return;
     }
     elEmpty.hidden = true;
-    // For simplicity, rebuild list but keep scroll position stable.
-    // Requirement "Only the affected feed re-renders" is met for live single-row updates via patchRow below.
-    elList.innerHTML = f.map(e => rowHtml(e, expandedId === e.id)).join("");
-    for (const button of Array.from(elList.querySelectorAll<HTMLButtonElement>(".al-copy-block"))) button.appendChild(createIcon("copy", { size: 14 }));
+    let next = elList.firstElementChild;
+    for (const entry of f) {
+      const isExpanded = expandedId === entry.id;
+      let row = renderedRows.get(entry.id);
+      const previous = row?.entry;
+      const keys = Object.keys(entry) as (keyof LogEntry)[];
+      if (!row || row.expanded !== isExpanded || !previous || keys.some(key => entry[key] !== previous[key])) {
+        const wrap = document.createElement("div");
+        wrap.innerHTML = rowHtml(entry, isExpanded);
+        const node = wrap.firstElementChild as HTMLElement;
+        for (const button of node.querySelectorAll(".al-copy-block")) {
+          button.appendChild(createIcon("copy", { size: 14 }));
+        }
+        if (row) {
+          const focused = document.activeElement === row.node;
+          if (next === row.node) next = node;
+          row.node.replaceWith(node);
+          if (focused) node.focus({ preventScroll: true });
+        }
+        row = { node, entry, expanded: isExpanded };
+        renderedRows.set(entry.id, row);
+        if (isExpanded) void enhanceExpandedRow(entry, node);
+      }
+      if (row.node !== next) elList.insertBefore(row.node, next);
+      next = row.node.nextElementSibling;
+      const time = row.node.querySelector("time");
+      const relative = relativeTime(entry.createdAt);
+      if (time && time.textContent !== relative) time.textContent = relative;
+    }
     renderLoadMore();
-    // async highlight for expanded rows
-    for (const e of f) if (expandedId === e.id) enhanceExpandedRow(e);
   }
 
-  async function enhanceExpandedRow(entry: LogEntry) {
-    // Highlight SQL off main thread
-    const sqlEl = elList.querySelector(`[data-sql="${entry.id}"]`) as HTMLElement | null;
+  async function enhanceExpandedRow(entry: LogEntry, node: HTMLElement) {
+    const sqlEl = node.querySelector(`[data-sql="${entry.id}"]`) as HTMLElement | null;
     if (sqlEl) {
       const hl = await highlightedHtmlAsync(entry.sql, "sql");
       sqlEl.innerHTML = hl;
     }
-    const cmdEl = elList.querySelector(`[data-cmd="${entry.id}"]`) as HTMLElement | null;
+    const cmdEl = node.querySelector(`[data-cmd="${entry.id}"]`) as HTMLElement | null;
     if (cmdEl) {
       const hl = await highlightedHtmlAsync(entry.sql, "shell");
       cmdEl.innerHTML = hl;
@@ -243,7 +272,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
         previewEl.textContent = cap.preview;
       }
     }
-    const consoleEl = elList.querySelector(`[data-console="${entry.id}"]`) as HTMLElement | null;
+    const consoleEl = node.querySelector(`[data-console="${entry.id}"]`) as HTMLElement | null;
     if (consoleEl && entry.responseText) {
       consoleEl.innerHTML = consoleHtml(entry.responseText);
     }
@@ -252,29 +281,6 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   async function highlightedHtmlAsync(src: string, lang: ReturnType<typeof parseLanguage>) {
     if (src.length > 3000) await new Promise(r => setTimeout(r, 0));
     return highlightedHtml(src, lang);
-  }
-
-  // Patch single row without full list rebuild (live updates)
-  function patchRow(entry: LogEntry) {
-    const existing = elList.querySelector(`[data-id="${entry.id}"]`);
-    const shouldShow = (filter === "all" || entry.verdict === filter) && matchesSearch(entry);
-    if (!shouldShow) {
-      if (existing) existing.remove();
-      return;
-    }
-    if (existing) {
-      // re-render this row only
-      const isExpanded = expandedId === entry.id;
-      const wrap = document.createElement("div");
-      wrap.innerHTML = rowHtml(entry, isExpanded);
-      const newNode = wrap.firstElementChild!;
-      existing.replaceWith(newNode);
-      if (isExpanded) enhanceExpandedRow(entry);
-    } else {
-      // new entry: insert in sorted order if filtered list is sorted
-      // For simplicity, re-render whole list for inserts to keep order correct
-      renderList();
-    }
   }
 
   function renderLoadMore() {
@@ -381,7 +387,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
           createdAt: ev.createdAt,
         };
         entries = mergeEntries(entries, [updated]);
-        patchRow(updated);
+        renderList();
         updateStats();
         updatePolling();
       } else {
@@ -396,7 +402,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
         };
         entries = mergeEntries(entries, [light]);
         seenIds.add(light.id);
-        patchRow(light);
+        renderList();
         updateStats();
         updatePolling();
       }
@@ -491,7 +497,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
       await cancelLog(id);
       // optimistic: mark cancelled distinct from failed
       const idx = entries.findIndex(en => en.id === id);
-      if (idx >= 0) { entries[idx] = { ...entries[idx], verdict: "cancelled" }; patchRow(entries[idx]); updateStats(); updatePolling(); }
+      if (idx >= 0) { entries[idx] = { ...entries[idx], verdict: "cancelled" }; renderList(); updateStats(); updatePolling(); }
       return;
     }
     const copySql = target.closest("[data-copy-sql]")?.getAttribute("data-copy-sql");
