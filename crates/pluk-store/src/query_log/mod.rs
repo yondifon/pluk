@@ -426,9 +426,8 @@ impl Store {
             conditions.push(format!("created_at >= {cutoff}"));
         }
         if let Some(cursor) = cursor {
-            conditions.push("(created_at < ? OR (created_at = ? AND id < ?))".to_string());
+            conditions.push("(created_at, id) < (?, ?)".to_string());
             params.extend([
-                Param::Text(cursor.created_at.clone()),
                 Param::Text(cursor.created_at.clone()),
                 Param::Int(cursor.id),
             ]);

@@ -1468,14 +1468,12 @@ impl BrowserStore<'_> {
 
     fn expire_drafts(&self, now: i64) -> Result<(), BrowserError> {
         self.conn.execute(
-            "UPDATE browser_drafts SET status = 'expired' WHERE integration_id = ? AND status = 'pending' AND created_at + ? <= ?",
-            params![self.integration_id.as_str(), DRAFT_TTL_MS, now],
+            "UPDATE browser_drafts SET status = 'expired' WHERE integration_id = ? AND status = 'pending' AND created_at <= ?",
+            params![self.integration_id.as_str(), now.saturating_sub(DRAFT_TTL_MS)],
         )?;
         Ok(())
     }
 
-    /// Drop settled drafts whose submission job is gone too, so the table does
-    /// not grow with every post ever asked for.
     fn prune_drafts(&self) -> Result<(), BrowserError> {
         let count: i64 = self
             .conn
@@ -1488,49 +1486,42 @@ impl BrowserStore<'_> {
             return Ok(());
         }
         let remove = count - self.max_jobs + 1;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
         let candidate_ids: Vec<String> = {
-            let mut statement = self.conn.prepare(
-                "SELECT id FROM browser_drafts WHERE integration_id = ? AND status NOT IN ('pending', 'confirmed') AND NOT EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.draft_id = browser_drafts.id) ORDER BY created_at ASC LIMIT ?",
+            let mut statement = tx.prepare(
+                "SELECT id FROM browser_drafts WHERE integration_id = ? AND status IN ('submitted', 'failed', 'cancelled', 'expired') AND NOT EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.draft_id = browser_drafts.id AND (browser_jobs.integration_id != browser_drafts.integration_id OR browser_jobs.status IN ('queued', 'running', 'unknown'))) AND NOT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE browser_schedule_reservations.draft_id = browser_drafts.id AND browser_schedule_reservations.status IN ('reserved', 'unknown')) ORDER BY created_at ASC LIMIT ?",
             )?;
             let rows = statement.query_map(params![self.integration_id.as_str(), remove], |row| row.get(0))?;
             rows.collect::<Result<_, _>>()?
         };
-        for id in &candidate_ids {
-            self.prune_one_draft(id)?;
-        }
-        let after: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM browser_drafts WHERE integration_id = ?",
-                [self.integration_id.as_str()],
-                |row| row.get(0),
-            )?;
-        if after >= self.max_jobs {
+        if (candidate_ids.len() as i64) < remove {
             return Err(BrowserError::Full);
         }
-        Ok(())
-    }
-
-    /// Delete one settled draft, and every staged image it was the last
-    /// reference to. A hash another draft still points at is left alone.
-    fn prune_one_draft(&self, id: &str) -> Result<(), BrowserError> {
-        let mut statement = self.conn.prepare(
-            "SELECT staged_path FROM browser_draft_images WHERE integration_id = ? AND draft_id = ?",
-        )?;
-        let staged_paths: Vec<String> = statement
-            .query_map(params![self.integration_id.as_str(), id], |row| row.get(0))?
-            .collect::<Result<_, _>>()?;
-        drop(statement);
-        self.conn.execute(
-            "DELETE FROM browser_draft_images WHERE integration_id = ? AND draft_id = ?",
-            params![self.integration_id.as_str(), id],
-        )?;
-        self.conn.execute(
-            "DELETE FROM browser_drafts WHERE integration_id = ? AND id = ?",
-            params![self.integration_id.as_str(), id],
-        )?;
-        for staged_path in staged_paths {
-            self.drop_staged_if_unreferenced(Path::new(&staged_path));
+        let mut staged_paths = Vec::new();
+        for id in &candidate_ids {
+            let mut statement = tx.prepare(
+                "SELECT staged_path FROM browser_draft_images WHERE integration_id = ? AND draft_id = ?",
+            )?;
+            staged_paths.extend(
+                statement
+                    .query_map(params![self.integration_id.as_str(), id], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+            tx.execute(
+                "DELETE FROM browser_jobs WHERE integration_id = ? AND draft_id = ?",
+                params![self.integration_id.as_str(), id],
+            )?;
+            tx.execute(
+                "DELETE FROM browser_drafts WHERE integration_id = ? AND id = ?",
+                params![self.integration_id.as_str(), id],
+            )?;
+        }
+        tx.commit()?;
+        for path in staged_paths {
+            self.drop_staged_if_unreferenced(Path::new(&path));
         }
         Ok(())
     }
@@ -1548,7 +1539,7 @@ impl BrowserStore<'_> {
         }
         let remove = count - self.max_jobs + 1;
         self.conn.execute(
-            "DELETE FROM browser_jobs WHERE integration_id = ? AND id IN (SELECT browser_jobs.id FROM browser_jobs WHERE browser_jobs.integration_id = ? AND browser_jobs.status IN ('succeeded', 'failed', 'expired', 'unknown') AND NOT EXISTS (SELECT 1 FROM browser_drafts WHERE browser_drafts.id = browser_jobs.draft_id AND browser_drafts.status = 'confirmed') ORDER BY browser_jobs.created_at ASC LIMIT ?)",
+            "DELETE FROM browser_jobs WHERE integration_id = ? AND id IN (SELECT browser_jobs.id FROM browser_jobs WHERE browser_jobs.integration_id = ? AND (browser_jobs.status IN ('succeeded', 'failed', 'expired') OR (browser_jobs.status = 'unknown' AND browser_jobs.action NOT IN ('submit_post', 'submit_reply', 'submit_repost', 'submit_quote'))) AND NOT EXISTS (SELECT 1 FROM browser_drafts WHERE browser_drafts.id = browser_jobs.draft_id AND browser_drafts.status IN ('pending', 'confirmed', 'unknown')) AND NOT EXISTS (SELECT 1 FROM browser_schedule_reservations WHERE browser_schedule_reservations.draft_id = browser_jobs.draft_id AND browser_schedule_reservations.status IN ('reserved', 'unknown')) ORDER BY browser_jobs.created_at ASC LIMIT ?)",
             params![self.integration_id.as_str(), self.integration_id.as_str(), remove],
         )?;
         let after: i64 = self
@@ -1565,10 +1556,7 @@ impl BrowserStore<'_> {
     }
 
     fn prune_artifacts(&self, now: i64) -> Result<(), BrowserError> {
-        self.conn.execute(
-            "DELETE FROM browser_artifacts WHERE expires_at <= ? AND EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.id = browser_artifacts.job_id AND browser_jobs.integration_id = ?)",
-            params![now, self.integration_id.as_str()],
-        )?;
+        crate::purge_expired_artifacts(&self.conn, now)?;
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM browser_artifacts WHERE EXISTS (SELECT 1 FROM browser_jobs WHERE browser_jobs.id = browser_artifacts.job_id AND browser_jobs.integration_id = ?)",
             [self.integration_id.as_str()],
@@ -1741,7 +1729,7 @@ fn is_submission(action: &str) -> bool {
     )
 }
 
-fn now_millis() -> i64 {
+pub(crate) fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
@@ -1793,6 +1781,102 @@ mod tests {
                 now,
             )
             .unwrap()
+    }
+
+    fn seed_history(store: &BrowserStore<'_>, count: i64) {
+        store.conn.execute_batch("BEGIN").unwrap();
+        for i in 0..count {
+            let id = format!("{}-{i}", store.integration_id);
+            store.conn.execute(
+                "INSERT INTO browser_drafts (id, platform, kind, target_url, text, status, created_at, integration_id) VALUES (?, 'x', 'post', '', '', 'submitted', ?, ?)",
+                params![id, i, store.integration_id],
+            ).unwrap();
+            store.conn.execute(
+                "INSERT INTO browser_jobs (id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, draft_id, integration_id) VALUES (?, ?, 'x', 'submit_post', '', '{}', 'succeeded', ?, ?, ?, ?)",
+                params![id, id, i, i, id, store.integration_id],
+            ).unwrap();
+        }
+        store.conn.execute_batch("COMMIT").unwrap();
+    }
+
+    #[test]
+    fn full_settled_history_admits_another_draft_and_keeps_other_owners() {
+        let (_dir, database) = crate::testing::temp_store();
+        seed_history(&database.browser_for("other"), 1);
+        let mut store = database.browser_for("owner");
+        seed_history(&store, MAX_JOBS);
+        store.conn.execute(
+            "INSERT INTO browser_artifacts (id, job_id, kind, content_type, bytes, data, created_at, expires_at) VALUES ('artifact', 'owner-0', 'screenshot', 'image/png', 1, X'00', 0, 1)",
+            [],
+        ).unwrap();
+        let draft = prepare_post_draft(&mut store, "Next post", now_millis());
+        assert_eq!(draft.status, "pending");
+        assert!(store.job_identity("owner-0").unwrap().is_none());
+        assert!(store.get_draft_row("owner-0").unwrap().is_none());
+        assert_eq!(store.conn.query_row("SELECT COUNT(*) FROM browser_artifacts", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(store.conn.query_row("SELECT COUNT(*) FROM browser_drafts WHERE integration_id = 'owner'", [], |row| row.get::<_, i64>(0)).unwrap(), MAX_JOBS);
+        assert_eq!(store.conn.query_row("SELECT COUNT(*) FROM browser_jobs WHERE integration_id = 'other'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert!(store.consume_draft(&draft.id, now_millis(), false).unwrap().is_some());
+    }
+
+    #[test]
+    fn history_eviction_preserves_unresolved_jobs_drafts_and_reservations() {
+        let (_dir, database) = crate::testing::temp_store();
+        let mut store = database.browser_for("owner");
+        store.max_jobs = 3;
+        seed_history(&store, 3);
+        store.conn.execute("UPDATE browser_jobs SET status = 'unknown' WHERE id = 'owner-0'", []).unwrap();
+        store.conn.execute("UPDATE browser_drafts SET status = 'unknown' WHERE id = 'owner-1'", []).unwrap();
+        store.conn.execute(
+            "INSERT INTO browser_schedule_reservations (id, draft_id, platform, scheduled_at, status, created_at, integration_id) VALUES ('reservation', 'owner-2', 'x', 1, 'unknown', 0, 'owner')",
+            [],
+        ).unwrap();
+        assert!(matches!(store.prune_drafts(), Err(BrowserError::Full)));
+        assert!(matches!(store.prune_jobs(), Err(BrowserError::Full)));
+        assert_eq!(store.conn.query_row("SELECT COUNT(*) FROM browser_jobs", [], |row| row.get::<_, i64>(0)).unwrap(), 3);
+        assert_eq!(store.conn.query_row("SELECT COUNT(*) FROM browser_drafts", [], |row| row.get::<_, i64>(0)).unwrap(), 3);
+        store.conn.execute("UPDATE browser_schedule_reservations SET status = 'committed' WHERE id = 'reservation'", []).unwrap();
+        store.prune_drafts().unwrap();
+        assert!(store.job_identity("owner-2").unwrap().is_none());
+        assert!(store.job_identity("owner-0").unwrap().is_some());
+        assert!(store.get_draft_row("owner-1").unwrap().is_some());
+    }
+
+    #[test]
+    fn history_eviction_rolls_back_jobs_if_draft_deletion_fails() {
+        let (_dir, database) = crate::testing::temp_store();
+        let mut store = database.browser_for("owner");
+        store.max_jobs = 1;
+        seed_history(&store, 1);
+        store.conn.execute_batch("CREATE TRIGGER keep_draft BEFORE DELETE ON browser_drafts BEGIN SELECT RAISE(ABORT, 'keep draft'); END;").unwrap();
+        assert!(store.prune_drafts().is_err());
+        assert!(store.job_identity("owner-0").unwrap().is_some());
+        assert!(store.get_draft_row("owner-0").unwrap().is_some());
+        assert!(store.conn.is_autocommit());
+    }
+
+    #[test]
+    fn expiry_respects_boundary_status_and_integration() {
+        let (_dir, database) = crate::testing::temp_store();
+        let store = database.browser_for("owner");
+        seed_history(&store, 3);
+        store.conn.execute_batch(
+            "UPDATE browser_jobs SET status = 'queued', expires_at = 100;
+             UPDATE browser_jobs SET expires_at = 101 WHERE id = 'owner-1';
+             UPDATE browser_jobs SET status = 'running' WHERE id = 'owner-2';
+             UPDATE browser_drafts SET status = 'pending', created_at = 0;
+             UPDATE browser_drafts SET created_at = 1 WHERE id = 'owner-1';
+             UPDATE browser_drafts SET integration_id = 'other' WHERE id = 'owner-2';",
+        ).unwrap();
+        store.expire_queued(100).unwrap();
+        assert_eq!(store.job_identity("owner-0").unwrap().unwrap().1, "expired");
+        assert_eq!(store.job_identity("owner-1").unwrap().unwrap().1, "queued");
+        assert_eq!(store.job_identity("owner-2").unwrap().unwrap().1, "running");
+        store.expire_drafts(DRAFT_TTL_MS).unwrap();
+        assert_eq!(store.get_draft_row("owner-0").unwrap().unwrap().status, "expired");
+        assert_eq!(store.get_draft_row("owner-1").unwrap().unwrap().status, "pending");
+        let other: String = store.conn.query_row("SELECT status FROM browser_drafts WHERE id = 'owner-2'", [], |row| row.get(0)).unwrap();
+        assert_eq!(other, "pending");
     }
 
     #[test]

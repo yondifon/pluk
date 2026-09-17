@@ -22,7 +22,7 @@ type Step = fn(&mut Connection) -> Result<()>;
 
 const LADDER: &[Step] = &[
     migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
-    migrate_v8,
+    migrate_v8, migrate_v9, migrate_v10,
 ];
 
 /// Bring `conn` up to the latest version.
@@ -402,6 +402,24 @@ fn migrate_v8(conn: &mut Connection) -> Result<()> {
     rebuilt
 }
 
+fn migrate_v9(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch("CREATE INDEX browser_jobs_draft_idx ON browser_jobs(draft_id);")?;
+    tx.pragma_update(None, "user_version", 9)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn migrate_v10(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "CREATE INDEX browser_jobs_integration_status_expires_idx ON browser_jobs(integration_id, status, expires_at);",
+    )?;
+    tx.pragma_update(None, "user_version", 10)?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn rebuild_browser_drafts(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
@@ -475,6 +493,45 @@ fn ensure_query_log_columns(tx: &Transaction<'_>) -> Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn upgrades_v8_with_job_indexes_and_preserves_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &LADDER[..8] {
+            step(&mut conn).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO browser_jobs (id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, integration_id, draft_id)
+             VALUES ('expired', 'c1', 'x', 'inspect', '', '{}', 'queued', 1, 100, 'a', 'd1'),
+                    ('future', 'c2', 'x', 'inspect', '', '{}', 'queued', 1, 101, 'a', NULL),
+                    ('other', 'c3', 'x', 'inspect', '', '{}', 'queued', 1, 100, 'b', NULL);",
+        ).unwrap();
+        run(&mut conn).unwrap();
+        run(&mut conn).unwrap();
+        assert_eq!(current_version(&conn).unwrap(), 10);
+        for (name, columns) in [
+            ("browser_jobs_draft_idx", vec!["draft_id"]),
+            ("browser_jobs_integration_status_expires_idx", vec!["integration_id", "status", "expires_at"]),
+        ] {
+            let mut stmt = conn.prepare("SELECT name FROM pragma_index_info(?) ORDER BY seqno").unwrap();
+            let actual = stmt.query_map([name], |row| row.get::<_, String>(0)).unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>().unwrap();
+            assert_eq!(actual, columns);
+        }
+        let mut stmt = conn.prepare(
+            "SELECT id FROM browser_jobs WHERE integration_id = ? AND status = 'queued' AND expires_at <= ?",
+        ).unwrap();
+        let expired = stmt.query_map(rusqlite::params!["a", 100], |row| row.get::<_, String>(0)).unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>().unwrap();
+        assert_eq!(expired, vec!["expired"]);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM browser_jobs", [], |row| row.get::<_, i64>(0)).unwrap(), 3);
+        let plan: String = conn.query_row(
+            "EXPLAIN QUERY PLAN SELECT id FROM browser_jobs WHERE integration_id = ? AND status = 'queued' AND expires_at <= ?",
+            rusqlite::params!["a", 100], |row| row.get(3),
+        ).unwrap();
+        assert!(plan.contains("browser_jobs_integration_status_expires_idx"), "{plan}");
+        assert!(plan.contains("expires_at<?"), "{plan}");
+    }
 
     #[test]
     fn ladder_runs_each_step_once_and_reports_the_version() {

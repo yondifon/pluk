@@ -157,6 +157,7 @@ pub mod live {
         host: String,
         port: u16,
         database: Option<String>,
+        _ca_file: Option<tempfile::NamedTempFile>,
     }
 
     impl MySqlDriver {
@@ -196,22 +197,12 @@ pub mod live {
             };
             // sqlx 0.8: ssl_mode is method on MySqlConnectOptions
             opts = opts.ssl_mode(mode);
-            if let Some(cfg) = &ssl {
-                if let Some(ca) = &cfg.ca {
-                    let ca_str = String::from_utf8_lossy(ca).to_string();
-                    // sqlx expects path; write to temp file if not a path
-                    // Try treating ca bytes as PEM path content: write to temp file
-                    if !ca_str.is_empty() {
-                        // Best effort: if ca bytes look like a file path that exists, use it
-                        // otherwise write to temp file
-                        let path = write_temp_pem(ca, "ca").unwrap_or_default();
-                        if !path.is_empty() {
-                            opts = opts.ssl_ca(&path);
-                        }
-                    }
-                }
-                // client cert/key handling would be similar, omitted for brevity — mode already covers verification
-                let _ = cfg;
+            let ca_file = ssl.as_ref().and_then(|cfg| cfg.ca.as_ref())
+                .filter(|ca| !ca.is_empty())
+                .map(|ca| write_temp_pem(ca))
+                .transpose()?;
+            if let Some(file) = &ca_file {
+                opts = opts.ssl_ca(file.path());
             }
 
             let pool = MySqlPool::connect_with(opts)
@@ -222,20 +213,27 @@ pub mod live {
                 host,
                 port,
                 database,
+                _ca_file: ca_file,
             })
         }
     }
 
-    fn write_temp_pem(data: &[u8], prefix: &str) -> Result<String, ()> {
+    fn write_temp_pem(data: &[u8]) -> Result<tempfile::NamedTempFile, DriverError> {
         use std::io::Write;
-        let mut f = tempfile::NamedTempFile::new().map_err(|_| ())?;
-        f.write_all(data).map_err(|_| ())?;
-        // Persist file so it stays on disk
-        let path = f.path().to_string_lossy().to_string();
-        // Keep file alive by forgetting? sqlx reads path immediately at connect, so temp file can be dropped after? Actually ConnectOptions stores path string, reads at connect time. So we need file to exist at connect time, which it does until function returns. But pool connects inside new, so ok. However for later reconnections, file would be gone. We leak it by persisting.
-        let _ = f.keep().map_err(|_| ())?;
-        let _ = prefix;
-        Ok(path)
+        let mut file = tempfile::NamedTempFile::new()
+            .map_err(|error| DriverError::Ssl(format!("CA staging failed: {error}")))?;
+        file.write_all(data)
+            .map_err(|error| DriverError::Ssl(format!("CA staging failed: {error}")))?;
+        Ok(file)
+    }
+
+    #[test]
+    fn temporary_ca_is_removed_when_its_owner_drops() {
+        let file = write_temp_pem(b"test certificate").unwrap();
+        let path = file.path().to_owned();
+        assert_eq!(std::fs::read(&path).unwrap(), b"test certificate");
+        drop(file);
+        assert!(!path.exists());
     }
 
     impl MySqlDriver {
