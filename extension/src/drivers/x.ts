@@ -246,6 +246,36 @@ export function runXPage(
     return null;
   };
 
+  // X's engagement label leads with the reply count, so a post claiming none
+  // needs no wait for a conversation that is never coming.
+  const claimsReplies = (post: ReadPost): boolean =>
+    /\d[\d,]*\s+repl/iu.test(post.engagement ?? "");
+
+  const postsBelow = (postId: string): ReadPost[] =>
+    readPosts().filter((post) => post.postId !== postId);
+
+  /**
+   * The conversation under a post. X draws the post first and the replies
+   * after it, so a scan that runs as soon as the post is there finds nothing
+   * below it. One that claims replies is given until the deadline for the
+   * first of them to arrive, and whatever has been drawn by then is what
+   * comes back.
+   */
+  const repliesTo = async (target: ReadPost): Promise<ReadPost[]> => {
+    const drawn = postsBelow(target.postId);
+    if (drawn.length > 0 || !claimsReplies(target)) {
+      return drawn;
+    }
+    await waitFor(
+      () =>
+        Array.from(
+          document.querySelectorAll('article[data-testid="tweet"]'),
+        ).find((article) => postIdFromNode(article) !== target.postId) ?? null,
+      5_000,
+    );
+    return postsBelow(target.postId);
+  };
+
   // The tightest box holding both an editor and its Post button. In a
   // thread X moves the toolbar to the newest post, so the anchor is the
   // editor the button should sit with.
@@ -1287,12 +1317,13 @@ export function runXPage(
         "The requested X post was not visible. No post data was returned.",
       );
     }
-    return {
-      ...baseData("x_post", target.text),
-      canonicalTarget: target.canonicalTarget,
-      post: target,
-      replies: posts.filter((post) => post !== target),
-    };
+    const found = target;
+    return repliesTo(found).then((replies) => ({
+      ...baseData("x_post", found.text),
+      canonicalTarget: found.canonicalTarget,
+      post: found,
+      replies,
+    }));
   }
   if (
     options.action === "read_feed" ||

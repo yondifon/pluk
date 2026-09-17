@@ -383,7 +383,7 @@ test("rejects login pages and never submits a reply to a post that is not the ta
   expect(clicks).toBe(0);
 }, 10_000);
 
-test("reads a typed X profile and refuses a read-post ID that does not match the target", () => {
+test("reads a typed X profile and refuses a read-post ID that does not match the target", async () => {
   const restoreProfile = installPage(
     "Jane Doe profile",
     "Jane Doe (@janedoe) / X",
@@ -422,7 +422,7 @@ test("reads a typed X profile and refuses a read-post ID that does not match the
     "https://x.com/janedoe/status/42",
     { 'article[data-testid="tweet"]': [article] },
   );
-  const post = runXPage({
+  const post = await runXPage({
     action: "read_post",
     targetUrl: "https://x.com/janedoe/status/42",
     postId: "42",
@@ -446,7 +446,7 @@ test("reads a typed X profile and refuses a read-post ID that does not match the
   expect(mismatched).toMatchObject({ state: "target_not_found" });
 });
 
-test("reads an X conversation as the root post and its visible replies in page order", () => {
+test("reads an X conversation as the root post and its visible replies in page order", async () => {
   const tweet = (handle: string, postId: string, text: string) =>
     node(
       text,
@@ -469,7 +469,7 @@ test("reads an X conversation as the root post and its visible replies in page o
       ],
     },
   );
-  const result = runXPage({
+  const result = await runXPage({
     action: "read_post",
     targetUrl: "https://x.com/janedoe/status/42",
     postId: "42",
