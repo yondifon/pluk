@@ -124,7 +124,12 @@ export function runXPage(
     readonly excerpt: string;
   }
 
+  // Whether the most recent post scan hit the 25-post cap. Rescans during a
+  // single injection see the same page, so the value read after the last
+  // scan describes the posts that scan returned.
+  let postsTruncated = false;
   const readPosts = (): ReadPost[] => {
+    postsTruncated = false;
     const articles = Array.from(
       document.querySelectorAll('article[data-testid="tweet"]'),
     );
@@ -138,6 +143,10 @@ export function runXPage(
       const postId = postIdFromNode(article);
       if (!postId || seen.has(postId)) {
         continue;
+      }
+      if (posts.length === 25) {
+        postsTruncated = true;
+        break;
       }
       // A shortened link ends in an ellipsis X draws itself; the href it
       // stands for is already in the text nodes around it.
@@ -176,9 +185,6 @@ export function runXPage(
         text,
         excerpt: text.slice(0, 1_000),
       });
-      if (posts.length === 25) {
-        break;
-      }
     }
     return posts;
   };
@@ -647,6 +653,31 @@ export function runXPage(
       clean(node.textContent),
     );
 
+  const awaitSubmitProgress = async (
+    composer: Element,
+    scope: Element,
+    text: string,
+    previousNotifications: readonly string[],
+  ): Promise<boolean> => {
+    const deadline = Date.now() + 2_000;
+    for (;;) {
+      if (
+        scope.isConnected === false ||
+        editorText(composer) !== clean(text) ||
+        notificationTexts().some(
+          (notification) => !previousNotifications.includes(notification),
+        ) ||
+        composerSubmitButton(scope) === null
+      ) {
+        return true;
+      }
+      if (Date.now() >= deadline) {
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  };
+
   const waitForSubmissionEvidence = async (
     scope: Element,
     previousNotifications: readonly string[],
@@ -995,11 +1026,6 @@ export function runXPage(
     if (mediaGuard) {
       return mediaGuard;
     }
-    await new Promise((resolve) =>
-      setTimeout(resolve, 600 + Math.random() * 800),
-    );
-    // X enables the reply button only once its draft state has taken the
-    // pasted text, which can land after the pause above.
     const submitButton = await waitFor(() => composerSubmitButton(scope), 5_000);
     if (!submitButton) {
       return failure(
@@ -1010,12 +1036,9 @@ export function runXPage(
     const previousNotifications = notificationTexts();
     trace("submit shortcut");
     dispatchSubmitShortcut(composer);
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-    const nothingHappened =
-      editorText(composer) === clean(options.text) &&
-      notificationTexts().length === previousNotifications.length &&
-      composerSubmitButton(scope) !== null;
-    if (nothingHappened) {
+    if (
+      !(await awaitSubmitProgress(composer, scope, options.text, previousNotifications))
+    ) {
       trace("submit click");
       (submitButton as HTMLElement).click();
     }
@@ -1156,10 +1179,7 @@ export function runXPage(
       );
     }
     const lastPart = parts[parts.length - 1] ?? "";
-    await new Promise((resolve) =>
-      setTimeout(resolve, 600 + Math.random() * 800),
-    );
-    const submitButton = composerSubmitButton(scope);
+    const submitButton = await waitFor(() => composerSubmitButton(scope), 5_000);
     if (!submitButton) {
       return failure(
         "unsupported",
@@ -1169,12 +1189,9 @@ export function runXPage(
     const previousNotifications = notificationTexts();
     trace("submit shortcut");
     dispatchSubmitShortcut(composer);
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-    const nothingHappened =
-      editorText(composer) === clean(lastPart) &&
-      notificationTexts().length === previousNotifications.length &&
-      composerSubmitButton(scope) !== null;
-    if (nothingHappened) {
+    if (
+      !(await awaitSubmitProgress(composer, scope, lastPart, previousNotifications))
+    ) {
       trace("submit click");
       (submitButton as HTMLElement).click();
     }
@@ -1323,6 +1340,7 @@ export function runXPage(
       canonicalTarget: found.canonicalTarget,
       post: found,
       replies,
+      truncated: postsTruncated,
     }));
   }
   if (
@@ -1339,6 +1357,7 @@ export function runXPage(
     return {
       ...baseData("x_feed", posts.map((post) => post.text).join(" | ")),
       posts,
+      truncated: postsTruncated,
     };
   }
   return failure(

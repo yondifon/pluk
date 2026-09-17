@@ -21,6 +21,7 @@ let tab: MockTab = {
 let captureVisibleTabImpl: () => Promise<string> = () =>
   Promise.resolve("data:image/png;base64,AA==");
 let captureVisibleTabCalls = 0;
+let tabUpdateCalls = 0;
 let focusEmulationCalls: boolean[] = [];
 let debuggerAttachCalls = 0;
 let debuggerDetachCalls = 0;
@@ -103,6 +104,7 @@ const mockChrome = {
       id: number,
       properties: { readonly active?: boolean; readonly url?: string },
     ) => {
+      tabUpdateCalls += 1;
       tab = {
         ...tab,
         id,
@@ -142,6 +144,7 @@ beforeEach(() => {
   storage.clear();
   tab = { id: 1, windowId: 1, status: "complete", url: "", active: true };
   captureVisibleTabCalls = 0;
+  tabUpdateCalls = 0;
   focusEmulationCalls = [];
   debuggerAttachCalls = 0;
   debuggerDetachCalls = 0;
@@ -213,6 +216,40 @@ test("a read succeeds and returns no image field even when screenshot capture is
   expect(sink.uploads).toEqual([
     { kind: "extract", contentType: "application/json" },
   ]);
+});
+
+test("read_post waits in place for replies on the exact target without preparing navigation", async () => {
+  let reads = 0;
+  executeScriptImpl = (targetUrl) => {
+    reads += 1;
+    return reads < 3
+      ? { state: "waiting", message: "Loading replies" }
+      : {
+          state: "ready",
+          kind: "x_post",
+          url: targetUrl,
+          title: "Post / X",
+          replies: [{ postId: "43", text: "A reply" }],
+        };
+  };
+  const result = await new BrowserExecutor().run(
+    makeCommand("read_post", "https://x.com/owner/status/42"),
+    makeSink(),
+  );
+  expect(reads).toBe(3);
+  expect(tabUpdateCalls).toBe(0);
+  expect(result.replies).toEqual([{ postId: "43", text: "A reply" }]);
+});
+
+test("an exact-target read that keeps waiting expires without navigating", async () => {
+  executeScriptImpl = () => ({ state: "waiting", message: "Loading replies" });
+  const sink = makeSink();
+  await expect(new BrowserExecutor().run({
+    ...makeCommand("read_post", "https://x.com/owner/status/42"),
+    expiresAt: Date.now() + 150,
+  }, sink)).rejects.toMatchObject({ code: "site_markup_changed" });
+  expect(tabUpdateCalls).toBe(0);
+  expect(sink.uploads).toEqual([]);
 });
 
 test("capture still attaches a screenshot", async () => {

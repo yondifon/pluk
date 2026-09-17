@@ -168,7 +168,13 @@ export class BrowserExecutor {
     const context = await this.ensureAutomationContext(targetUrl.value);
     const options = await makeDriverScriptOptions(command, targetUrl.value, sink);
     const page =
-      (await this.readInPlace(context, driver, options, command.platform)) ??
+      (await this.readInPlace(
+        context,
+        driver,
+        options,
+        command.platform,
+        command.expiresAt,
+      )) ??
       (await this.readAfterNavigation(
         context,
         driver,
@@ -229,14 +235,12 @@ export class BrowserExecutor {
     };
   }
 
-  /** A post already on screen is read where it is, so the tab is not sent
-   * off to load a page it is already looking at. Anything short of the
-   * post being there falls through to navigation. */
   private async readInPlace(
     context: AutomationContext,
     driver: SiteDriver,
     options: DriverScriptOptions,
     platform: Platform,
+    deadline: number,
   ): Promise<PageRead | null> {
     if (!IN_PLACE_ACTIONS.has(options.action)) {
       return null;
@@ -249,6 +253,16 @@ export class BrowserExecutor {
       !isSameAllowedOrigin(options.targetUrl, state.url, platform)
     ) {
       return null;
+    }
+    if (sameDestination(platform, options.targetUrl, state.url)) {
+      return this.readDriverPage(
+        context,
+        driver,
+        options,
+        options.targetUrl,
+        platform,
+        deadline,
+      );
     }
     let results: readonly chrome.scripting.InjectionResult<DriverPageResult>[];
     try {

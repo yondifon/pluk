@@ -489,6 +489,32 @@ test("reads an X conversation as the root post and its visible replies in page o
   });
 });
 
+test.each([25, 26])("marks an X scan of %i unique posts truncated only above the cap", async (count) => {
+  const articles = Array.from({ length: count }, (_, index) =>
+    node(`Post ${index}`, {}, {
+      'a[href*="/status/"]': [node("", { href: `/owner/status/${index + 1}` })],
+      '[data-testid="tweetText"]': [node(`Post ${index}`)],
+    }),
+  );
+  const restore = installPage("Posts", "X", "https://x.com/owner/status/1", {
+    'article[data-testid="tweet"]': [...articles, articles[0]!],
+  });
+  try {
+    const feed = await runXPage({ action: "read_feed", targetUrl: "https://x.com/home" });
+    expect(feed.posts).toHaveLength(25);
+    expect(feed.truncated).toBe(count > 25);
+    const post = await runXPage({
+      action: "read_post",
+      targetUrl: "https://x.com/owner/status/1",
+      postId: "1",
+    });
+    expect(post.replies).toHaveLength(24);
+    expect(post.truncated).toBe(count > 25);
+  } finally {
+    restore();
+  }
+});
+
 test("submits an exact X reply exactly once into the editor already under the post", async () => {
   let replyClicks = 0;
   let submitClicks = 0;
@@ -1481,10 +1507,20 @@ test("places the caret at the end of an empty X DraftJS block", async () => {
   expect(submitClicks).toBe(1);
 });
 
-test("submits an X post immediately", async () => {
+test.each([0, 3])("submits an X post after %i disabled button reads", async (disabledReads) => {
   let submitClicks = 0;
   let insertedText = "";
+  let buttonReads = 0;
   const submitButton = node("Post");
+  Object.defineProperty(submitButton, "getAttribute", {
+    value: (name: string) => {
+      if (name !== "aria-disabled") {
+        return null;
+      }
+      buttonReads += 1;
+      return buttonReads <= disabledReads ? "true" : null;
+    },
+  });
   const composer = node("");
   const toastLink = node("View", { href: "/owner/status/999" });
   const toast = node(
