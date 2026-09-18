@@ -5,6 +5,8 @@
 //! [`AdapterRegistry`](crate::AdapterRegistry) — no edits to the store, MCP
 //! transport, or REST layer.
 
+use std::borrow::Cow;
+
 use async_trait::async_trait;
 
 use pluk_store::Integration;
@@ -106,6 +108,16 @@ pub trait Adapter: Send + Sync {
     /// The fixed tool set, published once for the catalog/UI. Each tool is
     /// individually toggled on/off and may carry its own settings.
     fn tool_specs(&self) -> &[ToolSpec];
+
+    /// One integration's tool set. Everything that gates or renders tools for
+    /// a saved integration reads this rather than [`Adapter::tool_specs`], so
+    /// an adapter whose tools are only known once it has reached the service
+    /// can answer with what that integration actually offers.
+    fn tool_specs_for(&self, conn: &Integration) -> Cow<'_, [ToolSpec]> {
+        let _ = conn;
+        Cow::Borrowed(self.tool_specs())
+    }
+
     /// The form schema served verbatim to the frontend (definitions only —
     /// never secret values).
     fn config_fields(&self) -> &[ConfigField];

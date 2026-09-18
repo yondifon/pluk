@@ -44,6 +44,14 @@ export function isToolEnabled(tool: ToolSpec, toolConfig: Integration["toolConfi
   return tool.defaultEnabled;
 }
 
+/** The integration's own tools when it has them, else its adapter's catalog. */
+export function toolsFor(
+  integration: Integration,
+  manifest: AdapterManifest | null | undefined,
+): ToolSpec[] {
+  return integration.tools ?? manifest?.tools ?? [];
+}
+
 export function enabledCount(tools: ToolSpec[], toolConfig: Integration["toolConfig"]): number {
   return tools.filter((t) => isToolEnabled(t, toolConfig)).length;
 }
@@ -127,7 +135,7 @@ export function formatMetaLine(integration: Integration, manifest: AdapterManife
   const envLabel = env.charAt(0).toUpperCase() + env.slice(1);
   const typeLabel = manifest?.label ?? integration.type;
   const parts = [`${typeLabel} · ${envLabel}`];
-  const tools = manifest?.tools ?? [];
+  const tools = toolsFor(integration, manifest);
   if (tools.length) {
     parts.push(`${enabledCount(tools, integration.toolConfig)}/${tools.length} tools`);
   }

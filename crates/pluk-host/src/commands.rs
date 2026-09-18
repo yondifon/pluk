@@ -105,6 +105,11 @@ pub struct IntegrationJson {
     pub approvals: pluk_store::Approvals,
     pub token: String,
     pub created_at: String,
+    /// This integration's own tool catalog, which for some adapters is only
+    /// known once it has reached the service. Absent when no adapter matches
+    /// the type, and the UI falls back to the per-type catalog.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<pluk_adapters::ToolSpec>>,
 }
 
 impl From<pluk_store::Integration> for IntegrationJson {
@@ -120,16 +125,38 @@ impl From<pluk_store::Integration> for IntegrationJson {
             approvals: policy.map(|p| p.approvals).unwrap_or_default(),
             token: i.token,
             created_at: i.created_at,
+            tools: None,
+        }
+    }
+}
+
+impl IntegrationJson {
+    /// The wire shape plus the tools this integration itself publishes.
+    fn from_integration(
+        i: pluk_store::Integration,
+        registry: &pluk_adapters::AdapterRegistry,
+    ) -> Self {
+        let tools = registry
+            .get(&i.r#type)
+            .map(|adapter| adapter.tool_specs_for(&i).into_owned());
+        IntegrationJson {
+            tools,
+            ..IntegrationJson::from(i)
         }
     }
 }
 
 #[tauri::command]
 pub fn list_integrations(state: State<'_, HostState>) -> CmdResult<Vec<IntegrationJson>> {
+    let registry = state.shared.registry.clone();
     state
         .store
         .list_integrations()
-        .map(|v| v.into_iter().map(IntegrationJson::from).collect())
+        .map(|v| {
+            v.into_iter()
+                .map(|i| IntegrationJson::from_integration(i, &registry))
+                .collect()
+        })
         .map_err(|e| e.to_string())
 }
 
@@ -138,10 +165,11 @@ pub fn get_integration(
     state: State<'_, HostState>,
     id: String,
 ) -> CmdResult<Option<IntegrationJson>> {
+    let registry = state.shared.registry.clone();
     state
         .store
         .integration_by_id(&id)
-        .map(|o| o.map(IntegrationJson::from))
+        .map(|o| o.map(|i| IntegrationJson::from_integration(i, &registry)))
         .map_err(|e| e.to_string())
 }
 

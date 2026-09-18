@@ -10,6 +10,8 @@ export interface Integration {
   environment?: Environment;
   config: Record<string, string>;
   toolConfig: Record<string, { enabled: boolean; settings: Record<string, string> }>;
+  /** This integration's own tools, when its adapter publishes a list per integration. */
+  tools?: ToolSpec[];
   approvals?: { ask: boolean; allow: string[]; deny: string[] };
   token: string;
   createdAt: string;

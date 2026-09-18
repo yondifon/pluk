@@ -205,7 +205,8 @@ pub fn register_gated(
     conn: &pluk_store::Integration,
     owner_id: &str,
 ) -> Result<(), crate::error::AdapterError> {
-    let mut gated = PolicyGatedHost::new(host, adapter.tool_specs(), conn.query_policy.as_deref());
+    let specs = adapter.tool_specs_for(conn);
+    let mut gated = PolicyGatedHost::new(host, &specs, conn.query_policy.as_deref());
     adapter.register(&mut gated, conn, owner_id)
 }
 
@@ -218,6 +219,7 @@ mod tests {
     use crate::tool_spec::ToolSpec;
     use async_trait::async_trait;
     use pluk_store::Integration;
+    use std::borrow::Cow;
 
     /// An adapter that registers its whole surface without consulting the
     /// policy — the shape every hand-written `register` had.
@@ -362,6 +364,74 @@ mod tests {
         register_gated(&undeclared, &mut host, &integration(None), "").expect("register");
         // No catalog entry means no toggle a user could ever switch off.
         assert_eq!(host.tools, vec!["list".to_string()]);
+    }
+
+    /// An adapter with no per-type catalog at all: every tool it offers is
+    /// named by the integration.
+    struct DiscoveredAdapter {
+        registers: Vec<String>,
+    }
+
+    #[async_trait]
+    impl Adapter for DiscoveredAdapter {
+        fn id(&self) -> &str {
+            "discovered"
+        }
+        fn label(&self) -> &str {
+            "Discovered"
+        }
+        fn category(&self) -> &str {
+            "misc"
+        }
+        fn policy_kind(&self) -> PolicyKind {
+            PolicyKind::Action
+        }
+        fn agent_hint(&self) -> &str {
+            ""
+        }
+        fn tool_specs(&self) -> &[ToolSpec] {
+            &[]
+        }
+        fn tool_specs_for(&self, conn: &Integration) -> Cow<'_, [ToolSpec]> {
+            Cow::Owned(vec![ToolSpec::new(
+                format!("{}_query", conn.id),
+                "Query",
+                "read",
+            )])
+        }
+        fn config_fields(&self) -> &[ConfigField] {
+            &[]
+        }
+        async fn test_connection(&self, _conn: &Integration) -> Result<(), AdapterError> {
+            Ok(())
+        }
+        fn instructions(&self, _conn: &Integration) -> String {
+            String::new()
+        }
+        fn register(
+            &self,
+            host: &mut dyn ToolHost,
+            _conn: &Integration,
+            _owner_id: &str,
+        ) -> Result<(), AdapterError> {
+            for name in &self.registers {
+                host.register_tool(
+                    ToolRegistration::no_args(name, "…"),
+                    Arc::new(|_| Box::pin(async { crate::gate::ok("ran") })),
+                );
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_integrations_own_catalog_decides_what_it_exposes() {
+        let mut host = RecordingHost::default();
+        let adapter = DiscoveredAdapter {
+            registers: vec!["i1_query".into(), "secret_admin".into()],
+        };
+        register_gated(&adapter, &mut host, &integration(None), "").expect("register");
+        assert_eq!(host.tools, vec!["i1_query".to_string()]);
     }
 
     #[test]

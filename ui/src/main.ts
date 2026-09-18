@@ -28,7 +28,7 @@ import {
 } from "./forms/connectionDraft.ts";
 import { wizardSteps } from "./forms/wizard.ts";
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
-import type { AdapterManifest as CatalogManifest, ToolState } from "./forms/catalog.ts";
+import type { AdapterManifest as CatalogManifest, ToolDef, ToolState } from "./forms/catalog.ts";
 import { renderConnectChromeStep } from "./integration-detail/browser-access.ts";
 import { renderInstallStep } from "./integration-detail/agent-setup.ts";
 import { toast, mountToaster } from "./toast.ts";
@@ -59,6 +59,8 @@ type HostIntegration = {
   config: Record<string, unknown>;
   environment: string | null;
   toolConfig: Record<string, ToolState>;
+  /** Present when the adapter publishes a tool list per integration. */
+  tools?: ToolDef[];
   approvals: Approvals;
   token: string;
   createdAt: string;
@@ -136,6 +138,7 @@ function toDetailIntegration(row: HostIntegration): DetailIntegration {
     environment: (row.environment ?? undefined) as DetailIntegration["environment"],
     config,
     toolConfig: row.toolConfig,
+    tools: row.tools,
     approvals: row.approvals,
     token: row.token,
     createdAt: row.createdAt,
@@ -470,7 +473,8 @@ function startEditIntegration(id: string): void {
     config: row.config,
     environment: (row.environment ?? "development") as Environment,
   });
-  const manifest = manifestFor(row.type);
+  const catalog = manifestFor(row.type);
+  const manifest = catalog && row.tools ? { ...catalog, tools: row.tools } : catalog;
   const stored = { toolConfig: row.toolConfig, approvals: row.approvals };
   draft = manifest ? { ...adopt(base, manifest, false), ...stored } : { ...base, ...stored };
   openForm({ kind: "edit-integration", id, step: 0 });

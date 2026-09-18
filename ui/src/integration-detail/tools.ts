@@ -1,4 +1,4 @@
-import { isToolEnabled, orderedTools, settingsSummary } from "./logic";
+import { isToolEnabled, orderedTools, settingsSummary, toolsFor } from "./logic";
 import { renderApprovals } from "./approvals";
 import type { AdapterManifest, Integration } from "./types";
 
@@ -19,7 +19,7 @@ function renderToolList(
   manifest: AdapterManifest | null | undefined,
 ): void {
 
-  const tools = manifest?.tools ?? [];
+  const tools = toolsFor(integration, manifest);
   const card = document.createElement("section");
   card.className = "ui-card";
 
