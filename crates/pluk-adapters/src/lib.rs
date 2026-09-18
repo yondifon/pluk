@@ -16,6 +16,7 @@ pub mod github_cli;
 mod http_client;
 mod instructions;
 pub mod linear;
+pub mod mcp_proxy;
 pub mod mongodb;
 mod projection;
 pub mod redis;
