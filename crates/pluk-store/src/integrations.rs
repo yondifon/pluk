@@ -222,6 +222,8 @@ impl Store {
                 "DELETE FROM browser_pairing_tokens WHERE integration_id = ?",
                 [id],
             )?;
+            conn.execute("DELETE FROM proxy_tools WHERE integration_id = ?", [id])?;
+            conn.execute("DELETE FROM proxy_auth WHERE integration_id = ?", [id])?;
         }
         Ok(deleted)
     }
@@ -230,7 +232,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use crate::testing::temp_store;
-    use crate::{IntegrationInput, codec::parse_query_policy};
+    use crate::{DiscoveredTool, IntegrationInput, ProxyAuthInput, codec::parse_query_policy};
 
     fn allow_list(store: &crate::Store, id: &str) -> Vec<String> {
         let stored = store.integration_by_id(id).expect("read").expect("row");
@@ -262,6 +264,50 @@ mod tests {
         assert!(!store.allow_command(&conn.id, "rm [a-").unwrap());
         assert!(!store.allow_command(&conn.id, "   ").unwrap());
         assert!(allow_list(&store, &conn.id).is_empty());
+    }
+
+    #[test]
+    fn deleting_an_integration_takes_its_proxy_tools_and_credentials_with_it() {
+        let (_dir, store) = temp_store();
+        let kept = store
+            .create_integration(&IntegrationInput::new("Kept", "mcp"))
+            .expect("integration");
+        let removed = store
+            .create_integration(&IntegrationInput::new("Removed", "mcp"))
+            .expect("integration");
+        for id in [&kept.id, &removed.id] {
+            store
+                .replace_proxy_tools(
+                    id,
+                    &[DiscoveredTool {
+                        name: "search".to_owned(),
+                        description: String::new(),
+                        schema_json: "{}".to_owned(),
+                        annotations_json: None,
+                        content_hash: "hash-1".to_owned(),
+                    }],
+                )
+                .expect("snapshot");
+            store
+                .set_proxy_auth(&ProxyAuthInput {
+                    integration_id: id.clone(),
+                    kind: "oauth".to_owned(),
+                    access_token: "access-1".to_owned(),
+                    refresh_token: None,
+                    expires_at: None,
+                    client_id: None,
+                    client_secret: None,
+                    metadata_json: None,
+                })
+                .expect("credentials");
+        }
+
+        assert!(store.delete_integration(&removed.id).expect("delete"));
+
+        assert!(store.list_proxy_tools(&removed.id).expect("tools").is_empty());
+        assert!(store.get_proxy_auth(&removed.id).expect("auth").is_none());
+        assert_eq!(store.list_proxy_tools(&kept.id).expect("tools").len(), 1);
+        assert!(store.get_proxy_auth(&kept.id).expect("auth").is_some());
     }
 
     #[test]

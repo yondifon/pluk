@@ -17,6 +17,8 @@ mod integrations;
 mod masked_columns;
 mod migrate;
 mod models;
+mod proxy_auth;
+mod proxy_tools;
 mod query_log;
 mod saved_commands;
 mod saved_queries;
@@ -41,6 +43,8 @@ pub use models::{
     Config, Environment, Group, GroupMember, Integration, LogEntry, MaskedColumn, ResolvedMember,
     SavedCommand, SavedQuery, Verdict,
 };
+pub use proxy_auth::{AuthStatus, ProxyAuth, ProxyAuthInput, RefreshedTokens};
+pub use proxy_tools::{DiscoveredTool, ProxyTool, ToolState};
 pub use query_log::{
     ActivityHandler, LOG_PAGE_SIZE, LOG_RESPONSE_LIMIT, LOG_RESULT_ROWS, LogActivity, LogCursor,
     LogDraft, LogGroup, LogPage, LogRange, LogScope, LogUpdate, QueryResult,

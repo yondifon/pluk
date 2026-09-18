@@ -22,7 +22,7 @@ type Step = fn(&mut Connection) -> Result<()>;
 
 const LADDER: &[Step] = &[
     migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
-    migrate_v8, migrate_v9, migrate_v10,
+    migrate_v8, migrate_v9, migrate_v10, migrate_v11,
 ];
 
 /// Bring `conn` up to the latest version.
@@ -420,6 +420,48 @@ fn migrate_v10(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 11: the MCP proxy's own tables — the tools discovered on an
+/// upstream server, and the upstream credentials that reach it.
+///
+/// Credentials live here rather than in `integrations.config` because that
+/// blob is handed to the UI whole; only the proxy adapter reads this table.
+fn migrate_v11(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "
+        CREATE TABLE proxy_tools (
+            integration_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            schema_json TEXT NOT NULL DEFAULT '{}',
+            annotations_json TEXT,
+            content_hash TEXT NOT NULL,
+            approved_hash TEXT,
+            present INTEGER NOT NULL DEFAULT 1,
+            discovered_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (integration_id, name)
+        );
+
+        CREATE TABLE proxy_auth (
+            integration_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            access_token TEXT NOT NULL,
+            refresh_token TEXT,
+            expires_at INTEGER,
+            client_id TEXT,
+            client_secret TEXT,
+            metadata_json TEXT,
+            status TEXT NOT NULL CHECK (status IN ('connected', 'reconnect_needed')),
+            version INTEGER NOT NULL DEFAULT 1
+        );
+        ",
+    )?;
+    tx.pragma_update(None, "user_version", 11)?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn rebuild_browser_drafts(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
@@ -508,7 +550,7 @@ mod tests {
         ).unwrap();
         run(&mut conn).unwrap();
         run(&mut conn).unwrap();
-        assert_eq!(current_version(&conn).unwrap(), 10);
+        assert_eq!(current_version(&conn).unwrap(), LADDER.len() as u32);
         for (name, columns) in [
             ("browser_jobs_draft_idx", vec!["draft_id"]),
             ("browser_jobs_integration_status_expires_idx", vec!["integration_id", "status", "expires_at"]),
@@ -796,6 +838,58 @@ mod tests {
         let foreign_keys: bool = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0)).unwrap();
         assert!(foreign_keys);
         assert_eq!(current_version(&conn).unwrap(), 8);
+    }
+
+    #[test]
+    fn upgrades_v10_with_the_proxy_tables_and_opens_a_fresh_database_on_them() {
+        let mut upgraded = Connection::open_in_memory().unwrap();
+        for step in &LADDER[..10] {
+            step(&mut upgraded).unwrap();
+        }
+        migrate_v11(&mut upgraded).unwrap();
+        let mut fresh = Connection::open_in_memory().unwrap();
+        run(&mut fresh).unwrap();
+
+        let tables: [(&str, &[&str]); 2] = [
+            (
+                "proxy_tools",
+                &[
+                    "integration_id",
+                    "name",
+                    "description",
+                    "schema_json",
+                    "annotations_json",
+                    "content_hash",
+                    "approved_hash",
+                    "present",
+                    "discovered_at",
+                    "updated_at",
+                ],
+            ),
+            (
+                "proxy_auth",
+                &[
+                    "integration_id",
+                    "kind",
+                    "access_token",
+                    "refresh_token",
+                    "expires_at",
+                    "client_id",
+                    "client_secret",
+                    "metadata_json",
+                    "status",
+                    "version",
+                ],
+            ),
+        ];
+        for conn in [&upgraded, &fresh] {
+            assert_eq!(current_version(conn).unwrap(), 11);
+            for (table, columns) in tables {
+                let expected: HashSet<String> =
+                    columns.iter().map(|name| (*name).to_owned()).collect();
+                assert_eq!(columns_of(conn, table), expected, "{table}");
+            }
+        }
     }
 
     fn columns_of(conn: &Connection, table: &str) -> HashSet<String> {
