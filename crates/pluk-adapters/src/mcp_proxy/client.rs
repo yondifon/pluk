@@ -294,7 +294,7 @@ pub fn invalidate(integration_id: &str) {
 /// The HTTP client every upstream MCP server is reached through. It is not
 /// the one [`crate::http_client`] hands the API adapters: rmcp's transport is
 /// built on the next major of reqwest, so the two cannot be the same value.
-fn upstream_client() -> Result<upstream_http::Client, AdapterError> {
+pub(super) fn upstream_client() -> Result<upstream_http::Client, AdapterError> {
     static CLIENT: OnceLock<Result<upstream_http::Client, String>> = OnceLock::new();
     CLIENT
         .get_or_init(|| {

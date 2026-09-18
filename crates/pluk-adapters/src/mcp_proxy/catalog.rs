@@ -17,6 +17,7 @@ use crate::error::AdapterError;
 use crate::tool_spec::ToolSpec;
 
 use super::client::{self, DEFAULT_AUTH_HEADER, McpProxyClient, UpstreamAuth, UpstreamTool};
+use super::oauth;
 
 /// The upstream address, rejected before anything tries to open a session.
 pub fn endpoint(conn: &Integration) -> Result<String, AdapterError> {
@@ -33,8 +34,21 @@ pub fn endpoint(conn: &Integration) -> Result<String, AdapterError> {
 ///
 /// Every caller resolves credentials here and nowhere else, so a new sign-in
 /// style reaches discovery, the refresh endpoint and every proxied call at
-/// once.
-pub fn upstream_auth(conn: &Integration) -> UpstreamAuth {
+/// once. A sign-in the user completed in Pluk wins over a token typed into the
+/// config, because it is the one Pluk can keep current.
+pub async fn upstream_auth(
+    store: &Store,
+    conn: &Integration,
+) -> Result<UpstreamAuth, AdapterError> {
+    match oauth::bearer(store, &conn.id).await? {
+        Some(access_token) => Ok(UpstreamAuth::bearer(access_token)),
+        None => Ok(static_auth(conn)),
+    }
+}
+
+/// The credentials the integration's own config carries, with no store behind
+/// them.
+pub fn static_auth(conn: &Integration) -> UpstreamAuth {
     match config_str(conn, "token") {
         None => UpstreamAuth::None,
         Some(token) => UpstreamAuth::header(
@@ -46,9 +60,9 @@ pub fn upstream_auth(conn: &Integration) -> UpstreamAuth {
 
 /// A client for one integration, with the pooled session dropped when the
 /// address or the credentials moved since it was opened.
-pub fn client_for(conn: &Integration) -> Result<McpProxyClient, AdapterError> {
+pub async fn client_for(store: &Store, conn: &Integration) -> Result<McpProxyClient, AdapterError> {
     let endpoint = endpoint(conn)?;
-    let auth = upstream_auth(conn);
+    let auth = upstream_auth(store, conn).await?;
     let fingerprint = fingerprint(&endpoint, &auth);
     let previous = session_fingerprints()
         .lock()
@@ -62,7 +76,7 @@ pub fn client_for(conn: &Integration) -> Result<McpProxyClient, AdapterError> {
 
 /// Ask upstream what it offers now and replace the snapshot with the answer.
 pub async fn discover(store: &Store, conn: &Integration) -> Result<Vec<ProxyTool>, AdapterError> {
-    let tools = client_for(conn)?.list_tools().await?;
+    let tools = client_for(store, conn).await?.list_tools().await?;
     let discovered: Vec<DiscoveredTool> = tools.iter().map(discovered_from).collect();
     store
         .replace_proxy_tools(&conn.id, &discovered)
@@ -140,7 +154,7 @@ fn discovered_from(tool: &UpstreamTool) -> DiscoveredTool {
     }
 }
 
-fn config_str(conn: &Integration, key: &str) -> Option<String> {
+pub(super) fn config_str(conn: &Integration, key: &str) -> Option<String> {
     conn.config
         .get(key)
         .and_then(Value::as_str)
@@ -253,11 +267,11 @@ mod tests {
     #[test]
     fn a_bare_token_signs_in_as_a_bearer_header_and_a_named_one_goes_raw() {
         assert_eq!(
-            upstream_auth(&integration("int-1", json!({"url": "https://up/mcp"}))),
+            static_auth(&integration("int-1", json!({"url": "https://up/mcp"}))),
             UpstreamAuth::None
         );
         assert_eq!(
-            upstream_auth(&integration(
+            static_auth(&integration(
                 "int-1",
                 json!({"url": "https://up/mcp", "token": "t0ken"})
             )),
@@ -267,7 +281,7 @@ mod tests {
             }
         );
         assert_eq!(
-            upstream_auth(&integration(
+            static_auth(&integration(
                 "int-1",
                 json!({"url": "https://up/mcp", "token": "t0ken", "header_name": "X-Api-Key"})
             )),

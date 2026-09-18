@@ -13,6 +13,7 @@
 pub mod api;
 pub mod catalog;
 pub mod client;
+pub mod oauth;
 
 use std::borrow::Cow;
 use std::sync::{Arc, OnceLock};
@@ -59,6 +60,14 @@ fn mcp_fields() -> Vec<ConfigField> {
             .group("Auth")
             .default_value(&json!(client::DEFAULT_AUTH_HEADER))
             .help("Authorization sends the token as a bearer token. Any other header sends it as written."),
+        ConfigField::new("client_id", "Client ID", FieldType::Text)
+            .group("Auth")
+            .placeholder("leave empty if the server hands one out")
+            .help("Some servers ask you to register Pluk with them first, then give you this."),
+        ConfigField::new("client_secret", "Client secret", FieldType::Password)
+            .group("Auth")
+            .secret()
+            .placeholder("leave empty if the server gave none"),
     ]
 }
 
@@ -140,6 +149,11 @@ impl Adapter for McpProxyAdapter {
         subpath: &str,
     ) -> Option<ApiResponse> {
         api::handle_proxy_api(&self.store, conn, request, subpath).await
+    }
+
+    /// The page the user's browser lands on after they approve a sign-in.
+    async fn handle_global_api(&self, request: ApiRequest, path: &str) -> Option<ApiResponse> {
+        api::handle_callback(&self.store, request, path).await
     }
 
     fn instructions(&self, conn: &Integration) -> String {
@@ -237,7 +251,7 @@ async fn proxy_call(
     name: &str,
     args: Value,
 ) -> Result<Outcome, AdapterError> {
-    let client = catalog::client_for(conn)?;
+    let client = catalog::client_for(store, conn).await?;
     if client.take_tools_changed() {
         catalog::discover(store, conn).await?;
     }
@@ -248,15 +262,42 @@ async fn proxy_call(
         Value::Object(arguments) => Some(arguments),
         _ => None,
     };
-    match client.call_tool(name, arguments).await {
+    match client.call_tool(name, arguments.clone()).await {
         Ok(result) => Ok(outcome_of(result)),
-        Err(error)
-            if error.has_code(client::AUTH_REJECTED_CODE)
-                && catalog::upstream_auth(conn) != UpstreamAuth::None =>
-        {
-            Err(AdapterError::new(TOKEN_REJECTED).with_code(TOKEN_REJECTED_CODE))
+        Err(error) if error.has_code(client::AUTH_REJECTED_CODE) => {
+            after_refusal(store, conn, name, arguments, error).await
         }
         Err(error) => Err(error),
+    }
+}
+
+/// Upstream would not take the credentials Pluk presented.
+///
+/// A sign-in Pluk owns is renewed once and the call repeated, because an
+/// access token can run out mid-call. A token the user typed in is theirs to
+/// fix, and an open server refusing us is its own failure to report.
+async fn after_refusal(
+    store: &Store,
+    conn: &Integration,
+    name: &str,
+    arguments: Option<Map<String, Value>>,
+    error: AdapterError,
+) -> Result<Outcome, AdapterError> {
+    if !oauth::renew(store, &conn.id).await? {
+        return match catalog::static_auth(conn) {
+            UpstreamAuth::None => Err(error),
+            _ => Err(AdapterError::new(TOKEN_REJECTED).with_code(TOKEN_REJECTED_CODE)),
+        };
+    }
+    let client = catalog::client_for(store, conn).await?;
+    match client.call_tool(name, arguments).await {
+        Ok(result) => Ok(outcome_of(result)),
+        // A token minted seconds ago and still refused is a grant the server
+        // no longer honors, whatever it says.
+        Err(again) if again.has_code(client::AUTH_REJECTED_CODE) => {
+            Err(oauth::require_sign_in(store, &conn.id))
+        }
+        Err(again) => Err(again),
     }
 }
 
@@ -277,7 +318,10 @@ fn outcome_of(result: ToolResult) -> Outcome {
 /// Pluk's own refusals are finished sentences; an upstream failure keeps the
 /// runner's prefix so the agent can tell the two apart.
 fn agent_text(error: &AdapterError, verdict: Verdict) -> String {
-    if error.has_code(TOOL_CHANGED_CODE) || error.has_code(TOKEN_REJECTED_CODE) {
+    if error.has_code(TOOL_CHANGED_CODE)
+        || error.has_code(TOKEN_REJECTED_CODE)
+        || error.has_code(oauth::RECONNECT_NEEDED_CODE)
+    {
         return error.message.clone();
     }
     let label = if verdict == Verdict::Cancelled {
@@ -333,9 +377,9 @@ mod tests {
 
     /// A host that keeps the handlers so a test can call one directly.
     #[derive(Default)]
-    struct RecordingHost {
-        tools: Vec<ToolRegistration>,
-        handlers: HashMap<String, ToolHandler>,
+    pub(super) struct RecordingHost {
+        pub(super) tools: Vec<ToolRegistration>,
+        pub(super) handlers: HashMap<String, ToolHandler>,
     }
 
     impl RecordingHost {
@@ -742,7 +786,7 @@ mod tests {
         let auth = call_api(&adapter, &conn, "GET", "/proxy/auth", None).await;
         assert_eq!(
             auth["auth"],
-            json!({ "kind": "none", "status": "connected" })
+            json!({ "kind": "none", "status": "not_connected" })
         );
 
         client::invalidate(&conn.id);

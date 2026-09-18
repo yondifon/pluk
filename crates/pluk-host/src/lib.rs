@@ -222,6 +222,7 @@ pub fn run() {
             commands::clear_logs,
             commands::cancel_query,
             commands::reload,
+            commands::open_external,
             commands::inject_mcp_config,
             commands::list_installed_mcp_clients,
             updater::get_update_state,

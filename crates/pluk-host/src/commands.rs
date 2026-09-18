@@ -740,6 +740,53 @@ pub fn reload(state: State<'_, HostState>, owner_id: Option<String>) -> usize {
     owners.reset_owners(owner_id.as_deref())
 }
 
+/// Hand a web address to the browser the user already has open.
+///
+/// Only `http` and `https` get through. Everything else the system opener
+/// accepts is a file, an application, or a scheme some other program claims,
+/// and the window has no business reaching those through here.
+#[tauri::command]
+pub fn open_external(url: String) -> CmdResult<()> {
+    tauri_plugin_opener::open_url(web_url(&url)?, None::<&str>).map_err(|e| e.to_string())
+}
+
+fn web_url(raw: &str) -> CmdResult<&str> {
+    let url = raw.trim();
+    let scheme = url.split_once("://").map_or("", |(scheme, _)| scheme);
+    if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
+        return Ok(url);
+    }
+    Err("Only web addresses can be opened.".to_string())
+}
+
+#[cfg(test)]
+mod external_url_tests {
+    use super::web_url;
+
+    #[test]
+    fn only_web_addresses_are_opened() {
+        assert_eq!(
+            web_url("https://example.com/a?b=c"),
+            Ok("https://example.com/a?b=c")
+        );
+        assert_eq!(
+            web_url("  http://127.0.0.1:4242/x  "),
+            Ok("http://127.0.0.1:4242/x")
+        );
+        assert_eq!(web_url("HTTPS://example.com"), Ok("HTTPS://example.com"));
+        for refused in [
+            "file:///etc/passwd",
+            "javascript:alert('http://x')",
+            "ftp://files.example.com",
+            "mailto:someone@example.com",
+            "example.com",
+            "",
+        ] {
+            assert!(web_url(refused).is_err(), "{refused}");
+        }
+    }
+}
+
 /// Verify STEPS serializes stably as JSON numbers.
 #[cfg(test)]
 pub fn steps_json() -> serde_json::Value {
