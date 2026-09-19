@@ -36,6 +36,7 @@ use crate::error::AdapterError;
 
 use super::catalog;
 use super::client::{self, UPSTREAM_UNREACHABLE_CODE, UpstreamAuth};
+use super::discovery;
 
 /// The stored sign-in is spent and only the user can renew it.
 pub const RECONNECT_NEEDED_CODE: &str = "MCP_PROXY_RECONNECT_NEEDED";
@@ -91,17 +92,13 @@ pub async fn start(conn: &Integration) -> Result<String, AdapterError> {
     let mut manager = AuthorizationManager::new(&endpoint)
         .await
         .map_err(|_| unreachable_error())?;
-    let resolution = manager
-        .resolve_metadata_from_challenge(challenge(&endpoint).await.as_deref())
+    let challenge = challenge(&endpoint).await;
+    // Detection reads the same walk, so Pluk never offers a sign-in here that
+    // it cannot then start.
+    let metadata = discovery::published(&manager, &endpoint, challenge.as_deref())
         .await
-        .map_err(|_| unreachable_error())?;
-    // Endpoints the server never published are guesses, and sending the user's
-    // browser at a guess is worse than saying the server does not do this.
-    if !resolution.source.is_discovered() {
-        return Err(AdapterError::new(NO_SIGN_IN));
-    }
-    let metadata = resolution.metadata.clone();
-    manager.set_metadata(resolution.metadata);
+        .ok_or_else(|| AdapterError::new(NO_SIGN_IN))?;
+    manager.set_metadata(metadata.clone());
 
     let scopes = manager.select_scopes(None, &[]);
     let (client_id, client_secret) =

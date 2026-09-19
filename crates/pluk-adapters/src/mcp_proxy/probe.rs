@@ -25,6 +25,7 @@ use crate::error::AdapterError;
 
 use super::catalog;
 use super::client::{self, UPSTREAM_UNREACHABLE_CODE};
+use super::discovery;
 
 /// How long the probe waits before calling the server unreachable.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -116,17 +117,11 @@ async fn detect(endpoint: &str) -> Result<SignInRequired, AdapterError> {
 
 /// Whether the server published where to sign in, and if so whether it hands
 /// out client IDs. `None` when it published nothing, which is the same rule a
-/// real sign-in is started by: endpoints nobody published are guesses.
+/// real sign-in is started by.
 async fn published_sign_in(endpoint: &str, challenge: Option<&str>) -> Option<bool> {
     let manager = AuthorizationManager::new(endpoint).await.ok()?;
-    let resolution = manager
-        .resolve_metadata_from_challenge(challenge)
-        .await
-        .ok()?;
-    resolution
-        .source
-        .is_discovered()
-        .then(|| resolution.metadata.registration_endpoint.is_some())
+    let metadata = discovery::published(&manager, endpoint, challenge).await?;
+    Some(metadata.registration_endpoint.is_some())
 }
 
 /// The handshake every MCP session opens with, and the cheapest request that
@@ -166,7 +161,7 @@ mod tests {
     use axum::extract::State as AxumState;
     use axum::http::{HeaderMap, StatusCode as AxumStatus, header};
     use axum::response::{IntoResponse, Response};
-    use axum::routing::{any, get};
+    use axum::routing::{any, get, post};
     use rmcp::ErrorData as McpError;
     use rmcp::model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, JsonObject,
@@ -182,7 +177,7 @@ mod tests {
 
     use crate::adapter::Adapter;
     use crate::mcp_proxy::tests::integration;
-    use crate::mcp_proxy::{McpProxyAdapter, SIGN_IN_NEEDED, TOKEN_NEEDED};
+    use crate::mcp_proxy::{McpProxyAdapter, SIGN_IN_NEEDED, TOKEN_NEEDED, oauth};
 
     use super::*;
 
@@ -261,10 +256,40 @@ mod tests {
         format!("{}/mcp", serve(router).await)
     }
 
-    /// What every request the guarded server refused was carrying.
+    /// What every request a test server answered was carrying.
     #[derive(Default)]
     struct Presented {
         headers: Mutex<Vec<Option<String>>>,
+    }
+
+    impl Presented {
+        fn record(&self, headers: &HeaderMap) {
+            self.headers.lock().expect("presented").push(
+                headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string),
+            );
+        }
+
+        fn carried(&self) -> Vec<Option<String>> {
+            self.headers.lock().expect("presented").clone()
+        }
+    }
+
+    /// What an authorization server publishes about itself.
+    fn authority_metadata(base: &str, registers_clients: bool) -> Value {
+        let mut metadata = json!({
+            "issuer": base,
+            "authorization_endpoint": format!("{base}/authorize"),
+            "token_endpoint": format!("{base}/token"),
+            "response_types_supported": ["code"],
+            "code_challenge_methods_supported": ["S256"],
+        });
+        if registers_clients {
+            metadata["registration_endpoint"] = json!(format!("{base}/register"));
+        }
+        metadata
     }
 
     /// A server that refuses everyone and points at an authorization server of
@@ -293,17 +318,7 @@ mod tests {
             .route(
                 "/.well-known/oauth-authorization-server",
                 get(move |AxumState(base): AxumState<String>| async move {
-                    let mut metadata = json!({
-                        "issuer": base,
-                        "authorization_endpoint": format!("{base}/authorize"),
-                        "token_endpoint": format!("{base}/token"),
-                        "response_types_supported": ["code"],
-                        "code_challenge_methods_supported": ["S256"],
-                    });
-                    if registers_clients {
-                        metadata["registration_endpoint"] = json!(format!("{base}/register"));
-                    }
-                    as_json(metadata)
+                    as_json(authority_metadata(&base, registers_clients))
                 }),
             )
             .route("/mcp", any(refuse))
@@ -330,6 +345,115 @@ mod tests {
         format!("{}/mcp", serve(router).await)
     }
 
+    /// A server that refuses without saying why: a 401 with no challenge on it
+    /// at all, and its authorization server published where the spec says to
+    /// look for one.
+    async fn silent_server(registers_clients: bool) -> (String, Arc<Presented>) {
+        let presented = Arc::new(Presented::default());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("addr"));
+        let router = Router::new()
+            .route(
+                "/.well-known/oauth-authorization-server",
+                get(
+                    move |axum::Extension(presented): axum::Extension<Arc<Presented>>,
+                          headers: HeaderMap,
+                          AxumState(base): AxumState<String>| async move {
+                        presented.record(&headers);
+                        as_json(authority_metadata(&base, registers_clients))
+                    },
+                ),
+            )
+            .route(
+                "/register",
+                post(|| async {
+                    as_json(json!({
+                        "client_id": "client-1",
+                        "redirect_uris": [oauth::redirect_uri()],
+                    }))
+                }),
+            )
+            .route(
+                "/mcp",
+                any(
+                    |axum::Extension(presented): axum::Extension<Arc<Presented>>,
+                     headers: HeaderMap| async move {
+                        presented.record(&headers);
+                        (AxumStatus::UNAUTHORIZED, "unauthorized")
+                    },
+                ),
+            )
+            .layer(axum::Extension(presented.clone()))
+            .with_state(base.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        (format!("{base}/mcp"), presented)
+    }
+
+    /// A server with no protected resource metadata to read — the path it
+    /// would live at fails outright — and a working authorization server.
+    async fn no_resource_metadata_server() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("addr"));
+        let router = Router::new()
+            .route(
+                "/.well-known/oauth-protected-resource/mcp",
+                get(|| async { AxumStatus::INTERNAL_SERVER_ERROR }),
+            )
+            .route(
+                "/.well-known/oauth-authorization-server",
+                get(|AxumState(base): AxumState<String>| async move {
+                    as_json(authority_metadata(&base, true))
+                }),
+            )
+            .route("/mcp", any(refuse_plainly))
+            .with_state(base.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        format!("{base}/mcp")
+    }
+
+    /// A server whose published token endpoint would carry the authorization
+    /// code in the clear to another machine.
+    async fn insecure_authority_server() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("addr"));
+        let router = Router::new()
+            .route(
+                "/.well-known/oauth-authorization-server",
+                get(|AxumState(base): AxumState<String>| async move {
+                    as_json(json!({
+                        "issuer": base,
+                        "authorization_endpoint": format!("{base}/authorize"),
+                        "token_endpoint": "http://tokens.example.com/token",
+                    }))
+                }),
+            )
+            .route("/mcp", any(refuse_plainly))
+            .with_state(base.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        format!("{base}/mcp")
+    }
+
+    async fn refuse_plainly() -> Response {
+        (
+            AxumStatus::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "Bearer realm=\"docs\"")],
+            "unauthorized",
+        )
+            .into_response()
+    }
+
     fn as_json(value: Value) -> Response {
         (
             [(header::CONTENT_TYPE, "application/json")],
@@ -343,12 +467,7 @@ mod tests {
         AxumState(base): AxumState<String>,
         headers: HeaderMap,
     ) -> Response {
-        presented.headers.lock().expect("presented").push(
-            headers
-                .get(header::AUTHORIZATION)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string),
-        );
+        presented.record(&headers);
         (
             AxumStatus::UNAUTHORIZED,
             [(
@@ -409,6 +528,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_server_that_refuses_without_saying_why_can_still_be_signed_in_to() {
+        let (registering, _) = silent_server(true).await;
+        let conn = integration("probe-silent-registers", json!({ "url": registering }));
+        assert_eq!(
+            required(&conn).await.expect("probe"),
+            SignInRequired::Oauth {
+                registers_clients: true
+            }
+        );
+
+        let (bare, _) = silent_server(false).await;
+        let conn = integration("probe-silent-no-registration", json!({ "url": bare }));
+        assert_eq!(
+            required(&conn).await.expect("probe"),
+            SignInRequired::Oauth {
+                registers_clients: false
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_server_with_no_protected_resource_metadata_can_still_be_signed_in_to() {
+        let conn = integration(
+            "probe-no-resource-metadata",
+            json!({ "url": no_resource_metadata_server().await }),
+        );
+        assert_eq!(
+            required(&conn).await.expect("probe"),
+            SignInRequired::Oauth {
+                registers_clients: true
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_that_would_travel_in_the_clear_is_not_offered() {
+        let conn = integration(
+            "probe-insecure-authority",
+            json!({ "url": insecure_authority_server().await }),
+        );
+        assert_eq!(required(&conn).await.expect("probe"), SignInRequired::Token);
+    }
+
+    #[tokio::test]
+    async fn the_well_known_paths_are_asked_as_a_stranger() {
+        let (endpoint, presented) = silent_server(true).await;
+        let conn = integration(
+            "probe-silent-carries-nothing",
+            json!({ "url": endpoint, "token": TOKEN }),
+        );
+
+        required(&conn).await.expect("probe");
+        let carried = presented.carried();
+        assert!(carried.len() > 1, "the well-known paths were asked too");
+        assert!(
+            carried.iter().all(Option::is_none),
+            "every request presented nothing: {carried:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_starts_against_a_server_that_refuses_without_saying_why() {
+        let (endpoint, _) = silent_server(true).await;
+        let conn = integration("probe-silent-sign-in", json!({ "url": endpoint.clone() }));
+        let authorize_url = oauth::start(&conn).await.expect("sign-in started");
+        let published = format!("{}/authorize?", endpoint.trim_end_matches("/mcp"));
+        assert!(
+            authorize_url.starts_with(&published),
+            "the browser is sent at the published endpoint: {authorize_url}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_server_that_publishes_nothing_wants_a_token() {
         let conn = integration("probe-closed", json!({ "url": closed_server().await }));
         assert_eq!(required(&conn).await.expect("probe"), SignInRequired::Token);
@@ -436,7 +628,7 @@ mod tests {
             .expect("seed");
 
         required(&conn).await.expect("probe");
-        let carried = presented.headers.lock().expect("presented").clone();
+        let carried = presented.carried();
         assert!(!carried.is_empty(), "the server was asked");
         assert!(
             carried.iter().all(Option::is_none),

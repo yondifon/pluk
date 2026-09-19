@@ -49,6 +49,16 @@ pub fn endpoint(conn: &Integration) -> Result<String, AdapterError> {
     }
 }
 
+/// Whether an address may be reached at all, by the same rule [`endpoint`]
+/// holds the upstream to: off this machine, nothing travels in the clear.
+pub(super) fn is_secure_address(url: &Url) -> bool {
+    match url.scheme() {
+        "https" => true,
+        "http" => is_loopback(url),
+        _ => false,
+    }
+}
+
 /// Whether the address names this machine, the one place cleartext stays on.
 fn is_loopback(url: &Url) -> bool {
     match url.host_str() {

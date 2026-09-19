@@ -13,6 +13,7 @@
 pub mod api;
 pub mod catalog;
 pub mod client;
+mod discovery;
 pub mod oauth;
 pub mod probe;
 
