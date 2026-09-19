@@ -4,7 +4,6 @@ import { confirmModal } from "../modal";
 import { createBadge, createButton, createCard } from "../primitives";
 import { toast } from "../toast";
 import {
-  attentionCount,
   awaitingSignIn,
   canEnable,
   orderedProxyTools,
@@ -65,8 +64,8 @@ function card(title: string): { el: HTMLElement; body: HTMLElement } {
  * The tools an MCP server offers, and the sign-in that reveals them.
  *
  * The two sit together because one causes the other: nothing is listed until
- * the server lets Pluk in, and a tool reaches an agent only once the user has
- * approved it and switched it on.
+ * the server lets Pluk in. Each tool then carries one tick, which pins the
+ * definition the server offers now and switches the tool on together.
  */
 export function mountServerTools(
   container: HTMLElement,
@@ -86,8 +85,7 @@ export function mountServerTools(
   let toolsError: string | null = null;
   let busy = false;
   let waitingForBrowser = false;
-  /** What the user ticked on a first run, before anything has been approved. */
-  let picked: Set<string> | null = null;
+  let discovered = false;
   let stopPoll: (() => void) | null = null;
 
   async function loadAuth(): Promise<void> {
@@ -106,8 +104,18 @@ export function mountServerTools(
     }
     rows = result.value.tools;
     toolsError = null;
-    const untouched = rows.length > 0 && rows.every((row) => row.state === "new");
-    picked = untouched ? new Set<string>() : null;
+  }
+
+  /**
+   * A server Pluk can already reach, with nothing listed, is asked without a
+   * click. Once per panel: a server that keeps answering with nothing must not
+   * turn the screen into a loop.
+   */
+  async function discoverOnce(): Promise<void> {
+    if (discovered || !rows || rows.length) return;
+    if (!auth || awaitingSignIn(auth)) return;
+    discovered = true;
+    await loadTools("/proxy/refresh", "POST");
   }
 
   async function working(run: () => Promise<void>): Promise<void> {
@@ -133,7 +141,10 @@ export function mountServerTools(
         if (!alive) return;
         if (auth?.status !== "connected") return render();
         stopPoll?.();
+        rows = null;
+        render();
         await loadTools();
+        await discoverOnce();
         render();
       })();
     }, SIGN_IN_POLL_MS);
@@ -159,21 +170,6 @@ export function mountServerTools(
     if (alive) pollUntilSignedIn();
   }
 
-  async function approve(names: string[]): Promise<void> {
-    if (!names.length) return;
-    const result = await call<{ tools: ProxyToolRow[] }>(integration.id, "POST", "/proxy/approve", {
-      names,
-    });
-    if (!alive) return;
-    if (!result.ok) {
-      toast.error("Pluk could not approve that", { description: result.error });
-      return;
-    }
-    rows = result.value.tools;
-    picked = null;
-    toast.success(names.length === 1 ? "Tool approved" : `${names.length} tools approved`);
-  }
-
   async function signOut(): Promise<void> {
     const result = await call(integration.id, "POST", "/proxy/disconnect");
     if (!alive) return;
@@ -185,34 +181,30 @@ export function mountServerTools(
   }
 
   /**
+   * One tick, one call. The route answers with the list as it now stands, and
    * `toolConfig` is the same object the shell holds for this integration, so
    * writing into it keeps the list behind the detail screen in step without a
    * reload that would tear this panel down.
    */
   async function setEnabled(name: string, on: boolean): Promise<void> {
-    const before = integration.toolConfig[name];
-    integration.toolConfig[name] = { enabled: on, settings: before?.settings ?? {} };
-    render();
-    try {
-      await invoke("update_integration", {
-        id: integration.id,
-        payload: {
-          name: integration.name,
-          type: integration.type,
-          config: integration.config,
-          environment: integration.environment,
-          toolConfig: integration.toolConfig,
-          approvals: integration.approvals,
-        },
-      });
-    } catch (e) {
-      if (before) integration.toolConfig[name] = before;
-      else delete integration.toolConfig[name];
-      toast.error("Pluk could not save that", {
-        description: humanizeHealthError(e instanceof Error ? e.message : String(e)),
-      });
-      render();
+    const result = await call<{ tools: ProxyToolRow[] }>(integration.id, "POST", "/proxy/enable", {
+      names: [name],
+      enabled: on,
+    });
+    if (!alive) return;
+    if (result.ok) {
+      rows = result.value.tools;
+      const before = integration.toolConfig[name];
+      integration.toolConfig[name] = { enabled: on, settings: before?.settings ?? {} };
+    } else {
+      toast.error("Pluk could not save that", { description: result.error });
     }
+    render();
+    // The list is rebuilt around the answer, so the tick the user just pressed
+    // is a new element. Keyboard focus follows it rather than falling to the top.
+    [...tools.body.querySelectorAll<HTMLInputElement>("input[data-tool]")]
+      .find((tick) => tick.dataset.tool === name)
+      ?.focus();
   }
 
   function statusBadge(status: SignInStatus): HTMLElement {
@@ -269,7 +261,7 @@ export function mountServerTools(
               confirmModal({
                 title: "Sign out",
                 message:
-                  "Your agents lose this server’s tools until you sign in again. What you approved is remembered.",
+                  "Your agents lose this server’s tools until you sign in again. What you turned on is remembered.",
                 confirmLabel: "Sign out",
                 onConfirm: () => void working(signOut),
               }),
@@ -282,40 +274,31 @@ export function mountServerTools(
     signIn.body.appendChild(actionRow(action));
   }
 
+  /** A tool an agent can reach: pinned as the server describes it now, and on. */
+  function isOn(row: ProxyToolRow): boolean {
+    return canEnable(row.state) && (integration.toolConfig[row.name]?.enabled ?? false);
+  }
+
   function toolControl(row: ProxyToolRow): HTMLElement | null {
-    if (picked) {
-      const tick = document.createElement("input");
-      tick.type = "checkbox";
-      tick.checked = picked.has(row.name);
-      tick.setAttribute("aria-label", `Approve ${row.label}`);
-      tick.addEventListener("change", () => {
-        if (tick.checked) picked?.add(row.name);
-        else picked?.delete(row.name);
-      });
-      return tick;
-    }
     if (row.state === "missing") return null;
-    const approved = canEnable(row.state);
     const toggle = document.createElement("input");
     toggle.type = "checkbox";
-    toggle.checked = approved && (integration.toolConfig[row.name]?.enabled ?? false);
-    toggle.disabled = !approved;
+    toggle.checked = isOn(row);
+    toggle.dataset.tool = row.name;
     toggle.setAttribute("aria-label", row.label);
     toggle.setAttribute("aria-describedby", `tool-desc-${row.name}`);
-    if (!approved) toggle.title = "Approve this tool before switching it on.";
     toggle.addEventListener("change", () => void setEnabled(row.name, toggle.checked));
     return toggle;
   }
 
   function toolRow(row: ProxyToolRow): HTMLElement {
-    const approved = canEnable(row.state);
-    const on = approved && (integration.toolConfig[row.name]?.enabled ?? false);
+    const on = isOn(row);
     const el = document.createElement("div");
     el.className = "tool-row";
     // A tool still waiting on the user keeps full contrast. Only a settled one
     // dims when it is switched off, and a withdrawn one dims for good.
     if (row.state === "missing") el.classList.add("tool-gone");
-    else if (approved) el.classList.add(on ? "tool-on" : "tool-off");
+    else if (canEnable(row.state)) el.classList.add(on ? "tool-on" : "tool-off");
 
     const control = toolControl(row);
     const head = document.createElement(control ? "label" : "div");
@@ -345,14 +328,6 @@ export function mountServerTools(
     body.appendChild(desc);
     const note = stateNote(row.state);
     if (note) body.appendChild(line(note, "tool-summary"));
-    if (!picked && (row.state === "new" || row.state === "changed")) {
-      const one = createButton("Approve", {
-        size: "sm",
-        onClick: () => void working(() => approve([row.name])),
-      });
-      one.disabled = busy;
-      body.appendChild(one);
-    }
     el.appendChild(body);
     return el;
   }
@@ -402,45 +377,11 @@ export function mountServerTools(
       return;
     }
 
-    const waiting = attentionCount(rows);
-    if (picked) {
-      tools.body.appendChild(
-        line(
-          `Pluk found ${rows.length} ${rows.length === 1 ? "tool" : "tools"}. Tick the ones you want, then approve them. Nothing reaches your agents until you do.`,
-          "hint",
-        ),
-      );
-    } else if (waiting) {
-      tools.body.appendChild(
-        line(`${waiting} of ${rows.length} tools need your attention.`, "hint"),
-      );
-    }
+    const live = rows.filter(isOn).length;
+    tools.body.appendChild(line(`${live} of ${rows.length} tools available to the agent.`, "hint"));
 
     for (const row of orderedProxyTools(rows)) tools.body.appendChild(toolRow(row));
-
-    const actions = [refreshButton("Check for new tools")];
-    if (picked) {
-      const confirm = createButton("Approve ticked tools", {
-        variant: "primary",
-        onClick: () => void working(() => approve([...(picked ?? [])])),
-      });
-      confirm.disabled = busy;
-      actions.push(confirm);
-    } else if (waiting) {
-      const all = createButton("Approve all", {
-        onClick: () =>
-          void working(() =>
-            approve(
-              (rows ?? [])
-                .filter((row) => row.state === "new" || row.state === "changed")
-                .map((row) => row.name),
-            ),
-          ),
-      });
-      all.disabled = busy;
-      actions.push(all);
-    }
-    tools.body.appendChild(actionRow(...actions));
+    tools.body.appendChild(actionRow(refreshButton("Check for new tools")));
   }
 
   function render(): void {
@@ -452,6 +393,7 @@ export function mountServerTools(
   render();
   void working(async () => {
     await Promise.all([loadAuth(), loadTools()]);
+    await discoverOnce();
   });
 
   return {

@@ -56,11 +56,6 @@ export function orderedProxyTools(rows: ProxyToolRow[]): ProxyToolRow[] {
   );
 }
 
-/** How many tools are waiting on a decision. */
-export function attentionCount(rows: ProxyToolRow[]): number {
-  return rows.filter((row) => row.state === "new" || row.state === "changed").length;
-}
-
 /** The short word on the row, or null when the row needs no marking. */
 export function stateBadge(state: ProxyToolState): string | null {
   switch (state) {
@@ -78,12 +73,11 @@ export function stateBadge(state: ProxyToolState): string | null {
 /** The line under the row explaining what the user can do about it. */
 export function stateNote(state: ProxyToolState): string | null {
   switch (state) {
-    case "new":
-      return "Approve this tool to let your agents use it.";
     case "changed":
-      return "This tool changed since you approved it. Review and approve it again.";
+      return "This tool changed. Read what it does now, then turn it back on.";
     case "missing":
       return "This server no longer offers this tool.";
+    case "new":
     case "approved":
       return null;
   }

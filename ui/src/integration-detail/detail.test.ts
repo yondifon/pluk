@@ -117,6 +117,39 @@ describe("mountIntegrationDetail health update", () => {
     expect(root.querySelector<HTMLButtonElement>("#tab-overview")!.getAttribute("aria-selected")).toBe("true");
   });
 
+  test("an MCP server opens on Tools, and other integrations do not", async () => {
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+      core: { invoke: async () => ({ status: 200, body: { tools: [] } }) },
+      event: { listen: async () => () => {} },
+    } as never;
+    const actions = {
+      onEdit: () => {},
+      onDuplicate: () => {},
+      onDelete: () => {},
+      onTest: async () => ({ ok: true }),
+      inject: async () => ({ status: "added" as const, path: "" }),
+    };
+
+    const server = document.createElement("div");
+    const serverHandle = mountIntegrationDetail(
+      server,
+      { ...integration, id: "m1", type: "mcp" },
+      null,
+      null,
+      actions,
+    );
+    expect(server.querySelector<HTMLButtonElement>("#tab-tools")!.getAttribute("aria-selected")).toBe("true");
+
+    const database = document.createElement("div");
+    const databaseHandle = mountIntegrationDetail(database, integration, null, null, actions);
+    expect(database.querySelector<HTMLButtonElement>("#tab-tools")!.getAttribute("aria-selected")).toBe("false");
+    expect(database.querySelector<HTMLButtonElement>("#tab-logs")!.getAttribute("aria-selected")).toBe("true");
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    serverHandle.destroy();
+    databaseHandle.destroy();
+  });
+
   test("Overview shows adapter configuration without MCP setup", () => {
     const root = document.createElement("div");
     mountIntegrationDetail(root, integration, null, null, {

@@ -37,7 +37,9 @@ export function mountIntegrationDetail(
 
   let currentHealth: ConnHealth | null | undefined = health ?? null;
   const tabs: TabId[] = INTEGRATION_TAB_ORDER;
-  const landing: TabId = "logs";
+  // An MCP server opens on Tools: signing in and picking tools both live there,
+  // and until that is done the other tabs have nothing to show.
+  const landing: TabId = integration.type === MCP_TYPE ? "tools" : "logs";
   let selectedTab: TabId = openAt && tabs.includes(openAt) ? openAt : landing;
   let testing = false;
   const logsMount = document.createElement("div");

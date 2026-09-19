@@ -47,7 +47,7 @@ pub const SIGN_IN_NEEDED_CODE: &str = "MCP_PROXY_SIGN_IN_NEEDED";
 /// The server only answers a token, and none is saved.
 pub const TOKEN_NEEDED_CODE: &str = "MCP_PROXY_TOKEN_NEEDED";
 
-const TOOL_CHANGED: &str = "This tool changed. Approve it again in Pluk.";
+const TOOL_CHANGED: &str = "This tool changed. Turn it on again in Pluk.";
 const TOKEN_REJECTED: &str = "Pluk could not sign in to this MCP server. Check the token in Pluk.";
 const PERMISSION_DENIED: &str =
     "This MCP server refused the request. The account signed in to Pluk may not have permission.";
@@ -435,7 +435,7 @@ mod tests {
     use rmcp::{RoleServer, ServerHandler};
     use tower::ServiceExt as _;
 
-    use pluk_store::{Environment, LOG_RESPONSE_LIMIT, LogEntry};
+    use pluk_store::{Environment, IntegrationInput, LOG_RESPONSE_LIMIT, LogEntry};
 
     use super::*;
 
@@ -943,6 +943,60 @@ mod tests {
             auth["auth"],
             json!({ "kind": "none", "status": "not_connected", "required": "none" }),
             "an open server asks for nothing, so the screen offers no sign-in"
+        );
+
+        client::invalidate(&conn.id);
+    }
+
+    #[tokio::test]
+    async fn turning_a_tool_on_is_one_step_and_turning_it_off_keeps_it_ready() {
+        let (endpoint, tools) = upstream().await;
+        let (_dir, store) = store();
+        let adapter = McpProxyAdapter::new(store.clone());
+        let mut input = IntegrationInput::new("Docs server", ADAPTER_ID);
+        input
+            .config
+            .insert("url".to_string(), Value::String(endpoint));
+        let conn = store.create_integration(&input).expect("create");
+        let stored = || {
+            store
+                .integration_by_id(&conn.id)
+                .expect("read")
+                .expect("row")
+        };
+        let switch = |on: bool| Some(json!({ "names": ["search"], "enabled": on }).to_string());
+
+        call_api(&adapter, &conn, "POST", "/proxy/refresh", None).await;
+        assert!(registered(&adapter, &stored()).names().is_empty());
+
+        let on = call_api(&adapter, &conn, "POST", "/proxy/enable", switch(true)).await;
+        assert_eq!(on["tools"][0]["state"], json!("approved"));
+        assert_eq!(
+            registered(&adapter, &stored()).names(),
+            ["search".to_string()]
+        );
+
+        call_api(&adapter, &conn, "POST", "/proxy/enable", switch(false)).await;
+        assert!(registered(&adapter, &stored()).names().is_empty());
+        assert_eq!(
+            states(&store, &conn.id),
+            [("search".to_string(), ToolState::Approved)],
+            "turning a tool off leaves it pinned, so it goes back on in one step"
+        );
+
+        // A tool the server now describes differently is held back until the
+        // user turns it on against that new description.
+        *tools.lock().expect("tools") = vec![tool("search", "Search everything")];
+        call_api(&adapter, &conn, "POST", "/proxy/enable", switch(true)).await;
+        let changed = call_api(&adapter, &conn, "POST", "/proxy/refresh", None).await;
+        assert_eq!(changed["tools"][0]["state"], json!("changed"));
+        assert!(registered(&adapter, &stored()).names().is_empty());
+
+        let again = call_api(&adapter, &conn, "POST", "/proxy/enable", switch(true)).await;
+        assert_eq!(again["tools"][0]["state"], json!("approved"));
+        assert_eq!(
+            registered(&adapter, &stored()).names(),
+            ["search".to_string()]
         );
 
         client::invalidate(&conn.id);

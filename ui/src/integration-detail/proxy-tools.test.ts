@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  attentionCount,
   awaitingSignIn,
   canEnable,
   orderedProxyTools,
@@ -52,19 +51,6 @@ describe("orderedProxyTools", () => {
   });
 });
 
-describe("attentionCount", () => {
-  test("counts new and changed only", () => {
-    expect(
-      attentionCount([
-        row("a", "new"),
-        row("b", "changed"),
-        row("c", "approved"),
-        row("d", "missing"),
-      ]),
-    ).toBe(2);
-  });
-});
-
 describe("badges and notes", () => {
   test("only unsettled states are marked", () => {
     expect(stateBadge("new")).toBe("New");
@@ -73,10 +59,12 @@ describe("badges and notes", () => {
     expect(stateBadge("approved")).toBeNull();
   });
 
-  test("a changed tool asks to be approved again", () => {
+  test("only a changed or withdrawn tool needs a line of its own", () => {
     expect(stateNote("changed")).toBe(
-      "This tool changed since you approved it. Review and approve it again.",
+      "This tool changed. Read what it does now, then turn it back on.",
     );
+    expect(stateNote("missing")).toBe("This server no longer offers this tool.");
+    expect(stateNote("new")).toBeNull();
     expect(stateNote("approved")).toBeNull();
   });
 });
