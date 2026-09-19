@@ -529,6 +529,15 @@ fn mask_rows(rows: &mut [Value], masked: &[String]) {
     }
 }
 
+/// Stamp `env` onto a result's meta, and only when the integration carries an
+/// environment: without one the key stays out rather than naming a guess.
+fn with_environment(environment: Option<&str>, mut meta: Value) -> Value {
+    if let Some(environment) = environment {
+        meta["env"] = Value::String(environment.to_string());
+    }
+    meta
+}
+
 fn projected_json(
     value: Value,
     only: Option<Vec<String>>,
@@ -652,10 +661,7 @@ pub fn register_sql_server(
     // Helpers for policy/cap
     let conn_name = conn.name.clone();
     let conn_type = conn.r#type.clone();
-    let conn_env = conn
-        .environment
-        .map(|e| e.to_string())
-        .unwrap_or_else(|| "development".to_string());
+    let conn_env = conn.environment.map(|e| e.to_string());
     let conn_id = conn.id.clone();
     let via_group = conn.via_group.clone();
     let approvals = crate::gate::approvals_for(conn);
@@ -927,8 +933,7 @@ pub fn register_sql_server(
                             mask_rows(&mut rows, &masked);
                             // build meta
                             let fields = res.fields.unwrap_or_default();
-                            let meta_val = serde_json::json!({
-                                "env": conn_env,
+                            let meta_val = with_environment(conn_env.as_deref(), serde_json::json!({
                                 "connection": conn_name,
                                 "type": conn_type,
                                 "database": effective_db(pinned.as_ref(), db_opt.as_deref()),
@@ -938,7 +943,7 @@ pub fn register_sql_server(
                                 "row_cap": cap_limit.map(|v| Value::Number((v as i64).into())).unwrap_or(Value::Null),
                                 "row_count": total,
                                 "returned_rows": rows.len()
-                            });
+                            }));
                             let qmap = query_map();
                             let mut text = projected_json(meta_val.clone(), only, &qmap).map_err(crate::error::AdapterError::new)?;
                             if truncated {
@@ -1144,8 +1149,7 @@ pub fn register_sql_server(
                         let (mut rows, truncated, cap_limit) = cap_rows_vec(res.rows.into_iter().collect(), cap);
                         mask_rows(&mut rows, &masked);
                         let fields = res.fields.unwrap_or_default();
-                        let meta_val = serde_json::json!({
-                            "env": conn_env,
+                        let meta_val = with_environment(conn_env.as_deref(), serde_json::json!({
                             "connection": conn_name,
                             "type": conn_type,
                             "database": effective_db(pinned.as_ref(), db_for_meta.as_deref()),
@@ -1155,7 +1159,7 @@ pub fn register_sql_server(
                             "row_cap": cap_limit.map(|v| Value::Number((v as i64).into())).unwrap_or(Value::Null),
                             "row_count": total,
                             "returned_rows": rows.len()
-                        });
+                        }));
                         let mut text = projected_json(meta_val, only, &query_map()).map_err(crate::error::AdapterError::new)?;
                         if truncated {
                             let lim = cap_limit.unwrap_or(0);
@@ -1900,8 +1904,7 @@ pub fn register_sql_server(
                             let payload = if format=="csv" {
                                 to_csv(&rows, &fields)
                             } else {
-                                let meta_val = serde_json::json!({
-                                    "env": "development",
+                                let meta_val = with_environment(conn.environment.map(|e| e.as_str()), serde_json::json!({
                                     "connection": conn.name,
                                     "type": conn.r#type,
                                     "database": effective_db(pinned_for_payload.as_ref(), db_opt.as_deref()),
@@ -1911,7 +1914,7 @@ pub fn register_sql_server(
                                     "row_cap": _cap_limit.map(|v| Value::Number((v as i64).into())).unwrap_or(Value::Null),
                                     "row_count": total,
                                     "returned_rows": rows.len()
-                                });
+                                }));
                                 serde_json::to_string_pretty(&meta_val).unwrap()
                             };
                             let _ = tokio::fs::write(&path, payload).await.map_err(|e| crate::error::AdapterError::new(e.to_string()));
@@ -2065,8 +2068,7 @@ pub fn register_sql_server(
                             let (mut rows, truncated, cap_limit) = cap_rows_vec(res.rows.into_iter().collect(), cap);
                             mask_rows(&mut rows, &masked);
                             let fields = res.fields.unwrap_or_default();
-                            let meta_val = serde_json::json!({
-                                "env": conn_env,
+                            let meta_val = with_environment(conn_env.as_deref(), serde_json::json!({
                                 "connection": conn_name,
                                 "type": conn_type,
                                 "database": effective_db(pinned.as_ref(), db_opt.as_deref()),
@@ -2076,7 +2078,7 @@ pub fn register_sql_server(
                                 "row_cap": cap_limit.map(|v| Value::Number((v as i64).into())).unwrap_or(Value::Null),
                                 "row_count": total,
                                 "returned_rows": rows.len()
-                            });
+                            }));
                             let mut text = projected_json(meta_val, only, &query_map()).map_err(crate::error::AdapterError::new)?;
                             if truncated { text.push_str(&format!("\n\n[Row limit: showing first {} of {} rows. Add a LIMIT clause to see all results.]", cap_limit.unwrap_or(0), total)); }
                             let snapshot = pluk_store::QueryResult { fields, rows: rows.clone() };

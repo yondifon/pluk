@@ -26,7 +26,8 @@ export interface ConnectionDraft {
   name: string;
   type: string;
   config: Record<string, string>;
-  environment: Environment;
+  /** `null` when the integration carries no environment. */
+  environment: Environment | null;
   policyKind: string;
   fields: ConfigFieldDef[];
   tools: ToolDef[];
@@ -52,7 +53,7 @@ export function draftFromConnection(conn: {
   name: string;
   type: string;
   config: Record<string, unknown>;
-  environment?: Environment;
+  environment?: Environment | null;
   queryPolicy?: string | null;
 }): ConnectionDraft {
   // Hydrate config blob: values may be string/number/bool -> normalize to string
@@ -94,7 +95,7 @@ export function draftFromConnection(conn: {
     name: conn.name,
     type: conn.type,
     config,
-    environment: conn.environment ?? "development",
+    environment: conn.environment ?? null,
     policyKind: "sql",
     fields: [],
     tools: [],
@@ -167,7 +168,7 @@ export function applyEnvironmentDefaults(draft: ConnectionDraft): ConnectionDraf
   };
 }
 
-export function setEnvironment(draft: ConnectionDraft, env: Environment): ConnectionDraft {
+export function setEnvironment(draft: ConnectionDraft, env: Environment | null): ConnectionDraft {
   // The environment rule must not override a user-chosen value.
   // applyEnvironmentDefaults only flips seeded read-only -> mutations, never other values.
   const next = { ...draft, environment: env };

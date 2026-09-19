@@ -24,7 +24,7 @@ export function renderAgentSetup(
   renderMcpSection(
     endpoint,
     {
-      key: mcpKey(integration.name, integration.environment ?? "development"),
+      key: mcpKey(integration.name, integration.environment),
       url: mcpUrl(integration.token),
       agentHint: manifest?.agentHint,
       title: integration.type === WANDE_TYPE ? "Agent setup" : undefined,
@@ -63,7 +63,7 @@ export function renderInstallStep(
   renderMcpSection(
     endpoint,
     {
-      key: mcpKey(integration.name, integration.environment ?? "development"),
+      key: mcpKey(integration.name, integration.environment),
       url: mcpUrl(integration.token),
       agentHint: manifest?.agentHint,
       title: "Endpoint",

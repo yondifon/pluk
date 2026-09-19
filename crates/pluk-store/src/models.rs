@@ -58,8 +58,7 @@ pub struct Integration {
     /// Adapter id, e.g. `postgres`, `linear`, `github-cli`.
     pub r#type: String,
     pub config: Config,
-    /// `None` only for rows written before environments existed; new rows
-    /// always carry one (the column default is `development`).
+    /// `None` when the integration carries no environment at all.
     pub environment: Option<Environment>,
     /// Legacy column; kept for schema compatibility.
     pub read_only: i64,

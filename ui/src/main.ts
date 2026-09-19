@@ -138,7 +138,7 @@ function toDetailIntegration(row: HostIntegration): DetailIntegration {
     id: row.id,
     name: row.name,
     type: row.type,
-    environment: (row.environment ?? undefined) as DetailIntegration["environment"],
+    environment: row.environment as DetailIntegration["environment"],
     config,
     toolConfig: row.toolConfig,
     tools: row.tools,
@@ -437,7 +437,7 @@ function buildForm(current: FormState): { el: HTMLElement; destroy?: () => void 
             id: c.id,
             name: c.name,
             type: c.type,
-            environment: c.environment ?? undefined,
+            environment: c.environment,
             config: Object.fromEntries(
               Object.entries(c.config).map(([k, v]) => [k, v == null ? "" : String(v)]),
             ),
@@ -476,7 +476,7 @@ function startEditIntegration(id: string): void {
     name: row.name,
     type: row.type,
     config: row.config,
-    environment: (row.environment ?? "development") as Environment,
+    environment: row.environment as Environment | null,
   });
   const catalog = manifestFor(row.type);
   const manifest = catalog && row.tools ? { ...catalog, tools: row.tools } : catalog;
@@ -657,7 +657,7 @@ async function loadData(): Promise<void> {
       id: row.id,
       name: row.name,
       type: row.type,
-      environment: (row.environment ?? "development") as Environment,
+      environment: row.environment as Environment | null,
       readOnly: false,
     }),
   );

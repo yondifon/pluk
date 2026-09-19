@@ -20,7 +20,7 @@ export function matchesSearch(
     conn.name.toLowerCase().includes(q) ||
     conn.type.toLowerCase().includes(q) ||
     label.toLowerCase().includes(q) ||
-    conn.environment.toLowerCase().includes(q)
+    (conn.environment?.toLowerCase().includes(q) ?? false)
   );
 }
 
@@ -51,7 +51,7 @@ export function filteredIntegrations(
     (c) =>
       matchesSearch(c, query, adapters) &&
       (typeFilter.size === 0 || typeFilter.has(c.type)) &&
-      (envFilter.size === 0 || envFilter.has(c.environment)),
+      (envFilter.size === 0 || (c.environment != null && envFilter.has(c.environment))),
   );
 }
 
@@ -85,7 +85,7 @@ export function availableEnvs(
   groups: Group[],
 ): Environment[] {
   const present = new Set<Environment>();
-  for (const c of integrations) present.add(c.environment);
+  for (const c of integrations) if (c.environment) present.add(c.environment);
   for (const g of groups) if (g.environment) present.add(g.environment);
   const order: Environment[] = ["production", "staging", "development", "local"];
   return order.filter((e) => present.has(e));

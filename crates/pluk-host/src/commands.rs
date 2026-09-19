@@ -264,6 +264,17 @@ pub fn create_integration(
         .map_err(|e| e.to_string())
 }
 
+/// Read a field so an explicit `null` keeps its own meaning: an absent field
+/// stays the outer `None` ("leave as stored"), `null` becomes `Some(None)`
+/// ("clear it"). Plain `Option` collapses both to `None`.
+fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateIntegrationPayload {
@@ -271,7 +282,9 @@ pub struct UpdateIntegrationPayload {
     #[serde(rename = "type")]
     pub r#type: Option<String>,
     pub config: Option<serde_json::Map<String, serde_json::Value>>,
-    pub environment: Option<String>,
+    /// Absent leaves the stored environment; `null` clears it.
+    #[serde(default, deserialize_with = "nullable")]
+    pub environment: Option<Option<String>>,
     /// Per-tool enablement; absent leaves the stored policy untouched.
     pub tool_config: Option<std::collections::BTreeMap<String, pluk_store::ToolPolicy>>,
     /// Allow and deny rules; absent leaves the stored ones untouched.
@@ -328,8 +341,7 @@ pub fn update_integration(
         config: payload.config,
         environment: payload
             .environment
-            .as_deref()
-            .and_then(pluk_store::Environment::parse),
+            .map(|env| env.as_deref().and_then(pluk_store::Environment::parse)),
         read_only: None,
         query_policy,
     };
@@ -984,6 +996,32 @@ mod inject_command_tests {
 
         assert!(err.contains("Couldn't parse the existing config"));
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
+    }
+}
+
+/// The edit payload has to tell "the window left this out" from "the window
+/// chose no environment"; a plain `Option` reads both as absent.
+#[cfg(test)]
+mod update_payload_tests {
+    use super::*;
+
+    fn environment(json: serde_json::Value) -> Option<Option<String>> {
+        serde_json::from_value::<UpdateIntegrationPayload>(json)
+            .expect("payload")
+            .environment
+    }
+
+    #[test]
+    fn an_absent_environment_is_not_a_cleared_one() {
+        assert_eq!(environment(serde_json::json!({})), None);
+        assert_eq!(
+            environment(serde_json::json!({ "environment": null })),
+            Some(None)
+        );
+        assert_eq!(
+            environment(serde_json::json!({ "environment": "local" })),
+            Some(Some("local".to_string()))
+        );
     }
 }
 

@@ -376,12 +376,16 @@ export function createSidebar(
          nameEl.className = "sidebar-row-name";
          nameEl.textContent = c.name;
          nameEl.title = c.name;
-        const env = document.createElement("span");
-        env.className = "sidebar-row-env";
-        env.textContent = `· ${envLabel(c.environment)}`;
         const spacer = document.createElement("span");
          spacer.className = "sidebar-row-spacer";
-        row.append(glyph, nameEl, env, spacer);
+        row.append(glyph, nameEl);
+        if (c.environment) {
+          const env = document.createElement("span");
+          env.className = "sidebar-row-env";
+          env.textContent = `· ${envLabel(c.environment)}`;
+          row.appendChild(env);
+        }
+        row.appendChild(spacer);
         if (c.readOnly) {
           const lock = document.createElement("span");
            lock.appendChild(createIcon("lock"));

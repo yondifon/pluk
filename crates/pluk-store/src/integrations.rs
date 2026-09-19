@@ -16,7 +16,7 @@ pub struct IntegrationInput {
     /// Adapter id, e.g. `postgres`, `linear`, `github-cli`.
     pub r#type: String,
     pub config: Config,
-    /// Defaults to `development` when absent, like the column default.
+    /// `None` stores no environment at all.
     pub environment: Option<Environment>,
     /// Legacy flag; the server ignores it but the schema requires the column.
     pub read_only: i64,
@@ -38,15 +38,15 @@ impl IntegrationInput {
 
 /// A partial update; `None` fields leave the stored value untouched.
 ///
-/// `query_policy` is doubly optional: outer `None` keeps it, `Some(None)`
-/// clears it (mirroring how the TypeScript API distinguishes "absent" from
-/// explicit null).
+/// `environment` and `query_policy` are doubly optional: outer `None` keeps
+/// the stored value, `Some(None)` clears it (mirroring how the TypeScript API
+/// distinguishes "absent" from explicit null).
 #[derive(Debug, Clone, Default)]
 pub struct IntegrationUpdate {
     pub name: Option<String>,
     pub r#type: Option<String>,
     pub config: Option<Config>,
-    pub environment: Option<Environment>,
+    pub environment: Option<Option<Environment>>,
     pub read_only: Option<i64>,
     pub query_policy: Option<Option<String>>,
 }
@@ -124,7 +124,7 @@ impl Store {
                 input.name,
                 input.r#type,
                 serialize_config(&input.config),
-                input.environment.unwrap_or(Environment::Development).as_str(),
+                input.environment.map(Environment::as_str),
                 input.read_only,
                 input.query_policy,
                 token,
@@ -147,10 +147,10 @@ impl Store {
             Some(current) => current,
             None => return Ok(None),
         };
-        let next_environment = update
-            .environment
-            .or(current.environment)
-            .unwrap_or(Environment::Development);
+        let next_environment = match update.environment {
+            Some(explicit) => explicit,
+            None => current.environment,
+        };
         let next_type = update
             .r#type
             .clone()
@@ -172,7 +172,7 @@ impl Store {
                     .clone()
                     .unwrap_or_else(|| current.r#type.clone()),
                 serialize_config(update.config.as_ref().unwrap_or(&current.config)),
-                next_environment.as_str(),
+                next_environment.map(Environment::as_str),
                 update.read_only.unwrap_or(current.read_only),
                 next_policy,
                 id,
@@ -231,8 +231,12 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::Environment;
     use crate::testing::temp_store;
-    use crate::{DiscoveredTool, IntegrationInput, ProxyAuthInput, codec::parse_query_policy};
+    use crate::{
+        DiscoveredTool, IntegrationInput, IntegrationUpdate, ProxyAuthInput,
+        codec::parse_query_policy,
+    };
 
     fn allow_list(store: &crate::Store, id: &str) -> Vec<String> {
         let stored = store.integration_by_id(id).expect("read").expect("row");
@@ -308,6 +312,45 @@ mod tests {
         assert!(store.get_proxy_auth(&removed.id).expect("auth").is_none());
         assert_eq!(store.list_proxy_tools(&kept.id).expect("tools").len(), 1);
         assert!(store.get_proxy_auth(&kept.id).expect("auth").is_some());
+    }
+
+    #[test]
+    fn an_integration_can_be_stored_without_an_environment() {
+        let (_dir, store) = temp_store();
+        let created = store
+            .create_integration(&IntegrationInput::new("Metrics", "postgres"))
+            .expect("integration");
+
+        assert_eq!(created.environment, None);
+        let read_back = store.integration_by_id(&created.id).expect("read");
+        assert_eq!(read_back.expect("row").environment, None);
+    }
+
+    #[test]
+    fn an_environment_is_set_cleared_and_left_alone_on_update() {
+        let (_dir, store) = temp_store();
+        let created = store
+            .create_integration(&IntegrationInput::new("Metrics", "postgres"))
+            .expect("integration");
+
+        let set = |environment| IntegrationUpdate {
+            environment,
+            ..Default::default()
+        };
+        let apply = |update: IntegrationUpdate| {
+            store
+                .update_integration(&created.id, &update)
+                .expect("update")
+                .expect("row")
+                .environment
+        };
+
+        assert_eq!(
+            apply(set(Some(Some(Environment::Local)))),
+            Some(Environment::Local)
+        );
+        assert_eq!(apply(set(None)), Some(Environment::Local));
+        assert_eq!(apply(set(Some(None))), None);
     }
 
     #[test]

@@ -10,7 +10,7 @@ export interface Integration {
   id: string;
   name: string;
   type: string;
-  environment?: Environment;
+  environment?: Environment | null;
   config: Record<string, string>;
   toolConfig: Record<string, { enabled: boolean; settings: Record<string, string> }>;
   /** This integration's own tools, when its adapter publishes a list per integration. */

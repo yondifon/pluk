@@ -188,6 +188,15 @@ describe("environment rule flipping only seeded and only qualifying types", () =
     expect(d.toolConfig["query"].settings["mode"]).toBe("read-only");
   });
 
+  it("does not flip when there is no environment", () => {
+    const m = makeManifest();
+    let d = emptyDraft();
+    d.environment = null;
+    d = adopt(d, m, true);
+    expect(d.environment).toBeNull();
+    expect(d.toolConfig["query"].settings["mode"]).toBe("read-only");
+  });
+
   it("flips only for local and development, not staging", () => {
     const m = makeManifest();
     let d = emptyDraft();
@@ -196,6 +205,18 @@ describe("environment rule flipping only seeded and only qualifying types", () =
     expect(d.toolConfig["query"].settings["mode"]).toBe("read-only");
     d = setEnvironment(d, "local");
     expect(d.toolConfig["query"].settings["mode"]).toBe("mutations");
+  });
+});
+
+describe("saving without an environment", () => {
+  it("is allowed once the required fields are filled", () => {
+    const m = makeManifest();
+    let d = adopt(emptyDraft(), m, true);
+    d = setEnvironment(d, null);
+    d.name = "Metrics";
+    d.config["host"] = "db.internal";
+    expect(d.environment).toBeNull();
+    expect(canSave(d)).toBe(true);
   });
 });
 

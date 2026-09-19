@@ -73,7 +73,10 @@ mod tests {
     #[test]
     fn absent_environment_omits_the_suffix() {
         let text = build_instructions("Main DB", None, parts());
-        assert!(text.starts_with("PostgreSQL integration \"Main DB\".\n"));
+        assert_eq!(
+            text,
+            "PostgreSQL integration \"Main DB\".\nRead-only by default."
+        );
     }
 
     #[test]

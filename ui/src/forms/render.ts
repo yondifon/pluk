@@ -550,13 +550,17 @@ export function renderNameStep(
   const envPicker = document.createElement("select");
   envPicker.className = "field-select";
   envPicker.id = env.controlId;
+  const noneOpt = document.createElement("option");
+  noneOpt.value = ""; noneOpt.textContent = "None";
+  if (draft.environment == null) noneOpt.selected = true;
+  envPicker.appendChild(noneOpt);
   for (const value of ["production", "staging", "development", "local"] as Environment[]) {
     const o = document.createElement("option");
     o.value = value; o.textContent = value[0].toUpperCase() + value.slice(1);
     if (value === draft.environment) o.selected = true;
     envPicker.appendChild(o);
   }
-  envPicker.addEventListener("change", () => onDraftChange(setEnvironment(draft, envPicker.value as Environment)));
+  envPicker.addEventListener("change", () => onDraftChange(setEnvironment(draft, (envPicker.value || null) as Environment | null)));
   env.slot.appendChild(envPicker);
   card.appendChild(env.row);
 
@@ -734,7 +738,7 @@ export function renderCommandsStep(
 
 export function renderGroupForm(
   draft: GroupDraft,
-  connections: Array<{ id: string; name: string; type: string; environment?: string; config: Record<string, string> }>,
+  connections: Array<{ id: string; name: string; type: string; environment?: string | null; config: Record<string, string> }>,
   adapters: AdapterManifest[],
   onDraftChange: (next: GroupDraft) => void,
   onSave: (d: GroupDraft) => void,
@@ -784,8 +788,8 @@ export function renderGroupForm(
         onDraftChange({ ...draft, included: next });
       });
       const nameEl = document.createElement("span"); nameEl.textContent = conn.name;
-       const envTag = createBadge(conn.environment ?? "development", "environment");
-      header2.append(cb, nameEl, envTag);
+      header2.append(cb, nameEl);
+      if (conn.environment) header2.appendChild(createBadge(conn.environment, "environment"));
       row2.appendChild(header2);
 
       if (on) {

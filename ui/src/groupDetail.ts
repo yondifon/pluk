@@ -31,8 +31,7 @@ export type GroupDetailDeps = {
   inject: InjectFn;
 };
 
-function envLabel(env: string | null | undefined): string {
-  if (!env) return "Any";
+function envLabel(env: string): string {
   return env.charAt(0).toUpperCase() + env.slice(1);
 }
 
@@ -168,8 +167,10 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
         const nameEl = document.createElement("span");
         nameEl.textContent = conn.name;
         nameEl.className = "member-name";
-        const envTag = createBadge(envLabel(conn.environment as string), "environment");
-        nameRow.append(nameEl, envTag);
+        nameRow.appendChild(nameEl);
+        if (conn.environment) {
+          nameRow.appendChild(createBadge(envLabel(conn.environment), "environment"));
+        }
 
         info.appendChild(nameRow);
 

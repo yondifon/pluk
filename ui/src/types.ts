@@ -4,7 +4,7 @@ export type Integration = {
   id: string;
   name: string;
   type: string;
-  environment: Environment;
+  environment: Environment | null;
   readOnly: boolean;
 };
 

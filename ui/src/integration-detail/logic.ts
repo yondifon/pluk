@@ -131,10 +131,10 @@ export function overviewRows(
 }
 
 export function formatMetaLine(integration: Integration, manifest: AdapterManifest | null | undefined): string {
-  const env = integration.environment ?? "development";
-  const envLabel = env.charAt(0).toUpperCase() + env.slice(1);
+  const env = integration.environment;
   const typeLabel = manifest?.label ?? integration.type;
-  const parts = [`${typeLabel} · ${envLabel}`];
+  const head = env ? `${typeLabel} · ${env.charAt(0).toUpperCase() + env.slice(1)}` : typeLabel;
+  const parts = [head];
   const tools = toolsFor(integration, manifest);
   if (tools.length) {
     parts.push(`${enabledCount(tools, integration.toolConfig)}/${tools.length} tools`);
