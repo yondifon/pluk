@@ -21,6 +21,7 @@
 //!
 //! [`pluk-host`]: ../pluk_host/index.html
 
+mod boundary;
 mod cancel;
 mod events;
 mod health;

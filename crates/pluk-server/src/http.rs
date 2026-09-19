@@ -4,6 +4,9 @@
 //! MCP endpoint (token → integration or group), then health. Adapter-supplied
 //! APIs are probed from the fallback handler in the TypeScript order — global
 //! handlers first, then per-integration subpaths.
+//!
+//! Every route, the fallback included, is reached only through
+//! [`crate::boundary`].
 
 use std::collections::BTreeMap;
 
@@ -12,7 +15,7 @@ use axum::extract::{Path, RawQuery, State};
 use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
-use axum::{Json, Router};
+use axum::{Json, Router, middleware};
 use futures::StreamExt;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
 use tower::ServiceExt;
@@ -43,10 +46,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health_report))
         .fallback(adapter_apis_or_not_found)
         .with_state(state);
-    match browser {
+    let router = match browser {
         Some(browser) => router.nest("/wande", browser),
         None => router,
-    }
+    };
+    router.layer(middleware::from_fn(crate::boundary::guard))
 }
 
 fn json_response(status: StatusCode, value: serde_json::Value) -> Response {

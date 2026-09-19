@@ -109,7 +109,12 @@ impl Adapter for StubAdapter {
     }
 
     async fn handle_global_api(&self, _request: ApiRequest, path: &str) -> Option<ApiResponse> {
-        (path == "/api/stub-global").then(|| ApiResponse::text(200, "global"))
+        match path {
+            "/api/stub-global" => Some(ApiResponse::text(200, "global")),
+            // Stands in for the page the OAuth redirect lands on.
+            "/oauth/mcp/callback" => Some(ApiResponse::text(200, "signed in")),
+            _ => None,
+        }
     }
 
     fn instructions(&self, conn: &Integration) -> String {
@@ -282,13 +287,41 @@ pub async fn spawn_app_with_events(keepalive: Duration, capacity: usize) -> Test
         events.clone(),
     );
     finish_spawn(
-        state, dir, db_path, store, adapter, owners, health, closed, events,
+        state,
+        loopback().await,
+        dir,
+        db_path,
+        store,
+        adapter,
+        owners,
+        health,
+        closed,
+        events,
     )
+    .await
+}
+
+/// Spawn with the `/wande` surface attached, pinned to the port it answers on.
+pub async fn spawn_app_with_browser() -> TestApp {
+    let listener = loopback().await;
+    let port = listener.local_addr().unwrap().port();
+    spawn_with_listener(listener, move |store, registry, owners, health| {
+        let mut state = AppState::new(store, registry, owners, health);
+        state.attach_browser(port).expect("attach browser");
+        state
+    })
     .await
 }
 
 /// Spawn with a caller-built state (full control over every shared handle).
 pub async fn spawn_app_with(
+    build: impl Fn(Arc<Store>, Arc<AdapterRegistry>, Arc<OwnerPool>, Arc<HealthMap>) -> AppState,
+) -> TestApp {
+    spawn_with_listener(loopback().await, build).await
+}
+
+async fn spawn_with_listener(
+    listener: tokio::net::TcpListener,
     build: impl Fn(Arc<Store>, Arc<AdapterRegistry>, Arc<OwnerPool>, Arc<HealthMap>) -> AppState,
 ) -> TestApp {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -319,14 +352,21 @@ pub async fn spawn_app_with(
         health.clone(),
     );
     finish_spawn(
-        state, dir, db_path, store, adapter, owners, health, closed, events,
+        state, listener, dir, db_path, store, adapter, owners, health, closed, events,
     )
     .await
+}
+
+async fn loopback() -> tokio::net::TcpListener {
+    tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind")
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn finish_spawn(
     state: AppState,
+    listener: tokio::net::TcpListener,
     dir: tempfile::TempDir,
     db_path: std::path::PathBuf,
     store: Arc<Store>,
@@ -338,9 +378,6 @@ async fn finish_spawn(
 ) -> TestApp {
     let app = router(state);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
     let port = listener.local_addr().unwrap().port();
     let shutdown = tokio_util::sync::CancellationToken::new();
     {
