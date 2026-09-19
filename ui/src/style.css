@@ -127,7 +127,7 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .snippet + .hint { margin-top: var(--space-xs); }
 .snippet-targets { padding: var(--space-xs) var(--space-md); }
 .form-footer { justify-content: flex-end; margin-top: var(--space-lg); }
-.modal-body .form-footer { position: sticky; bottom: 0; margin: var(--space-lg) calc(var(--space-xl) * -1) 0; padding: var(--space-md) var(--space-xl); border-top: var(--border-width) solid var(--border-subtle); background: var(--surface-panel); }
+.modal-body .form-footer { position: sticky; bottom: 0; margin: auto calc(var(--space-xl) * -1) 0; padding: var(--space-md) var(--space-xl); border-top: var(--border-width) solid var(--border-subtle); background: var(--surface-panel); }
 .chooser-section { display: flex; flex-direction: column; gap: var(--space-sm); }
 .wizard-head { display: flex; flex-direction: column; gap: var(--space-xs); }
 .wizard-progress { margin: 0; color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
@@ -303,13 +303,20 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .modal-overlay.modal-closing .modal { transform: scale(0.97); transition-duration: var(--duration-exit); }
 .modal-small { width: min(var(--modal-small-width), calc(100vw - var(--space-xxl))); max-height: min(var(--modal-small-height), calc(100vh - var(--space-xxl))); }
 .modal-large { width: min(var(--modal-large-width), calc(100vw - var(--space-xxl))); max-height: min(var(--modal-large-height), calc(100vh - var(--space-xxl))); }
+/* Every create and edit screen shares this shape, so the dialog holds still as
+   the wizard steps. It grows with its step and stops short of the window edge. */
+.modal-form { width: min(var(--modal-form-width), calc(100vw - var(--space-xxl))); min-height: min(var(--modal-form-min-height), 85vh); max-height: min(var(--modal-form-height), 85vh); }
 .modal-header { display: flex; align-items: center; gap: var(--space-lg); min-height: var(--modal-header-height); padding: 0 var(--space-md) 0 var(--space-lg); border-bottom: var(--border-width) solid var(--border-subtle); }
 .modal-title { flex: 1; margin: 0; color: var(--surface-label); font-size: calc(var(--type-body) * var(--zoom-scale)); font-weight: 600; }
 .modal-header-actions { display: flex; align-items: center; gap: var(--space-sm); }
 .modal-close { display: grid; place-items: center; min-width: var(--control-target); min-height: var(--control-target); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--surface-tertiary-label); }
 .modal-close:hover { background: var(--surface-hover); color: var(--surface-label); }
 .modal-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--space-xl); }
+/* The body and the host it wraps the form in both pass their height down, so a
+   short step's footer still rests on the bottom edge and a long one scrolls. */
 .modal-body-form { padding-bottom: 0; }
+.modal-body-form, .form-host { display: flex; flex-direction: column; }
+.form-host, .form-host > * { flex: 1 0 auto; }
 .modal-with-sidebar .modal-body { padding: 0; }
 .modal-large-layout { display: grid; grid-template-columns: minmax(var(--modal-sidebar-min), 28%) minmax(0, 1fr); min-height: 100%; }
 .modal-sidebar { padding: var(--space-xl); border-right: var(--border-width) solid var(--border-subtle); background: var(--surface-content); }

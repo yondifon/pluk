@@ -1,7 +1,7 @@
 import { createIcon } from "./icon";
 import { createButton } from "./primitives";
 
-export type ModalSize = "small" | "large";
+export type ModalSize = "small" | "form" | "large";
 
 type ModalOptions = {
   title: string;

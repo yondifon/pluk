@@ -60,6 +60,11 @@
   --modal-small-height: 560px;
   --modal-large-width: 960px;
   --modal-large-height: 760px;
+  /* One column of fields, wide enough for a label beside its control and no
+     wider. The floor keeps a short step from collapsing to a strip. */
+  --modal-form-width: 560px;
+  --modal-form-min-height: 480px;
+  --modal-form-height: 720px;
   --modal-header-height: 52px;
   --modal-sidebar-min: 180px;
   --toast-width: 356px;

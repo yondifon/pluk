@@ -249,9 +249,10 @@ function openForm(next: FormState): void {
   ruleProblem = null;
   if (!formModal) {
     formHost = document.createElement("div");
+    formHost.className = "form-host";
     formModal = openModal({
       title: FORM_TITLES[next.kind],
-      size: "large",
+      size: "form",
       content: formHost,
       onClose: () => {
         const provisionalId = provisionalIntegrationId;
