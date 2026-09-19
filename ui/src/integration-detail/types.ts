@@ -3,6 +3,9 @@ export type Environment = "production" | "staging" | "development" | "local";
 /** The Wande integration's type (`pluk_browser::INTEGRATION_TYPE`). */
 export const WANDE_TYPE = "wande";
 
+/** The type of an integration that re-exposes another MCP server's tools. */
+export const MCP_TYPE = "mcp";
+
 export interface Integration {
   id: string;
   name: string;

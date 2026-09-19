@@ -168,6 +168,11 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .tool-off .tool-dot, .al-dot-cancelled, .al-dot-pending { background: var(--surface-tertiary-label); }
 .tool-off { opacity: var(--disabled-opacity); }
 .tool-state { color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
+.tool-gone { opacity: var(--disabled-opacity); }
+.tool-head > .ui-badge { min-height: 0; padding: var(--space-xxs) var(--space-xs); }
+.ui-badge-new { background: var(--success-fill); color: var(--success-label); }
+.ui-badge-changed { background: color-mix(in srgb, var(--status-warning) 14%, transparent); color: var(--status-warning); }
+.ui-badge-missing { background: var(--surface-control); color: var(--surface-tertiary-label); }
 .tool-head, .member-name-row { display: flex; align-items: center; gap: var(--space-sm); }
 .tool-head { min-height: var(--control-target); }
 .tool-name { color: var(--surface-label); font-weight: 600; }

@@ -2,12 +2,13 @@ import { renderHeader } from "./header";
 import { renderAgentSetup } from "./agent-setup";
 import { renderOverview } from "./overview";
 import { renderTools } from "./tools";
+import { mountServerTools } from "./server-tools";
 import { type InjectFn } from "./mcp-section";
 import { INTEGRATION_TAB_ORDER, renderTabs, type TabId } from "./tabs";
 import { mountActivityLog } from "../activityLog/activityLog";
 import { humanizeHealthError } from "../health";
 import { toast, type PendingToast } from "../toast";
-import { type AdapterManifest, type ConnHealth, type Integration } from "./types";
+import { MCP_TYPE, type AdapterManifest, type ConnHealth, type Integration } from "./types";
 
 export type DetailActions = {
   onEdit: () => void;
@@ -44,6 +45,7 @@ export function mountIntegrationDetail(
   let logs: { destroy: () => void } | null = null;
   let overview: { destroy: () => void } | null = null;
   let agentSetup: { destroy: () => void } | null = null;
+  let serverTools: { destroy: () => void } | null = null;
 
   function reportTestFailure(error: string, pending: PendingToast): void {
     currentHealth = { status: "error", error, at: Date.now() };
@@ -92,6 +94,8 @@ export function mountIntegrationDetail(
     overview = null;
     agentSetup?.destroy();
     agentSetup = null;
+    serverTools?.destroy();
+    serverTools = null;
     contentEl.innerHTML = "";
     if (selectedTab === "logs") {
       const panel = document.createElement("div");
@@ -119,7 +123,8 @@ export function mountIntegrationDetail(
       const panel = document.createElement("div");
       panel.setAttribute("role", "tabpanel");
       panel.setAttribute("aria-labelledby", "tab-tools");
-      renderTools(panel, integration, manifest ?? null);
+      if (integration.type === MCP_TYPE) serverTools = mountServerTools(panel, integration);
+      else renderTools(panel, integration, manifest ?? null);
       contentEl.appendChild(panel);
     }
   }
@@ -141,6 +146,8 @@ export function mountIntegrationDetail(
       overview = null;
       agentSetup?.destroy();
       agentSetup = null;
+      serverTools?.destroy();
+      serverTools = null;
       logs?.destroy();
       logs = null;
       root.innerHTML = "";

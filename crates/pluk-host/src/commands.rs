@@ -173,6 +173,19 @@ pub fn get_integration(
         .map_err(|e| e.to_string())
 }
 
+/// What an adapter's own API answered: the HTTP status it chose, and its
+/// body. Anything the route itself reports, including a refusal, arrives here
+/// rather than as an error, so the window can show the adapter's own wording.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiAnswer {
+    pub status: u16,
+    pub body: serde_json::Value,
+}
+
+/// The window's one way into an integration's own REST API, the routes its
+/// adapter serves under `/api/integrations/<id>/…`. The loopback server is
+/// closed to browser origins, so the request is resolved here instead.
 #[tauri::command]
 pub async fn integration_api(
     state: State<'_, HostState>,
@@ -180,7 +193,7 @@ pub async fn integration_api(
     method: String,
     subpath: String,
     body: Option<String>,
-) -> CmdResult<serde_json::Value> {
+) -> CmdResult<ApiAnswer> {
     integration_api_request(
         &state.store,
         &state.shared.registry,
@@ -199,7 +212,7 @@ async fn integration_api_request(
     method: String,
     subpath: String,
     body: Option<String>,
-) -> CmdResult<serde_json::Value> {
+) -> CmdResult<ApiAnswer> {
     let conn = store
         .integration_by_id(&integration_id)
         .map_err(|e| e.to_string())?
@@ -215,19 +228,11 @@ async fn integration_api_request(
     let response = adapter
         .handle_api(&conn, request, &subpath)
         .await
-        .ok_or_else(|| "Not found".to_string())?;
-    if (200..300).contains(&response.status) {
-        return serde_json::from_slice(&response.body).map_err(|e| e.to_string());
-    }
-    let error = serde_json::from_slice::<serde_json::Value>(&response.body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        });
-    Err(error.unwrap_or_else(|| response.status.to_string()))
+        .ok_or_else(|| format!("No route for {subpath}"))?;
+    Ok(ApiAnswer {
+        status: response.status,
+        body: serde_json::from_slice(&response.body).map_err(|e| e.to_string())?,
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1062,7 +1067,8 @@ mod integration_api_tests {
         .await
         .unwrap();
 
-        assert_eq!(response["ok"], true);
-        assert!(response["tools"].is_array());
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body["ok"], true);
+        assert!(response.body["tools"].is_array());
     }
 }

@@ -267,7 +267,9 @@ export function renderToolsSection(
   wrap.appendChild(header);
   const hint = document.createElement("p");
   hint.className = "hint";
-  hint.textContent = `${enabledCount} of ${draft.tools.length} on. Enable tools to give the agent more, disable to shrink what it sees.`;
+  hint.textContent = draft.tools.length
+    ? `${enabledCount} of ${draft.tools.length} on. Enable tools to give the agent more, disable to shrink what it sees.`
+    : "Nothing to choose yet. Finish here, then open this integration to see what it offers.";
   wrap.appendChild(hint);
 
   const { defaults, extras } = splitTools(draft.tools);

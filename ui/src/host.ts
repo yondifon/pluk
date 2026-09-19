@@ -62,12 +62,18 @@ export async function injectMcpConfig(args: {
   });
 }
 
-export async function integrationApi(args: {
+/**
+ * One call to an integration's own REST API, the routes its adapter serves
+ * under `/api/integrations/<id>/…`. The window cannot reach the loopback
+ * server directly, so the host forwards the request and hands back the parsed
+ * JSON body.
+ */
+export async function integrationApi<T>(args: {
   integrationId: string;
   method: string;
   subpath: string;
   body?: string;
-}): Promise<unknown> {
+}): Promise<{ status: number; body: T }> {
   return invoke("integration_api", {
     integrationId: args.integrationId,
     method: args.method,
