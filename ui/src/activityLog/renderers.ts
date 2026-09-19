@@ -1,4 +1,4 @@
-import type { LogEntry } from "./types";
+import { isCommandAdapter, type LogEntry } from "./types";
 import { escapeHtml } from "./highlight";
 
 export type EntryType = "database" | "command" | "forward" | "http" | "policy" | "error" | "generic";
@@ -53,12 +53,18 @@ const genericRenderer: EntryRenderer = entry => httpRenderer(entry);
 
 export const ENTRY_RENDERERS: Record<EntryType, EntryRenderer> = { database: databaseRenderer, command: commandRenderer, forward: forwardRenderer, http: httpRenderer, policy: policyRenderer, error: errorRenderer, generic: genericRenderer };
 
-export function entryType(entry: LogEntry, connectionType?: string): EntryType {
-  if (entry.verdict === "blocked") return "policy";
-  if (entry.verdict === "error" || entry.verdict === "cancelled") return "error";
-  if (entry.categories === "command" || ["ssh", "github-cli", "spark", "herd"].includes(connectionType ?? "")) return "command";
+/** What the call was, with no regard for how it ended. */
+export function entryCategory(entry: LogEntry, connectionType?: string): EntryType {
+  if (entry.categories === "command" || isCommandAdapter(connectionType)) return "command";
   if (entry.categories === "forward") return "forward";
   if (entry.categories?.includes("database") || ["query", "export_query", "run_saved_query"].includes(entry.source ?? "")) return "database";
   if (entry.source) return "http";
   return "generic";
+}
+
+/** Which detail renderer an entry gets; a refusal or a failure overrides the category. */
+export function entryType(entry: LogEntry, connectionType?: string): EntryType {
+  if (entry.verdict === "blocked") return "policy";
+  if (entry.verdict === "error" || entry.verdict === "cancelled") return "error";
+  return entryCategory(entry, connectionType);
 }

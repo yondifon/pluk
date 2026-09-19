@@ -6,6 +6,8 @@ export type Integration = {
   type: string;
   environment: Environment | null;
   readOnly: boolean;
+  /** The upstream this integration proxies, when it has one. Its host picks the logo. */
+  serverUrl?: string;
 };
 
 export type Group = {

@@ -3,6 +3,7 @@ import { mergeEntries } from "./api";
 import { capResponse, capConsole, PREVIEW_LINES, PREVIEW_CHARS, CONSOLE_PREVIEW_LINES, CONSOLE_PREVIEW_CHARS } from "./caps";
 import { scan, scanConsole } from "./highlight";
 import { parseUtcToMillis, relativeTime, localTimeString } from "./time";
+import { verdictFilterCounts, verdictFilterLabel, verdictFilters } from "./types";
 import type { LogEntry } from "./types";
 
 function entry(over: Partial<LogEntry> & { id: number }): LogEntry {
@@ -78,6 +79,25 @@ describe("filters and live counts", () => {
     ];
     expect(counts(es)).toEqual({ allowed: 2, blocked: 1, error: 1 });
     expect(es.filter(e => e.verdict === "allowed").length).toBe(2);
+  });
+
+  test("every filter chip carries its own count", () => {
+    const es = [
+      entry({ id: 1, verdict: "allowed" }),
+      entry({ id: 2, verdict: "blocked" }),
+      entry({ id: 3, verdict: "error" }),
+      entry({ id: 4, verdict: "allowed" }),
+      entry({ id: 5, verdict: "pending" }),
+    ];
+    expect(verdictFilterCounts(es)).toEqual({ all: 5, allowed: 2, blocked: 1, error: 1 });
+  });
+
+  test("chip labels name the result, not the verdict key", () => {
+    expect(verdictFilters.map(verdictFilterLabel)).toEqual(["All", "Successful", "Blocked", "Failed"]);
+  });
+
+  test("counts an empty page as all zero", () => {
+    expect(verdictFilterCounts([])).toEqual({ all: 0, allowed: 0, blocked: 0, error: 0 });
   });
 
   test("search matches sql, source, connectionName, categories", () => {

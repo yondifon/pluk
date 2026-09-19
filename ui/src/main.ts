@@ -662,6 +662,7 @@ async function loadData(): Promise<void> {
       type: row.type,
       environment: row.environment as Environment | null,
       readOnly: false,
+      serverUrl: typeof row.config.url === "string" ? row.config.url : undefined,
     }),
   );
   state.groups = groups.map(

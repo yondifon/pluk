@@ -5,16 +5,16 @@
  */
 
 import type { LogEntry, LogCursor, TimeRange, VerdictFilter } from "./types";
-import { timeRangeLabels } from "./types";
+import { verdictFilters, verdictFilterCounts, verdictFilterLabel, verdictLabel } from "./types";
 import { fetchLogPage, mergeEntries, cancelLog, getRetention, setRetention, clearLogs, connectEvents, type LogScope, type LiveEvent } from "./api";
-import { relativeTime, localTimeString, parseUtcToMillis } from "./time";
+import { relativeTime, localTimeString } from "./time";
 import { highlightedHtml, consoleHtml, parseLanguage, escapeHtml } from "./highlight";
 import { capResponse } from "./caps";
 import { createResponseViewer } from "./responseViewer";
 import { createIcon } from "../icon";
 import { confirmModal } from "../modal";
 import { toast } from "../toast";
-import { ENTRY_RENDERERS, entryType, responseTextForCopy } from "./renderers";
+import { ENTRY_RENDERERS, entryCategory, entryType, responseTextForCopy, type EntryType } from "./renderers";
 
 export interface ActivityLogOptions {
   scope: LogScope;
@@ -60,7 +60,6 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
         <input class="al-search-input" placeholder="Filter SQL, tool, integration…" aria-label="Filter activity" />
         <button class="al-search-clear icon-button" aria-label="Clear search" hidden></button>
       </div>
-      <div class="al-spacer"></div>
       <div class="al-menus">
         <label class="al-select-wrap">Time
           <select class="al-select" data-role="range">
@@ -69,14 +68,6 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
             <option value="7d">Last 7 days</option>
             <option value="30d">Last 30 days</option>
             <option value="all" selected>All time</option>
-          </select>
-        </label>
-        <label class="al-select-wrap">Show
-          <select class="al-select" data-role="verdict">
-            <option value="all">All</option>
-            <option value="allowed">Successful</option>
-            <option value="blocked">Blocked</option>
-            <option value="error">Failed</option>
           </select>
         </label>
         <label class="al-select-wrap">Keep
@@ -89,11 +80,12 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
             <option value="0">Forever</option>
           </select>
         </label>
-         <button class="ui-button" data-role="refresh" aria-label="Refresh">Refresh</button>
-         <button class="ui-button ui-button-danger" data-role="clear" aria-label="Clear all">Clear</button>
+        <button class="ui-button" data-role="refresh">Refresh</button>
+        <span class="al-toolbar-divider" aria-hidden="true"></span>
+        <button class="ui-button al-clear" data-role="clear">Clear history</button>
       </div>
     </div>
-    <div class="al-stats" data-role="stats"></div>
+    <div class="al-filters" role="group" aria-label="Filter by result" data-role="filters"></div>
     <div class="al-retention-status sr-only" data-role="retention-status" role="status" aria-live="polite" aria-atomic="true"></div>
     <div class="al-list" data-role="list"></div>
     <div class="al-load-more" data-role="loadMore"></div>
@@ -103,9 +95,8 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   const elSearch = container.querySelector(".al-search-input") as HTMLInputElement;
   const elSearchClear = container.querySelector(".al-search-clear") as HTMLButtonElement;
   const elRange = container.querySelector("[data-role='range']") as HTMLSelectElement;
-  const elVerdict = container.querySelector("[data-role='verdict']") as HTMLSelectElement;
   const elRetention = container.querySelector("[data-role='retention']") as HTMLSelectElement;
-  const elStats = container.querySelector("[data-role='stats']") as HTMLElement;
+  const elFilters = container.querySelector("[data-role='filters']") as HTMLElement;
   const elRetentionStatus = container.querySelector("[data-role='retention-status']") as HTMLElement;
   const elList = container.querySelector("[data-role='list']") as HTMLElement;
   const elLoadMore = container.querySelector("[data-role='loadMore']") as HTMLElement;
@@ -113,6 +104,9 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   container.querySelector(".al-search-icon")?.appendChild(createIcon("search"));
   container.querySelector(".al-search-clear")?.appendChild(createIcon("close"));
   container.querySelector("[data-role='refresh']")?.prepend(createIcon("refresh"));
+  elFilters.innerHTML = verdictFilters
+    .map(value => `<button type="button" class="al-filter" data-verdict="${value}" aria-pressed="false">${escapeHtml(verdictFilterLabel(value))} <span class="al-filter-count">0</span></button>`)
+    .join("");
 
   // retention init
   getRetention().then(d => {
@@ -133,32 +127,14 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     return entries.filter(e => (filter === "all" || e.verdict === filter) && matchesSearch(e));
   }
 
-  function statsCounts() {
-    return {
-      allowed: entries.filter(e => e.verdict === "allowed").length,
-      blocked: entries.filter(e => e.verdict === "blocked").length,
-      error: entries.filter(e => e.verdict === "error").length,
-    };
-  }
-
   function updateStats() {
-    const s = statsCounts();
-    const counts = `All ${entries.length} · Successful ${s.allowed} · Blocked ${s.blocked} · Failed ${s.error}`;
-    // Inject live counts into verdict options
-    for (const opt of Array.from(elVerdict.options)) {
-      const base = opt.value === "all" ? "All" : opt.value === "allowed" ? "Successful" : opt.value === "blocked" ? "Blocked" : "Failed";
-      const n = opt.value === "all" ? entries.length : opt.value === "allowed" ? s.allowed : opt.value === "blocked" ? s.blocked : s.error;
-      opt.textContent = `${base} (${n})`;
+    const counts = verdictFilterCounts(entries);
+    for (const chip of Array.from(elFilters.querySelectorAll<HTMLButtonElement>(".al-filter"))) {
+      const value = chip.dataset.verdict as VerdictFilter;
+      chip.setAttribute("aria-pressed", String(value === filter));
+      const count = chip.querySelector(".al-filter-count");
+      if (count) count.textContent = String(counts[value]);
     }
-    elStats.textContent = counts;
-  }
-
-  function verdictLabel(v: string): string {
-    if (v === "allowed") return "ok";
-    if (v === "blocked") return "blocked";
-    if (v === "cancelled") return "cancelled";
-    if (v === "pending") return "running";
-    return "error";
   }
 
   function renderEmpty() {
@@ -167,7 +143,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     let title = "";
     let subtitle = "";
     if (q) { title = "No matches"; subtitle = `No entries match “${q}”.`; }
-    else if (f !== "all") { title = `No ${f} activity`; subtitle = "Try a different filter."; }
+    else if (f !== "all") { title = `No ${verdictFilterLabel(f).toLowerCase()} activity`; subtitle = "Try a different filter."; }
     else if (timeRange !== "all") { title = "No activity in this range"; subtitle = "Try a wider time range."; }
     else { title = "No activity yet"; subtitle = "Activity from agents using this endpoint will appear here."; }
     elEmpty.innerHTML = `<div class="al-empty-icon"></div><div class="al-empty-title">${escapeHtml(title)}</div><div class="al-empty-sub">${escapeHtml(subtitle)}</div>`;
@@ -175,22 +151,21 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   }
 
   function rowHtml(entry: LogEntry, isExpanded: boolean): string {
-    const type = entryType(entry, typeMap.get(entry.connectionId));
+    const connectionType = typeMap.get(entry.connectionId);
     const detailId = `al-detail-${entry.id}`;
-    const detail = isExpanded ? `<div id="${detailId}" class="al-expanded" role="region">${ENTRY_RENDERERS[type](entry)}</div>` : "";
-    return `<div class="al-row ui-card${isExpanded ? " al-row-expanded" : ""}" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="${isExpanded}" aria-controls="${detailId}">${metaLineHtml(entry, type)}<div class="al-summary" title="${escapeHtml(entry.sql)}">${escapeHtml(entry.sql)}</div>${detail}</div>`;
+    const detail = isExpanded ? `<div id="${detailId}" class="al-expanded" role="region">${ENTRY_RENDERERS[entryType(entry, connectionType)](entry)}</div>` : "";
+    return `<div class="al-row${isExpanded ? " al-row-expanded" : ""}" data-id="${entry.id}" data-verdict="${escapeHtml(entry.verdict)}" role="button" tabindex="0" aria-expanded="${isExpanded}" aria-controls="${detailId}">${metaLineHtml(entry, entryCategory(entry, connectionType))}<div class="al-summary" title="${escapeHtml(entry.sql)}">${escapeHtml(entry.sql)}</div>${detail}</div>`;
   }
 
-  function metaLineHtml(entry: LogEntry, type = entryType(entry, typeMap.get(entry.connectionId))): string {
-    const badges: string[] = [];
-    badges.push(`<span class="al-badge al-badge-${escapeHtml(entry.verdict)}"><span class="al-dot al-dot-${escapeHtml(entry.verdict)}"></span>${escapeHtml(verdictLabel(entry.verdict))}</span>`);
-    badges.push(`<span class="al-chip">${escapeHtml(entry.connectionName)}</span>`);
-    if (entry.source) badges.push(`<span class="al-chip">${escapeHtml(entry.source)}</span>`);
-    badges.push(`<span class="al-kind">${escapeHtml(type)}</span>`);
+  function metaLineHtml(entry: LogEntry, category: EntryType): string {
+    // A successful call says so only to assistive tech; the left rule carries it on screen.
+    const statusClass = entry.verdict === "allowed" ? "sr-only" : "al-status";
+    const status = `<span class="${statusClass}">${escapeHtml(verdictLabel(entry.verdict))}</span>`;
+    const facets = entry.source ? `${entry.source} · ${category}` : category;
     const stopBtn = entry.verdict === "pending" ? `<button class="ui-button ui-button-sm ui-button-danger" data-stop="${entry.id}">Stop</button>` : "";
-     const rel = escapeHtml(relativeTime(entry.createdAt));
-     const absolute = escapeHtml(localTimeString(entry.createdAt));
-     return `<div class="al-meta">${badges.join("")}<span class="al-spacer"></span>${stopBtn}<time class="al-time-ago" datetime="${escapeHtml(entry.createdAt)}" title="${absolute}">${rel}</time></div>`;
+    const rel = escapeHtml(relativeTime(entry.createdAt));
+    const absolute = escapeHtml(localTimeString(entry.createdAt));
+    return `<div class="al-meta">${status}<span class="al-name">${escapeHtml(entry.connectionName)}</span><span class="al-facets">${escapeHtml(facets)}</span>${stopBtn}<time class="al-time-ago" datetime="${escapeHtml(entry.createdAt)}" title="${absolute}">${rel}</time></div>`;
   }
 
   const renderedRows = new Map<number, { node: HTMLElement; entry: LogEntry; expanded: boolean }>();
@@ -414,7 +389,6 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   elSearch.addEventListener("input", () => {
     search = elSearch.value;
     elSearchClear.hidden = !search;
-    updateStats();
     if (searchTimer) clearTimeout(searchTimer);
     searchTimer = window.setTimeout(() => {
       searchTimer = null;
@@ -428,15 +402,17 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     if (searchTimer) clearTimeout(searchTimer);
     searchTimer = null;
     renderList();
-    updateStats();
   });
   elRange.value = timeRange;
   elRange.addEventListener("change", () => {
     timeRange = elRange.value as TimeRange;
     reload(true);
   });
-  elVerdict.addEventListener("change", () => {
-    filter = elVerdict.value as VerdictFilter;
+  elFilters.addEventListener("click", (e) => {
+    const chip = (e.target as HTMLElement).closest<HTMLButtonElement>(".al-filter");
+    if (!chip) return;
+    filter = chip.dataset.verdict as VerdictFilter;
+    updateStats();
     renderList();
   });
   elRetention.addEventListener("change", () => {
@@ -552,6 +528,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   });
 
   // initial load + live
+  updateStats();
   reload(true);
   startLive();
 

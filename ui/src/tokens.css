@@ -53,7 +53,6 @@
   --tool-indent: calc(var(--checkbox-size) * var(--zoom-scale) + var(--space-sm));
   --select-max-width: 240px;
   --search-min-width: 160px;
-  --search-max-width: 320px;
   --gutter-width: 36px;
   --empty-max-width: 420px;
   --modal-small-width: 440px;

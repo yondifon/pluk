@@ -31,15 +31,36 @@ export interface LogPage {
 
 export type TimeRange = "hour" | "today" | "7d" | "30d" | "all";
 
-export const timeRangeLabels: Record<TimeRange, string> = {
-  hour: "Last hour",
-  today: "Today",
-  "7d": "Last 7 days",
-  "30d": "Last 30 days",
-  all: "All time",
+export type VerdictFilter = "all" | "allowed" | "blocked" | "error";
+
+export const verdictFilters: VerdictFilter[] = ["all", "allowed", "blocked", "error"];
+
+/** One word per verdict, shared by the row status and the filter chips. */
+export const verdictLabels: Record<string, string> = {
+  allowed: "Successful",
+  blocked: "Blocked",
+  cancelled: "Cancelled",
+  error: "Failed",
+  pending: "Running",
 };
 
-export type VerdictFilter = "all" | "allowed" | "blocked" | "error";
+export function verdictLabel(verdict: string): string {
+  return verdictLabels[verdict] ?? verdict;
+}
+
+export function verdictFilterLabel(filter: VerdictFilter): string {
+  return filter === "all" ? "All" : verdictLabels[filter];
+}
+
+export function verdictFilterCounts(entries: LogEntry[]): Record<VerdictFilter, number> {
+  const counts: Record<VerdictFilter, number> = { all: entries.length, allowed: 0, blocked: 0, error: 0 };
+  for (const entry of entries) {
+    if (entry.verdict === "allowed" || entry.verdict === "blocked" || entry.verdict === "error") {
+      counts[entry.verdict] += 1;
+    }
+  }
+  return counts;
+}
 
 export function isCommandAdapter(type?: string | null): boolean {
   return type === "ssh" || type === "github-cli" || type === "spark" || type === "herd";

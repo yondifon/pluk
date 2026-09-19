@@ -1,10 +1,11 @@
 import { createIcon } from "./icon";
 
-function loadLogo(element: HTMLElement, type: string, tint = false): void {
-  void import("./adapterLogo").then(({ adapterLogo }) => {
-    const logo = adapterLogo(type);
+function loadLogo(element: HTMLElement, type: string, options: { tint?: boolean; serverUrl?: string } = {}): void {
+  void import("./adapterLogo").then(({ adapterLogo, logoType }) => {
+    const brand = logoType(type, options.serverUrl);
+    const logo = adapterLogo(brand);
     if (logo) {
-      if (tint) element.style.background = hexToRgba(adapterColor(type), 0.14);
+      if (options.tint) element.style.background = hexToRgba(adapterColor(brand), 0.14);
       element.replaceChildren(logo);
     }
   });
@@ -44,7 +45,7 @@ export function adapterAbbrev(type: string): string {
   }
 }
 
-export function glyphElement(type: string, size = 12): HTMLElement {
+export function glyphElement(type: string, size = 12, serverUrl?: string): HTMLElement {
   const wrap = document.createElement("span");
   wrap.className = "adapter-glyph";
   wrap.style.width = `${size}px`;
@@ -63,7 +64,7 @@ export function glyphElement(type: string, size = 12): HTMLElement {
     return wrap;
   }
 
-  loadLogo(wrap, type);
+  loadLogo(wrap, type, { serverUrl });
   wrap.textContent = adapterAbbrev(type);
   wrap.style.fontFamily = "var(--font-mono)";
   wrap.title = type;
@@ -91,7 +92,7 @@ export function typeBadge(type: string, label: string): HTMLElement {
     return badge;
   }
 
-  loadLogo(badge, type, true);
+  loadLogo(badge, type, { tint: true });
   badge.textContent = type === "mssql" ? adapterAbbrev(type) : label.slice(0, 2).toUpperCase();
   return badge;
 }
