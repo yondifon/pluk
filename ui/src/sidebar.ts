@@ -244,16 +244,6 @@ export function createSidebar(
   list.setAttribute("role", "list");
   fadeScrollbar(list);
 
-  /** Paint one row's health: its dot, its tooltip, and the failure in its name. */
-  function applyHealth(dot: HTMLElement, health: Health | undefined) {
-    const failing = health?.status === "error";
-    dot.className = `health-dot ${failing ? "error" : health ? "ok" : "unknown"}`;
-    dot.title = failing ? health.error ?? "Connection failing" : health ? "Healthy" : "Not checked";
-    const row = dot.closest<HTMLElement>(".sidebar-row");
-    const label = row?.dataset.label;
-    if (row && label) row.setAttribute("aria-label", failing ? `${label}, connection failing` : label);
-  }
-
   function showConfirm(kind: "integration" | "group", id: string, name: string) {
     confirmModal({
       title: `Delete ${kind} “${name}”?`,
@@ -332,14 +322,14 @@ export function createSidebar(
         });
         const icon = document.createElement("span");
         icon.className = "sidebar-group-icon";
-        icon.appendChild(createIcon("group"));
-        const name = document.createElement("span");
-        name.className = "sidebar-row-name";
-        name.textContent = g.name;
+         icon.appendChild(createIcon("group"));
+         const name = document.createElement("span");
+         name.className = "sidebar-row-name";
+         name.textContent = g.name;
+         name.title = g.name;
         const count = document.createElement("span");
-        count.className = "sidebar-row-detail";
-        count.textContent = `${g.memberIds.length} integration${g.memberIds.length === 1 ? "" : "s"}`;
-        row.title = `${g.name} · ${count.textContent}`;
+        count.className = "sidebar-row-env";
+        count.textContent = `· ${g.memberIds.length} integration${g.memberIds.length === 1 ? "" : "s"}`;
         row.append(icon, name, count);
         list.appendChild(row);
       }
@@ -355,10 +345,8 @@ export function createSidebar(
         row.className = "sidebar-row";
         row.dataset.id = c.id;
         if (c.id === selectedId) row.classList.add("selected");
-        row.setAttribute("role", "button");
-        row.dataset.label = c.environment
-          ? `${c.name}, integration, ${envLabel(c.environment)}`
-          : `${c.name}, integration`;
+         row.setAttribute("role", "button");
+         row.setAttribute("aria-label", `${c.name}, integration`);
         row.tabIndex = 0;
         row.onclick = () => cbs.onSelect(c.id);
         row.onkeydown = (e) => {
@@ -383,18 +371,21 @@ export function createSidebar(
 
         const glyph = glyphElement(c.type, 12, c.serverUrl);
         glyph.style.background = hexToRgba(adapterColor(c.type), 0.14);
-        glyph.classList.add("sidebar-glyph");
-        const nameEl = document.createElement("span");
-        nameEl.className = "sidebar-row-name";
-        nameEl.textContent = c.name;
-        row.title = c.environment ? `${c.name} · ${envLabel(c.environment)}` : c.name;
+         glyph.classList.add("sidebar-glyph");
+         const nameEl = document.createElement("span");
+         nameEl.className = "sidebar-row-name";
+         nameEl.textContent = c.name;
+         nameEl.title = c.name;
+        const spacer = document.createElement("span");
+         spacer.className = "sidebar-row-spacer";
         row.append(glyph, nameEl);
         if (c.environment) {
           const env = document.createElement("span");
-          env.className = "sidebar-row-detail";
-          env.textContent = envLabel(c.environment);
+          env.className = "sidebar-row-env";
+          env.textContent = `· ${envLabel(c.environment)}`;
           row.appendChild(env);
         }
+        row.appendChild(spacer);
         if (c.readOnly) {
           const lock = document.createElement("span");
            lock.appendChild(createIcon("lock"));
@@ -402,10 +393,13 @@ export function createSidebar(
            lock.className = "sidebar-lock";
           row.appendChild(lock);
         }
+        const health = state.health[c.id];
         const dot = document.createElement("span");
+        dot.className = `health-dot ${health ? (health.status === "error" ? "error" : "ok") : "unknown"}`;
         dot.dataset.healthId = c.id;
+        dot.title = health ? (health.status === "error" ? health.error ?? "Connection failing" : "Healthy") : "Not checked";
+        dot.setAttribute("aria-label", dot.title);
         row.appendChild(dot);
-        applyHealth(dot, state.health[c.id]);
 
         list.appendChild(row);
       }
@@ -451,7 +445,15 @@ export function createSidebar(
   const sidebar = root as SidebarElement;
   sidebar._setHealth = (health) => {
     for (const dot of Array.from(root.querySelectorAll<HTMLElement>("[data-health-id]"))) {
-      applyHealth(dot, health[dot.dataset.healthId ?? ""]);
+      const current = health[dot.dataset.healthId ?? ""];
+      const title = current
+        ? current.status === "error"
+          ? current.error ?? "Connection failing"
+          : "Healthy"
+        : "Not checked";
+      dot.className = `health-dot ${current ? (current.status === "error" ? "error" : "ok") : "unknown"}`;
+      dot.title = title;
+      dot.setAttribute("aria-label", title);
     }
   };
   sidebar._setSelectedId = (id) => {
