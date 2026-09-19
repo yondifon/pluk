@@ -28,12 +28,12 @@ use pluk_store::{Integration, ProxyTool, Store, ToolState, Verdict};
 use crate::adapter::{Adapter, ApiRequest, ApiResponse, PolicyKind};
 use crate::config_field::{ConfigField, FieldType};
 use crate::error::AdapterError;
-use crate::gate::{CallTarget, GateMeta, GateOpts, Outcome, ToolResult, run_gated};
+use crate::gate::{CallTarget, GateMeta, GateOpts, Outcome, RunOutcome, run_gated};
 use crate::instructions::{InstructionParts, build_instructions};
 use crate::tool_host::{ToolHandler, ToolHost, ToolRegistration};
 use crate::tool_spec::ToolSpec;
 
-use client::UpstreamAuth;
+use client::{UpstreamAuth, UpstreamCall};
 use probe::SignInRequired;
 
 pub const ADAPTER_ID: &str = "mcp";
@@ -55,6 +55,15 @@ const SIGN_IN_NEEDED: &str = "This server needs you to sign in. Open the Tools t
 const TOKEN_NEEDED: &str = "This server needs a token. Add one in this integration's settings.";
 
 const AGENT_HINT: &str = "Use this to reach the tools of another MCP server the owner connected in Pluk. Each tool is that server's own: call it by name with the arguments its schema describes.";
+
+/// How much of a call's arguments the log line keeps. The response itself is
+/// capped by the store; the arguments share one line with the tool name.
+const MAX_LOGGED_ARGS: usize = 4_000;
+/// How much of an upstream failure the row's reason keeps. The full text is
+/// still stored as the response.
+const MAX_REASON_CHARS: usize = 200;
+/// How a cut line says it was cut, matching the store's own marker.
+const TRUNCATED: &str = "…[truncated]";
 
 fn mcp_fields() -> Vec<ConfigField> {
     vec![
@@ -270,7 +279,7 @@ fn handler_for(store: Arc<Store>, conn: &Integration, tool: &ProxyTool) -> ToolH
 
         Box::pin(async move {
             let target = CallTarget::from(&conn);
-            let meta = GateMeta::new(category, name.clone(), name.clone());
+            let meta = GateMeta::new(category, name.clone(), detail_of(&name, &args));
             let upstream_store = store.clone();
             run_gated(
                 &store,
@@ -284,8 +293,25 @@ fn handler_for(store: Arc<Store>, conn: &Integration, tool: &ProxyTool) -> ToolH
     })
 }
 
-/// One proxied call. Arguments and results reach the upstream server and the
-/// agent, never the log.
+/// The log line for one call: the tool name, and the arguments it was given.
+fn detail_of(name: &str, args: &Value) -> String {
+    let arguments = match args {
+        Value::Object(arguments) if !arguments.is_empty() => arguments,
+        _ => return name.to_string(),
+    };
+    let rendered = serde_json::to_string(arguments).unwrap_or_default();
+    format!("{name} {}", cut_to(&rendered, MAX_LOGGED_ARGS))
+}
+
+fn cut_to(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(max).collect();
+    format!("{head}{TRUNCATED}")
+}
+
+/// One proxied call.
 async fn proxy_call(
     store: &Store,
     conn: &Integration,
@@ -304,7 +330,7 @@ async fn proxy_call(
         _ => None,
     };
     match client.call_tool(name, arguments.clone()).await {
-        Ok(result) => Ok(outcome_of(result)),
+        Ok(call) => Ok(outcome_of(call)),
         // Upstream took the credentials and refused anyway. Renewing them
         // answers a question nobody asked.
         Err(error) if error.has_code(client::PERMISSION_DENIED_CODE) => {
@@ -337,7 +363,7 @@ async fn after_refusal(
     }
     let client = catalog::client_for(store, conn).await?;
     match client.call_tool(name, arguments).await {
-        Ok(result) => Ok(outcome_of(result)),
+        Ok(call) => Ok(outcome_of(call)),
         // A token minted seconds ago and still refused is a grant the server
         // no longer honors, whatever it says.
         Err(again) if again.has_code(client::AUTH_REJECTED_CODE) => {
@@ -347,18 +373,30 @@ async fn after_refusal(
     }
 }
 
-fn outcome_of(result: ToolResult) -> Outcome {
-    let text = result
+fn outcome_of(call: UpstreamCall) -> Outcome {
+    let text = call
+        .result
         .content
         .iter()
         .map(|part| part.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    if result.is_error {
-        Outcome::failed(text, "the tool reported a failure")
-    } else {
-        Outcome::ran(text)
+    Outcome::Ran(RunOutcome {
+        text,
+        is_error: call.result.is_error,
+        reason: call.result.is_error.then(|| reason_of(&call.logged)),
+        response_text: Some(call.logged),
+        ..Default::default()
+    })
+}
+
+/// The one line the log shows for a failure: what upstream said, cut to fit.
+fn reason_of(logged: &str) -> String {
+    let line = logged.lines().next().unwrap_or_default().trim();
+    if line.is_empty() {
+        return "the tool reported a failure".to_string();
     }
+    cut_to(line, MAX_REASON_CHARS)
 }
 
 /// Pluk's own refusals are finished sentences; an upstream failure keeps the
@@ -397,7 +435,7 @@ mod tests {
     use rmcp::{RoleServer, ServerHandler};
     use tower::ServiceExt as _;
 
-    use pluk_store::{Environment, LogEntry};
+    use pluk_store::{Environment, LOG_RESPONSE_LIMIT, LogEntry};
 
     use super::*;
 
@@ -507,9 +545,16 @@ mod tests {
                 .and_then(|arguments| arguments.get("q"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            Ok(CallToolResponse::Complete(CallToolResult::success(vec![
-                ContentBlock::text(format!("found {query}")),
-            ])))
+            let result = match &*request.name {
+                "flood" => CallToolResult::success(vec![ContentBlock::text(
+                    "y".repeat(LOG_RESPONSE_LIMIT + 50),
+                )]),
+                "break" => CallToolResult::error(vec![ContentBlock::text(
+                    "the document is locked".to_string(),
+                )]),
+                _ => CallToolResult::success(vec![ContentBlock::text(format!("found {query}"))]),
+            };
+            Ok(CallToolResponse::Complete(result))
         }
     }
 
@@ -645,11 +690,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_proxied_call_reaches_upstream_and_logs_only_the_tool_name() {
+    async fn a_proxied_call_logs_its_arguments_and_the_response_but_no_credential() {
         let (endpoint, _tools) = upstream().await;
         let (_dir, store) = store();
         let adapter = McpProxyAdapter::new(store.clone());
-        let mut conn = integration("proxied-call", json!({ "url": endpoint }));
+        let mut conn = integration("proxied-call", json!({ "url": endpoint, "token": TOKEN }));
         conn.query_policy = Some(enabling("search"));
 
         adapter.test_connection(&conn).await.expect("discover");
@@ -664,13 +709,76 @@ mod tests {
 
         let entries = logs(&store);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].sql, "search");
+        assert_eq!(entries[0].sql, r#"search {"q":"onboarding"}"#);
         assert_eq!(entries[0].source.as_deref(), Some("search"));
         assert_eq!(entries[0].verdict, "allowed");
-        assert!(!entries[0].sql.contains("onboarding"));
+        assert_eq!(
+            entries[0].response_text.as_deref(),
+            Some("found onboarding")
+        );
         assert!(
-            !format!("{entries:?}").contains("onboarding"),
-            "no argument value reaches the log"
+            !format!("{entries:?}").contains(TOKEN),
+            "no credential reaches the log"
+        );
+
+        client::invalidate(&conn.id);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_response_is_stored_up_to_the_log_cap() {
+        let (endpoint, tools) = upstream().await;
+        *tools.lock().expect("tools") = vec![tool("flood", "Return a lot")];
+        let (_dir, store) = store();
+        let adapter = McpProxyAdapter::new(store.clone());
+        let mut conn = integration("oversized-response", json!({ "url": endpoint }));
+        conn.query_policy = Some(enabling("flood"));
+
+        adapter.test_connection(&conn).await.expect("discover");
+        store
+            .approve_proxy_tools(&conn.id, &["flood".to_string()])
+            .expect("approve");
+        let host = registered(&adapter, &conn);
+
+        host.handlers["flood"](json!({})).await;
+
+        let stored = logs(&store)[0]
+            .response_text
+            .clone()
+            .expect("response stored");
+        assert!(stored.ends_with(TRUNCATED), "{}", &stored[..40]);
+        assert_eq!(
+            stored.chars().filter(|char| *char == 'y').count(),
+            LOG_RESPONSE_LIMIT
+        );
+
+        client::invalidate(&conn.id);
+    }
+
+    #[tokio::test]
+    async fn an_upstream_tool_error_is_logged_as_a_failed_call_with_its_message() {
+        let (endpoint, tools) = upstream().await;
+        *tools.lock().expect("tools") = vec![tool("break", "Fail on purpose")];
+        let (_dir, store) = store();
+        let adapter = McpProxyAdapter::new(store.clone());
+        let mut conn = integration("upstream-error", json!({ "url": endpoint }));
+        conn.query_policy = Some(enabling("break"));
+
+        adapter.test_connection(&conn).await.expect("discover");
+        store
+            .approve_proxy_tools(&conn.id, &["break".to_string()])
+            .expect("approve");
+        let host = registered(&adapter, &conn);
+
+        let result = host.handlers["break"](json!({ "q": "budget" })).await;
+        assert!(result.is_error);
+        assert_eq!(result.text(), "the document is locked");
+
+        let entries = logs(&store);
+        assert_eq!(entries[0].verdict, "error");
+        assert_eq!(entries[0].reason.as_deref(), Some("the document is locked"));
+        assert_eq!(
+            entries[0].response_text.as_deref(),
+            Some("the document is locked")
         );
 
         client::invalidate(&conn.id);

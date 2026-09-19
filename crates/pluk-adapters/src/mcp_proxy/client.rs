@@ -178,7 +178,7 @@ impl McpProxyClient {
         &self,
         name: &str,
         arguments: Option<JsonObject>,
-    ) -> Result<ToolResult, AdapterError> {
+    ) -> Result<UpstreamCall, AdapterError> {
         let mut params = CallToolRequestParams::new(name.to_string());
         params.arguments = arguments;
         let result = self
@@ -447,12 +447,26 @@ fn refusal_in(body: &str) -> Option<&'static str> {
         .then_some(PERMISSION_DENIED_CODE)
 }
 
-fn shape_result(result: CallToolResult) -> ToolResult {
-    let mut texts: Vec<String> = result.content.iter().map(block_text).collect();
+/// One upstream call: what the agent gets back, and what the activity log
+/// records for it.
+pub struct UpstreamCall {
+    pub result: ToolResult,
+    pub logged: String,
+}
+
+fn shape_result(result: CallToolResult) -> UpstreamCall {
+    let mut texts: Vec<String> = Vec::new();
+    let mut logged: Vec<String> = Vec::new();
+    for block in &result.content {
+        let (text, line) = render_block(block);
+        texts.push(text);
+        logged.push(line);
+    }
     if texts.is_empty()
         && let Some(structured) = &result.structured_content
     {
         texts.push(structured.to_string());
+        logged.push(structured.to_string());
     }
     let mut content = Vec::new();
     let mut budget = MAX_RESULT_BYTES;
@@ -477,18 +491,35 @@ fn shape_result(result: CallToolResult) -> ToolResult {
             text: TRUNCATION_MARKER.to_string(),
         });
     }
-    ToolResult {
-        content,
-        is_error: result.is_error.unwrap_or(false),
+    UpstreamCall {
+        result: ToolResult {
+            content,
+            is_error: result.is_error.unwrap_or(false),
+        },
+        logged: logged.join("\n"),
     }
 }
 
-/// Images, audio and embedded resources travel as their own JSON so nothing
-/// the upstream tool returned is silently dropped.
-fn block_text(block: &ContentBlock) -> String {
+/// What one content block becomes: the text the agent gets, and the line the
+/// log keeps. Images, audio and embedded resources reach the agent as their
+/// own JSON so nothing upstream returned is silently dropped; the log only
+/// names them, because base64 bytes are unreadable there.
+fn render_block(block: &ContentBlock) -> (String, String) {
     match block.as_text() {
-        Some(text) => text.text.clone(),
-        None => serde_json::to_string(block).unwrap_or_default(),
+        Some(text) => (text.text.clone(), text.text.clone()),
+        None => (
+            serde_json::to_string(block).unwrap_or_default(),
+            block_label(block),
+        ),
+    }
+}
+
+fn block_label(block: &ContentBlock) -> String {
+    let json = serde_json::to_value(block).unwrap_or_default();
+    match json["type"].as_str().unwrap_or("content") {
+        "resource" => "[embedded resource]".to_string(),
+        "resource_link" => "[resource link]".to_string(),
+        other => format!("[{other}]"),
     }
 }
 
@@ -667,8 +698,8 @@ mod tests {
             .call_tool("echo", Some(arguments))
             .await
             .expect("call tool");
-        assert!(!result.is_error);
-        assert_eq!(result.text(), "hello upstream");
+        assert!(!result.result.is_error);
+        assert_eq!(result.result.text(), "hello upstream");
 
         invalidate("lists-and-calls");
     }
@@ -740,9 +771,27 @@ mod tests {
     #[test]
     fn an_oversized_result_is_cut_with_a_marker() {
         let long = "x".repeat(MAX_RESULT_BYTES + 10);
-        let shaped = shape_result(CallToolResult::success(vec![ContentBlock::text(long)]));
+        let shaped = shape_result(CallToolResult::success(vec![ContentBlock::text(long)])).result;
         assert_eq!(shaped.content.len(), 2);
         assert_eq!(shaped.content[0].text.len(), MAX_RESULT_BYTES);
         assert_eq!(shaped.content[1].text, TRUNCATION_MARKER);
+    }
+
+    #[test]
+    fn the_log_names_content_it_does_not_store() {
+        let image: ContentBlock = serde_json::from_value(json!({
+            "type": "image",
+            "data": "iVBORw0KGgo=",
+            "mimeType": "image/png",
+        }))
+        .expect("image block");
+        let call = shape_result(CallToolResult::success(vec![
+            ContentBlock::text("the chart"),
+            image,
+        ]));
+
+        assert_eq!(call.logged, "the chart\n[image]");
+        assert!(!call.logged.contains("iVBORw0KGgo="));
+        assert!(call.result.content[1].text.contains("iVBORw0KGgo="));
     }
 }
