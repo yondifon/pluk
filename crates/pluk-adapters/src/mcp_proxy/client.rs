@@ -36,6 +36,9 @@ use crate::gate::{TextContent, ToolResult};
 /// Upstream refused the credentials we presented. The caller may refresh the
 /// token and retry once.
 pub const AUTH_REJECTED_CODE: &str = "MCP_PROXY_AUTH_REJECTED";
+/// Upstream knows who we are and will not do this. No credential fixes it, so
+/// nothing about it is worth a retry.
+pub const PERMISSION_DENIED_CODE: &str = "MCP_PROXY_PERMISSION_DENIED";
 /// The upstream server could not be reached at all.
 pub const UPSTREAM_UNREACHABLE_CODE: &str = "MCP_PROXY_UNREACHABLE";
 /// The upstream server accepted the request but did not answer in time.
@@ -356,7 +359,10 @@ impl ClientHandler for ProxyHandler {
 fn is_disconnected(error: &ServiceError) -> bool {
     match error {
         ServiceError::TransportClosed => true,
-        ServiceError::TransportSend(_) => failure_code(error) != Some(AUTH_REJECTED_CODE),
+        ServiceError::TransportSend(_) => !matches!(
+            failure_code(error),
+            Some(AUTH_REJECTED_CODE | PERMISSION_DENIED_CODE)
+        ),
         _ => false,
     }
 }
@@ -378,22 +384,21 @@ fn failure_code(error: &(dyn std::error::Error + 'static)) -> Option<&'static st
 fn code_of(error: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
     if let Some(http) = error.downcast_ref::<StreamableHttpError<upstream_http::Error>>() {
         match http {
-            StreamableHttpError::AuthRequired(_) | StreamableHttpError::InsufficientScope(_) => {
-                return Some(AUTH_REJECTED_CODE);
-            }
-            StreamableHttpError::UnexpectedServerResponse(body) if rejects_auth(body) => {
-                return Some(AUTH_REJECTED_CODE);
+            StreamableHttpError::AuthRequired(_) => return Some(AUTH_REJECTED_CODE),
+            StreamableHttpError::InsufficientScope(_) => return Some(PERMISSION_DENIED_CODE),
+            StreamableHttpError::UnexpectedServerResponse(body) => {
+                if let Some(code) = refusal_in(body) {
+                    return Some(code);
+                }
             }
             _ => {}
         }
     }
     if let Some(request) = error.downcast_ref::<upstream_http::Error>() {
-        if matches!(
-            request.status(),
-            Some(upstream_http::StatusCode::UNAUTHORIZED)
-                | Some(upstream_http::StatusCode::FORBIDDEN)
-        ) {
-            return Some(AUTH_REJECTED_CODE);
+        match request.status() {
+            Some(upstream_http::StatusCode::UNAUTHORIZED) => return Some(AUTH_REJECTED_CODE),
+            Some(upstream_http::StatusCode::FORBIDDEN) => return Some(PERMISSION_DENIED_CODE),
+            _ => {}
         }
         if request.is_timeout() {
             return Some(UPSTREAM_TIMEOUT_CODE);
@@ -426,10 +431,14 @@ fn cause_of<'a>(
     error.source()
 }
 
-/// A 401 or 403 the transport passed through as a plain HTTP failure, because
-/// the server sent no `WWW-Authenticate` header to go with it.
-fn rejects_auth(body: &str) -> bool {
-    body.starts_with("HTTP 401") || body.starts_with("HTTP 403")
+/// The code for a 401 or 403 the transport passed through as a plain HTTP
+/// failure, because the server sent no `WWW-Authenticate` header to go with it.
+fn refusal_in(body: &str) -> Option<&'static str> {
+    if body.starts_with("HTTP 401") {
+        return Some(AUTH_REJECTED_CODE);
+    }
+    body.starts_with("HTTP 403")
+        .then_some(PERMISSION_DENIED_CODE)
 }
 
 fn shape_result(result: CallToolResult) -> ToolResult {

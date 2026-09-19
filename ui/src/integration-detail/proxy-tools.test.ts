@@ -3,7 +3,6 @@ import {
   attentionCount,
   canEnable,
   orderedProxyTools,
-  readOnlyDefaults,
   signInMessage,
   stateBadge,
   stateNote,
@@ -106,19 +105,5 @@ describe("signInMessage", () => {
     expect(signInMessage("oauth", "not_connected")).toBe(
       "Sign in to see what this server offers.",
     );
-  });
-});
-
-describe("readOnlyDefaults", () => {
-  test("ticks tools that only read and still need a decision", () => {
-    expect(
-      readOnlyDefaults([
-        row("search", "new", "read"),
-        row("write_file", "new", "write"),
-        row("drop", "new", "delete"),
-        row("list", "changed", "read"),
-        row("settled", "approved", "read"),
-      ]),
-    ).toEqual(["search", "list"]);
   });
 });

@@ -7,7 +7,6 @@ import {
   attentionCount,
   canEnable,
   orderedProxyTools,
-  readOnlyDefaults,
   signInMessage,
   stateBadge,
   stateNote,
@@ -88,7 +87,7 @@ export function mountServerTools(
   let toolsError: string | null = null;
   let busy = false;
   let waitingForBrowser = false;
-  /** The ticks of a first run, before anything has ever been approved. */
+  /** What the user ticked on a first run, before anything has been approved. */
   let picked: Set<string> | null = null;
   let stopPoll: (() => void) | null = null;
 
@@ -109,7 +108,7 @@ export function mountServerTools(
     rows = result.value.tools;
     toolsError = null;
     const untouched = rows.length > 0 && rows.every((row) => row.state === "new");
-    picked = untouched ? new Set(readOnlyDefaults(rows)) : null;
+    picked = untouched ? new Set<string>() : null;
   }
 
   async function working(run: () => Promise<void>): Promise<void> {
@@ -401,7 +400,7 @@ export function mountServerTools(
     if (picked) {
       tools.body.appendChild(
         line(
-          `Pluk found ${rows.length} ${rows.length === 1 ? "tool" : "tools"}. The ones that only read are ticked. Nothing reaches your agents until you approve it.`,
+          `Pluk found ${rows.length} ${rows.length === 1 ? "tool" : "tools"}. Tick the ones you want, then approve them. Nothing reaches your agents until you do.`,
           "hint",
         ),
       );

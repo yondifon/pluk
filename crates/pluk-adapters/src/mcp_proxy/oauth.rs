@@ -161,9 +161,10 @@ pub async fn complete(store: &Store, callback_url: &str) -> Result<(), AdapterEr
 }
 
 /// The access token for a stored sign-in, renewed when it is about to run out.
-/// `None` when the user has not signed in to this server.
-pub async fn bearer(store: &Store, integration_id: &str) -> Result<Option<String>, AdapterError> {
-    let Some(stored) = stored_auth(store, integration_id)? else {
+/// `None` when the user has not signed in to the server this integration now
+/// points at.
+pub async fn bearer(store: &Store, conn: &Integration) -> Result<Option<String>, AdapterError> {
+    let Some(stored) = signed_in_here(store, conn)? else {
         return Ok(None);
     };
     if stored.status == AuthStatus::ReconnectNeeded {
@@ -172,18 +173,18 @@ pub async fn bearer(store: &Store, integration_id: &str) -> Result<Option<String
     if !is_expiring(&stored) {
         return Ok(Some(stored.access_token));
     }
-    renewed_token(store, integration_id, &stored.access_token)
+    renewed_token(store, conn, &stored.access_token)
         .await
         .map(Some)
 }
 
 /// Renew a stored sign-in after upstream refused the token Pluk sent.
 /// `false` when there is no stored sign-in to renew.
-pub async fn renew(store: &Store, integration_id: &str) -> Result<bool, AdapterError> {
-    let Some(stored) = stored_auth(store, integration_id)? else {
+pub async fn renew(store: &Store, conn: &Integration) -> Result<bool, AdapterError> {
+    let Some(stored) = signed_in_here(store, conn)? else {
         return Ok(false);
     };
-    renewed_token(store, integration_id, &stored.access_token).await?;
+    renewed_token(store, conn, &stored.access_token).await?;
     Ok(true)
 }
 
@@ -210,7 +211,7 @@ pub fn require_sign_in(store: &Store, integration_id: &str) -> AdapterError {
 
 /// What the settings screen renders for one integration's sign-in.
 pub fn sign_in_state(store: &Store, conn: &Integration) -> Result<SignInState, AdapterError> {
-    if let Some(stored) = stored_auth(store, &conn.id)? {
+    if let Some(stored) = signed_in_here(store, conn)? {
         return Ok(SignInState {
             kind: KIND,
             status: stored.status.as_str(),
@@ -232,13 +233,14 @@ pub fn sign_in_state(store: &Store, conn: &Integration) -> Result<SignInState, A
 /// row and uses the token the winner stored.
 async fn renewed_token(
     store: &Store,
-    integration_id: &str,
+    conn: &Integration,
     spent: &str,
 ) -> Result<String, AdapterError> {
+    let integration_id = conn.id.as_str();
     let lock = refresh_lock(integration_id);
     let _held = lock.lock().await;
 
-    let Some(stored) = stored_auth(store, integration_id)? else {
+    let Some(stored) = signed_in_here(store, conn)? else {
         return Err(reconnect_error());
     };
     if stored.status == AuthStatus::ReconnectNeeded {
@@ -281,6 +283,47 @@ async fn renewed_token(
         Some(winner) => Ok(winner.access_token),
         None => Err(reconnect_error()),
     }
+}
+
+/// The stored sign-in, but only when it was made for the address this
+/// integration points at now.
+///
+/// A sign-in is issued for one server. Editing the URL afterwards must not
+/// hand the next server what the last one granted, and that holds for the
+/// refresh token too. The row is left alone: putting the old address back
+/// signs the user straight back in.
+fn signed_in_here(store: &Store, conn: &Integration) -> Result<Option<ProxyAuth>, AdapterError> {
+    let Some(stored) = stored_auth(store, &conn.id)? else {
+        return Ok(None);
+    };
+    let issued_for = context_of(&stored)
+        .ok()
+        .and_then(|context| Url::parse(&context.resource).ok());
+    let address = catalog::endpoint(conn)
+        .ok()
+        .and_then(|address| Url::parse(&address).ok());
+    Ok(match (issued_for, address) {
+        (Some(issued_for), Some(address)) if covers(&issued_for, &address) => Some(stored),
+        _ => None,
+    })
+}
+
+/// Whether a resource indicator names the address in question.
+///
+/// This is the rule the indicator was accepted by when the sign-in discovered
+/// it: same origin, and a path the address sits under, because a server may
+/// publish one resource for a whole tree of endpoints.
+fn covers(resource: &Url, address: &Url) -> bool {
+    if resource.scheme() != address.scheme()
+        || resource.host_str() != address.host_str()
+        || resource.port_or_known_default() != address.port_or_known_default()
+    {
+        return false;
+    }
+    let (held, wanted) = (resource.path(), address.path());
+    wanted == held
+        || (wanted.starts_with(held)
+            && (held.ends_with('/') || wanted.as_bytes().get(held.len()) == Some(&b'/')))
 }
 
 /// A manager built from the stored row alone, so a refresh costs no discovery.
@@ -586,9 +629,9 @@ mod tests {
     use pluk_store::{IntegrationInput, ToolState};
 
     use crate::adapter::{Adapter, ApiRequest, ApiResponse};
-    use crate::mcp_proxy::McpProxyAdapter;
     use crate::mcp_proxy::api::{SIGN_IN_LAPSED, SIGNED_IN};
     use crate::mcp_proxy::tests::RecordingHost;
+    use crate::mcp_proxy::{McpProxyAdapter, PERMISSION_DENIED};
 
     use super::*;
 
@@ -745,8 +788,8 @@ mod tests {
         world.upstream.accept_only(SECOND_ACCESS);
 
         let (one, two) = tokio::join!(
-            bearer(&world.store, &world.conn.id),
-            bearer(&world.store, &world.conn.id)
+            bearer(&world.store, &world.conn),
+            bearer(&world.store, &world.conn)
         );
         assert_eq!(one.expect("first").as_deref(), Some(SECOND_ACCESS));
         assert_eq!(two.expect("second").as_deref(), Some(SECOND_ACCESS));
@@ -775,7 +818,7 @@ mod tests {
         world.seed(Some(now_ms() + 3_600_000));
 
         assert_eq!(
-            bearer(&world.store, &world.conn.id)
+            bearer(&world.store, &world.conn)
                 .await
                 .expect("bearer")
                 .as_deref(),
@@ -792,7 +835,7 @@ mod tests {
         world.authority.refuse_renewals();
         world.seed(Some(now_ms() - 1_000));
 
-        let error = bearer(&world.store, &world.conn.id)
+        let error = bearer(&world.store, &world.conn)
             .await
             .expect_err("refused");
         assert!(error.has_code(RECONNECT_NEEDED_CODE), "{error:?}");
@@ -803,7 +846,7 @@ mod tests {
         );
 
         // Every later call says the same thing without asking the server again.
-        let again = bearer(&world.store, &world.conn.id)
+        let again = bearer(&world.store, &world.conn)
             .await
             .expect_err("still refused");
         assert!(again.has_code(RECONNECT_NEEDED_CODE));
@@ -815,7 +858,7 @@ mod tests {
         let world = World::new("oauth-unreachable-renewal").await;
         world.seed_against(&closed_authority().await, Some(now_ms() - 1_000));
 
-        let error = bearer(&world.store, &world.conn.id)
+        let error = bearer(&world.store, &world.conn)
             .await
             .expect_err("unreachable");
         assert!(error.has_code(UPSTREAM_UNREACHABLE_CODE), "{error:?}");
@@ -844,7 +887,7 @@ mod tests {
             })
             .expect("seed");
 
-        let error = bearer(&world.store, &world.conn.id)
+        let error = bearer(&world.store, &world.conn)
             .await
             .expect_err("nothing to renew");
         assert!(error.has_code(RECONNECT_NEEDED_CODE), "{error:?}");
@@ -881,6 +924,47 @@ mod tests {
             world.row().expect("row").status,
             AuthStatus::ReconnectNeeded
         );
+    }
+
+    /// A server that will not do this for the account Pluk signed in with is
+    /// answering the request, not the sign-in. Sending the user round the
+    /// browser again would change nothing.
+    #[tokio::test]
+    async fn a_server_refusing_on_permission_is_not_a_sign_in_to_redo() {
+        let world = World::new("oauth-permission-denied").await;
+        world.seed(Some(now_ms() + 3_600_000));
+        world.approve_tool("search").await;
+        world.upstream.refuse_the_request();
+
+        assert_eq!(world.call("search").await, PERMISSION_DENIED);
+        assert_eq!(world.authority.refreshes(), 0);
+        assert_eq!(world.row().expect("row").status, AuthStatus::Connected);
+    }
+
+    /// A sign-in is granted by one server for one server. Point the
+    /// integration somewhere else and it stops counting, without being thrown
+    /// away.
+    #[tokio::test]
+    async fn a_sign_in_does_not_follow_the_integration_to_another_address() {
+        let mut world = World::new("oauth-address-moved").await;
+        world.seed(Some(now_ms() + 3_600_000));
+        world.approve_tool("search").await;
+
+        let elsewhere = upstream(&world.authority.base).await;
+        world.point_at(&elsewhere.endpoint);
+
+        assert!(world.call("search").await.starts_with("Error:"));
+        assert_eq!(
+            elsewhere.last_bearer(),
+            None,
+            "the other server is offered nothing the first one granted"
+        );
+        assert_eq!(world.authority.refreshes(), 0);
+        assert_eq!(
+            world.rest("GET", "/proxy/auth", None).await["auth"],
+            json!({ "kind": "none", "status": "not_connected" })
+        );
+        assert!(world.row().is_some(), "the sign-in is kept, not discarded");
     }
 
     /// AC-5: none of the REST surface, and none of the failures it produces,
@@ -1066,6 +1150,14 @@ mod tests {
             self.seed_against(&self.authority, expires_at);
         }
 
+        /// The same integration, pointed at another server.
+        fn point_at(&mut self, endpoint: &str) {
+            self.conn
+                .config
+                .insert("url".to_string(), Value::String(endpoint.to_string()));
+            client::invalidate(&self.conn.id);
+        }
+
         /// A sign-in that already happened, pointed at one authorization
         /// server, so a renewal can be exercised without a browser.
         fn seed_against(&self, authority: &AuthorityState, expires_at: Option<i64>) {
@@ -1130,9 +1222,7 @@ mod tests {
                     },
                 )
                 .expect("expire");
-            bearer(&self.store, &self.conn.id)
-                .await
-                .expect_err("refused")
+            bearer(&self.store, &self.conn).await.expect_err("refused")
         }
 
         async fn rest(&self, method: &str, subpath: &str, body: Option<String>) -> Value {
@@ -1392,11 +1482,18 @@ mod tests {
         metadata_url: String,
         accepted: Mutex<Option<String>>,
         last_bearer: Mutex<Option<String>>,
+        forbids: Mutex<bool>,
     }
 
     impl UpstreamState {
         fn last_bearer(&self) -> Option<String> {
             self.last_bearer.lock().expect("bearer").clone()
+        }
+
+        /// Take the credentials and refuse the request anyway, the way a
+        /// server behaves when the account is not allowed to do this.
+        fn refuse_the_request(&self) {
+            *self.forbids.lock().expect("forbids") = true;
         }
 
         /// Take this token and nothing else, the way a server behaves once the
@@ -1466,6 +1563,7 @@ mod tests {
             metadata_url: format!("{base}/.well-known/oauth-protected-resource"),
             accepted: Mutex::new(Some(FIRST_ACCESS.to_string())),
             last_bearer: Mutex::new(None),
+            forbids: Mutex::new(false),
         });
         let resource = state.endpoint.clone();
         let authority_base = authority_base.to_string();
@@ -1512,6 +1610,9 @@ mod tests {
                                 "unauthorized",
                             )
                                 .into_response();
+                        }
+                        if *state.forbids.lock().expect("forbids") {
+                            return (StatusCode::FORBIDDEN, "forbidden").into_response();
                         }
                         match mcp.oneshot(request).await {
                             Ok(response) => response.map(axum::body::Body::new).into_response(),

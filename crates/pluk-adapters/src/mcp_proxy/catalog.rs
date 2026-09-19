@@ -6,10 +6,12 @@
 //! stops being exposed until the owner approves it again.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use upstream_http::Url;
 
 use pluk_store::{DiscoveredTool, Integration, ProxyTool, Store, StoreError, ToolState};
 
@@ -19,14 +21,43 @@ use crate::tool_spec::ToolSpec;
 use super::client::{self, DEFAULT_AUTH_HEADER, McpProxyClient, UpstreamAuth, UpstreamTool};
 use super::oauth;
 
+/// The address would carry a credential in the clear to somewhere else.
+pub const INSECURE_ADDRESS_CODE: &str = "MCP_PROXY_INSECURE_ADDRESS";
+
+const INSECURE_ADDRESS: &str =
+    "Use https:// for this server. http:// only works for a server on this computer.";
+const NOT_AN_ADDRESS: &str = "The server URL has to start with http:// or https://.";
+const NO_ADDRESS: &str = "Add the URL of the MCP server.";
+
 /// The upstream address, rejected before anything tries to open a session.
+///
+/// Plain `http` reaches loopback and nothing else. Everything Pluk sends a
+/// server travels with whatever the user signed in with, and off this machine
+/// that is a wire anyone on the path can read.
 pub fn endpoint(conn: &Integration) -> Result<String, AdapterError> {
-    match config_str(conn, "url") {
-        Some(url) if url.starts_with("http://") || url.starts_with("https://") => Ok(url),
-        Some(_) => Err(AdapterError::new(
-            "The server URL has to start with http:// or https://.",
-        )),
-        None => Err(AdapterError::new("Add the URL of the MCP server.")),
+    let Some(url) = config_str(conn, "url") else {
+        return Err(AdapterError::new(NO_ADDRESS));
+    };
+    let Ok(parsed) = Url::parse(&url) else {
+        return Err(AdapterError::new(NOT_AN_ADDRESS));
+    };
+    match parsed.scheme() {
+        "https" => Ok(url),
+        "http" if is_loopback(&parsed) => Ok(url),
+        "http" => Err(AdapterError::new(INSECURE_ADDRESS).with_code(INSECURE_ADDRESS_CODE)),
+        _ => Err(AdapterError::new(NOT_AN_ADDRESS)),
+    }
+}
+
+/// Whether the address names this machine, the one place cleartext stays on.
+fn is_loopback(url: &Url) -> bool {
+    match url.host_str() {
+        Some(host) => {
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            host.eq_ignore_ascii_case("localhost")
+                || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+        }
+        None => false,
     }
 }
 
@@ -40,7 +71,7 @@ pub async fn upstream_auth(
     store: &Store,
     conn: &Integration,
 ) -> Result<UpstreamAuth, AdapterError> {
-    match oauth::bearer(store, &conn.id).await? {
+    match oauth::bearer(store, conn).await? {
         Some(access_token) => Ok(UpstreamAuth::bearer(access_token)),
         None => Ok(static_auth(conn)),
     }
@@ -100,14 +131,19 @@ pub fn is_approved(store: &Store, integration_id: &str, name: &str) -> bool {
 
 /// The catalog entry for one snapshot row: what the settings screen renders a
 /// toggle for, and what the policy gate reads its default from.
+///
+/// Nothing an MCP server offers is on until the owner turns it on. A server
+/// describes its own tools, so letting that description decide would let a
+/// server that describes itself generously ship enabled.
 pub fn spec_for(tool: &ProxyTool) -> ToolSpec {
     ToolSpec::new(tool.name.clone(), tool.description.clone(), category(tool))
+        .with_default_enabled(false)
 }
 
 /// The policy category upstream's hints put a tool in.
 ///
 /// `readOnlyHint` and `destructiveHint` come from the upstream server and are
-/// hints, not guarantees: they pick the default toggle, and nothing more.
+/// hints, not guarantees: they label the row and decide nothing.
 pub fn category(tool: &ProxyTool) -> &'static str {
     let annotations: Option<Value> = tool
         .annotations_json
@@ -227,26 +263,36 @@ mod tests {
         );
     }
 
+    fn proxy_tool(annotations: Option<Value>) -> ProxyTool {
+        ProxyTool {
+            integration_id: "int-1".to_string(),
+            name: "search".to_string(),
+            description: String::new(),
+            schema_json: "{}".to_string(),
+            annotations_json: annotations.as_ref().map(Value::to_string),
+            content_hash: String::new(),
+            approved_hash: None,
+            present: true,
+            discovered_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
     #[test]
     fn upstream_hints_pick_the_category() {
-        let of = |annotations: Option<Value>| {
-            category(&ProxyTool {
-                integration_id: "int-1".to_string(),
-                name: "search".to_string(),
-                description: String::new(),
-                schema_json: "{}".to_string(),
-                annotations_json: annotations.as_ref().map(Value::to_string),
-                content_hash: String::new(),
-                approved_hash: None,
-                present: true,
-                discovered_at: String::new(),
-                updated_at: String::new(),
-            })
-        };
+        let of = |annotations: Option<Value>| category(&proxy_tool(annotations));
         assert_eq!(of(Some(json!({"readOnlyHint": true}))), "read");
         assert_eq!(of(Some(json!({"destructiveHint": true}))), "delete");
         assert_eq!(of(Some(json!({"title": "Search"}))), "write");
         assert_eq!(of(None), "write");
+    }
+
+    #[test]
+    fn a_tool_that_calls_itself_read_only_is_labelled_but_still_ships_off() {
+        let spec = spec_for(&proxy_tool(Some(json!({"readOnlyHint": true}))));
+        assert_eq!(spec.category, "read");
+        assert!(!spec.default_enabled);
+        assert!(!spec_for(&proxy_tool(None)).default_enabled);
     }
 
     #[test]
@@ -262,6 +308,29 @@ mod tests {
             .expect("address"),
             "https://example.com/mcp"
         );
+    }
+
+    #[test]
+    fn cleartext_reaches_this_computer_and_nowhere_else() {
+        let refused = endpoint(&integration(
+            "int-1",
+            json!({"url": "http://example.com/mcp"}),
+        ))
+        .expect_err("cleartext to another host");
+        assert!(refused.has_code(INSECURE_ADDRESS_CODE), "{refused:?}");
+        assert_eq!(refused.message, INSECURE_ADDRESS);
+
+        for allowed in [
+            "http://127.0.0.1:9000/mcp",
+            "http://localhost:9000/mcp",
+            "http://[::1]:9000/mcp",
+            "https://example.com/mcp",
+        ] {
+            assert_eq!(
+                endpoint(&integration("int-1", json!({ "url": allowed }))).expect(allowed),
+                allowed
+            );
+        }
     }
 
     #[test]

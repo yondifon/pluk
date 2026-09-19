@@ -112,7 +112,7 @@ describe("mountServerTools", () => {
     expect(calls.some((c) => c.cmd === "open_external")).toBe(true);
   });
 
-  test("a first run ticks what only reads and approves nothing on its own", async () => {
+  test("a first run ticks nothing, whatever the server says its tools do", async () => {
     const { root, calls, settled } = mount({ kind: "oauth", status: "connected" }, [
       tool("search", "new", "read"),
       tool("write", "new", "write"),
@@ -120,9 +120,10 @@ describe("mountServerTools", () => {
     await settled;
 
     const ticks = [...root.querySelectorAll<HTMLInputElement>(".tool-head input")];
-    expect(ticks.map((t) => t.checked)).toEqual([true, false]);
+    expect(ticks.map((t) => t.checked)).toEqual([false, false]);
     expect(calls.some((c) => String(c.subpath ?? "").includes("approve"))).toBe(false);
     expect(buttonLabels(root)).toContain("Approve ticked tools");
+    expect(root.textContent).toContain("Tick the ones you want, then approve them.");
   });
 
   test("a server it cannot reach explains itself and offers a retry", async () => {

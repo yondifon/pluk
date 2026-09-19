@@ -43,6 +43,8 @@ pub const TOKEN_REJECTED_CODE: &str = "MCP_PROXY_TOKEN_REJECTED";
 
 const TOOL_CHANGED: &str = "This tool changed. Approve it again in Pluk.";
 const TOKEN_REJECTED: &str = "Pluk could not sign in to this MCP server. Check the token in Pluk.";
+const PERMISSION_DENIED: &str =
+    "This MCP server refused the request. The account signed in to Pluk may not have permission.";
 
 const AGENT_HINT: &str = "Use this to reach the tools of another MCP server the owner connected in Pluk. Each tool is that server's own: call it by name with the arguments its schema describes.";
 
@@ -264,6 +266,11 @@ async fn proxy_call(
     };
     match client.call_tool(name, arguments.clone()).await {
         Ok(result) => Ok(outcome_of(result)),
+        // Upstream took the credentials and refused anyway. Renewing them
+        // answers a question nobody asked.
+        Err(error) if error.has_code(client::PERMISSION_DENIED_CODE) => {
+            Err(AdapterError::new(PERMISSION_DENIED).with_code(client::PERMISSION_DENIED_CODE))
+        }
         Err(error) if error.has_code(client::AUTH_REJECTED_CODE) => {
             after_refusal(store, conn, name, arguments, error).await
         }
@@ -283,7 +290,7 @@ async fn after_refusal(
     arguments: Option<Map<String, Value>>,
     error: AdapterError,
 ) -> Result<Outcome, AdapterError> {
-    if !oauth::renew(store, &conn.id).await? {
+    if !oauth::renew(store, conn).await? {
         return match catalog::static_auth(conn) {
             UpstreamAuth::None => Err(error),
             _ => Err(AdapterError::new(TOKEN_REJECTED).with_code(TOKEN_REJECTED_CODE)),
@@ -320,6 +327,7 @@ fn outcome_of(result: ToolResult) -> Outcome {
 fn agent_text(error: &AdapterError, verdict: Verdict) -> String {
     if error.has_code(TOOL_CHANGED_CODE)
         || error.has_code(TOKEN_REJECTED_CODE)
+        || error.has_code(client::PERMISSION_DENIED_CODE)
         || error.has_code(oauth::RECONNECT_NEEDED_CODE)
     {
         return error.message.clone();
@@ -590,8 +598,8 @@ mod tests {
             .approve_proxy_tools(&conn.id, &["search".to_string()])
             .expect("approve");
 
-        // The upstream server published no hints, so the tool counts as a
-        // write and ships off.
+        // Nothing a proxied server offers is on until the owner turns it on,
+        // so an approved tool with no toggle stays unreachable.
         assert!(registered(&adapter, &conn).names().is_empty());
 
         client::invalidate(&conn.id);

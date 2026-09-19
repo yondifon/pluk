@@ -3,8 +3,7 @@
  *
  * Rows arrive from `GET /api/integrations/<id>/proxy/tools` in the shape the
  * adapter writes them. Nothing here talks to the server: this is the order the
- * rows are shown in, the words each state is shown with, and which rows a
- * first run offers to approve.
+ * rows are shown in and the words each state is shown with.
  */
 
 /** Where a tool stands between what the server offers and what the user approved. */
@@ -87,15 +86,4 @@ export function signInMessage(kind: SignInKind, status: SignInStatus): string {
     case "not_connected":
       return "Sign in to see what this server offers.";
   }
-}
-
-/**
- * What a first run offers to approve: the tools that only read. Anything that
- * writes or deletes stays unticked, and nothing is approved until the user
- * says so.
- */
-export function readOnlyDefaults(rows: ProxyToolRow[]): string[] {
-  return rows
-    .filter((row) => row.category === "read" && (row.state === "new" || row.state === "changed"))
-    .map((row) => row.name);
 }
