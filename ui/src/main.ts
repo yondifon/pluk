@@ -71,7 +71,7 @@ type HostGroup = {
   id: string;
   name: string;
   environment: string | null;
-  members: Array<{ id: string; overrides?: Record<string, string> }>;
+  members: Array<{ id: string; overrides?: Record<string, string>; tools?: string[] }>;
   token: string;
   createdAt: string;
 };
@@ -214,7 +214,7 @@ function renderDetail(mount: HTMLElement): void {
           name: row.name,
           environment: row.environment,
           token: row.token,
-          members: row.members.map((m) => ({ id: m.id, overrides: m.overrides ?? {} })),
+          members: row.members.map((m) => ({ id: m.id, overrides: m.overrides ?? {}, tools: m.tools })),
         },
         integrations: hostIntegrations.map(toDetailIntegration),
         adapters: manifests,
@@ -441,6 +441,8 @@ function buildForm(current: FormState): { el: HTMLElement; destroy?: () => void 
             config: Object.fromEntries(
               Object.entries(c.config).map(([k, v]) => [k, v == null ? "" : String(v)]),
             ),
+            tools: c.tools ?? manifestFor(c.type)?.tools ?? [],
+            toolConfig: c.toolConfig,
           })),
           manifests,
           (next) => {
@@ -496,7 +498,7 @@ function startEditGroup(id: string): void {
   groupDraft = groupDraftFrom({
     name: row.name,
     environment: row.environment,
-    members: row.members.map((m) => ({ id: m.id, overrides: m.overrides ?? {} })),
+    members: row.members.map((m) => ({ id: m.id, overrides: m.overrides ?? {}, tools: m.tools })),
   });
   openForm({ kind: "edit-group", id });
 }

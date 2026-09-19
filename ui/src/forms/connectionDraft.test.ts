@@ -295,6 +295,7 @@ describe("override inheritance and secret filtering", () => {
       environment: null,
       included: new Set(["c2", "c1"]),
       overrides: { c1: { a: "1", b: "" }, c2: {} },
+      tools: {},
     };
     const out = serializeGroup(draft, [{ id: "c1" }, { id: "c2" }]);
     expect(out).toEqual([{ id: "c1", overrides: { a: "1" } }, { id: "c2", overrides: {} }]);

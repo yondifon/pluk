@@ -118,9 +118,24 @@ impl Adapter for StubAdapter {
     }
 
     fn instructions(&self, conn: &Integration) -> String {
+        let policy =
+            pluk_store::parse_query_policy(conn.query_policy.as_deref()).unwrap_or_default();
+        let enabled: Vec<&str> = self
+            .tool_specs()
+            .iter()
+            .filter(|spec| {
+                policy
+                    .tools
+                    .get(&spec.name)
+                    .map(|tool| tool.enabled)
+                    .unwrap_or(spec.default_enabled)
+            })
+            .map(|spec| spec.name.as_str())
+            .collect();
         format!(
-            "Stub integration \"{}\".\nEcho things.\nEndpoint: {}",
+            "Stub integration \"{}\".\nEcho things.\nEnabled tools: {}.\nEndpoint: {}",
             conn.name,
+            enabled.join(", "),
             conn.config
                 .get("endpoint")
                 .and_then(Value::as_str)

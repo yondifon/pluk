@@ -175,7 +175,7 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .ui-badge-missing { background: var(--surface-control); color: var(--surface-tertiary-label); }
 .tool-head, .member-name-row { display: flex; align-items: center; gap: var(--space-sm); }
 .tool-head { min-height: var(--control-target); }
-.tool-name { color: var(--surface-label); font-weight: 600; }
+.tool-name, .member-tools-title { color: var(--surface-label); font-weight: 600; }
 /* The description and the settings hang off the tool's name, not the card
    edge, so they read as belonging to the tool above them. */
 .tool-body { padding-left: var(--tool-indent); min-width: 0; }
@@ -283,6 +283,12 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .member-chevron { display: inline-flex; flex-shrink: 0; color: var(--surface-tertiary-label); }
 .member-form-row { padding: var(--space-xs) 0; }
 .member-form-panel { display: flex; flex-direction: column; gap: var(--space-sm); margin: var(--space-xs) 0 var(--space-sm) calc(var(--space-lg) + var(--space-sm)); padding: var(--space-md); border-radius: var(--radius-sm); background: var(--surface-sunken); }
+/* The member's tools hang under its overrides behind a rule, not in a second
+   box: the panel around them is already sunken. */
+.member-tools { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-xxs); }
+.member-tools-title { margin: 0; }
+.member-form-panel > .inspector-row + .member-tools { padding-top: var(--space-sm); border-top: var(--border-width) solid var(--border-subtle); }
+.member-tool-row { display: flex; align-items: center; gap: var(--space-sm); min-height: var(--control-target); }
 .detail-empty p { max-width: var(--empty-max-width); margin: 0 0 var(--space-lg); color: var(--surface-tertiary-label); font-size: calc(var(--type-body) * var(--zoom-scale)); line-height: 1.5; }
 .modal-overlay { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--space-xl); background: color-mix(in srgb, var(--surface-content) 38%, transparent); backdrop-filter: blur(var(--space-xxs)); opacity: 1; transition: opacity var(--duration-enter) var(--ease-out); }
 .modal { display: flex; flex-direction: column; overflow: hidden; background: var(--surface-panel); border-radius: var(--radius-md); box-shadow: var(--shadow-modal); transform: scale(1); transition: transform var(--duration-enter) var(--ease-out); }

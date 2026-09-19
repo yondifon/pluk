@@ -74,7 +74,8 @@ pub struct Integration {
     pub via_group: Option<LogGroup>,
 }
 
-/// One group member: an integration id plus optional per-group config overrides.
+/// One group member: an integration id, optional per-group config overrides,
+/// and optionally the subset of its tools this group exposes.
 ///
 /// Rows may hold either the current form (`{"id": …, "overrides": {…}}`) or the
 /// legacy form (a bare id string); parsing accepts both. Serialization always
@@ -85,6 +86,10 @@ pub struct GroupMember {
     pub id: String,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub overrides: Map<String, serde_json::Value>,
+    /// Which of the integration's tools the group exposes. `None` means every
+    /// tool the integration itself has on; a list can only narrow that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<String>>,
 }
 
 /// Several integrations fronted by one MCP token/endpoint.
@@ -99,11 +104,14 @@ pub struct Group {
     pub created_at: String,
 }
 
-/// A group member resolved to its live integration, with the group's overrides.
+/// A group member resolved to its live integration, with the group's overrides
+/// and its tool selection.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedMember {
     pub integration: Integration,
     pub overrides: Map<String, serde_json::Value>,
+    /// `None` means the group exposes every tool the integration has on.
+    pub tools: Option<Vec<String>>,
 }
 
 /// Verdict recorded on a query-log row.

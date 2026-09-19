@@ -24,8 +24,14 @@ fn group(app: &TestApp, name: &str, member_ids: &[String]) -> String {
         .map(|id| pluk_store::GroupMember {
             id: id.clone(),
             overrides: Default::default(),
+            tools: None,
         })
         .collect();
+    group_of(app, name, members)
+}
+
+/// Create a group from members built by the caller and return its token.
+fn group_of(app: &TestApp, name: &str, members: Vec<pluk_store::GroupMember>) -> String {
     let created = app
         .store
         .create_group(&pluk_store::GroupInput {
@@ -35,6 +41,24 @@ fn group(app: &TestApp, name: &str, member_ids: &[String]) -> String {
         })
         .expect("create group");
     created.token
+}
+
+/// The `instructions` an endpoint hands a client on initialize.
+async fn endpoint_instructions(app: &TestApp, token: &str) -> String {
+    let (_, _, init) = app
+        .mcp_post(
+            token,
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": { "protocolVersion": "2025-11-25", "capabilities": {},
+                            "clientInfo": { "name": "c", "version": "1" } }
+            }),
+        )
+        .await;
+    init["result"]["instructions"]
+        .as_str()
+        .expect("instructions")
+        .to_string()
 }
 
 #[tokio::test]
@@ -328,6 +352,7 @@ async fn per_member_overrides_are_coerced_before_registration() {
                 r#"{"endpoint":"overridden-host","retries":"","verbose":"true"}"#,
             )
             .unwrap(),
+            tools: None,
         }];
         app.store
             .create_group(&pluk_store::GroupInput {
@@ -479,4 +504,65 @@ async fn the_endpoint_hides_tools_the_policy_disables() {
     // The toggle is the switch: the surface is rebuilt per request.
     let enabled = listed_tools(&app, &token).await;
     assert!(enabled.contains(&"wipe".to_string()), "{enabled:?}");
+}
+
+#[tokio::test]
+async fn a_member_exposes_only_the_tools_the_group_picked() {
+    let app = spawn_app().await;
+    let (member_id, _) = integration(&app, "Picked DB");
+    let token = group_of(
+        &app,
+        "Narrow",
+        vec![pluk_store::GroupMember {
+            id: member_id,
+            overrides: Default::default(),
+            tools: Some(vec!["echo".into()]),
+        }],
+    );
+
+    assert_eq!(
+        listed_tools(&app, &token).await,
+        vec!["picked_db__echo".to_string()]
+    );
+    // The agent-facing text names the same short list.
+    let instructions = endpoint_instructions(&app, &token).await;
+    assert!(
+        instructions.contains("Enabled tools: echo."),
+        "{instructions}"
+    );
+}
+
+#[tokio::test]
+async fn a_member_with_nothing_picked_keeps_every_tool_it_has_on() {
+    let app = spawn_app().await;
+    let (member_id, _) = integration(&app, "Whole DB");
+    let token = group(&app, "Wide", std::slice::from_ref(&member_id));
+
+    let tools = listed_tools(&app, &token).await;
+    assert_eq!(
+        tools,
+        vec!["whole_db__echo".to_string(), "whole_db__ping".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn a_group_cannot_pick_a_tool_the_integration_has_off() {
+    let app = spawn_app().await;
+    let (member_id, _) = integration(&app, "Guarded DB");
+    // `wipe` is a delete tool: off until the integration itself turns it on.
+    let token = group_of(
+        &app,
+        "Hopeful",
+        vec![pluk_store::GroupMember {
+            id: member_id,
+            overrides: Default::default(),
+            // `gone` no longer exists on the integration and is ignored.
+            tools: Some(vec!["echo".into(), "wipe".into(), "gone".into()]),
+        }],
+    );
+
+    assert_eq!(
+        listed_tools(&app, &token).await,
+        vec!["guarded_db__echo".to_string()]
+    );
 }

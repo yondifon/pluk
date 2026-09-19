@@ -3,8 +3,17 @@ import { visibleFields, groupedFields, groupedByCategory, prettyCategory } from 
 import type { ConnectionDraft, Environment } from "./connectionDraft.ts";
 import { parseRules, setEnvironment, splitTools } from "./connectionDraft.ts";
 import type { Approvals } from "./connectionDraft.ts";
-import type { GroupDraft } from "./groupForm.ts";
-import { overridableFields, inheritPlaceholder, canSaveGroup } from "./groupForm.ts";
+import type { GroupDraft, GroupFormConnection } from "./groupForm.ts";
+import {
+  availableTools,
+  canSaveGroup,
+  clearMemberTools,
+  hasPickedTools,
+  inheritPlaceholder,
+  memberTools,
+  overridableFields,
+  setMemberTool,
+} from "./groupForm.ts";
 import { createIcon } from "../icon";
 import { createButton, createBadge, wizardStepHeader, wizardStepFooter } from "../primitives";
 import { typeBadge } from "../glyph";
@@ -736,9 +745,80 @@ export function renderCommandsStep(
   return wrap;
 }
 
+/** What the count line under a member's Tools heading says. */
+function memberToolsHint(picked: number, available: number, name: string): string {
+  if (!available) return `Nothing to pick yet. Turn on tools for ${name} first.`;
+  if (!picked) return `0 of ${available} tools. This one gives the agent nothing here.`;
+  return `${picked} of ${available} tools. Uncheck what the agent should not reach here.`;
+}
+
+/**
+ * One member's tools: a row per tool the integration has on, and a way back to
+ * handing over all of them.
+ *
+ * The reset sits after the list, never before it. The form rebuilds on every
+ * change and puts focus back by position, so a control that comes and goes
+ * ahead of the checkboxes would move focus to the wrong row mid-edit.
+ */
+function renderMemberTools(
+  draft: GroupDraft,
+  conn: GroupFormConnection,
+  onDraftChange: (next: GroupDraft) => void,
+): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "member-tools";
+  const available = availableTools(conn);
+  const exposed = new Set(memberTools(draft, conn));
+
+  const title = document.createElement("p");
+  title.className = "member-tools-title";
+  title.id = `${conn.id}-tools-title`;
+  title.textContent = "Tools";
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = memberToolsHint(exposed.size, available.length, conn.name);
+  wrap.append(title, hint);
+  if (!available.length) return wrap;
+
+  const list = document.createElement("div");
+  list.setAttribute("role", "group");
+  list.setAttribute("aria-labelledby", title.id);
+  for (const tool of available) {
+    const on = exposed.has(tool.name);
+    const row = document.createElement("label");
+    row.className = on ? "member-tool-row" : "member-tool-row tool-off";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = on;
+    box.setAttribute("aria-label", tool.label);
+    box.addEventListener("change", () =>
+      onDraftChange(setMemberTool(draft, conn, tool.name, box.checked)),
+    );
+    const label = document.createElement("span");
+    label.className = "tool-name";
+    label.textContent = tool.label;
+    const id = document.createElement("code");
+    id.className = "tool-id tool-category mono";
+    id.textContent = tool.name;
+    row.append(box, label, id);
+    list.appendChild(row);
+  }
+  wrap.appendChild(list);
+
+  if (hasPickedTools(draft, conn.id)) {
+    wrap.appendChild(
+      createButton("Use all tools", {
+        size: "sm",
+        onClick: () => onDraftChange(clearMemberTools(draft, conn.id)),
+      }),
+    );
+  }
+  return wrap;
+}
+
 export function renderGroupForm(
   draft: GroupDraft,
-  connections: Array<{ id: string; name: string; type: string; environment?: string | null; config: Record<string, string> }>,
+  connections: GroupFormConnection[],
   adapters: AdapterManifest[],
   onDraftChange: (next: GroupDraft) => void,
   onSave: (d: GroupDraft) => void,
@@ -795,8 +875,8 @@ export function renderGroupForm(
       if (on) {
         const manifest = adapters.find((a) => a.id === conn.type);
         const fields = overridableFields(manifest);
+        const panel = document.createElement("div"); panel.className = "member-form-panel";
         if (fields.length) {
-          const panel = document.createElement("div"); panel.className = "member-form-panel";
           const hint = document.createElement("div"); hint.className = "hint"; hint.textContent = "Overrides for this group (blank = inherit)";
           panel.appendChild(hint);
           for (const f of fields) {
@@ -816,8 +896,9 @@ export function renderGroupForm(
             override.slot.appendChild(inp);
             panel.appendChild(override.row);
           }
-          row2.appendChild(panel);
         }
+        panel.appendChild(renderMemberTools(draft, conn, onDraftChange));
+        row2.appendChild(panel);
       }
       listCard.appendChild(row2);
     }

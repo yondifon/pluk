@@ -80,8 +80,11 @@ pub fn serialize_query_policy(policy: &QueryPolicy) -> String {
     serde_json::to_string(policy).expect("QueryPolicy serializes")
 }
 
-/// Parse the `member_ids` column: an array of `{id, overrides}` objects with
-/// entries that predate overrides stored as bare id strings.
+/// Parse the `member_ids` column: an array of `{id, overrides, tools}` objects
+/// with entries that predate overrides stored as bare id strings.
+///
+/// A missing `tools` key means the group exposes every tool the integration
+/// has on, which is how every row written before tool picking reads.
 ///
 /// Anything unparseable yields no members rather than an error — a group with
 /// garbage members still lists, it just has none.
@@ -100,6 +103,7 @@ pub fn parse_members(raw: &str) -> Vec<GroupMember> {
             Value::String(id) => Some(GroupMember {
                 id,
                 overrides: Map::new(),
+                tools: None,
             }),
             Value::Object(object) => match object.get("id") {
                 Some(Value::String(id)) => Some(GroupMember {
@@ -108,6 +112,7 @@ pub fn parse_members(raw: &str) -> Vec<GroupMember> {
                         .get("overrides")
                         .and_then(|o| serde_json::from_value(o.clone()).ok())
                         .unwrap_or_default(),
+                    tools: object.get("tools").and_then(parse_tool_names),
                 }),
                 _ => None,
             },
@@ -116,8 +121,22 @@ pub fn parse_members(raw: &str) -> Vec<GroupMember> {
         .collect()
 }
 
+/// A member's `tools` entry: a list of tool names, or nothing when the value
+/// is not one.
+fn parse_tool_names(value: &Value) -> Option<Vec<String>> {
+    let Value::Array(entries) = value else {
+        return None;
+    };
+    Some(
+        entries
+            .iter()
+            .filter_map(|entry| entry.as_str().map(str::to_string))
+            .collect(),
+    )
+}
+
 /// Serialize members in the current form, omitting empty overrides exactly as
-/// both existing writers do.
+/// both existing writers do, and the tool selection when there is none.
 pub fn serialize_members(members: &[GroupMember]) -> String {
     let entries: Vec<Value> = members
         .iter()
@@ -126,6 +145,12 @@ pub fn serialize_members(members: &[GroupMember]) -> String {
             object.insert("id".into(), Value::String(m.id.clone()));
             if !m.overrides.is_empty() {
                 object.insert("overrides".into(), Value::Object(m.overrides.clone()));
+            }
+            if let Some(tools) = &m.tools {
+                object.insert(
+                    "tools".into(),
+                    Value::Array(tools.iter().cloned().map(Value::String).collect()),
+                );
             }
             Value::Object(object)
         })
@@ -195,18 +220,50 @@ mod tests {
             vec![
                 GroupMember {
                     id: "legacyid".into(),
-                    overrides: Map::new()
+                    overrides: Map::new(),
+                    tools: None,
                 },
                 GroupMember {
                     id: "current".into(),
-                    overrides: Map::new()
+                    overrides: Map::new(),
+                    tools: None,
                 },
                 GroupMember {
                     id: "withov".into(),
                     overrides: serde_json::from_value(json!({"team_key": "ACME"})).unwrap(),
+                    tools: None,
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_members_tool_selection_round_trips() {
+        let members = vec![
+            GroupMember {
+                id: "picked".into(),
+                overrides: Map::new(),
+                tools: Some(vec!["query".into(), "list_tables".into()]),
+            },
+            GroupMember {
+                id: "none_picked".into(),
+                overrides: Map::new(),
+                tools: Some(Vec::new()),
+            },
+        ];
+        let raw = serialize_members(&members);
+        assert_eq!(
+            raw,
+            r#"[{"id":"picked","tools":["query","list_tables"]},{"id":"none_picked","tools":[]}]"#
+        );
+        assert_eq!(parse_members(&raw), members);
+    }
+
+    #[test]
+    fn a_tool_selection_that_is_not_a_name_list_reads_as_every_tool() {
+        let members = parse_members(r#"[{"id":"a","tools":"query"},{"id":"b","tools":[1,"ok"]}]"#);
+        assert_eq!(members[0].tools, None);
+        assert_eq!(members[1].tools, Some(vec!["ok".to_string()]));
     }
 
     #[test]
@@ -222,10 +279,12 @@ mod tests {
             GroupMember {
                 id: "a".into(),
                 overrides: Map::new(),
+                tools: None,
             },
             GroupMember {
                 id: "b".into(),
                 overrides: serde_json::from_value(json!({"k": "v"})).unwrap(),
+                tools: None,
             },
         ];
         assert_eq!(

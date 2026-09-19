@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::namespace::slug;
-use pluk_adapters::{Adapter, AdapterRegistry, ConfigField, FieldType, register_gated};
-use pluk_store::{Group, Integration, LogGroup, Store};
+use pluk_adapters::{Adapter, AdapterRegistry, ConfigField, FieldType, ToolSpec, register_gated};
+use pluk_store::{Group, Integration, LogGroup, Store, ToolPolicy};
 
 use super::namespace::NamespacedHost;
 use super::surface::{Surface, SurfaceBuilder};
@@ -154,6 +154,34 @@ pub fn apply_overrides(
     scoped
 }
 
+/// Switch off every tool of `conn` the group did not pick, leaving the rest of
+/// its stored policy alone.
+///
+/// A group can only take tools away: picking a tool the integration itself has
+/// off changes nothing, because this never writes `enabled: true`. A picked
+/// name the integration no longer offers is simply absent from `specs` and so
+/// has no effect. Narrowing the policy rather than the registrations means the
+/// same cut reaches the member's instructions, which are built from it.
+fn restrict_to_picked(conn: &Integration, specs: &[ToolSpec], picked: &[String]) -> String {
+    let mut policy =
+        pluk_store::parse_query_policy(conn.query_policy.as_deref()).unwrap_or_default();
+    for spec in specs {
+        if picked.iter().any(|name| name == &spec.name) {
+            continue;
+        }
+        policy
+            .tools
+            .entry(spec.name.clone())
+            .and_modify(|tool| tool.enabled = false)
+            .or_insert_with(|| ToolPolicy {
+                enabled: false,
+                settings: serde_json::Map::new(),
+                extra: serde_json::Map::new(),
+            });
+    }
+    pluk_store::serialize_query_policy(&policy)
+}
+
 /// Build one MCP surface aggregating every usable member of a group. Each
 /// member registers through a namespaced host (prefix = slug of its name) so
 /// identically-named tools across members don't collide; per-member overrides
@@ -193,6 +221,10 @@ pub fn build_group_surface(
             Some(&member.overrides),
             adapter.config_fields(),
         );
+        if let Some(picked) = &member.tools {
+            let specs = adapter.tool_specs_for(&scoped);
+            scoped.query_policy = Some(restrict_to_picked(&scoped, &specs, picked));
+        }
         // Tag the member so its log rows attribute to this group.
         scoped.via_group = Some(LogGroup {
             id: group.id.clone(),

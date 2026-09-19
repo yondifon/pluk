@@ -443,6 +443,8 @@ pub fn create_group(
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct UpdateGroupPayload {
     pub name: Option<String>,
+    /// Absent leaves the stored environment; `null` clears it.
+    #[serde(default, deserialize_with = "nullable")]
     pub environment: Option<Option<String>>,
     pub members: Option<Vec<pluk_store::GroupMember>>,
 }
@@ -1011,6 +1013,12 @@ mod update_payload_tests {
             .environment
     }
 
+    fn group_environment(json: serde_json::Value) -> Option<Option<String>> {
+        serde_json::from_value::<UpdateGroupPayload>(json)
+            .expect("payload")
+            .environment
+    }
+
     #[test]
     fn an_absent_environment_is_not_a_cleared_one() {
         assert_eq!(environment(serde_json::json!({})), None);
@@ -1022,6 +1030,33 @@ mod update_payload_tests {
             environment(serde_json::json!({ "environment": "local" })),
             Some(Some("local".to_string()))
         );
+    }
+
+    #[test]
+    fn a_group_can_go_back_to_spanning_every_environment() {
+        assert_eq!(group_environment(serde_json::json!({})), None);
+        assert_eq!(
+            group_environment(serde_json::json!({ "environment": null })),
+            Some(None)
+        );
+        assert_eq!(
+            group_environment(serde_json::json!({ "environment": "local" })),
+            Some(Some("local".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_members_picked_tools_reach_the_store_unchanged() {
+        let payload = serde_json::from_value::<UpdateGroupPayload>(serde_json::json!({
+            "members": [
+                { "id": "a", "tools": ["echo"] },
+                { "id": "b" },
+            ]
+        }))
+        .expect("payload");
+        let members = payload.members.expect("members");
+        assert_eq!(members[0].tools, Some(vec!["echo".to_string()]));
+        assert_eq!(members[1].tools, None);
     }
 }
 

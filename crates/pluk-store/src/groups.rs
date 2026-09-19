@@ -72,7 +72,7 @@ impl Store {
     }
 
     /// Resolve members to live integrations, skipping any that vanished,
-    /// carrying each member's per-group overrides.
+    /// carrying each member's per-group overrides and tool selection.
     pub fn resolve_members(&self, group: &Group) -> Result<Vec<ResolvedMember>> {
         let mut resolved = Vec::with_capacity(group.members.len());
         for member in &group.members {
@@ -80,6 +80,7 @@ impl Store {
                 resolved.push(ResolvedMember {
                     integration,
                     overrides: member.overrides.clone(),
+                    tools: member.tools.clone(),
                 });
             }
         }
@@ -132,5 +133,66 @@ impl Store {
     pub fn delete_group(&self, id: &str) -> Result<bool> {
         let conn = self.conn.lock().expect("store lock");
         Ok(conn.execute("DELETE FROM groups WHERE id = ?", [id])? > 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::IntegrationInput;
+    use crate::testing::temp_store;
+
+    #[test]
+    fn a_members_tool_selection_survives_a_save_and_an_update() {
+        let (_dir, store) = temp_store();
+        let picked = store
+            .create_integration(&IntegrationInput::new("Picked", "stub"))
+            .expect("integration");
+        let whole = store
+            .create_integration(&IntegrationInput::new("Whole", "stub"))
+            .expect("integration");
+
+        let group = store
+            .create_group(&GroupInput {
+                name: "Mixed".into(),
+                environment: None,
+                members: vec![
+                    GroupMember {
+                        id: picked.id.clone(),
+                        overrides: Default::default(),
+                        tools: Some(vec!["echo".into()]),
+                    },
+                    GroupMember {
+                        id: whole.id.clone(),
+                        overrides: Default::default(),
+                        tools: None,
+                    },
+                ],
+            })
+            .expect("group");
+
+        let stored = store.group_by_id(&group.id).expect("read").expect("row");
+        assert_eq!(stored.members[0].tools, Some(vec!["echo".to_string()]));
+        assert_eq!(stored.members[1].tools, None);
+
+        let resolved = store.resolve_members(&stored).expect("resolve");
+        assert_eq!(resolved[0].tools, Some(vec!["echo".to_string()]));
+        assert_eq!(resolved[1].tools, None);
+
+        let widened = store
+            .update_group(
+                &group.id,
+                &GroupUpdate {
+                    members: Some(vec![GroupMember {
+                        id: picked.id.clone(),
+                        overrides: Default::default(),
+                        tools: None,
+                    }]),
+                    ..Default::default()
+                },
+            )
+            .expect("update")
+            .expect("row");
+        assert_eq!(widened.members[0].tools, None);
     }
 }
