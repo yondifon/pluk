@@ -66,7 +66,10 @@ export function wizardStepHeader(stepIndex: number, totalSteps: number, title: s
   head.appendChild(help);
 
   wrap.appendChild(head);
-  queueMicrotask(() => heading.focus());
+  // Arriving on a step announces its heading; a redraw while someone works in it leaves them be.
+  queueMicrotask(() => {
+    if (!wrap.contains(document.activeElement)) heading.focus();
+  });
   return wrap;
 }
 

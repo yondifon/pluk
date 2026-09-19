@@ -27,6 +27,7 @@ import {
   type ConnectionDraft,
 } from "./forms/connectionDraft.ts";
 import { wizardSteps } from "./forms/wizard.ts";
+import { markFocus, restoreFocus } from "./forms/focus.ts";
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
 import type { AdapterManifest as CatalogManifest, ToolDef, ToolState } from "./forms/catalog.ts";
 import { renderConnectChromeStep } from "./integration-detail/browser-access.ts";
@@ -103,6 +104,8 @@ let selection: Selection = { kind: "none" };
 let form: FormState | null = null;
 let formModal: { close: () => void; setTitle: (text: string) => void; content: HTMLElement } | null = null;
 let formHost: HTMLElement | null = null;
+/** The form screen last drawn, so typing into a field is not mistaken for arriving on a step. */
+let renderedScreen: string | null = null;
 let draft: ConnectionDraft | null = null;
 let provisionalIntegrationId: string | null = null;
 let creatingIntegration = false;
@@ -234,7 +237,12 @@ const FORM_TITLES: Record<FormState["kind"], string> = {
   "edit-group": "Edit Group",
 };
 
-const FORM_FOCUSABLE = "input, select, textarea, button";
+/** The screen a form state draws, so a redraw of the one on show is told apart from a move to another. */
+function formScreen(current: FormState): string {
+  const id = "id" in current ? current.id : "";
+  const step = "step" in current ? current.step : 0;
+  return `${current.kind}:${id}:${step}`;
+}
 
 function openForm(next: FormState): void {
   form = next;
@@ -281,9 +289,9 @@ function closeForm(): void {
 function renderForm(): void {
   const host = formHost;
   if (!host || !form) return;
-  const active = document.activeElement as HTMLElement | null;
-  const index = active ? Array.from(host.querySelectorAll<HTMLElement>(FORM_FOCUSABLE)).indexOf(active) : -1;
-  const caret = active instanceof HTMLInputElement ? active.selectionStart : null;
+  const screen = formScreen(form);
+  const keep = screen === renderedScreen ? markFocus(host) : null;
+  renderedScreen = screen;
 
   activeStepCleanup?.();
   activeStepCleanup = null;
@@ -292,10 +300,7 @@ function renderForm(): void {
   host.appendChild(built.el);
   activeStepCleanup = built.destroy ?? null;
 
-  if (index < 0) return;
-  const restored = host.querySelectorAll<HTMLElement>(FORM_FOCUSABLE)[index];
-  restored?.focus();
-  if (restored instanceof HTMLInputElement && caret != null) restored.setSelectionRange(caret, caret);
+  restoreFocus(host, keep);
 }
 
 /** Moves the wizard step index for the integration currently open, if one is. */
