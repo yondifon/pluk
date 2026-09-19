@@ -14,6 +14,7 @@ pub mod api;
 pub mod catalog;
 pub mod client;
 pub mod oauth;
+pub mod probe;
 
 use std::borrow::Cow;
 use std::sync::{Arc, OnceLock};
@@ -33,6 +34,7 @@ use crate::tool_host::{ToolHandler, ToolHost, ToolRegistration};
 use crate::tool_spec::ToolSpec;
 
 use client::UpstreamAuth;
+use probe::SignInRequired;
 
 pub const ADAPTER_ID: &str = "mcp";
 
@@ -40,11 +42,17 @@ pub const ADAPTER_ID: &str = "mcp";
 pub const TOOL_CHANGED_CODE: &str = "MCP_PROXY_TOOL_CHANGED";
 /// The stored token no longer signs in to the upstream server.
 pub const TOKEN_REJECTED_CODE: &str = "MCP_PROXY_TOKEN_REJECTED";
+/// The server only answers people who signed in, and nobody has.
+pub const SIGN_IN_NEEDED_CODE: &str = "MCP_PROXY_SIGN_IN_NEEDED";
+/// The server only answers a token, and none is saved.
+pub const TOKEN_NEEDED_CODE: &str = "MCP_PROXY_TOKEN_NEEDED";
 
 const TOOL_CHANGED: &str = "This tool changed. Approve it again in Pluk.";
 const TOKEN_REJECTED: &str = "Pluk could not sign in to this MCP server. Check the token in Pluk.";
 const PERMISSION_DENIED: &str =
     "This MCP server refused the request. The account signed in to Pluk may not have permission.";
+const SIGN_IN_NEEDED: &str = "This server needs you to sign in. Open the Tools tab and sign in.";
+const TOKEN_NEEDED: &str = "This server needs a token. Add one in this integration's settings.";
 
 const AGENT_HINT: &str = "Use this to reach the tools of another MCP server the owner connected in Pluk. Each tool is that server's own: call it by name with the arguments its schema describes.";
 
@@ -53,23 +61,26 @@ fn mcp_fields() -> Vec<ConfigField> {
         ConfigField::new("url", "Server URL", FieldType::Text)
             .group("Connection")
             .required()
-            .placeholder("https://example.com/mcp"),
+            .placeholder("https://example.com/mcp")
+            .help("Pluk works out what this server needs. The other fields are only for the few servers that ask for more."),
         ConfigField::new("token", "Token", FieldType::Password)
-            .group("Auth")
+            .group("Sign-in")
             .secret()
-            .placeholder("leave empty if the server does not need one"),
+            .placeholder("leave empty")
+            .help("Most servers do not need one. Add the token if the server gave you one."),
         ConfigField::new("header_name", "Header name", FieldType::Text)
-            .group("Auth")
+            .group("Sign-in")
             .default_value(&json!(client::DEFAULT_AUTH_HEADER))
-            .help("Authorization sends the token as a bearer token. Any other header sends it as written."),
+            .help("Leave this as it is unless the server asked for the token under another name."),
         ConfigField::new("client_id", "Client ID", FieldType::Text)
-            .group("Auth")
-            .placeholder("leave empty if the server hands one out")
-            .help("Some servers ask you to register Pluk with them first, then give you this."),
+            .group("Sign-in")
+            .placeholder("leave empty")
+            .help("Most servers do not need one. Add it if the server asked you to register Pluk first."),
         ConfigField::new("client_secret", "Client secret", FieldType::Password)
-            .group("Auth")
+            .group("Sign-in")
             .secret()
-            .placeholder("leave empty if the server gave none"),
+            .placeholder("leave empty")
+            .help("Add this only if the server gave you one with the client ID."),
     ]
 }
 
@@ -140,8 +151,21 @@ impl Adapter for McpProxyAdapter {
         FIELDS.get_or_init(mcp_fields)
     }
 
+    /// Reaching the server is the test. A server that will only answer someone
+    /// who signed in is working as built, so the failure it reports is the step
+    /// the user still owes it rather than the refusal it gave Pluk.
     async fn test_connection(&self, conn: &Integration) -> Result<(), AdapterError> {
+        credentials_in_hand(&self.store, conn).await?;
         catalog::discover(&self.store, conn).await.map(|_| ())
+    }
+
+    fn humanize_error(&self, error: &AdapterError) -> Option<String> {
+        if error.has_code(SIGN_IN_NEEDED_CODE) {
+            return Some(SIGN_IN_NEEDED.to_string());
+        }
+        error
+            .has_code(TOKEN_NEEDED_CODE)
+            .then(|| TOKEN_NEEDED.to_string())
     }
 
     async fn handle_api(
@@ -198,6 +222,21 @@ impl Adapter for McpProxyAdapter {
         }
         Ok(())
     }
+}
+
+/// Whether Pluk holds what this server asks for. The failure names the step
+/// the user still owes it.
+async fn credentials_in_hand(store: &Store, conn: &Integration) -> Result<(), AdapterError> {
+    let required = probe::required(conn).await?;
+    if required == SignInRequired::None
+        || catalog::upstream_auth(store, conn).await? != UpstreamAuth::None
+    {
+        return Ok(());
+    }
+    Err(match required {
+        SignInRequired::Token => AdapterError::new(TOKEN_NEEDED).with_code(TOKEN_NEEDED_CODE),
+        _ => AdapterError::new(SIGN_IN_NEEDED).with_code(SIGN_IN_NEEDED_CODE),
+    })
 }
 
 /// The upstream definition, passed through as it was approved.
@@ -794,7 +833,8 @@ mod tests {
         let auth = call_api(&adapter, &conn, "GET", "/proxy/auth", None).await;
         assert_eq!(
             auth["auth"],
-            json!({ "kind": "none", "status": "not_connected" })
+            json!({ "kind": "none", "status": "not_connected", "required": "none" }),
+            "an open server asks for nothing, so the screen offers no sign-in"
         );
 
         client::invalidate(&conn.id);

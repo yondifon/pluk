@@ -13,6 +13,25 @@ export type SignInKind = "none" | "token" | "oauth";
 
 export type SignInStatus = "connected" | "reconnect_needed" | "not_connected";
 
+/** What the server itself asks for, whatever the user has saved so far. */
+export type SignInRequired = "none" | "oauth" | "token";
+
+export interface SignIn {
+  kind: SignInKind;
+  status: SignInStatus;
+  required: SignInRequired;
+  /** The server hands out no client IDs and none was saved. */
+  needsClientId?: boolean;
+}
+
+/** The sign-in block, reduced to the one line and the one button it shows. */
+export interface SignInView {
+  message: string;
+  /** The badge to show, or null when this server has nothing to be signed in to. */
+  status: SignInStatus | null;
+  action: "sign-in" | "sign-in-again" | "sign-out" | null;
+}
+
 export interface ProxyToolRow {
   name: string;
   label: string;
@@ -75,15 +94,55 @@ export function canEnable(state: ProxyToolState): boolean {
   return state === "approved";
 }
 
-export function signInMessage(kind: SignInKind, status: SignInStatus): string {
-  if (kind === "none") return "This server does not ask you to sign in.";
-  if (kind === "token") return "Signed in with the token you saved.";
-  switch (status) {
-    case "connected":
-      return "Signed in.";
-    case "reconnect_needed":
-      return "Your sign-in has expired. Sign in again to keep using this server.";
-    case "not_connected":
-      return "Sign in to see what this server offers.";
+/**
+ * What the sign-in block says and offers.
+ *
+ * The server's own answer leads: a server that lets anyone in is never asked
+ * to be signed in to, and one that only takes a token is never offered a
+ * button that cannot help. A saved token that works reads as signed in,
+ * whatever else the server would have accepted.
+ */
+export function signInView(auth: SignIn): SignInView {
+  if (auth.kind === "token") {
+    return { message: "Signed in with the token you saved.", status: "connected", action: null };
   }
+  if (auth.required === "none") {
+    return { message: "This server does not ask you to sign in.", status: null, action: null };
+  }
+  if (auth.required === "token") {
+    return {
+      message: "This server needs a token. Add one in this integration's settings.",
+      status: null,
+      action: null,
+    };
+  }
+  if (auth.needsClientId) {
+    return {
+      message:
+        "This server needs a client ID. Add one in this integration's settings, then sign in.",
+      status: null,
+      action: null,
+    };
+  }
+  switch (auth.status) {
+    case "connected":
+      return { message: "Signed in.", status: "connected", action: "sign-out" };
+    case "reconnect_needed":
+      return {
+        message: "Your sign-in has expired. Sign in again to keep using this server.",
+        status: "reconnect_needed",
+        action: "sign-in-again",
+      };
+    case "not_connected":
+      return {
+        message: "Sign in to see what this server offers.",
+        status: "not_connected",
+        action: "sign-in",
+      };
+  }
+}
+
+/** Whether an empty tool list is waiting on the user rather than on the server. */
+export function awaitingSignIn(auth: SignIn): boolean {
+  return auth.required !== "none" && signInView(auth).status !== "connected";
 }

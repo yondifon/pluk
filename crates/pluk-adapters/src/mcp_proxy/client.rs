@@ -347,11 +347,17 @@ impl ClientHandler for ProxyHandler {
     }
 
     fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
-        info.client_info.name = "pluk".to_string();
-        info.client_info.version = env!("CARGO_PKG_VERSION").to_string();
-        info
+        client_info()
     }
+}
+
+/// How Pluk introduces itself to an upstream server, on a session it opens and
+/// on a bare request it sends without one.
+pub(super) fn client_info() -> ClientInfo {
+    let mut info = ClientInfo::default();
+    info.client_info.name = "pluk".to_string();
+    info.client_info.version = env!("CARGO_PKG_VERSION").to_string();
+    info
 }
 
 /// Whether the session is gone rather than the request being refused: worth

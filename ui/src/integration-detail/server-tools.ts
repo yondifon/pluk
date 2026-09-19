@@ -5,21 +5,20 @@ import { createBadge, createButton, createCard } from "../primitives";
 import { toast } from "../toast";
 import {
   attentionCount,
+  awaitingSignIn,
   canEnable,
   orderedProxyTools,
-  signInMessage,
+  signInView,
   stateBadge,
   stateNote,
   type ProxyToolRow,
-  type SignInKind,
+  type SignIn,
   type SignInStatus,
 } from "./proxy-tools";
 import type { Integration } from "./types";
 
 const SIGN_IN_POLL_MS = 2000;
 const SIGN_IN_GIVE_UP_MS = 10 * 60 * 1000;
-
-type Auth = { kind: SignInKind; status: SignInStatus };
 
 type Answer<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -81,7 +80,7 @@ export function mountServerTools(
   container.append(signIn.el, tools.el);
 
   let alive = true;
-  let auth: Auth | null = null;
+  let auth: SignIn | null = null;
   let authError: string | null = null;
   let rows: ProxyToolRow[] | null = null;
   let toolsError: string | null = null;
@@ -92,7 +91,7 @@ export function mountServerTools(
   let stopPoll: (() => void) | null = null;
 
   async function loadAuth(): Promise<void> {
-    const result = await call<{ auth: Auth }>(integration.id, "GET", "/proxy/auth");
+    const result = await call<{ auth: SignIn }>(integration.id, "GET", "/proxy/auth");
     if (!alive) return;
     auth = result.ok ? result.value.auth : null;
     authError = result.ok ? null : result.error;
@@ -241,9 +240,13 @@ export function mountServerTools(
       return;
     }
 
-    const statusLine = actionRow(statusBadge(auth.status));
-    statusLine.setAttribute("role", "status");
-    signIn.body.append(statusLine, line(signInMessage(auth.kind, auth.status), "hint"));
+    const view = signInView(auth);
+    if (view.status) {
+      const statusLine = actionRow(statusBadge(view.status));
+      statusLine.setAttribute("role", "status");
+      signIn.body.appendChild(statusLine);
+    }
+    signIn.body.appendChild(line(view.message, "hint"));
 
     if (waitingForBrowser) {
       const stop = createButton("Cancel", {
@@ -258,8 +261,9 @@ export function mountServerTools(
       );
       return;
     }
+    if (!view.action) return;
     const action =
-      auth.status === "connected"
+      view.action === "sign-out"
         ? createButton("Sign out", {
             onClick: () =>
               confirmModal({
@@ -270,7 +274,7 @@ export function mountServerTools(
                 onConfirm: () => void working(signOut),
               }),
           })
-        : createButton(auth.status === "reconnect_needed" ? "Sign in again" : "Sign in", {
+        : createButton(view.action === "sign-in-again" ? "Sign in again" : "Sign in", {
             variant: "primary",
             onClick: () => void working(startSignIn),
           });
@@ -368,6 +372,14 @@ export function mountServerTools(
     return el;
   }
 
+  /** What an empty list is waiting for, in the words of the step above it. */
+  function waitingLine(): string {
+    const action = auth ? signInView(auth).action : null;
+    return action === "sign-in" || action === "sign-in-again"
+      ? "Sign in above to see what this server offers."
+      : "Finish the step above to see what this server offers.";
+  }
+
   function renderTools(): void {
     tools.body.innerHTML = "";
     if (toolsError) {
@@ -383,16 +395,10 @@ export function mountServerTools(
       return;
     }
     if (!rows.length) {
-      const waitingOnSignIn = auth?.kind === "oauth" && auth.status !== "connected";
-      tools.body.append(
-        line(
-          waitingOnSignIn
-            ? "Sign in above to see what this server offers."
-            : "This server offers no tools yet.",
-          "empty",
-        ),
-      );
-      if (!waitingOnSignIn) tools.body.appendChild(actionRow(refreshButton("Check for new tools")));
+      const waiting = auth ? awaitingSignIn(auth) : false;
+      const empty = waiting ? waitingLine() : "This server offers no tools yet.";
+      tools.body.appendChild(line(empty, "empty"));
+      if (!waiting) tools.body.appendChild(actionRow(refreshButton("Check for new tools")));
       return;
     }
 

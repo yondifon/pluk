@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import type { SignIn } from "./proxy-tools";
 import { mountServerTools } from "./server-tools";
 import type { Integration } from "./types";
 
 /** Stands in for the host, and records what the panel asked it to do. */
-function host(auth: { kind: string; status: string }, tools: unknown[]) {
+function host(auth: SignIn, tools: unknown[]) {
   const calls: Array<Record<string, unknown>> = [];
   Object.assign(window, {
     __TAURI__: {
@@ -45,7 +46,9 @@ function integration(): Integration {
   };
 }
 
-function mount(auth: { kind: string; status: string }, tools: unknown[]) {
+const signedIn: SignIn = { kind: "oauth", status: "connected", required: "oauth" };
+
+function mount(auth: SignIn, tools: unknown[]) {
   const calls = host(auth, tools);
   const root = document.createElement("div");
   mountServerTools(root, integration());
@@ -57,7 +60,7 @@ const buttonLabels = (root: HTMLElement) =>
 
 describe("mountServerTools", () => {
   test("shows what needs a decision first, and tells the states apart", async () => {
-    const { root, settled } = mount({ kind: "oauth", status: "connected" }, [
+    const { root, settled } = mount(signedIn, [
       tool("search", "new", "read"),
       tool("edit", "approved", "write"),
       tool("old", "missing", "read"),
@@ -80,7 +83,7 @@ describe("mountServerTools", () => {
   });
 
   test("a tool cannot be switched on before it is approved", async () => {
-    const { root, settled } = mount({ kind: "oauth", status: "connected" }, [
+    const { root, settled } = mount(signedIn, [
       tool("moved", "changed", "write"),
       tool("search", "new", "read"),
       tool("edit", "approved", "write"),
@@ -91,8 +94,49 @@ describe("mountServerTools", () => {
     expect(switches.map((s) => s.disabled)).toEqual([true, true, false]);
   });
 
+  test("a server that lets anyone in offers no sign-in at all", async () => {
+    const { root, settled } = mount({ kind: "none", status: "not_connected", required: "none" }, [
+      tool("search", "approved", "read"),
+    ]);
+    await settled;
+
+    expect(root.textContent).toContain("This server does not ask you to sign in.");
+    expect(root.querySelector(".browser-status")).toBeNull();
+    expect(buttonLabels(root)).not.toContain("Sign in");
+    expect([...root.querySelectorAll(".tool-name")].map((n) => n.textContent)).toEqual(["Search"]);
+  });
+
+  test("a server that only takes a token says where to put it", async () => {
+    const { root, settled } = mount(
+      { kind: "none", status: "not_connected", required: "token" },
+      [],
+    );
+    await settled;
+
+    expect(root.textContent).toContain(
+      "This server needs a token. Add one in this integration's settings.",
+    );
+    expect(buttonLabels(root)).not.toContain("Sign in");
+  });
+
+  test("a server that hands out no client IDs asks for one before the sign-in", async () => {
+    const { root, settled } = mount(
+      { kind: "none", status: "not_connected", required: "oauth", needsClientId: true },
+      [],
+    );
+    await settled;
+
+    expect(root.textContent).toContain(
+      "This server needs a client ID. Add one in this integration's settings, then sign in.",
+    );
+    expect(buttonLabels(root)).not.toContain("Sign in");
+  });
+
   test("an expired sign-in warns and offers a way back", async () => {
-    const { root, settled } = mount({ kind: "oauth", status: "reconnect_needed" }, []);
+    const { root, settled } = mount(
+      { kind: "oauth", status: "reconnect_needed", required: "oauth" },
+      [],
+    );
     await settled;
 
     expect(root.querySelector(".browser-status-disconnected")).not.toBeNull();
@@ -101,7 +145,10 @@ describe("mountServerTools", () => {
   });
 
   test("signing in sends the user to the browser", async () => {
-    const { root, calls, settled } = mount({ kind: "oauth", status: "not_connected" }, []);
+    const { root, calls, settled } = mount(
+      { kind: "oauth", status: "not_connected", required: "oauth" },
+      [],
+    );
     await settled;
 
     const signIn = [...root.querySelectorAll("button")].find((b) => b.textContent === "Sign in");
@@ -113,7 +160,7 @@ describe("mountServerTools", () => {
   });
 
   test("a first run ticks nothing, whatever the server says its tools do", async () => {
-    const { root, calls, settled } = mount({ kind: "oauth", status: "connected" }, [
+    const { root, calls, settled } = mount(signedIn, [
       tool("search", "new", "read"),
       tool("write", "new", "write"),
     ]);

@@ -15,6 +15,7 @@ use crate::error::AdapterError;
 
 use super::catalog;
 use super::oauth;
+use super::probe::{self, SignInRequired};
 
 pub(super) const SIGNED_IN: &str = "You're signed in. Close this tab and go back to Pluk.";
 pub(super) const SIGN_IN_LAPSED: &str =
@@ -29,9 +30,12 @@ pub async fn handle_proxy_api(
     let route = subpath.strip_prefix("/proxy/")?;
     match (request.method.as_str(), route) {
         ("GET", "tools") => Some(tool_list(catalog::snapshot(store, &conn.id))),
-        ("POST", "refresh") => Some(tool_list(catalog::discover(store, conn).await)),
+        ("POST", "refresh") => {
+            probe::forget(&conn.id);
+            Some(tool_list(catalog::discover(store, conn).await))
+        }
         ("POST", "approve") => Some(approve(store, conn, request.body.as_deref())),
-        ("GET", "auth") => Some(auth(store, conn)),
+        ("GET", "auth") => Some(auth(store, conn).await),
         ("POST", "oauth/start") => Some(start_sign_in(conn).await),
         ("POST", "disconnect") => Some(disconnect(store, conn)),
         _ => None,
@@ -66,14 +70,27 @@ fn approve(store: &Store, conn: &Integration, body: Option<&str>) -> ApiResponse
     }
 }
 
-fn auth(store: &Store, conn: &Integration) -> ApiResponse {
-    match oauth::sign_in_state(store, conn) {
-        Ok(state) => ApiResponse::json(
-            200,
-            &json!({ "ok": true, "auth": { "kind": state.kind, "status": state.status } }),
-        ),
-        Err(error) => failed(500, &error.message),
+/// How this server is signed in to, and what it asks for in the first place.
+/// The screen needs both: the stored sign-in says where the user got to, and
+/// the server's own answer says which step it was.
+async fn auth(store: &Store, conn: &Integration) -> ApiResponse {
+    let state = match oauth::sign_in_state(store, conn) {
+        Ok(state) => state,
+        Err(error) => return failed(500, &error.message),
+    };
+    let required = match probe::required(conn).await {
+        Ok(required) => required,
+        Err(error) => return failed(502, &error.message),
+    };
+    let mut auth = json!({
+        "kind": state.kind,
+        "status": state.status,
+        "required": required.as_str(),
+    });
+    if matches!(required, SignInRequired::Oauth { .. }) {
+        auth["needsClientId"] = json!(probe::needs_client_id(conn, required));
     }
+    ApiResponse::json(200, &json!({ "ok": true, "auth": auth }))
 }
 
 async fn start_sign_in(conn: &Integration) -> ApiResponse {

@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   attentionCount,
+  awaitingSignIn,
   canEnable,
   orderedProxyTools,
-  signInMessage,
+  signInView,
   stateBadge,
   stateNote,
   type ProxyToolRow,
   type ProxyToolState,
+  type SignIn,
 } from "./proxy-tools";
 
 function row(name: string, state: ProxyToolState, category = "read"): ProxyToolRow {
@@ -88,22 +90,63 @@ describe("canEnable", () => {
   });
 });
 
-describe("signInMessage", () => {
-  test("a server with no sign in says so", () => {
-    expect(signInMessage("none", "not_connected")).toBe("This server does not ask you to sign in.");
+describe("signInView", () => {
+  const view = (auth: Partial<SignIn>) =>
+    signInView({ kind: "none", status: "not_connected", required: "none", ...auth });
+
+  test("a server that lets anyone in is never asked to be signed in to", () => {
+    expect(view({})).toEqual({
+      message: "This server does not ask you to sign in.",
+      status: null,
+      action: null,
+    });
   });
 
-  test("a saved key reads the same whatever the status", () => {
-    expect(signInMessage("token", "connected")).toBe("Signed in with the token you saved.");
+  test("a server that only takes a token points at the settings, not a button", () => {
+    expect(view({ required: "token" })).toEqual({
+      message: "This server needs a token. Add one in this integration's settings.",
+      status: null,
+      action: null,
+    });
   });
 
-  test("an expired sign in asks for a new one", () => {
-    expect(signInMessage("oauth", "reconnect_needed")).toBe(
-      "Your sign-in has expired. Sign in again to keep using this server.",
-    );
-    expect(signInMessage("oauth", "connected")).toBe("Signed in.");
-    expect(signInMessage("oauth", "not_connected")).toBe(
-      "Sign in to see what this server offers.",
-    );
+  test("a saved token reads as signed in", () => {
+    expect(view({ kind: "token", status: "connected", required: "token" })).toEqual({
+      message: "Signed in with the token you saved.",
+      status: "connected",
+      action: null,
+    });
+  });
+
+  test("a server that hands out no client IDs asks for one first", () => {
+    expect(view({ required: "oauth", needsClientId: true })).toEqual({
+      message:
+        "This server needs a client ID. Add one in this integration's settings, then sign in.",
+      status: null,
+      action: null,
+    });
+  });
+
+  test("a sign-in server offers the button its state calls for", () => {
+    expect(view({ required: "oauth" }).action).toBe("sign-in");
+    expect(view({ required: "oauth", status: "reconnect_needed" })).toEqual({
+      message: "Your sign-in has expired. Sign in again to keep using this server.",
+      status: "reconnect_needed",
+      action: "sign-in-again",
+    });
+    expect(view({ kind: "oauth", required: "oauth", status: "connected" })).toEqual({
+      message: "Signed in.",
+      status: "connected",
+      action: "sign-out",
+    });
+  });
+});
+
+describe("awaitingSignIn", () => {
+  test("only a server still waiting on the user holds its tools back", () => {
+    expect(awaitingSignIn({ kind: "none", status: "not_connected", required: "none" })).toBe(false);
+    expect(awaitingSignIn({ kind: "none", status: "not_connected", required: "oauth" })).toBe(true);
+    expect(awaitingSignIn({ kind: "none", status: "not_connected", required: "token" })).toBe(true);
+    expect(awaitingSignIn({ kind: "token", status: "connected", required: "token" })).toBe(false);
   });
 });

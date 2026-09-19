@@ -962,7 +962,7 @@ mod tests {
         assert_eq!(world.authority.refreshes(), 0);
         assert_eq!(
             world.rest("GET", "/proxy/auth", None).await["auth"],
-            json!({ "kind": "none", "status": "not_connected" })
+            not_signed_in()
         );
         assert!(world.row().is_some(), "the sign-in is kept, not discarded");
     }
@@ -1004,12 +1004,23 @@ mod tests {
         }
     }
 
+    /// A server nobody has signed in to yet, as the screen reads it: it asks
+    /// for a sign-in, hands out its own client IDs, and holds nothing.
+    fn not_signed_in() -> Value {
+        json!({
+            "kind": "none",
+            "status": "not_connected",
+            "required": "oauth",
+            "needsClientId": false,
+        })
+    }
+
     #[tokio::test]
     async fn the_sign_in_route_says_how_a_server_is_reached() {
         let world = World::new("oauth-sign-in-shape").await;
         assert_eq!(
             world.rest("GET", "/proxy/auth", None).await["auth"],
-            json!({ "kind": "none", "status": "not_connected" })
+            not_signed_in()
         );
 
         let mut with_token = world.conn.clone();
@@ -1022,14 +1033,19 @@ mod tests {
         world.seed(Some(now_ms() + 3_600_000));
         assert_eq!(
             world.rest("GET", "/proxy/auth", None).await["auth"],
-            json!({ "kind": "oauth", "status": "connected" })
+            json!({
+                "kind": "oauth",
+                "status": "connected",
+                "required": "oauth",
+                "needsClientId": false,
+            })
         );
 
         world.rest("POST", "/proxy/disconnect", None).await;
         assert!(world.row().is_none(), "the sign-in is forgotten");
         assert_eq!(
             world.rest("GET", "/proxy/auth", None).await["auth"],
-            json!({ "kind": "none", "status": "not_connected" })
+            not_signed_in()
         );
     }
 
