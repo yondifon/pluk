@@ -26,7 +26,6 @@ use pluk_store::{LogDraft, LogGroup, LogUpdate, QueryResult, Store, Verdict};
 
 use crate::error::AdapterError;
 
-
 /// One text block of an MCP tool response.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TextContent {
@@ -75,7 +74,6 @@ impl ToolResult {
             .unwrap_or_default()
     }
 }
-
 
 /// Structured metadata describing one gated call.
 #[derive(Debug, Clone)]
@@ -302,7 +300,6 @@ pub fn cancelled_when_message_contains(
     }
 }
 
-
 /// The approval rules stored on an integration.
 pub fn approvals_for(conn: &pluk_store::Integration) -> pluk_policy::Approvals {
     pluk_store::parse_query_policy(conn.query_policy.as_deref())
@@ -311,8 +308,7 @@ pub fn approvals_for(conn: &pluk_store::Integration) -> pluk_policy::Approvals {
 }
 
 /// Refused because a rule the owner wrote covers it.
-const DENIED_BY_RULE: &str =
-    "the \"Never allow\" rules for this integration cover it.";
+const DENIED_BY_RULE: &str = "the \"Never allow\" rules for this integration cover it.";
 
 /// Run the guard: the owner's rules first, then the adapter's own policy, then
 /// the question — and act on the answer. A returned reason blocks the call.
@@ -389,8 +385,7 @@ fn draft_for(
 }
 
 /// Text returned when the pending audit row cannot be written.
-const UNAUDITABLE: &str =
-    "Blocked: Pluk could not record this in the activity log, so the action did not run. \
+const UNAUDITABLE: &str = "Blocked: Pluk could not record this in the activity log, so the action did not run. \
      Try again, and restart Pluk if it keeps failing.";
 
 /// Run a tool body through the policy gate + activity log, returning a shaped
@@ -876,11 +871,7 @@ mod tests {
             !*ran.lock().unwrap(),
             "an unauditable call must not reach the remote system"
         );
-        assert!(
-            result.text().starts_with("Blocked:"),
-            "{}",
-            result.text()
-        );
+        assert!(result.text().starts_with("Blocked:"), "{}", result.text());
     }
 
     /// The confirm path is process-global, so these tests take turns.
@@ -958,7 +949,10 @@ mod tests {
 
         assert!(!result.is_error);
         assert_eq!(result.text(), "ran");
-        assert!(asked.lock().unwrap().is_empty(), "an allowed call asks nobody");
+        assert!(
+            asked.lock().unwrap().is_empty(),
+            "an allowed call asks nobody"
+        );
         assert_eq!(single_entry(&store).await.verdict, "allowed");
         crate::confirm::clear_prompter();
     }
@@ -968,11 +962,20 @@ mod tests {
         let _turn = confirm_turn();
         let (_dir, store) = temp_store();
         let asked = attach(crate::confirm::ConfirmChoice::Always);
-        let result = guarded(&store, "rm -rf /", rules(&["rm *"], &["rm -rf /*"], true), None).await;
+        let result = guarded(
+            &store,
+            "rm -rf /",
+            rules(&["rm *"], &["rm -rf /*"], true),
+            None,
+        )
+        .await;
 
         assert!(result.is_error);
         assert!(result.text().starts_with("Blocked:"), "{}", result.text());
-        assert!(asked.lock().unwrap().is_empty(), "a denied call asks nobody");
+        assert!(
+            asked.lock().unwrap().is_empty(),
+            "a denied call asks nobody"
+        );
         assert_eq!(single_entry(&store).await.verdict, "blocked");
         crate::confirm::clear_prompter();
     }
@@ -994,7 +997,13 @@ mod tests {
         let _turn = confirm_turn();
         let (_dir, store) = temp_store();
         let asked = attach(crate::confirm::ConfirmChoice::Once);
-        let result = guarded(&store, "shutdown now", rules(&[], &[], true), Some("not allowed")).await;
+        let result = guarded(
+            &store,
+            "shutdown now",
+            rules(&[], &[], true),
+            Some("not allowed"),
+        )
+        .await;
 
         assert!(!result.is_error);
         let seen = asked.lock().unwrap();
@@ -1011,7 +1020,13 @@ mod tests {
         let _turn = confirm_turn();
         let (_dir, store) = temp_store();
         attach(crate::confirm::ConfirmChoice::Deny);
-        let result = guarded(&store, "shutdown now", rules(&[], &[], true), Some("not allowed")).await;
+        let result = guarded(
+            &store,
+            "shutdown now",
+            rules(&[], &[], true),
+            Some("not allowed"),
+        )
+        .await;
 
         assert!(result.is_error);
         assert!(result.text().contains("not allowed"), "{}", result.text());
@@ -1024,7 +1039,13 @@ mod tests {
         let _turn = confirm_turn();
         let (_dir, store) = temp_store();
         let asked = attach(crate::confirm::ConfirmChoice::Once);
-        let result = guarded(&store, "shutdown now", rules(&[], &[], false), Some("not allowed")).await;
+        let result = guarded(
+            &store,
+            "shutdown now",
+            rules(&[], &[], false),
+            Some("not allowed"),
+        )
+        .await;
 
         assert!(result.is_error);
         assert_eq!(result.text(), "Blocked: not allowed");
@@ -1038,7 +1059,13 @@ mod tests {
         let (_dir, store) = temp_store();
         let asked = attach(crate::confirm::ConfirmChoice::Session);
         for _ in 0..2 {
-            let result = guarded(&store, "shutdown now", rules(&[], &[], true), Some("not allowed")).await;
+            let result = guarded(
+                &store,
+                "shutdown now",
+                rules(&[], &[], true),
+                Some("not allowed"),
+            )
+            .await;
             assert!(!result.is_error);
         }
         assert_eq!(asked.lock().unwrap().len(), 1);
@@ -1085,7 +1112,13 @@ mod tests {
         let _turn = confirm_turn();
         let (_dir, store) = temp_store();
         crate::confirm::clear_prompter();
-        let result = guarded(&store, "shutdown now", rules(&[], &[], true), Some("not allowed")).await;
+        let result = guarded(
+            &store,
+            "shutdown now",
+            rules(&[], &[], true),
+            Some("not allowed"),
+        )
+        .await;
         assert!(result.is_error);
         assert_eq!(result.text(), "Blocked: not allowed");
     }

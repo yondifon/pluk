@@ -242,7 +242,6 @@ pub fn sql_tool_specs() -> Vec<ToolSpec> {
     ]
 }
 
-
 #[derive(Default)]
 pub struct SqlCancelRegistry {
     handles: Mutex<HashMap<i64, CancellationToken>>,
@@ -1049,7 +1048,9 @@ pub fn register_sql_server(
                                 .map_err(driver_error_to_adapter)?;
                             let res = dw.driver.list_tables(schema_opt.as_deref()).await;
                             let _ = dw.close().await;
-                            Ok(Outcome::ran(res.map_err(driver_error_to_adapter)?.join("\n")))
+                            Ok(Outcome::ran(
+                                res.map_err(driver_error_to_adapter)?.join("\n"),
+                            ))
                         },
                     )
                     .await
@@ -1281,8 +1282,7 @@ pub fn register_sql_server(
                             let res = dw.driver.explain(&sql_for_driver, &params).await;
                             let _ = dw.close().await;
                             let res = res.map_err(driver_error_to_adapter)?;
-                            let val =
-                                serde_json::json!({ "rows": res.rows, "fields": res.fields });
+                            let val = serde_json::json!({ "rows": res.rows, "fields": res.fields });
                             let map = FieldMap::new(&["rows", "fields"], &["rows", "fields"]);
                             let text = projected_json(val, only, &map)
                                 .map_err(crate::error::AdapterError::new)?;
@@ -1434,8 +1434,10 @@ pub fn register_sql_server(
                         Ok(v) => v,
                         Err(e) => return err(e),
                     };
-                    let detail =
-                        detail_line("list_relationships", &[table.as_deref(), schema_opt.as_deref()]);
+                    let detail = detail_line(
+                        "list_relationships",
+                        &[table.as_deref(), schema_opt.as_deref()],
+                    );
                     let db_for_driver = db_opt.clone();
                     audited(
                         &store,
@@ -1577,9 +1579,7 @@ pub fn register_sql_server(
                                     Value::Object(m)
                                 })
                                 .collect();
-                            Ok(Outcome::ran(
-                                serde_json::to_string_pretty(&vals).unwrap(),
-                            ))
+                            Ok(Outcome::ran(serde_json::to_string_pretty(&vals).unwrap()))
                         },
                     )
                     .await

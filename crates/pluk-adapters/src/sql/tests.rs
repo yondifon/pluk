@@ -90,7 +90,11 @@ fn mssql_manifest_exposes_sql_server_connection_fields() {
     let (_dir, store) = temp_store();
     let adapter = crate::sql::SqlAdapter::mssql(store, Arc::new(SqlCancelRegistry::default()));
     let fields = adapter.config_fields();
-    assert!(fields.iter().any(|field| field.key == "port" && field.default.as_deref() == Some("1433")));
+    assert!(
+        fields
+            .iter()
+            .any(|field| field.key == "port" && field.default.as_deref() == Some("1433"))
+    );
     assert!(fields.iter().any(|field| field.key == "encrypt"));
     assert!(fields.iter().any(|field| field.key == "trust_cert"));
     assert!(fields.iter().any(|field| field.key == "use_ssh"));
@@ -728,7 +732,10 @@ async fn every_call_that_reaches_the_database_leaves_a_log_row() {
         .filter_map(|e| e.source.clone())
         .collect();
     for (name, _) in &calls {
-        assert!(sources.contains(*name), "{name} left no log row: {sources:?}");
+        assert!(
+            sources.contains(*name),
+            "{name} left no log row: {sources:?}"
+        );
     }
     assert!(
         sources.contains("schema"),
@@ -787,7 +794,11 @@ async fn mysql_gates_the_statement_it_will_run_not_the_placeholder_form() {
         "params": ["a'; DROP TABLE users; --", 7],
     }))
     .await;
-    assert!(res.is_error, "read-only must refuse an UPDATE: {}", res.text());
+    assert!(
+        res.is_error,
+        "read-only must refuse an UPDATE: {}",
+        res.text()
+    );
 
     let row = mysql_row(&store);
     assert_eq!(row.verdict, "blocked");

@@ -164,8 +164,8 @@ mod tests {
     fn the_shipped_catalog_offers_wande() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = Arc::new(pluk_store::Store::open(&dir.path().join("pluk.db")).expect("open"));
-        let registry =
-            default_registry(store, Arc::new(crate::sql::SqlCancelRegistry::default())).expect("registry");
+        let registry = default_registry(store, Arc::new(crate::sql::SqlCancelRegistry::default()))
+            .expect("registry");
         let wande = registry
             .get(pluk_browser::INTEGRATION_TYPE)
             .expect("Wande is offered in the add flow");

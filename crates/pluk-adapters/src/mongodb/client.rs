@@ -63,7 +63,9 @@ pub fn to_document(value: &Value, what: &str) -> Result<Document, AdapterError> 
         .map_err(|e| AdapterError::new(format!("`{what}` is not valid JSON for MongoDB: {e}")))?;
     match bson {
         Bson::Document(document) => Ok(document),
-        _ => Err(AdapterError::new(format!("`{what}` must be a JSON object."))),
+        _ => Err(AdapterError::new(format!(
+            "`{what}` must be a JSON object."
+        ))),
     }
 }
 
@@ -356,11 +358,7 @@ async fn drain(
 ) -> Result<(Vec<Value>, bool), AdapterError> {
     let limit = limit.max(0) as usize;
     let mut documents = Vec::new();
-    while let Some(document) = cursor
-        .try_next()
-        .await
-        .map_err(|e| failed(operation, e))?
-    {
+    while let Some(document) = cursor.try_next().await.map_err(|e| failed(operation, e))? {
         if documents.len() == limit {
             return Ok((documents, true));
         }

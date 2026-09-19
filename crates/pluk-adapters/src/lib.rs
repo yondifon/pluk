@@ -8,8 +8,8 @@
 
 mod action;
 mod adapter;
-pub mod confirm;
 mod config_field;
+pub mod confirm;
 mod error;
 mod gate;
 pub mod github_cli;
@@ -39,10 +39,8 @@ pub use action::{
 };
 pub use adapter::{Adapter, ApiRequest, ApiResponse, PolicyKind};
 pub use config_field::{ConfigField, FieldType, SelectOption, ShowIf, normalize_scalar};
+pub use confirm::{ANSWER_WINDOW, ConfirmChoice, ConfirmPrompter, ConfirmRequest, set_prompter};
 pub use error::{AdapterError, SSH_CONNECT_PENDING_CODE};
-pub use confirm::{
-    ANSWER_WINDOW, ConfirmChoice, ConfirmPrompter, ConfirmRequest, set_prompter,
-};
 pub use gate::{
     CallTarget, GateMeta, GateOpts, Guard, Outcome, RunOutcome, TextContent, ToolResult,
     approvals_for, cancelled_when_message_contains, err, ok, run_gated,

@@ -650,7 +650,11 @@ async fn working_dir_with_shell_characters_is_refused() {
 
     let res = handler(json!({"command":"ls","working_dir":"/srv; rm -rf /"})).await;
     assert!(res.is_error);
-    assert!(res.text().contains("working_dir not allowed"), "got: {}", res.text());
+    assert!(
+        res.text().contains("working_dir not allowed"),
+        "got: {}",
+        res.text()
+    );
     assert!(ran.lock().unwrap().is_empty());
     clear_test_executor();
     reset_forwards_for_test();

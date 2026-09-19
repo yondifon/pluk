@@ -61,9 +61,9 @@ fn opt_text(args: &Value, key: &str) -> Option<String> {
 fn json_arg(args: &Value, key: &str) -> Option<Value> {
     match args.get(key) {
         None | Some(Value::Null) => None,
-        Some(Value::String(raw)) => Some(
-            serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.clone())),
-        ),
+        Some(Value::String(raw)) => {
+            Some(serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.clone())))
+        }
         Some(value) => Some(value.clone()),
     }
 }
@@ -326,7 +326,8 @@ fn tools() -> Vec<MongoTool> {
             },
             body: |args, acc| {
                 Box::pin(async move {
-                    let pipeline = to_pipeline(&json_arg(&args, "pipeline").unwrap_or_else(|| json!([])))?;
+                    let pipeline =
+                        to_pipeline(&json_arg(&args, "pipeline").unwrap_or_else(|| json!([])))?;
                     acc.aggregate(
                         opt_text(&args, "database").as_deref(),
                         &text(&args, "collection"),
@@ -385,13 +386,7 @@ fn tools() -> Vec<MongoTool> {
                 ),
             ]),
             required: &["collection", "filter", "update"],
-            detail: |args| {
-                format!(
-                    "update_many {} filter={}",
-                    target(args),
-                    filter_arg(args)
-                )
-            },
+            detail: |args| format!("update_many {} filter={}", target(args), filter_arg(args)),
             check: |args| {
                 let filter = filter_arg(args);
                 guard::require_filter(&filter)
@@ -477,8 +472,8 @@ fn tool_handler(
                 meta,
                 |_| async move {
                     let output = body(args, accessor).await?;
-                    let text = serde_json::to_string_pretty(&output)
-                        .unwrap_or_else(|_| "{}".to_string());
+                    let text =
+                        serde_json::to_string_pretty(&output).unwrap_or_else(|_| "{}".to_string());
                     Ok(Outcome::Ran(RunOutcome {
                         text: text.clone(),
                         response_text: Some(text),
@@ -641,8 +636,10 @@ mod tests {
 
     #[test]
     fn a_blank_default_database_stays_unset() {
-        let cfg = mongo_config_from(&conn(json!({"uri":"mongodb://localhost:27017","database":"  "})))
-            .expect("config");
+        let cfg = mongo_config_from(&conn(
+            json!({"uri":"mongodb://localhost:27017","database":"  "}),
+        ))
+        .expect("config");
         assert!(cfg.database.is_none());
     }
 
@@ -650,7 +647,8 @@ mod tests {
     fn config_rejects_a_missing_or_foreign_connection_string() {
         let missing = mongo_config_from(&conn(json!({}))).unwrap_err();
         assert!(missing.message.contains("connection string is missing"));
-        let foreign = mongo_config_from(&conn(json!({"uri":"postgres://localhost/db"}))).unwrap_err();
+        let foreign =
+            mongo_config_from(&conn(json!({"uri":"postgres://localhost/db"}))).unwrap_err();
         assert!(foreign.message.contains("mongodb://"));
     }
 
@@ -685,7 +683,11 @@ mod tests {
             assert!(!spec.default_enabled, "{write} must ship off");
         }
         assert_eq!(
-            specs.iter().find(|s| s.name == "delete_many").unwrap().category,
+            specs
+                .iter()
+                .find(|s| s.name == "delete_many")
+                .unwrap()
+                .category,
             "delete"
         );
     }
@@ -722,9 +724,7 @@ mod tests {
         let all = tools();
         let update = all.iter().find(|t| t.name == "update_many").unwrap();
         let delete = all.iter().find(|t| t.name == "delete_many").unwrap();
-        assert!(
-            (update.check)(&json!({"collection":"users","update":{"$set":{"a":1}}})).is_some()
-        );
+        assert!((update.check)(&json!({"collection":"users","update":{"$set":{"a":1}}})).is_some());
         assert!((delete.check)(&json!({"collection":"users","filter":{}})).is_some());
         assert!((delete.check)(&json!({"collection":"users","filter":{"_id":1}})).is_none());
     }

@@ -242,7 +242,9 @@ async fn spawn_gh(
         Err(RunError::Spawn(e)) => {
             let msg = e.to_string();
             if msg.contains("No such file") || msg.contains("ENOENT") || msg.contains("not found") {
-                Err(AdapterError::new(format!("gh executable not found (\"{bin}\"). Install GitHub CLI and make sure it is on PATH, or set gh_bin on this integration.")))
+                Err(AdapterError::new(format!(
+                    "gh executable not found (\"{bin}\"). Install GitHub CLI and make sure it is on PATH, or set gh_bin on this integration."
+                )))
             } else {
                 Err(AdapterError::new(format!("Could not start gh: {msg}")))
             }

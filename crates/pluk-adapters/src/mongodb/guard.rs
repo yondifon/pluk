@@ -115,14 +115,19 @@ mod tests {
             None
         );
         assert_eq!(
-            check_query(&json!([{"$match": {"a": 1}}, {"$group": {"_id": "$a", "n": {"$sum": 1}}}])),
+            check_query(
+                &json!([{"$match": {"a": 1}}, {"$group": {"_id": "$a", "n": {"$sum": 1}}}])
+            ),
             None
         );
     }
 
     #[test]
     fn an_inserted_document_may_hold_a_field_named_eval() {
-        assert_eq!(check_document(&json!({"eval": "grade B", "mapReduce": 2})), None);
+        assert_eq!(
+            check_document(&json!({"eval": "grade B", "mapReduce": 2})),
+            None
+        );
         assert!(check_document(&json!({"$where": "…"})).is_some());
     }
 

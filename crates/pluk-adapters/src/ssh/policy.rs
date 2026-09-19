@@ -97,14 +97,7 @@ fn build_allow() -> HashMap<String, BinRule> {
         "find",
         BinRule {
             forbid_args: Some(set(&[
-                "-exec",
-                "-execdir",
-                "-delete",
-                "-fprint",
-                "-fprint0",
-                "-fprintf",
-                "-fls",
-                "-ok",
+                "-exec", "-execdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls", "-ok",
                 "-okdir",
             ])),
             ..Default::default()
@@ -210,8 +203,17 @@ fn build_allow() -> HashMap<String, BinRule> {
         "git",
         BinRule {
             sub_allow: Some(set(&[
-                "status", "log", "diff", "show", "branch", "remote", "describe", "rev-parse",
-                "tag", "blame", "shortlog",
+                "status",
+                "log",
+                "diff",
+                "show",
+                "branch",
+                "remote",
+                "describe",
+                "rev-parse",
+                "tag",
+                "blame",
+                "shortlog",
             ])),
             forbid_args: Some(set(&[
                 "-c",
@@ -391,17 +393,15 @@ fn split_pipeline(command: &str) -> Result<Vec<Segment>, String> {
                 }
             }
             // Double quotes still expand `$`, `` ` `` and `\`.
-            Some('"') => {
-                match ch {
-                    '"' => quote = None,
-                    '$' | '`' | '\\' | '\0' => {
-                        return Err(format!(
-                            "`{ch}` keeps its shell meaning inside double quotes, so it is not allowed"
-                        ));
-                    }
-                    _ => word.push(ch),
+            Some('"') => match ch {
+                '"' => quote = None,
+                '$' | '`' | '\\' | '\0' => {
+                    return Err(format!(
+                        "`{ch}` keeps its shell meaning inside double quotes, so it is not allowed"
+                    ));
                 }
-            }
+                _ => word.push(ch),
+            },
             Some(_) => unreachable!("only ' and \" open a quote"),
             None => {
                 if ch == '\'' || ch == '"' {
@@ -534,9 +534,7 @@ fn check_segment(tokens: &[String]) -> SegmentResult {
     };
     for token in tokens {
         if brace_expansion().is_match(token) {
-            return SegmentResult::Err(format!(
-                "brace expansion is not allowed: \"{token}\""
-            ));
+            return SegmentResult::Err(format!("brace expansion is not allowed: \"{token}\""));
         }
         if wildcard_hides_a_hidden_path(token) {
             return SegmentResult::Err(format!(
@@ -656,7 +654,9 @@ fn check_segment(tokens: &[String]) -> SegmentResult {
                 return SegmentResult::Ok(cat);
             }
             Some(s) => {
-                return SegmentResult::Err(format!("subcommand not allowed for \"{bin}\": \"{s}\""));
+                return SegmentResult::Err(format!(
+                    "subcommand not allowed for \"{bin}\": \"{s}\""
+                ));
             }
             None => {
                 return SegmentResult::Err(format!(
@@ -753,7 +753,11 @@ mod tests {
 
     fn allowed(command: &str) {
         let verdict = evaluate_command(command);
-        assert!(verdict.ok, "{command:?} should be allowed: {:?}", verdict.reason);
+        assert!(
+            verdict.ok,
+            "{command:?} should be allowed: {:?}",
+            verdict.reason
+        );
     }
 
     #[test]
@@ -962,7 +966,10 @@ mod tests {
 
     #[test]
     fn working_dir_rejects_anything_with_shell_meaning() {
-        assert_eq!(sanitize_working_dir("/srv/app"), Some("/srv/app".to_string()));
+        assert_eq!(
+            sanitize_working_dir("/srv/app"),
+            Some("/srv/app".to_string())
+        );
         for dir in [
             "",
             "/srv/app; rm -rf /",

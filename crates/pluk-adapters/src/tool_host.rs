@@ -438,18 +438,33 @@ mod tests {
     fn prompts_and_resources_pass_through() {
         let mut inner = RecordingHost::default();
         let mut gated = PolicyGatedHost::new(&mut inner, &[], None);
-        gated.register_prompt("summarize", "…", None, Arc::new(|_| {
-            Box::pin(async { PromptResult { messages: Vec::new() } })
-        }));
-        gated.register_resource("schema", "schema://full", "text/plain", None, Arc::new(|| {
-            Box::pin(async {
-                ResourceContents {
-                    uri: "schema://full".into(),
-                    mime_type: "text/plain".into(),
-                    text: String::new(),
-                }
-            })
-        }));
+        gated.register_prompt(
+            "summarize",
+            "…",
+            None,
+            Arc::new(|_| {
+                Box::pin(async {
+                    PromptResult {
+                        messages: Vec::new(),
+                    }
+                })
+            }),
+        );
+        gated.register_resource(
+            "schema",
+            "schema://full",
+            "text/plain",
+            None,
+            Arc::new(|| {
+                Box::pin(async {
+                    ResourceContents {
+                        uri: "schema://full".into(),
+                        mime_type: "text/plain".into(),
+                        text: String::new(),
+                    }
+                })
+            }),
+        );
         assert_eq!(inner.prompts, vec!["summarize".to_string()]);
         assert_eq!(inner.resources, vec!["schema".to_string()]);
     }
