@@ -80,7 +80,7 @@ export function hexToRgba(hex: string, alpha: number): string {
 }
 
 /** The large square mark used in detail headers and the type chooser. */
-export function typeBadge(type: string, label: string): HTMLElement {
+export function typeBadge(type: string, label: string, serverUrl?: string): HTMLElement {
   const badge = document.createElement("div");
   badge.className = "type-badge";
   badge.setAttribute("aria-hidden", "true");
@@ -92,7 +92,7 @@ export function typeBadge(type: string, label: string): HTMLElement {
     return badge;
   }
 
-  loadLogo(badge, type, { tint: true });
+  loadLogo(badge, type, { tint: true, serverUrl });
   badge.textContent = type === "mssql" ? adapterAbbrev(type) : label.slice(0, 2).toUpperCase();
   return badge;
 }

@@ -14,14 +14,104 @@ import {
   overridableFields,
   setMemberTool,
 } from "./groupForm.ts";
+import { isWorkingIn } from "./focus.ts";
+import { SERVER_TEMPLATES, SERVERS_SHOWN, isAdded, type ServerTemplate } from "./serverTemplates.ts";
 import { createIcon } from "../icon";
 import { createButton, createBadge, wizardStepHeader, wizardStepFooter } from "../primitives";
 import { typeBadge } from "../glyph";
+import { MCP_TYPE } from "../integration-detail/types.ts";
+
+/** One well-known server, ready to add with a click. */
+function serverTile(
+  template: ServerTemplate,
+  serverUrls: string[],
+  onPick: (template: ServerTemplate) => Promise<void>,
+): HTMLButtonElement {
+  const added = isAdded(template, serverUrls);
+  const tile = document.createElement("button");
+  tile.type = "button";
+  tile.className = "server-tile";
+  tile.dataset.server = template.id;
+  tile.title = template.summary;
+  tile.setAttribute("aria-label", added ? `Add another ${template.name}` : `Add ${template.name}`);
+  tile.appendChild(typeBadge(MCP_TYPE, template.name, template.url));
+
+  const text = document.createElement("span");
+  text.className = "server-tile-text";
+  const name = document.createElement("span");
+  name.className = "server-tile-name";
+  name.textContent = template.name;
+  const line = document.createElement("span");
+  line.className = "server-tile-line";
+  line.textContent = template.summary;
+  text.append(name, line);
+  tile.appendChild(text);
+
+  if (added) {
+    const mark = createBadge("Added");
+    mark.classList.add("server-tile-added");
+    tile.appendChild(mark);
+  }
+
+  tile.addEventListener("click", () => {
+    tile.disabled = true;
+    tile.setAttribute("aria-busy", "true");
+    line.textContent = "Adding…";
+    void onPick(template).finally(() => {
+      tile.disabled = false;
+      tile.removeAttribute("aria-busy");
+      line.textContent = template.summary;
+    });
+  });
+  return tile;
+}
+
+function renderPopularServers(
+  serverUrls: string[],
+  onPick: (template: ServerTemplate) => Promise<void>,
+): HTMLElement {
+  const section = document.createElement("section");
+  section.className = "server-section";
+
+  const title = document.createElement("h3");
+  title.className = "ui-card-title";
+  title.textContent = "Popular servers";
+  section.appendChild(title);
+
+  const grid = document.createElement("div");
+  grid.className = "server-grid";
+  grid.setAttribute("role", "group");
+  grid.setAttribute("aria-label", "Popular servers");
+  section.appendChild(grid);
+
+  const tiles = SERVER_TEMPLATES.map((template) => serverTile(template, serverUrls, onPick));
+  for (const tile of tiles.slice(0, SERVERS_SHOWN)) grid.appendChild(tile);
+
+  if (tiles.length > SERVERS_SHOWN) {
+    const rest = tiles.slice(SERVERS_SHOWN);
+    const more = createButton(`Show ${rest.length} more`, { size: "sm" });
+    more.addEventListener("click", () => {
+      for (const tile of rest) grid.appendChild(tile);
+      more.remove();
+      rest[0].focus();
+    });
+    section.appendChild(more);
+  }
+  return section;
+}
 
 export function renderTypeChooser(
   adapters: AdapterManifest[],
   onChoose: (m: AdapterManifest) => void,
-  opts?: { onCancel?: () => void; adaptersLoadFailed?: boolean; onRetry?: () => void },
+  opts?: {
+    onCancel?: () => void;
+    adaptersLoadFailed?: boolean;
+    onRetry?: () => void;
+    /** Adding a well-known server, which only the live app can carry out. */
+    onPickServer?: (template: ServerTemplate) => Promise<void>;
+    /** Addresses of the servers already added, so a tile can say so. */
+    serverUrls?: string[];
+  },
 ): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "form-chooser";
@@ -64,11 +154,21 @@ export function renderTypeChooser(
     }
     wrap.appendChild(card);
   } else {
+    // A tile creates an MCP integration, so the tiles wait for that type to be in the catalog.
+    const onPickServer = opts?.onPickServer;
+    const showServers = onPickServer != null && adapters.some((a) => a.id === MCP_TYPE);
+    if (showServers) {
+      wrap.appendChild(renderPopularServers(opts?.serverUrls ?? [], onPickServer));
+      const rest = document.createElement("h3");
+      rest.className = "ui-card-title";
+      rest.textContent = "Everything else";
+      wrap.appendChild(rest);
+    }
     for (const { category, items } of groupedByCategory(adapters)) {
       const section = document.createElement("div");
       section.className = "chooser-section";
       const label = prettyCategory(category);
-      const sectionTitle = document.createElement("h3");
+      const sectionTitle = document.createElement(showServers ? "h4" : "h3");
       sectionTitle.className = "ui-card-title";
       sectionTitle.textContent = label;
       section.appendChild(sectionTitle);
@@ -107,7 +207,7 @@ export function renderTypeChooser(
   });
 
   queueMicrotask(() => {
-    const first = wrap.querySelector<HTMLButtonElement>(".chooser-row");
+    const first = wrap.querySelector<HTMLButtonElement>(".server-tile, .chooser-row");
     if (first) first.focus();
     else heading.focus();
   });
@@ -607,6 +707,8 @@ export function renderConnectFieldsStep(
   onBack: (() => void) | null,
   onCancel: () => void,
   onContinue: () => void,
+  /** The field to open on, and the line above it saying what belongs there. */
+  landOn?: { field: string; text: string },
 ): HTMLElement {
   const wrap = wizardStepHeader(stepIndex, totalSteps, "Connect", `Fill in what Pluk needs to reach ${manifest.label}.`);
   const body = document.createElement("div");
@@ -620,6 +722,7 @@ export function renderConnectFieldsStep(
     const h = document.createElement("h3"); h.className = "ui-card-title"; h.textContent = group;
     card.appendChild(h);
     for (const f of shown) {
+      if (landOn?.field === f.key) card.appendChild(helpText(`land-on-${f.key}`, landOn.text));
       const row = renderField(f, draft.config[f.key] ?? "", (v) => {
         onDraftChange({ ...draft, config: { ...draft.config, [f.key]: v } });
       });
@@ -628,6 +731,16 @@ export function renderConnectFieldsStep(
     body.appendChild(card);
   }
   wrap.appendChild(body);
+
+  if (landOn) {
+    const control = body.querySelector<HTMLElement>(`[data-field-key="${landOn.field}"] input`);
+    const described = [control?.getAttribute("aria-describedby"), `land-on-${landOn.field}`];
+    control?.setAttribute("aria-describedby", described.filter(Boolean).join(" "));
+    // Arriving lands on the field that still needs something; a redraw mid-edit leaves them be.
+    queueMicrotask(() => {
+      if (!isWorkingIn(wrap)) control?.focus();
+    });
+  }
 
   const { el: footer } = wizardStepFooter({
     onBack,

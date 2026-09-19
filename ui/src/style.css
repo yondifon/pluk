@@ -141,7 +141,19 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .chooser-row .type-badge { width: var(--control-target); height: var(--control-target); }
 .chooser-chevron { margin-left: auto; color: var(--surface-tertiary-label); }
 .form-body, .form-chooser { display: flex; flex-direction: column; gap: var(--space-lg); }
-@media (max-width: 640px) { .chooser-grid { grid-template-columns: minmax(0, 1fr); } }
+/* A well-known server is a name and a line about it, two to a row. The line is
+   held to one line so a long one cannot push the grid out of the dialog. */
+.server-section { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-sm); }
+.server-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-xs); width: 100%; }
+.server-tile { display: flex; align-items: center; width: 100%; gap: var(--space-sm); padding: var(--space-xs) var(--space-sm); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--surface-label); text-align: left; font: inherit; }
+.server-tile:hover:not(:disabled) { background: var(--surface-hover); }
+.server-tile:disabled { opacity: var(--disabled-opacity); }
+.server-tile .type-badge { width: var(--control-target); height: var(--control-target); }
+.server-tile-text { display: flex; min-width: 0; flex-direction: column; }
+.server-tile-name { font-size: calc(var(--type-callout) * var(--zoom-scale)); }
+.server-tile-line { overflow: hidden; color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); text-overflow: ellipsis; white-space: nowrap; }
+.server-tile-added { flex-shrink: 0; margin-left: auto; }
+@media (max-width: 640px) { .chooser-grid, .server-grid { grid-template-columns: minmax(0, 1fr); } }
 /* Form rows are a label column beside a value column. The label is placed on
    the first row only, so it lines up with the control and not with the help
    text stacked under it; everything else falls down the value column. */

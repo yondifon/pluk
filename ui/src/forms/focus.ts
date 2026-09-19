@@ -11,6 +11,12 @@ export function markFocus(host: HTMLElement): FormFocus | null {
   return { index, caret: active instanceof HTMLInputElement ? active.selectionStart : null };
 }
 
+/** Whether someone is already in a control here, so a redraw leaves them be. */
+export function isWorkingIn(host: HTMLElement): boolean {
+  const active = document.activeElement;
+  return active instanceof HTMLElement && host.contains(active) && active.matches(FOCUSABLE);
+}
+
 export function restoreFocus(host: HTMLElement, mark: FormFocus | null): void {
   if (!mark) return;
   const target = host.querySelectorAll<HTMLElement>(FOCUSABLE)[mark.index];

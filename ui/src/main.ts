@@ -27,6 +27,7 @@ import {
   type ConnectionDraft,
 } from "./forms/connectionDraft.ts";
 import { wizardSteps } from "./forms/wizard.ts";
+import { addServer, type ServerHost, type ServerTemplate } from "./forms/serverTemplates.ts";
 import { markFocus, restoreFocus } from "./forms/focus.ts";
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
 import type { AdapterManifest as CatalogManifest, ToolDef, ToolState } from "./forms/catalog.ts";
@@ -39,7 +40,7 @@ import { openModal } from "./modal.ts";
 import { injectMcpConfig, invoke, hasHost } from "./host.ts";
 import { isMac } from "./platform.ts";
 import type { Integration, Group, Environment, Health } from "./types.ts";
-import { WANDE_TYPE } from "./integration-detail/types.ts";
+import { MCP_TYPE, WANDE_TYPE } from "./integration-detail/types.ts";
 
 const app = document.getElementById("app")!;
 
@@ -112,6 +113,8 @@ let creatingIntegration = false;
 /** The rule the host refused on the last save attempt, shown beside its list. */
 let ruleProblem: RuleProblem | null = null;
 let groupDraft: GroupDraft | null = null;
+/** The server picked from a tile that needs a token, until the draft moves on. */
+let tokenServer: ServerTemplate | null = null;
 /** Teardown for whatever the current wizard step is watching (Chrome pairing polling). */
 let activeStepCleanup: (() => void) | null = null;
 /** Which tab the next detail render opens on, when it should not be the usual one. */
@@ -267,6 +270,7 @@ function openForm(next: FormState): void {
         formHost = null;
         draft = null;
         groupDraft = null;
+        tokenServer = null;
       },
     });
     formModal.content.classList.add("modal-body-form");
@@ -284,6 +288,7 @@ function closeForm(): void {
   formHost = null;
   draft = null;
   groupDraft = null;
+  tokenServer = null;
 }
 
 /** Re-renders the open form, keeping the caret where the person left it. */
@@ -360,6 +365,9 @@ function buildForm(current: FormState): { el: HTMLElement; destroy?: () => void 
             onCancel: closeForm,
             adaptersLoadFailed: state.adaptersLoadFailed,
             onRetry: () => void loadAdapters().then(renderForm),
+            onPickServer: (template) =>
+              addServer(template, serverHost()).catch((error) => report(error, "Server not added")),
+            serverUrls: addedServerUrls(),
           }),
         };
       }
@@ -379,7 +387,8 @@ function buildForm(current: FormState): { el: HTMLElement; destroy?: () => void 
           return { el: renderNameStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => void continueFromName()) };
         case "connect": {
           if (manifest.configFields.length > 0) {
-            return { el: renderConnectFieldsStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => goToStep(1)) };
+            const landOn = tokenServer?.tokenHint ? { field: "token", text: tokenServer.tokenHint } : undefined;
+            return { el: renderConnectFieldsStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => goToStep(1), landOn) };
           }
           const integrationId = current.kind === "edit-integration" ? current.id : current.savedId;
           if (!integrationId) return { el: document.createElement("div") };
@@ -468,8 +477,39 @@ function startNewIntegration(): void {
 function chooseIntegrationType(manifest: CatalogManifest): void {
   const base = draft ?? applyEnvironmentDefaults(emptyDraft());
   draft = adopt(base, manifest, true);
+  tokenServer = null;
   if (form?.kind === "new-integration") form = { ...form, step: 1 };
   renderForm();
+}
+
+/** The addresses the MCP integrations already point at. */
+function addedServerUrls(): string[] {
+  return hostIntegrations
+    .filter((row) => row.type === MCP_TYPE)
+    .map((row) => (typeof row.config.url === "string" ? row.config.url : ""))
+    .filter((url) => url !== "");
+}
+
+/** What a server tile can reach out to, resolved against the app as it stands now. */
+function serverHost(): ServerHost {
+  return {
+    takenNames: hostIntegrations.map((row) => row.name),
+    create: (payload) => invoke<HostIntegration>("create_integration", { payload }),
+    reveal: async (id) => {
+      closeForm();
+      selection = { kind: "integration", id };
+      await loadData();
+    },
+    askForToken: (name, template) => {
+      const manifest = manifestFor(MCP_TYPE);
+      if (!manifest) return;
+      const base = adopt(applyEnvironmentDefaults(emptyDraft()), manifest, true);
+      draft = { ...base, name, environment: null, config: { ...base.config, url: template.url } };
+      tokenServer = template;
+      form = { kind: "new-integration", step: wizardSteps(manifest, "create").indexOf("connect"), savedId: null };
+      renderForm();
+    },
+  };
 }
 
 function startEditIntegration(id: string): void {
