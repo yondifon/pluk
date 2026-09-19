@@ -173,6 +173,63 @@ pub fn get_integration(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn integration_api(
+    state: State<'_, HostState>,
+    integration_id: String,
+    method: String,
+    subpath: String,
+    body: Option<String>,
+) -> CmdResult<serde_json::Value> {
+    integration_api_request(
+        &state.store,
+        &state.shared.registry,
+        integration_id,
+        method,
+        subpath,
+        body,
+    )
+    .await
+}
+
+async fn integration_api_request(
+    store: &pluk_store::Store,
+    registry: &pluk_adapters::AdapterRegistry,
+    integration_id: String,
+    method: String,
+    subpath: String,
+    body: Option<String>,
+) -> CmdResult<serde_json::Value> {
+    let conn = store
+        .integration_by_id(&integration_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Integration not found".to_string())?;
+    let adapter = registry
+        .get(&conn.r#type)
+        .ok_or_else(|| "Adapter not found".to_string())?;
+    let request = pluk_adapters::ApiRequest {
+        method,
+        url: format!("/api/integrations/{integration_id}{subpath}"),
+        body,
+    };
+    let response = adapter
+        .handle_api(&conn, request, &subpath)
+        .await
+        .ok_or_else(|| "Not found".to_string())?;
+    if (200..300).contains(&response.status) {
+        return serde_json::from_slice(&response.body).map_err(|e| e.to_string());
+    }
+    let error = serde_json::from_slice::<serde_json::Value>(&response.body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
+    Err(error.unwrap_or_else(|| response.status.to_string()))
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateIntegrationPayload {
@@ -972,5 +1029,40 @@ mod approval_rule_tests {
         let problem = check_approval_rules(rules(&["x[]y"], &[])).expect("a problem");
         assert_eq!(problem.list, pluk_policy::RuleList::Allow);
         assert!(problem.message.contains("Always allow"), "{}", problem.message);
+    }
+}
+
+#[cfg(test)]
+mod integration_api_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn proxy_tools_round_trip_through_the_command() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(pluk_store::Store::open(&directory.path().join("pluk.db")).unwrap());
+        let registry = Arc::new(
+            pluk_adapters::default_registry(
+                store.clone(),
+                Arc::new(pluk_adapters::sql::SqlCancelRegistry::default()),
+            )
+            .unwrap(),
+        );
+        let integration = store
+            .create_integration(&pluk_store::IntegrationInput::new("Proxy", "mcp"))
+            .unwrap();
+        let response = integration_api_request(
+            &store,
+            &registry,
+            integration.id,
+            "GET".to_string(),
+            "/proxy/tools".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response["ok"], true);
+        assert!(response["tools"].is_array());
     }
 }

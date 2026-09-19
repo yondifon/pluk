@@ -62,6 +62,20 @@ export async function injectMcpConfig(args: {
   });
 }
 
+export async function integrationApi(args: {
+  integrationId: string;
+  method: string;
+  subpath: string;
+  body?: string;
+}): Promise<unknown> {
+  return invoke("integration_api", {
+    integrationId: args.integrationId,
+    method: args.method,
+    subpath: args.subpath,
+    body: args.body ?? null,
+  });
+}
+
 /** Subscribe to a host event. Resolves to an unlisten function. */
 export async function listen<T>(event: string, fn: (payload: T) => void): Promise<() => void> {
   const subscribe = tauri()?.event?.listen;

@@ -196,6 +196,7 @@ pub fn run() {
             commands::set_frame,
             commands::list_integrations,
             commands::get_integration,
+            commands::integration_api,
             commands::create_integration,
             commands::update_integration,
             commands::check_approval_rules,
