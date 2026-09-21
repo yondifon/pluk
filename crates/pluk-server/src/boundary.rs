@@ -22,6 +22,8 @@ use axum::response::{IntoResponse, Response};
 
 use pluk_adapters::mcp_proxy::oauth::CALLBACK_PATH;
 
+use crate::logging;
+
 /// The names this server answers to. Any port: the OS assigns it in tests and
 /// `PORT` moves it in the app.
 const LOOPBACK_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "[::1]"];
@@ -30,9 +32,11 @@ pub(crate) async fn guard(request: Request, next: Next) -> Response {
     let loopback = header(request.headers(), "host")
         .is_some_and(|host| LOOPBACK_HOSTS.contains(&hostname(host)));
     if !loopback {
+        log_refusal(&request, "non-loopback host");
         return refuse("Pluk answers on the loopback host only.");
     }
     if !caller_allowed(&request) {
+        log_refusal(&request, "browser-origin request");
         return refuse("Pluk does not answer requests made by a web page.");
     }
     next.run(request).await
@@ -40,6 +44,32 @@ pub(crate) async fn guard(request: Request, next: Next) -> Response {
 
 fn refuse(message: &'static str) -> Response {
     (StatusCode::FORBIDDEN, message).into_response()
+}
+
+/// Record a request the loopback boundary turned away, so a page reaching for
+/// the local surface, or a client whose host or origin is misconfigured,
+/// leaves a trace instead of only a refusal. The endpoint token in an
+/// `/mcp/<token>` path is a credential and is dropped from what is written.
+fn log_refusal(request: &Request, reason: &str) {
+    logging::log_error(
+        "refused a request at the loopback boundary",
+        &reason,
+        Some(serde_json::json!({
+            "method": request.method().as_str(),
+            "host": header(request.headers(), "host").unwrap_or_default(),
+            "origin": header(request.headers(), "origin").unwrap_or_default(),
+            "path": redact_token_path(request.uri().path()),
+        })),
+    );
+}
+
+/// The request path with an MCP endpoint token segment removed.
+fn redact_token_path(path: &str) -> &str {
+    if path.starts_with("/mcp/") {
+        "/mcp/<token>"
+    } else {
+        path
+    }
 }
 
 /// Whether the client behind a request may be served. A client sending
@@ -113,4 +143,18 @@ fn port(authority: &str) -> &str {
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_token_path;
+
+    #[test]
+    fn an_mcp_endpoint_path_loses_its_token() {
+        assert_eq!(redact_token_path("/mcp/s3cret-token"), "/mcp/<token>");
+        assert_eq!(redact_token_path("/mcp/a/b"), "/mcp/<token>");
+        assert_eq!(redact_token_path("/api/logs"), "/api/logs");
+        assert_eq!(redact_token_path("/"), "/");
+        assert_eq!(redact_token_path("/mcpx"), "/mcpx");
+    }
 }

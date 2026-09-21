@@ -105,7 +105,11 @@ async fn test_integration(State(state): State<AppState>, Path(id): Path<String>)
             json_response(StatusCode::OK, serde_json::json!({ "ok": true }))
         }
         Err(error) => {
-            logging::log_error("connection test failed", &error.message, None);
+            logging::log_error(
+                "connection test failed",
+                &error.message,
+                Some(serde_json::json!({ "integration": integration.id.as_str() })),
+            );
             let reason = adapter
                 .humanize_error(&error)
                 .unwrap_or_else(|| error.message.clone());
@@ -347,23 +351,57 @@ async fn mcp(
 ) -> Response {
     let owner = match resolve_owner(&state.store, &state.registry, &token) {
         Ok(Some(owner)) => owner,
-        Ok(None) => return (StatusCode::NOT_FOUND, "Integration not found").into_response(),
-        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        Ok(None) => {
+            logging::log_error(
+                "mcp request for an unknown endpoint token",
+                &"no integration or group matches the token",
+                None,
+            );
+            return (StatusCode::NOT_FOUND, "Integration not found").into_response();
+        }
+        Err(message) => {
+            logging::log_error("mcp endpoint failed to resolve", &message, None);
+            return (StatusCode::BAD_REQUEST, message).into_response();
+        }
     };
     let owner_id = owner.owner_id().to_string();
     state.owners.open_owner(&owner_id);
 
     let app_state = state.clone();
     let token_for_factory = token;
+    let owner_id_for_factory = owner_id.clone();
     // Stateless serving: the factory runs per protocol request, so the surface
     // always reflects current config (tool toggles included).
     let service = StreamableHttpService::new(
         move || {
-            let owner = resolve_owner(&app_state.store, &app_state.registry, &token_for_factory)
-                .map_err(std::io::Error::other)?
-                .ok_or_else(|| std::io::Error::other("owner vanished"))?;
-            build_owner_surface(&owner, &app_state.store, &app_state.registry)
-                .map_err(std::io::Error::other)
+            let owner =
+                match resolve_owner(&app_state.store, &app_state.registry, &token_for_factory) {
+                    Ok(Some(owner)) => owner,
+                    Ok(None) => {
+                        logging::log_error(
+                            "mcp endpoint owner vanished between requests",
+                            &"the endpoint token no longer resolves",
+                            Some(serde_json::json!({ "owner": owner_id_for_factory.as_str() })),
+                        );
+                        return Err(std::io::Error::other("owner vanished"));
+                    }
+                    Err(message) => {
+                        logging::log_error(
+                            "mcp endpoint failed to re-resolve",
+                            &message,
+                            Some(serde_json::json!({ "owner": owner_id_for_factory.as_str() })),
+                        );
+                        return Err(std::io::Error::other(message));
+                    }
+                };
+            build_owner_surface(&owner, &app_state.store, &app_state.registry).map_err(|error| {
+                logging::log_error(
+                    "mcp surface build failed",
+                    &error,
+                    Some(serde_json::json!({ "owner": owner_id_for_factory.as_str() })),
+                );
+                std::io::Error::other(error)
+            })
         },
         state.sessions.clone(),
         crate::ServerConfig::mcp_transport_config(),
