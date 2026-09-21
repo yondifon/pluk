@@ -469,14 +469,8 @@ pub async fn open_openssh_tunnel(
     })
 }
 
-/// High-level entry mirroring `openSSHTunnel` routing: agent/key via OpenSSH,
-/// password/encrypted-key via in-process client (delegated to russh module).
-pub async fn open_ssh_tunnel_via_openssh(
-    config: SshTunnelConfig,
-    on_fatal: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
-) -> Result<Tunnel, SshError> {
-    let ssh_config = parse_ssh_config(&config.host);
-    let username = if !config.user.is_empty() {
+fn resolve_username(config: &SshTunnelConfig, ssh_config: &SshConfigEntry) -> String {
+    if !config.user.is_empty() {
         config.user.clone()
     } else if let Some(u) = ssh_config.user.clone() {
         u
@@ -485,7 +479,39 @@ pub async fn open_ssh_tunnel_via_openssh(
         std::env::var("USER")
             .or_else(|_| std::env::var("USERNAME"))
             .unwrap_or_else(|_| "root".into())
-    };
+    }
+}
+
+/// Force-close the OpenSSH ControlMaster this config would reuse, so the next
+/// call starts a fresh one. `ssh -O check` only confirms the local master
+/// process responds, not that its connection to the remote host survived a
+/// network change, so a dead master otherwise gets reused (and hangs) until
+/// its own `ServerAliveInterval`/`ServerAliveCountMax` keepalive reaps it. A
+/// no-op for password/encrypted-key auth, which never sets up a master.
+pub async fn kill_master(config: &SshTunnelConfig) -> Result<(), SshError> {
+    let use_openssh =
+        config.auth_type == "agent" || (config.auth_type == "key" && config.passphrase.is_none());
+    if !use_openssh {
+        return Ok(());
+    }
+    let ssh_config = parse_ssh_config(&config.host);
+    let username = resolve_username(config, &ssh_config);
+    let target = master_target(config, &ssh_config, &username);
+    let mut args = vec!["-O".to_string(), "exit".to_string()];
+    args.extend_from_slice(&target);
+    args.push(config.host.clone());
+    run_ssh_command(&args, CONTROL_CMD_TIMEOUT_MS).await;
+    Ok(())
+}
+
+/// High-level entry mirroring `openSSHTunnel` routing: agent/key via OpenSSH,
+/// password/encrypted-key via in-process client (delegated to russh module).
+pub async fn open_ssh_tunnel_via_openssh(
+    config: SshTunnelConfig,
+    on_fatal: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+) -> Result<Tunnel, SshError> {
+    let ssh_config = parse_ssh_config(&config.host);
+    let username = resolve_username(&config, &ssh_config);
 
     let use_openssh =
         config.auth_type == "agent" || (config.auth_type == "key" && config.passphrase.is_none());

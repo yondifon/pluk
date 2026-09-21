@@ -25,9 +25,12 @@ use crate::tool_host::{
 };
 use crate::tool_spec::ToolSpec;
 
-use super::error::{driver_error_to_adapter, format_sql_error};
+use super::error::{
+    SqlErrorCategory, classify_sql_error, driver_error_to_adapter, format_sql_error,
+};
+use pluk_db::DriverError;
 use pluk_db::config::SqlConfig;
-use pluk_db::factory::{CreateDriverOpts, create_driver};
+use pluk_db::factory::{CreateDriverOpts, DriverWithTunnel, create_driver};
 use pluk_db::resolve_statement;
 use pluk_db::types::{QueryOpts, QueryResult as DbQueryResult};
 
@@ -896,21 +899,66 @@ pub fn register_sql_server(
                                 timeout_ms: timeout,
                                 cancel: Some(cancels.register(log_id)),
                             });
-                            // create driver
                             let cfg = sql_config_from(&conn, db_opt.as_deref());
-                            let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
                             let use_read_only = policy.allowed.len()==2 && policy.allowed.contains(&pluk_policy::category::StatementCategory::Select) && policy.allowed.contains(&pluk_policy::category::StatementCategory::Inspect);
-                            let res: Result<DbQueryResult, _> = if use_read_only {
-                                dw.driver.query_read_only(&sql, &params, query_opts.clone()).await
-                            } else {
-                                dw.driver.query(&sql, &params, query_opts.clone()).await
-                            };
-                            let res = match res {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    cancels.clear(log_id);
-                                    let _ = dw.close().await;
-                                    return Err(driver_error_to_adapter(e));
+
+                            // One attempt: connect, then run the statement. `before_send` tells
+                            // the caller whether the failure happened during connect (nothing
+                            // sent yet, always safe to retry) or while the statement was in
+                            // flight (only safe to retry when it was read-only).
+                            async fn attempt(
+                                cfg: SqlConfig,
+                                sql: &str,
+                                params: &[Value],
+                                use_read_only: bool,
+                                query_opts: Option<QueryOpts>,
+                            ) -> Result<(DriverWithTunnel, DbQueryResult), (Option<DriverWithTunnel>, DriverError, bool)>
+                            {
+                                let dw = create_driver(CreateDriverOpts::new(cfg))
+                                    .await
+                                    .map_err(|e| (None, e, true))?;
+                                let res = if use_read_only {
+                                    dw.driver.query_read_only(sql, params, query_opts).await
+                                } else {
+                                    dw.driver.query(sql, params, query_opts).await
+                                };
+                                match res {
+                                    Ok(r) => Ok((dw, r)),
+                                    Err(e) => Err((Some(dw), e, false)),
+                                }
+                            }
+
+                            let (dw, res) = match attempt(cfg.clone(), &sql, &params, use_read_only, query_opts.clone()).await {
+                                Ok(pair) => pair,
+                                Err((dw_opt, e, before_send)) => {
+                                    if let Some(dw) = dw_opt { let _ = dw.close().await; }
+                                    let adapter_err = driver_error_to_adapter(e);
+                                    let category = classify_sql_error(&adapter_err).category;
+                                    let network_failure = matches!(category, SqlErrorCategory::ConnectionFailed | SqlErrorCategory::TunnelFailed);
+                                    // A pooled OpenSSH tunnel can outlive the network path it
+                                    // rode in on: `-O check` only confirms the local master is
+                                    // still running, not that it can still reach the remote host.
+                                    // Retrying blind on a write mid-statement risks double-running
+                                    // it, so only reads (or a failure before anything was sent)
+                                    // qualify.
+                                    if network_failure && (before_send || use_read_only) {
+                                        pluk_db::force_reconnect(&cfg).await;
+                                        match attempt(cfg.clone(), &sql, &params, use_read_only, query_opts.clone()).await {
+                                            Ok(pair) => pair,
+                                            Err((dw2_opt, e2, _)) => {
+                                                if let Some(dw2) = dw2_opt { let _ = dw2.close().await; }
+                                                cancels.clear(log_id);
+                                                let retry_msg = driver_error_to_adapter(e2).message;
+                                                return Err(crate::error::AdapterError::new(format!(
+                                                    "The database host is unreachable, even on a fresh connection. Check your network or VPN, then retry. ({})",
+                                                    retry_msg
+                                                )).with_code("HOST_UNREACHABLE"));
+                                            }
+                                        }
+                                    } else {
+                                        cancels.clear(log_id);
+                                        return Err(adapter_err);
+                                    }
                                 }
                             };
                             let _ = dw.close().await;
@@ -964,10 +1012,6 @@ pub fn register_sql_server(
                             move || policy_block(&verdict)
                         })
                         .classify_error(cancelled_when_message_contains("cancelled"))
-                        .on_error({
-                            let _store = store.clone();
-                            move |_e| { /* evict would go here */ }
-                        })
                         .format_error(|e, verdict| {
                             if verdict == pluk_store::Verdict::Cancelled {
                                 format!("Cancelled: {}", e.message)

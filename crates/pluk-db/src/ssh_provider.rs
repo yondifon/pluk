@@ -14,6 +14,41 @@ use crate::error::DriverError;
 /// ControlMaster, password/encrypted keys via russh.
 pub struct PlukSshTunnelProvider;
 
+fn tunnel_config(
+    cfg: &SqlConfig,
+    remote_host: &str,
+    remote_port: u16,
+) -> pluk_ssh::SshTunnelConfig {
+    pluk_ssh::SshTunnelConfig {
+        host: cfg.ssh_host.clone().unwrap_or_else(|| cfg.effective_host()),
+        port: cfg.ssh_port.unwrap_or(22),
+        user: cfg.ssh_user.clone().unwrap_or_default(),
+        auth_type: cfg
+            .ssh_auth_type
+            .clone()
+            .unwrap_or_else(|| "agent".to_string()),
+        key_path: cfg.ssh_key_path.clone(),
+        passphrase: cfg.ssh_password.clone(),
+        remote_host: remote_host.to_string(),
+        remote_port,
+        local_port: None,
+    }
+}
+
+/// Force-close a possibly-stale OpenSSH ControlMaster for this connection's
+/// tunnel. `ssh -O check` only confirms the local master process is running,
+/// not that its connection to the remote host survived a network change, so a
+/// dead master is otherwise reused (and hangs) until its own keepalive reaps
+/// it. Call this before retrying a query that just failed on a pooled tunnel.
+/// No-op for connections that don't use an OpenSSH-multiplexed tunnel.
+pub async fn force_reconnect(cfg: &SqlConfig) {
+    if cfg.r#type == "sqlite" || !cfg.is_use_ssh() || cfg.ssh_host.is_none() {
+        return;
+    }
+    let tunnel_cfg = tunnel_config(cfg, &cfg.effective_host(), cfg.effective_port());
+    let _ = pluk_ssh::kill_master(&tunnel_cfg).await;
+}
+
 #[async_trait::async_trait]
 impl SshTunnelProvider for PlukSshTunnelProvider {
     async fn open_tunnel(
@@ -22,28 +57,7 @@ impl SshTunnelProvider for PlukSshTunnelProvider {
         remote_host: &str,
         remote_port: u16,
     ) -> Result<TunnelEndpoint, DriverError> {
-        let ssh_host = cfg.ssh_host.clone().unwrap_or_else(|| cfg.effective_host());
-        let ssh_port = cfg.ssh_port.unwrap_or(22);
-        let ssh_user = cfg.ssh_user.clone().unwrap_or_default();
-
-        let auth_type = cfg
-            .ssh_auth_type
-            .clone()
-            .unwrap_or_else(|| "agent".to_string());
-        let key_path = cfg.ssh_key_path.clone();
-        let passphrase = cfg.ssh_password.clone();
-
-        let tunnel_cfg = pluk_ssh::SshTunnelConfig {
-            host: ssh_host,
-            port: ssh_port,
-            user: ssh_user,
-            auth_type,
-            key_path,
-            passphrase,
-            remote_host: remote_host.to_string(),
-            remote_port,
-            local_port: None,
-        };
+        let tunnel_cfg = tunnel_config(cfg, remote_host, remote_port);
 
         let tunnel = pluk_ssh::open_ssh_tunnel(tunnel_cfg, None)
             .await

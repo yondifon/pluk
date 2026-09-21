@@ -13,7 +13,7 @@ pub use config::{
     expand_home, expand_proxy_command, parse_ssh_config, resolve_agent_socket, split_command,
 };
 pub use openssh::{
-    HANDSHAKE_TIMEOUT_MS, SshError, SshTunnelConfig, Tunnel, control_dir, control_path,
+    HANDSHAKE_TIMEOUT_MS, SshError, SshTunnelConfig, Tunnel, control_dir, control_path, kill_master,
 };
 pub use pending::{
     SSH_CONNECT_WAIT_MS, SSH_PENDING_CODE, SSH_PENDING_MAX_REPORTS, SSH_STALLED_CODE,
