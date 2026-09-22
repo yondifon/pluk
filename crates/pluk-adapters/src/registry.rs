@@ -75,10 +75,6 @@ pub fn default_registry(
     registry.register(crate::sentry::SentryAdapter::new(store.clone()))?;
     registry.register(crate::mcp_proxy::McpProxyAdapter::new(store.clone()))?;
     registry.register(Arc::new(crate::github_cli::build_github_cli_adapter(
-        store.clone(),
-    )))?;
-    registry.register(Arc::new(crate::action::action_adapter(
-        crate::spark::spark_adapter_spec(),
         store,
     )))?;
     Ok(registry)

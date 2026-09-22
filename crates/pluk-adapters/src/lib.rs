@@ -23,7 +23,6 @@ pub mod redis;
 mod registry;
 pub mod sentry;
 pub mod slack;
-pub mod spark;
 pub mod sql;
 pub mod ssh;
 mod ssh_fields;

@@ -26,7 +26,7 @@ mod cancel;
 mod events;
 mod health;
 mod http;
-mod logging;
+pub mod logging;
 mod logs_api;
 pub mod mcp;
 

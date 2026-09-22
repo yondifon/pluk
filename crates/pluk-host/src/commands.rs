@@ -136,9 +136,16 @@ impl IntegrationJson {
         i: pluk_store::Integration,
         registry: &pluk_adapters::AdapterRegistry,
     ) -> Self {
-        let tools = registry
-            .get(&i.r#type)
-            .map(|adapter| adapter.tool_specs_for(&i).into_owned());
+        let tools = match registry.get(&i.r#type) {
+            Some(adapter) => Some(adapter.tool_specs_for(&i).into_owned()),
+            None => {
+                pluk_server::logging::log_info(&format!(
+                    "skipping integration with unknown adapter kind: {} ({})",
+                    i.r#type, i.id
+                ));
+                None
+            }
+        };
         IntegrationJson {
             tools,
             ..IntegrationJson::from(i)
