@@ -2,7 +2,7 @@
 
 Pluk turns the services you already use — databases, [Linear](https://linear.app), and more — into local [MCP](https://modelcontextprotocol.io) endpoints, so AI tools can use them safely from your own machine. Nothing leaves your laptop: the server runs on `localhost`, integrations are stored locally, and a per-integration policy engine keeps agents in bounds.
 
-Each service is a pluggable **adapter**. Pluk ships with database adapters (Postgres / MySQL / SQLite / MongoDB) and a Linear adapter; adding another is one module — no changes to the app, server, or UI.
+Each service is a pluggable **adapter**. Pluk ships with database adapters (Postgres / MySQL / SQLite / MongoDB), SSH, and an MCP server adapter. Linear, Sentry, and Slack connect through the MCP server adapter, using each vendor's official MCP server. Adding another adapter is one module — no changes to the app, server, or UI.
 
 It ships as a macOS menu bar app with an embedded server. You add an integration in the UI, copy its MCP URL, and paste it into your AI client.
 
@@ -11,7 +11,7 @@ It ships as a macOS menu bar app with an embedded server. You add an integration
 Pluk is a [Tauri](https://tauri.app) app (Rust host + TypeScript webview) that bundles an MCP server:
 
 - **Host (Rust, `crates/pluk-host/`)** — manages the menu bar, window, integrations, and activity logs. It runs the MCP server in-process on `http://localhost:4242`.
-- **Server (Rust, `crates/pluk-core/` + `crates/pluk-store/`)** — resolves each integration to its adapter (databases over SSH/SSL, Linear over its GraphQL API, …), enforces that integration's policy, and speaks MCP over HTTP.
+- **Server (Rust, `crates/pluk-core/` + `crates/pluk-store/`)** — resolves each integration to its adapter (databases over SSH/SSL, hosted services like Linear through their official MCP servers, …), enforces that integration's policy, and speaks MCP over HTTP.
 - **Frontend (TypeScript, `ui/src/`)** — rendered in a webview from the Tauri host. It manages the UI for adding, editing, and testing integrations.
 
 The app launches and exposes each saved integration at `http://localhost:4242/mcp/<token>`.
@@ -70,7 +70,7 @@ The server listens on `http://localhost:4242`. Health check: `curl http://localh
 
 ## Use it
 
-1. Open Pluk from the menu bar and add an integration. Pick a type — a database (host, port, credentials, optional SSH and read-only flag), MongoDB (connection string), or Linear (API key) — and the form shows just that adapter's settings.
+1. Open Pluk from the menu bar and add an integration. Pick a type — a database (host, port, credentials, optional SSH and read-only flag), MongoDB (connection string), or an MCP server such as Linear, Sentry, or Slack (pick its tile and sign in) — and the form shows just that adapter's settings.
 2. Test the integration from the detail view.
 3. Copy its MCP URL — one URL per integration, so each agent only sees what you intend.
 4. Add it to your MCP client. Examples:

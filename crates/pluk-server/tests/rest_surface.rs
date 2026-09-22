@@ -32,6 +32,7 @@ async fn the_adapter_catalog_serves_definitions_never_secret_values() {
     assert_eq!(stub["label"], "Stub Service");
     assert_eq!(stub["policyKind"], "none");
     assert_eq!(stub["agentHint"], "Use echo first.");
+    assert_eq!(stub["offeredForSetup"], true);
 
     let fields = stub["configFields"].as_array().unwrap();
     assert_eq!(fields.len(), 4);

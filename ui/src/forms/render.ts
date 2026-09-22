@@ -76,7 +76,10 @@ function renderPopularServers(
   const title = document.createElement("h3");
   title.className = "ui-card-title";
   title.textContent = "Popular servers";
-  section.appendChild(title);
+  const note = document.createElement("p");
+  note.className = "hint";
+  note.textContent = "Linear, Sentry, and Slack connect through their official MCP servers. Pick one below.";
+  section.append(title, note);
 
   const grid = document.createElement("div");
   grid.className = "server-grid";
@@ -101,7 +104,7 @@ function renderPopularServers(
 }
 
 export function renderTypeChooser(
-  adapters: AdapterManifest[],
+  catalog: AdapterManifest[],
   onChoose: (m: AdapterManifest) => void,
   opts?: {
     onCancel?: () => void;
@@ -113,6 +116,7 @@ export function renderTypeChooser(
     serverUrls?: string[];
   },
 ): HTMLElement {
+  const adapters = catalog.filter((a) => a.offeredForSetup);
   const wrap = document.createElement("div");
   wrap.className = "form-chooser";
   wrap.setAttribute("role", "region");

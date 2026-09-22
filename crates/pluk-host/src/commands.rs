@@ -501,6 +501,7 @@ pub struct AdapterInfo {
     pub policy_kind: String,
     pub agent_hint: String,
     pub runs_commands: bool,
+    pub offered_for_setup: bool,
     pub tools: Vec<pluk_adapters::ToolSpec>,
     pub config_fields: Vec<pluk_adapters::ConfigField>,
 }
@@ -519,6 +520,7 @@ pub fn list_adapters(state: State<'_, HostState>) -> Vec<AdapterInfo> {
             policy_kind: a.policy_kind().as_str().to_string(),
             agent_hint: a.agent_hint().to_string(),
             runs_commands: a.runs_commands(),
+            offered_for_setup: registry.offered_for_setup(a.id()),
             tools: a.tool_specs().to_vec(),
             config_fields: a.config_fields().to_vec(),
         })

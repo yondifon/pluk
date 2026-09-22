@@ -13,6 +13,7 @@ const wande: AdapterManifest = {
   policyKind: "none",
   agentHint: "",
   runsCommands: false,
+  offeredForSetup: true,
   tools: [{ name: "x_post", label: "Post", description: "Post exact text.", category: "write", defaultEnabled: true }],
   configFields: [],
 };
@@ -24,6 +25,7 @@ const ssh: AdapterManifest = {
   policyKind: "none",
   agentHint: "",
   runsCommands: true,
+  offeredForSetup: true,
   tools: [{ name: "run_command", label: "Run command", description: "Run a shell command.", category: "read", defaultEnabled: true }],
   configFields: [{ key: "host", label: "Host", type: "text", required: true, group: "Connection" }],
 };

@@ -42,6 +42,8 @@ export interface AdapterManifest {
   policyKind: string;
   agentHint: string;
   runsCommands: boolean;
+  /** False for a kind that only serves integrations already saved. */
+  offeredForSetup: boolean;
   tools: ToolDef[];
   configFields: ConfigFieldDef[];
 }

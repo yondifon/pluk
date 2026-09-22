@@ -71,6 +71,7 @@ async fn adapters_catalog(State(state): State<AppState>) -> Response {
                 "category": adapter.category(),
                 "policyKind": adapter.policy_kind(),
                 "agentHint": adapter.agent_hint(),
+                "offeredForSetup": state.registry.offered_for_setup(adapter.id()),
                 "tools": adapter.tool_specs(),
                 "configFields": adapter.config_fields(),
             })

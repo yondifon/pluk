@@ -18,6 +18,7 @@ function manifest(id: string, label: string, category = "database"): AdapterMani
     policyKind: "sql",
     agentHint: "",
     runsCommands: false,
+    offeredForSetup: true,
     tools: [],
     configFields: [{ key: "url", label: "Server URL", type: "text" as const, required: true }],
   };
@@ -60,6 +61,14 @@ describe("the server list", () => {
     for (const template of SERVER_TEMPLATES) {
       expect(template.url.startsWith("https://")).toBe(true);
     }
+  });
+
+  it("shows a tile for each vendor that moved off its own entry", () => {
+    const el = chooser(spyHost().host);
+    for (const id of ["linear", "sentry", "slack"]) {
+      expect(el.querySelector(`[data-server="${id}"]`)).not.toBeNull();
+    }
+    expect(el.textContent).toContain("Linear, Sentry, and Slack connect through their official MCP servers.");
   });
 
   it("steps around a name already in use", () => {
