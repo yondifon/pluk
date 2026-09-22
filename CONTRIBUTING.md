@@ -34,7 +34,7 @@ Then run `make dev` to start the full app, or test components individually:
 
 Run `make test` to run all tests. The suite covers:
 
-- **Adapters** (in Rust, `crates/pluk-core/src/adapters/`) — GitHub CLI, Linear, Redis, Sentry, Slack, SSH, and the SQL family
+- **Adapters** (in Rust, `crates/pluk-adapters/src/`) — Linear, Redis, Sentry, Slack, SSH, and the SQL family
 - **Store layer** — SQLite, migrations, and concurrency handling
 - **Platform layer** — MCP config injection, tray/window management, update checking
 - **Policy engines** — SQL policy (`sql.rs`) and SSH command policy (`ssh/policy.rs`) get direct test coverage — they're what stands between an agent and a production database or shell, so changes there need tests

@@ -56,7 +56,7 @@ export const ENTRY_RENDERERS: Record<EntryType, EntryRenderer> = { database: dat
 export function entryType(entry: LogEntry, connectionType?: string): EntryType {
   if (entry.verdict === "blocked") return "policy";
   if (entry.verdict === "error" || entry.verdict === "cancelled") return "error";
-  if (entry.categories === "command" || ["ssh", "github-cli", "herd"].includes(connectionType ?? "")) return "command";
+  if (entry.categories === "command" || ["ssh", "herd"].includes(connectionType ?? "")) return "command";
   if (entry.categories === "forward") return "forward";
   if (entry.categories?.includes("database") || ["query", "export_query", "run_saved_query"].includes(entry.source ?? "")) return "database";
   if (entry.source) return "http";

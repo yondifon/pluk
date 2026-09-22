@@ -13,7 +13,7 @@ use crate::models::{Config, Environment, Integration};
 #[derive(Debug, Clone)]
 pub struct IntegrationInput {
     pub name: String,
-    /// Adapter id, e.g. `postgres`, `linear`, `github-cli`.
+    /// Adapter id, e.g. `postgres` or `linear`.
     pub r#type: String,
     pub config: Config,
     /// `None` stores no environment at all.

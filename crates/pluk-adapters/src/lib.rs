@@ -12,7 +12,6 @@ mod config_field;
 pub mod confirm;
 mod error;
 mod gate;
-pub mod github_cli;
 mod http_client;
 mod instructions;
 pub mod linear;

@@ -6,7 +6,6 @@ import { sqlAdapters } from "./sql/index.js";
 import { linearAdapter } from "./linear/index.js";
 import { sentryAdapter } from "./sentry/index.js";
 import { sshAdapter } from "./ssh/index.js";
-import { githubCliAdapter } from "./github-cli/index.js";
 import { redisAdapter } from "./redis/index.js";
 import { slackAdapter } from "./slack/index.js";
 import { herdAdapter } from "./herd/index.js";
@@ -23,7 +22,7 @@ function register(adapters: Adapter[]): void {
 }
 
 register(sqlAdapters);
-register([linearAdapter, sentryAdapter, sshAdapter, githubCliAdapter, redisAdapter, slackAdapter, herdAdapter]);
+register([linearAdapter, sentryAdapter, sshAdapter, redisAdapter, slackAdapter, herdAdapter]);
 
 export function getAdapter(type: string): Adapter | undefined {
   return registry.get(type);

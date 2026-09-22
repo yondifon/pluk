@@ -55,7 +55,7 @@ impl fmt::Display for Environment {
 pub struct Integration {
     pub id: String,
     pub name: String,
-    /// Adapter id, e.g. `postgres`, `linear`, `github-cli`.
+    /// Adapter id, e.g. `postgres` or `linear`.
     pub r#type: String,
     pub config: Config,
     /// `None` when the integration carries no environment at all.

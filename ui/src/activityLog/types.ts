@@ -42,5 +42,5 @@ export const timeRangeLabels: Record<TimeRange, string> = {
 export type VerdictFilter = "all" | "allowed" | "blocked" | "error";
 
 export function isCommandAdapter(type?: string | null): boolean {
-  return type === "ssh" || type === "github-cli" || type === "herd";
+  return type === "ssh" || type === "herd";
 }
