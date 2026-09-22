@@ -3,7 +3,7 @@
 //! To add a service: build an adapter and register it here. Nothing else —
 //! store, MCP transport, REST layer, UI — needs editing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::adapter::Adapter;
@@ -15,6 +15,9 @@ use crate::error::AdapterError;
 pub struct AdapterRegistry {
     adapters: HashMap<String, Arc<dyn Adapter>>,
     order: Vec<String>,
+    /// Ids that serve integrations already saved but are left out of the add
+    /// flow.
+    not_offered: HashSet<String>,
 }
 
 impl AdapterRegistry {
@@ -32,6 +35,20 @@ impl AdapterRegistry {
         self.order.push(id.clone());
         self.adapters.insert(id, adapter);
         Ok(())
+    }
+
+    /// Add an adapter that keeps saved integrations of its kind loading,
+    /// running, and editable, without being offered for new setup.
+    pub fn register_not_offered(&mut self, adapter: Arc<dyn Adapter>) -> Result<(), AdapterError> {
+        let id = adapter.id().to_string();
+        self.register(adapter)?;
+        self.not_offered.insert(id);
+        Ok(())
+    }
+
+    /// Whether the add flow offers this adapter for a new integration.
+    pub fn offered_for_setup(&self, id: &str) -> bool {
+        self.adapters.contains_key(id) && !self.not_offered.contains(id)
     }
 
     /// Resolve an integration's `type` to its adapter.
@@ -70,17 +87,12 @@ pub fn default_registry(
     registry.register(crate::wande::WandeAdapter::new(store.clone()))?;
     registry.register(crate::redis::RedisAdapter::new(store.clone()))?;
     registry.register(crate::mongodb::MongoAdapter::new(store.clone()))?;
-    registry.register(crate::slack::SlackAdapter::new(store.clone()))?;
-    registry.register(crate::linear::LinearAdapter::new(store.clone()))?;
-    registry.register(crate::sentry::SentryAdapter::new(store.clone()))?;
+    // Each vendor runs its own MCP server, which new integrations reach
+    // through the MCP server adapter.
+    registry.register_not_offered(crate::slack::SlackAdapter::new(store.clone()))?;
+    registry.register_not_offered(crate::linear::LinearAdapter::new(store.clone()))?;
+    registry.register_not_offered(crate::sentry::SentryAdapter::new(store.clone()))?;
     registry.register(crate::mcp_proxy::McpProxyAdapter::new(store.clone()))?;
-    registry.register(Arc::new(crate::github_cli::build_github_cli_adapter(
-        store.clone(),
-    )))?;
-    registry.register(Arc::new(crate::action::action_adapter(
-        crate::spark::spark_adapter_spec(),
-        store,
-    )))?;
     Ok(registry)
 }
 
@@ -185,6 +197,23 @@ mod tests {
 
         let ssh = registry.get("ssh").expect("SSH is offered in the add flow");
         assert!(ssh.runs_commands());
+    }
+
+    #[test]
+    fn vendors_with_their_own_mcp_server_serve_saved_integrations_but_are_not_offered() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(pluk_store::Store::open(&dir.path().join("pluk.db")).expect("open"));
+        let registry = default_registry(store, Arc::new(crate::sql::SqlCancelRegistry::default()))
+            .expect("registry");
+        for id in ["linear", "sentry", "slack"] {
+            assert!(registry.get(id).is_some(), "{id} still resolves");
+            assert!(registry.list().iter().any(|a| a.id() == id), "{id} still listed");
+            assert!(!registry.offered_for_setup(id), "{id} is not offered");
+        }
+        for id in ["mcp", "ssh", "postgres"] {
+            assert!(registry.offered_for_setup(id), "{id} is offered");
+        }
+        assert!(!registry.offered_for_setup("unknown"));
     }
 
     #[test]

@@ -33,6 +33,12 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     summary: "Errors, issues, and releases",
   },
   {
+    id: "slack",
+    name: "Slack",
+    url: "https://mcp.slack.com/mcp",
+    summary: "Channels, messages, and search",
+  },
+  {
     id: "notion",
     name: "Notion",
     url: "https://mcp.notion.com/mcp",

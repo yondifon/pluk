@@ -19,11 +19,9 @@ export const adapterColors: Record<string, string> = {
   linear: "#5e6ad2", // 0.37,0.42,0.82 approx Linear indigo
   sentry: "#7d6bc7", // 0.49,0.42,0.78
   ssh: "#458c73", // 0.27,0.55,0.45
-  "github-cli": "#6e7681",
   redis: "#c7402e", // 0.78,0.25,0.18
   mongodb: "#47a248", // 0.28,0.64,0.28
   slack: "#752e73", // 0.46,0.18,0.45
-  spark: "#d95438", // 0.85,0.33,0.22
 };
 
 export function adapterColor(type: string): string {

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { renderTypeChooser } from "./render.ts";
 import type { AdapterManifest } from "./catalog.ts";
-import { emptyDraft, adopt } from "./connectionDraft.ts";
+import { emptyDraft, adopt, draftFromConnection } from "./connectionDraft.ts";
 
 function manifest(id: string, label: string, category = "database"): AdapterManifest {
   return {
@@ -11,6 +11,7 @@ function manifest(id: string, label: string, category = "database"): AdapterMani
     policyKind: "sql",
     agentHint: "",
     runsCommands: false,
+    offeredForSetup: true,
     tools: [{ name: "query", label: "Query", description: "Run", category: "read", defaultEnabled: true }],
     configFields: [{ key: "host", label: "Host", type: "text" as const, required: true }],
   };
@@ -37,6 +38,31 @@ describe("type chooser draws from live catalog", () => {
     expect(el.querySelectorAll(".chooser-row").length).toBe(1);
     expect(el.textContent).toContain("SQLite");
     expect(el.textContent).not.toContain("PostgreSQL");
+  });
+});
+
+describe("kinds not offered for setup", () => {
+  const catalog = () => {
+    const linear = manifest("linear", "Linear", "issue-tracker");
+    linear.offeredForSetup = false;
+    return [manifest("postgres", "PostgreSQL"), linear];
+  };
+
+  it("are left out of the chooser", () => {
+    const el = renderTypeChooser(catalog(), () => {});
+    const rows = [...el.querySelectorAll(".chooser-row")].map((b) => b.textContent);
+    expect(rows).toEqual([expect.stringContaining("PostgreSQL")]);
+    expect(el.querySelector('[aria-label="Issue Tracker"]')).toBeNull();
+  });
+
+  it("still open a saved integration with its fields and tools", () => {
+    const linear = catalog()[1];
+    const saved = draftFromConnection({ name: "Linear", type: "linear", config: { host: "api.linear.app" }, environment: null });
+    const d = adopt(saved, linear, false);
+    expect(d.type).toBe("linear");
+    expect(d.config["host"]).toBe("api.linear.app");
+    expect(d.fields.map((f) => f.key)).toEqual(["host"]);
+    expect(d.toolConfig["query"]).toBeDefined();
   });
 });
 
