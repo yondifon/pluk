@@ -5,6 +5,7 @@ import {
   formatFanOutMessage,
   formatRelativeTime,
   genericConfigRows,
+  initialTab,
   isToolEnabled,
   mcpKey,
   mcpUrl,
@@ -40,6 +41,52 @@ describe("deriveStatus", () => {
     expect(formatRelativeTime(now - 3 * 3600_000)).toBe("3h ago");
     expect(formatRelativeTime(now - 2 * 86400_000)).toBe("2d ago");
     expect(formatRelativeTime(now + 10000)).toBeNull();
+  });
+});
+
+describe("initial detail tab", () => {
+  const base = {
+    id: "db1",
+    name: "Database",
+    type: "postgres",
+    config: { host: "localhost" },
+    toolConfig: {},
+    token: "token",
+    createdAt: "",
+  };
+  const manifest: AdapterManifest = {
+    id: "postgres",
+    label: "PostgreSQL",
+    category: "database",
+    agentHint: "",
+    tools: [],
+    configFields: [{ key: "host", label: "Host", type: "text", required: true }],
+  };
+
+  test("a required empty config field opens Overview", () => {
+    expect(initialTab({ integration: { ...base, config: { host: " " } }, manifest })).toBe("overview");
+  });
+
+  test("a failed health check opens Overview", () => {
+    expect(initialTab({ integration: base, manifest, health: { status: "error", at: 1 } })).toBe("overview");
+  });
+
+  test("a complete integration with unknown or healthy status opens Logs", () => {
+    expect(initialTab({ integration: base, manifest })).toBe("logs");
+    expect(initialTab({ integration: base, manifest, health: { status: "ok", at: 1 } })).toBe("logs");
+  });
+
+  test("an MCP integration without sign-in or discovered tools opens Tools", () => {
+    const mcp = { ...base, type: "mcp" };
+    expect(initialTab({ integration: mcp, mcp: { signedIn: false, toolCount: 2 } })).toBe("tools");
+    expect(initialTab({ integration: mcp, mcp: { signedIn: true, toolCount: 0 } })).toBe("tools");
+  });
+
+  test("a signed-in MCP integration with discovered tools opens Logs", () => {
+    expect(initialTab({
+      integration: { ...base, type: "mcp" },
+      mcp: { signedIn: true, toolCount: 1 },
+    })).toBe("logs");
   });
 });
 

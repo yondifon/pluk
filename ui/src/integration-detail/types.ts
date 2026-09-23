@@ -26,6 +26,7 @@ export interface ConfigField {
   label: string;
   type: string;
   secret?: boolean;
+  required?: boolean;
   default?: string;
   options?: Array<{ value: string; label: string }>;
 }

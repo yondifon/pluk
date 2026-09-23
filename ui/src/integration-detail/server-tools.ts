@@ -70,6 +70,7 @@ function card(title: string): { el: HTMLElement; body: HTMLElement } {
 export function mountServerTools(
   container: HTMLElement,
   integration: Integration,
+  onStatusChange?: (status: { signedIn: boolean; toolCount: number }) => void,
 ): { destroy: () => void } {
   container.innerHTML = "";
   container.className = "tools-tab stack-lg";
@@ -390,10 +391,18 @@ export function mountServerTools(
     renderTools();
   }
 
+  function reportStatus(): void {
+    onStatusChange?.({
+      signedIn: auth ? !awaitingSignIn(auth) : false,
+      toolCount: rows?.length ?? 0,
+    });
+  }
+
   render();
   void working(async () => {
     await Promise.all([loadAuth(), loadTools()]);
     await discoverOnce();
+    reportStatus();
   });
 
   return {

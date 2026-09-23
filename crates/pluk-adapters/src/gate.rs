@@ -141,7 +141,7 @@ impl From<&pluk_store::Integration> for CallTarget {
         CallTarget {
             connection_id: conn.id.clone(),
             connection_name: conn.name.clone(),
-            group: None,
+            group: conn.via_group.clone(),
         }
     }
 }

@@ -9,6 +9,7 @@ import { mountActivityLog } from "../activityLog/activityLog";
 import { humanizeHealthError } from "../health";
 import { toast, type PendingToast } from "../toast";
 import { MCP_TYPE, type AdapterManifest, type ConnHealth, type Integration } from "./types";
+import { initialTab } from "./logic";
 
 export type DetailActions = {
   onEdit: () => void;
@@ -37,10 +38,11 @@ export function mountIntegrationDetail(
 
   let currentHealth: ConnHealth | null | undefined = health ?? null;
   const tabs: TabId[] = INTEGRATION_TAB_ORDER;
-  // An MCP server opens on Tools: signing in and picking tools both live there,
-  // and until that is done the other tabs have nothing to show.
-  const landing: TabId = integration.type === MCP_TYPE ? "tools" : "logs";
-  let selectedTab: TabId = openAt && tabs.includes(openAt) ? openAt : landing;
+  let selectedTab: TabId = openAt && tabs.includes(openAt)
+    ? openAt
+    : initialTab({ integration, manifest, health: currentHealth });
+  let userSelectedTab = false;
+  let mcpStatusApplied = false;
   let testing = false;
   const logsMount = document.createElement("div");
   logsMount.className = "logs-mount";
@@ -88,6 +90,7 @@ export function mountIntegrationDetail(
     });
 
     renderTabs(tabsEl, tabs, selectedTab, (id) => {
+      userSelectedTab = true;
       selectedTab = id;
       render();
     });
@@ -125,7 +128,17 @@ export function mountIntegrationDetail(
       const panel = document.createElement("div");
       panel.setAttribute("role", "tabpanel");
       panel.setAttribute("aria-labelledby", "tab-tools");
-      if (integration.type === MCP_TYPE) serverTools = mountServerTools(panel, integration);
+      if (integration.type === MCP_TYPE) {
+        serverTools = mountServerTools(panel, integration, (mcp) => {
+          if (mcpStatusApplied) return;
+          mcpStatusApplied = true;
+          if (userSelectedTab) return;
+          const nextTab = initialTab({ integration, manifest, health: currentHealth, mcp });
+          if (nextTab === selectedTab) return;
+          selectedTab = nextTab;
+          render();
+        });
+      }
       else renderTools(panel, integration, manifest ?? null);
       contentEl.appendChild(panel);
     }
