@@ -1,4 +1,34 @@
 import type { AdapterManifest, ConfigField, ConnHealth, ConnStatus, FanOutResult, Integration, ToolSpec } from "./types";
+import { MCP_TYPE } from "./types";
+import type { TabId } from "./tabs";
+
+export type InitialTabItem =
+  | { kind: "group" }
+  | {
+      kind: "integration";
+      integration: Integration;
+      manifest?: AdapterManifest | null;
+      health?: ConnHealth | null;
+      mcp?: { signedIn: boolean; toolCount: number };
+    };
+
+export function initialTab(item: InitialTabItem): TabId {
+  if (item.kind === "group") return "logs";
+
+  if (
+    item.integration.type === MCP_TYPE &&
+    (!item.mcp || !item.mcp.signedIn || item.mcp.toolCount === 0)
+  ) {
+    return "tools";
+  }
+
+  const missingRequiredConfig = item.manifest?.configFields.some(
+    (field) => field.required && !item.integration.config[field.key]?.trim(),
+  );
+  if (missingRequiredConfig) return "overview";
+  if (item.health?.status === "error") return "overview";
+  return "logs";
+}
 
 export function deriveStatus(health: ConnHealth | null | undefined): ConnStatus {
   if (!health) return "unknown";
