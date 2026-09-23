@@ -21,6 +21,7 @@ import {
 import {
   adopt,
   applyEnvironmentDefaults,
+  configToSave,
   draftFromConnection,
   emptyDraft,
   type Approvals,
@@ -58,7 +59,9 @@ type HostIntegration = {
   id: string;
   name: string;
   type: string;
+  /** Holds no secret values; `secretsSet` names the secret fields that are saved. */
   config: Record<string, unknown>;
+  secretsSet: string[];
   environment: string | null;
   toolConfig: Record<string, ToolState>;
   /** Present when the adapter publishes a tool list per integration. */
@@ -143,6 +146,7 @@ function toDetailIntegration(row: HostIntegration): DetailIntegration {
     type: row.type,
     environment: row.environment as DetailIntegration["environment"],
     config,
+    secretsSet: row.secretsSet,
     toolConfig: row.toolConfig,
     tools: row.tools,
     approvals: row.approvals,
@@ -519,6 +523,7 @@ function startEditIntegration(id: string): void {
     name: row.name,
     type: row.type,
     config: row.config,
+    secretsSet: row.secretsSet,
     environment: row.environment as Environment | null,
   });
   const catalog = manifestFor(row.type);
@@ -549,7 +554,7 @@ async function saveIntegration(saved: ConnectionDraft): Promise<void> {
   const payload = {
     name: saved.name,
     type: saved.type,
-    config: saved.config,
+    config: configToSave(saved),
     environment: saved.environment,
     toolConfig: saved.toolConfig,
     approvals: saved.approvals,
@@ -617,6 +622,7 @@ async function duplicateIntegration(id: string): Promise<void> {
         type: row.type,
         config: row.config,
         environment: row.environment,
+        secretsFrom: row.id,
       },
     });
     await loadData();

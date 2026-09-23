@@ -26,6 +26,12 @@ export interface ConnectionDraft {
   name: string;
   type: string;
   config: Record<string, string>;
+  /**
+   * Secret fields that hold a saved value. The window never reads a secret
+   * back, so such a field's config entry stays blank until the user types a
+   * new one.
+   */
+  savedSecrets: string[];
   /** `null` when the integration carries no environment. */
   environment: Environment | null;
   policyKind: string;
@@ -40,6 +46,7 @@ export function emptyDraft(): ConnectionDraft {
     name: "",
     type: "postgres",
     config: {},
+    savedSecrets: [],
     environment: "development",
     policyKind: "sql",
     fields: [],
@@ -53,6 +60,7 @@ export function draftFromConnection(conn: {
   name: string;
   type: string;
   config: Record<string, unknown>;
+  secretsSet?: string[];
   environment?: Environment | null;
   queryPolicy?: string | null;
 }): ConnectionDraft {
@@ -95,6 +103,7 @@ export function draftFromConnection(conn: {
     name: conn.name,
     type: conn.type,
     config,
+    savedSecrets: conn.secretsSet ?? [],
     environment: conn.environment ?? null,
     policyKind: "sql",
     fields: [],
@@ -121,6 +130,7 @@ export function adopt(draft: ConnectionDraft, manifest: AdapterManifest, resetCo
       if (f.default != null) seededCfg[f.key] = f.default;
     }
     next.config = seededCfg;
+    next.savedSecrets = [];
     next.toolConfig = {};
     next.approvals = emptyApprovals();
   } else {
@@ -175,14 +185,35 @@ export function setEnvironment(draft: ConnectionDraft, env: Environment | null):
   return applyEnvironmentDefaults(next);
 }
 
+/** Whether a field holds a value, counting a secret saved earlier. */
+export function isFilled(draft: ConnectionDraft, field: ConfigFieldDef): boolean {
+  if ((draft.config[field.key] ?? "") !== "") return true;
+  return draft.savedSecrets.includes(field.key);
+}
+
 export function canSave(draft: ConnectionDraft): boolean {
   if (draft.name.trim() === "") return false;
+  return draft.fields.every((f) => !f.required || !isVisible(f, draft.config) || isFilled(draft, f));
+}
+
+/**
+ * The config a save sends. A blank secret keeps its saved value by being left
+ * out; a blank secret with nothing saved, or one the user removed, goes as
+ * `null` so the host drops it.
+ */
+export function configToSave(draft: ConnectionDraft): Record<string, string | null> {
+  const config: Record<string, string | null> = { ...draft.config };
   for (const f of draft.fields) {
-    if (f.required && isVisible(f, draft.config)) {
-      if ((draft.config[f.key] ?? "") === "") return false;
-    }
+    if (!f.secret || (config[f.key] ?? "") !== "") continue;
+    if (draft.savedSecrets.includes(f.key)) delete config[f.key];
+    else config[f.key] = null;
   }
-  return true;
+  return config;
+}
+
+/** The draft with a saved secret let go of, so saving removes it. */
+export function forgetSecret(draft: ConnectionDraft, key: string): ConnectionDraft {
+  return { ...draft, savedSecrets: draft.savedSecrets.filter((saved) => saved !== key) };
 }
 
 export function splitTools(tools: ToolDef[]): { defaults: ToolDef[]; extras: ToolDef[] } {

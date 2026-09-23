@@ -1,7 +1,7 @@
 import type { AdapterManifest, ConfigFieldDef, ToolDef } from "./catalog.ts";
 import { visibleFields, groupedFields, groupedByCategory, prettyCategory } from "./catalog.ts";
 import type { ConnectionDraft, Environment } from "./connectionDraft.ts";
-import { parseRules, setEnvironment, splitTools } from "./connectionDraft.ts";
+import { forgetSecret, isFilled, parseRules, setEnvironment, splitTools } from "./connectionDraft.ts";
 import type { Approvals } from "./connectionDraft.ts";
 import type { GroupDraft, GroupFormConnection } from "./groupForm.ts";
 import {
@@ -255,12 +255,23 @@ function helpText(id: string, text: string): HTMLElement {
   return el;
 }
 
-export function renderField(field: ConfigFieldDef, value: string, onChange: (v: string) => void): HTMLElement {
+/**
+ * One config input. `onForget` marks a secret that already has a saved value:
+ * the input starts blank, says the value is saved, and offers to remove it.
+ */
+export function renderField(
+  field: ConfigFieldDef,
+  value: string,
+  onChange: (v: string) => void,
+  onForget?: () => void,
+): HTMLElement {
   const { row, slot, controlId } = settingRow(field.key, field.required ? `${field.label} *` : field.label);
   row.dataset.fieldKey = field.key;
 
   const help = field.help ? helpText(`help-${field.key}`, field.help) : null;
-  const describe = (el: HTMLElement) => { if (help) el.setAttribute("aria-describedby", help.id); };
+  const saved = onForget ? helpText(`saved-${field.key}`, "Saved. Leave this blank to keep it.") : null;
+  const describedBy = [saved?.id, help?.id].filter(Boolean).join(" ");
+  const describe = (el: HTMLElement) => { if (describedBy) el.setAttribute("aria-describedby", describedBy); };
 
   switch (field.type) {
     case "toggle": {
@@ -339,15 +350,19 @@ export function renderField(field: ConfigFieldDef, value: string, onChange: (v: 
       const input = document.createElement("input");
       input.type = field.type === "password" ? "password" : "text";
       input.id = controlId;
-      input.placeholder = field.placeholder ?? (field.type === "password" ? "••••••" : "");
+      input.placeholder = saved ? "Saved" : field.placeholder ?? (field.type === "password" ? "••••••" : "");
       input.value = value;
       input.className = "field-input mono";
       describe(input);
       input.addEventListener("input", () => onChange(input.value));
       slot.appendChild(input);
+      if (onForget) {
+        slot.appendChild(createButton("Remove", { size: "sm", onClick: onForget, ariaLabel: `Remove saved ${field.label.toLowerCase()}` }));
+      }
       break;
     }
   }
+  if (saved) row.appendChild(saved);
   if (help) row.appendChild(help);
   return row;
 }
@@ -727,9 +742,12 @@ export function renderConnectFieldsStep(
     card.appendChild(h);
     for (const f of shown) {
       if (landOn?.field === f.key) card.appendChild(helpText(`land-on-${f.key}`, landOn.text));
+      const onForget = draft.savedSecrets.includes(f.key)
+        ? () => onDraftChange({ ...forgetSecret(draft, f.key), config: { ...draft.config, [f.key]: "" } })
+        : undefined;
       const row = renderField(f, draft.config[f.key] ?? "", (v) => {
         onDraftChange({ ...draft, config: { ...draft.config, [f.key]: v } });
-      });
+      }, onForget);
       card.appendChild(row);
     }
     body.appendChild(card);
@@ -751,7 +769,7 @@ export function renderConnectFieldsStep(
     onCancel,
     primaryLabel: "Continue",
     onPrimary: () => {
-      const invalid = visibleFields(draft.fields, draft.config).find((field) => field.required && (draft.config[field.key] ?? "") === "");
+      const invalid = visibleFields(draft.fields, draft.config).find((field) => field.required && !isFilled(draft, field));
       if (!invalid) {
         onContinue();
         return;

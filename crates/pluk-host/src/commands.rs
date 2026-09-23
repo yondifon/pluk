@@ -97,7 +97,11 @@ pub struct IntegrationJson {
     pub name: String,
     #[serde(rename = "type")]
     pub r#type: String,
+    /// The stored config without its secret values, which the window never
+    /// reads back.
     pub config: serde_json::Map<String, serde_json::Value>,
+    /// The secret fields that hold a saved value.
+    pub secrets_set: Vec<String>,
     pub environment: Option<String>,
     /// Per-tool enablement and settings, lifted out of the `query_policy` blob.
     pub tool_config: std::collections::BTreeMap<String, pluk_store::ToolPolicy>,
@@ -112,31 +116,15 @@ pub struct IntegrationJson {
     pub tools: Option<Vec<pluk_adapters::ToolSpec>>,
 }
 
-impl From<pluk_store::Integration> for IntegrationJson {
-    fn from(i: pluk_store::Integration) -> Self {
-        let policy = pluk_store::parse_query_policy(i.query_policy.as_deref());
-        Self {
-            id: i.id,
-            name: i.name,
-            r#type: i.r#type,
-            config: i.config,
-            environment: i.environment.map(|e| e.as_str().to_string()),
-            tool_config: policy.clone().map(|p| p.tools).unwrap_or_default(),
-            approvals: policy.map(|p| p.approvals).unwrap_or_default(),
-            token: i.token,
-            created_at: i.created_at,
-            tools: None,
-        }
-    }
-}
-
 impl IntegrationJson {
-    /// The wire shape plus the tools this integration itself publishes.
+    /// The wire shape: secrets withheld, plus the tools this integration
+    /// itself publishes. Every integration the window reads is built here.
     fn from_integration(
         i: pluk_store::Integration,
         registry: &pluk_adapters::AdapterRegistry,
     ) -> Self {
-        let tools = match registry.get(&i.r#type) {
+        let adapter = registry.get(&i.r#type);
+        let tools = match adapter.as_deref() {
             Some(adapter) => Some(adapter.tool_specs_for(&i).into_owned()),
             None => {
                 pluk_server::logging::log_info(&format!(
@@ -146,10 +134,39 @@ impl IntegrationJson {
                 None
             }
         };
+        let mut config = i.config;
+        let secrets_set = adapter
+            .map(|adapter| pluk_adapters::withhold_secrets(&mut config, adapter.config_fields()))
+            .unwrap_or_default();
+        let policy = pluk_store::parse_query_policy(i.query_policy.as_deref());
         IntegrationJson {
+            id: i.id,
+            name: i.name,
+            r#type: i.r#type,
+            config,
+            secrets_set,
+            environment: i.environment.map(|e| e.as_str().to_string()),
+            tool_config: policy.clone().map(|p| p.tools).unwrap_or_default(),
+            approvals: policy.map(|p| p.approvals).unwrap_or_default(),
+            token: i.token,
+            created_at: i.created_at,
             tools,
-            ..IntegrationJson::from(i)
         }
+    }
+}
+
+/// Fold a config the window sent over a stored one, keeping every secret the
+/// window left untouched. An unknown type has no fields to go by, so the
+/// config is taken as sent.
+fn with_kept_secrets(
+    registry: &pluk_adapters::AdapterRegistry,
+    r#type: &str,
+    stored: &pluk_store::Config,
+    sent: pluk_store::Config,
+) -> pluk_store::Config {
+    match registry.get(r#type) {
+        Some(adapter) => pluk_adapters::keep_secrets(stored, sent, adapter.config_fields()),
+        None => sent,
     }
 }
 
@@ -251,6 +268,10 @@ pub struct CreateIntegrationPayload {
     #[serde(default)]
     pub config: serde_json::Map<String, serde_json::Value>,
     pub environment: Option<String>,
+    /// An integration whose saved secrets fill the ones this config leaves
+    /// untouched, so a copy keeps secrets the window never saw.
+    #[serde(default)]
+    pub secrets_from: Option<String>,
 }
 
 #[tauri::command]
@@ -258,16 +279,34 @@ pub fn create_integration(
     state: State<'_, HostState>,
     payload: CreateIntegrationPayload,
 ) -> CmdResult<IntegrationJson> {
+    create_integration_in(&state.store, &state.shared.registry, payload)
+}
+
+fn create_integration_in(
+    store: &pluk_store::Store,
+    registry: &pluk_adapters::AdapterRegistry,
+    payload: CreateIntegrationPayload,
+) -> CmdResult<IntegrationJson> {
+    let source = match payload.secrets_from.as_deref() {
+        Some(source) => {
+            store
+                .integration_by_id(source)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "Integration not found".to_string())?
+                .config
+        }
+        None => pluk_store::Config::new(),
+    };
+    let config = with_kept_secrets(registry, &payload.r#type, &source, payload.config);
     let mut input = pluk_store::IntegrationInput::new(payload.name, payload.r#type);
-    input.config = payload.config;
+    input.config = config;
     input.environment = payload
         .environment
         .as_deref()
         .and_then(pluk_store::Environment::parse);
-    state
-        .store
+    store
         .create_integration(&input)
-        .map(IntegrationJson::from)
+        .map(|i| IntegrationJson::from_integration(i, registry))
         .map_err(|e| e.to_string())
 }
 
@@ -288,6 +327,8 @@ pub struct UpdateIntegrationPayload {
     pub name: Option<String>,
     #[serde(rename = "type")]
     pub r#type: Option<String>,
+    /// Replaces the stored config, except that a secret field left out or
+    /// empty keeps its stored value and one sent as `null` is removed.
     pub config: Option<serde_json::Map<String, serde_json::Value>>,
     /// Absent leaves the stored environment; `null` clears it.
     #[serde(default, deserialize_with = "nullable")]
@@ -336,26 +377,40 @@ pub fn update_integration(
     id: String,
     payload: UpdateIntegrationPayload,
 ) -> CmdResult<Option<IntegrationJson>> {
-    let stored = state
-        .store
-        .integration_by_id(&id)
-        .map_err(|e| e.to_string())?
-        .and_then(|i| i.query_policy);
-    let query_policy = merged_policy(stored.as_deref(), payload.tool_config, payload.approvals)?;
+    update_integration_in(&state.store, &state.shared.registry, &id, payload)
+}
+
+fn update_integration_in(
+    store: &pluk_store::Store,
+    registry: &pluk_adapters::AdapterRegistry,
+    id: &str,
+    payload: UpdateIntegrationPayload,
+) -> CmdResult<Option<IntegrationJson>> {
+    let Some(stored) = store.integration_by_id(id).map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let query_policy = merged_policy(
+        stored.query_policy.as_deref(),
+        payload.tool_config,
+        payload.approvals,
+    )?;
+    let r#type = payload.r#type.as_deref().unwrap_or(&stored.r#type);
+    let config = payload
+        .config
+        .map(|sent| with_kept_secrets(registry, r#type, &stored.config, sent));
     let update = pluk_store::IntegrationUpdate {
         name: payload.name,
         r#type: payload.r#type,
-        config: payload.config,
+        config,
         environment: payload
             .environment
             .map(|env| env.as_deref().and_then(pluk_store::Environment::parse)),
         read_only: None,
         query_policy,
     };
-    state
-        .store
-        .update_integration(&id, &update)
-        .map(|o| o.map(IntegrationJson::from))
+    store
+        .update_integration(id, &update)
+        .map(|o| o.map(|i| IntegrationJson::from_integration(i, registry)))
         .map_err(|e| e.to_string())
 }
 
@@ -1152,5 +1207,217 @@ mod integration_api_tests {
         assert_eq!(response.status, 200);
         assert_eq!(response.body["ok"], true);
         assert!(response.body["tools"].is_array());
+    }
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use axum::http::{HeaderMap, StatusCode, header};
+    use axum::response::{IntoResponse, Response};
+    use serde_json::{Value, json};
+
+    const TOKEN: &str = "saved-upstream-token";
+
+    struct World {
+        _directory: tempfile::TempDir,
+        store: Arc<pluk_store::Store>,
+        registry: Arc<pluk_adapters::AdapterRegistry>,
+    }
+
+    fn world() -> World {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(pluk_store::Store::open(&directory.path().join("pluk.db")).unwrap());
+        let registry = Arc::new(
+            pluk_adapters::default_registry(
+                store.clone(),
+                Arc::new(pluk_adapters::sql::SqlCancelRegistry::default()),
+            )
+            .unwrap(),
+        );
+        World {
+            _directory: directory,
+            store,
+            registry,
+        }
+    }
+
+    fn config(value: Value) -> pluk_store::Config {
+        match value {
+            Value::Object(map) => map,
+            _ => unreachable!(),
+        }
+    }
+
+    fn create(world: &World, r#type: &str, config: pluk_store::Config) -> IntegrationJson {
+        create_integration_in(
+            &world.store,
+            &world.registry,
+            CreateIntegrationPayload {
+                name: format!("{type} integration"),
+                r#type: r#type.to_string(),
+                config,
+                environment: None,
+                secrets_from: None,
+            },
+        )
+        .unwrap()
+    }
+
+    /// An edit as the window sends it: the config it was given, back again.
+    fn resave(
+        world: &World,
+        shown: &IntegrationJson,
+        config: pluk_store::Config,
+    ) -> IntegrationJson {
+        let payload = UpdateIntegrationPayload {
+            name: Some(format!("{} renamed", shown.name)),
+            config: Some(config),
+            ..Default::default()
+        };
+        update_integration_in(&world.store, &world.registry, &shown.id, payload)
+            .unwrap()
+            .unwrap()
+    }
+
+    fn stored(world: &World, id: &str) -> pluk_store::Config {
+        world.store.integration_by_id(id).unwrap().unwrap().config
+    }
+
+    #[test]
+    fn every_adapters_secrets_stay_out_of_the_window_and_survive_an_edit() {
+        let world = world();
+        let mut checked = 0;
+        for adapter in world.registry.list() {
+            let secrets: Vec<&str> = adapter
+                .config_fields()
+                .iter()
+                .filter(|field| field.secret)
+                .map(|field| field.key.as_str())
+                .collect();
+            if secrets.is_empty() {
+                continue;
+            }
+            let mut saved = config(json!({"host": "db.internal"}));
+            for key in &secrets {
+                saved.insert(key.to_string(), json!(format!("{key}-value")));
+            }
+            let shown = create(&world, adapter.id(), saved.clone());
+            for key in &secrets {
+                assert!(!shown.config.contains_key(*key), "{} {key}", adapter.id());
+            }
+            let mut set = shown.secrets_set.clone();
+            set.sort();
+            let mut expected: Vec<String> = secrets.iter().map(|key| key.to_string()).collect();
+            expected.sort();
+            expected.dedup();
+            assert_eq!(set, expected, "{}", adapter.id());
+
+            let edited = resave(&world, &shown, shown.config.clone());
+            assert_eq!(stored(&world, &shown.id), saved, "{}", adapter.id());
+            assert_eq!(edited.secrets_set.len(), expected.len(), "{}", adapter.id());
+            checked += 1;
+        }
+        assert!(checked >= 2, "only {checked} adapters declare secrets");
+    }
+
+    #[test]
+    fn a_secret_can_be_cleared_or_replaced_from_the_window() {
+        let world = world();
+        let shown = create(
+            &world,
+            "mcp",
+            config(json!({"url": "https://example.com/mcp", "token": TOKEN, "client_secret": "s"})),
+        );
+
+        let mut sent = shown.config.clone();
+        sent.insert("token".into(), json!("replaced"));
+        sent.insert("client_secret".into(), Value::Null);
+        let edited = resave(&world, &shown, sent);
+
+        assert_eq!(stored(&world, &shown.id)["token"], json!("replaced"));
+        assert!(!stored(&world, &shown.id).contains_key("client_secret"));
+        assert_eq!(edited.secrets_set, vec!["token".to_string()]);
+    }
+
+    #[test]
+    fn a_copy_keeps_the_secrets_of_the_integration_it_copies() {
+        let world = world();
+        let shown = create(
+            &world,
+            "mcp",
+            config(json!({"url": "https://example.com/mcp", "token": TOKEN})),
+        );
+        let copy = create_integration_in(
+            &world.store,
+            &world.registry,
+            CreateIntegrationPayload {
+                name: "copy".into(),
+                r#type: shown.r#type.clone(),
+                config: shown.config.clone(),
+                environment: None,
+                secrets_from: Some(shown.id.clone()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(stored(&world, &copy.id)["token"], json!(TOKEN));
+        assert!(!copy.config.contains_key("token"));
+    }
+
+    /// Just enough of an MCP server to open a session and list one tool, and
+    /// only for a caller holding the token.
+    async fn guarded_mcp(headers: HeaderMap, body: axum::Json<Value>) -> Response {
+        let bearer = format!("Bearer {TOKEN}");
+        if headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            != Some(&bearer)
+        {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(header::WWW_AUTHENTICATE, "Bearer")],
+            )
+                .into_response();
+        }
+        let Some(id) = body.get("id").cloned() else {
+            return StatusCode::ACCEPTED.into_response();
+        };
+        let result = match body["method"].as_str() {
+            Some("initialize") => json!({
+                "protocolVersion": body["params"]["protocolVersion"],
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "guarded", "version": "1"},
+            }),
+            Some("tools/list") => json!({
+                "tools": [{"name": "echo", "inputSchema": {"type": "object"}}],
+            }),
+            _ => json!({}),
+        };
+        axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
+    }
+
+    #[tokio::test]
+    async fn an_mcp_integration_still_connects_after_an_edit_that_skips_its_token() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let router = axum::Router::new().route("/mcp", axum::routing::post(guarded_mcp));
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let world = world();
+        let shown = create(&world, "mcp", config(json!({"url": url, "token": TOKEN})));
+
+        resave(&world, &shown, shown.config.clone());
+
+        let integration = world.store.integration_by_id(&shown.id).unwrap().unwrap();
+        let adapter = world.registry.get("mcp").unwrap();
+        adapter
+            .test_connection(&integration)
+            .await
+            .expect("connects with the kept token");
+        pluk_adapters::mcp_proxy::client::invalidate(&shown.id);
     }
 }

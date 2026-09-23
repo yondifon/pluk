@@ -11,7 +11,9 @@ export interface Integration {
   name: string;
   type: string;
   environment?: Environment | null;
+  /** Holds no secret values; `secretsSet` names the secret fields that are saved. */
   config: Record<string, string>;
+  secretsSet?: string[];
   toolConfig: Record<string, { enabled: boolean; settings: Record<string, string> }>;
   /** This integration's own tools, when its adapter publishes a list per integration. */
   tools?: ToolSpec[];

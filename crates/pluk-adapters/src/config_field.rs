@@ -4,6 +4,11 @@
 //! secret values, only the shape of the inputs (`secret` marks which stored
 //! values must not be echoed back).
 //!
+//! Secret values are write-only for the window. [`withhold_secrets`] takes
+//! them out of a config before it is sent there, and [`keep_secrets`] folds
+//! what the window sends back over the stored config, so a secret it never
+//! saw is not lost.
+//!
 //! Two normalisations are part of the contract:
 //!
 //! - [`ConfigField`] `default` accepts a string, integer or boolean and is
@@ -12,7 +17,7 @@
 //!   so a toggle's `true` matches the string `"true"`.
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// Normalise a JSON value the way config defaults and `show_if.equals`
 /// compare: strings verbatim, booleans as `"true"`/`"false"`, numbers by
@@ -213,6 +218,51 @@ impl ConfigField {
     }
 }
 
+/// Take every secret field's value out of a config bound for the window, and
+/// name the fields that hold one. An empty value counts as not set.
+pub fn withhold_secrets(config: &mut Map<String, Value>, fields: &[ConfigField]) -> Vec<String> {
+    fields
+        .iter()
+        .filter(|field| field.secret)
+        .filter_map(|field| {
+            let value = config.remove(&field.key)?;
+            (!is_blank(&value)).then(|| field.key.clone())
+        })
+        .collect()
+}
+
+/// Fold a config the window sent over the stored one. For each secret field,
+/// an absent or empty value keeps what is stored, `null` removes it, and any
+/// other value replaces it. Every other key is taken as sent.
+pub fn keep_secrets(
+    stored: &Map<String, Value>,
+    mut sent: Map<String, Value>,
+    fields: &[ConfigField],
+) -> Map<String, Value> {
+    for field in fields.iter().filter(|field| field.secret) {
+        match sent.remove(&field.key) {
+            Some(Value::Null) => {}
+            Some(value) if !is_blank(&value) => {
+                sent.insert(field.key.clone(), value);
+            }
+            _ => {
+                if let Some(kept) = stored.get(&field.key) {
+                    sent.insert(field.key.clone(), kept.clone());
+                }
+            }
+        }
+    }
+    sent
+}
+
+fn is_blank(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::String(s) => s.is_empty(),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +338,53 @@ mod tests {
             value["options"],
             json!([{ "value": "agent", "label": "Agent" }, { "value": "key", "label": "Private Key" }])
         );
+    }
+
+    fn secret_fields() -> Vec<ConfigField> {
+        vec![
+            ConfigField::new("url", "URL", FieldType::Text),
+            ConfigField::new("token", "Token", FieldType::Password).secret(),
+            ConfigField::new("client_secret", "Client secret", FieldType::Password).secret(),
+        ]
+    }
+
+    fn map(value: Value) -> Map<String, Value> {
+        match value {
+            Value::Object(map) => map,
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn the_window_is_told_which_secrets_are_set_and_never_their_values() {
+        let mut config = map(json!({"url": "https://x", "token": "t0k", "client_secret": ""}));
+        let set = withhold_secrets(&mut config, &secret_fields());
+        assert_eq!(set, vec!["token".to_string()]);
+        assert_eq!(config, map(json!({"url": "https://x"})));
+    }
+
+    #[test]
+    fn a_secret_the_window_leaves_alone_keeps_its_stored_value() {
+        let stored = map(json!({"url": "https://x", "token": "t0k", "client_secret": "s3c"}));
+        let kept = keep_secrets(
+            &stored,
+            map(json!({"url": "https://y", "client_secret": ""})),
+            &secret_fields(),
+        );
+        assert_eq!(
+            kept,
+            map(json!({"url": "https://y", "token": "t0k", "client_secret": "s3c"}))
+        );
+    }
+
+    #[test]
+    fn a_secret_is_replaced_by_a_new_value_and_removed_by_null() {
+        let stored = map(json!({"token": "t0k", "client_secret": "s3c"}));
+        let kept = keep_secrets(
+            &stored,
+            map(json!({"token": "new", "client_secret": null})),
+            &secret_fields(),
+        );
+        assert_eq!(kept, map(json!({"token": "new"})));
     }
 }

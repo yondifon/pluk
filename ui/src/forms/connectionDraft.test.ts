@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { isVisible, visibleFields } from "./catalog.ts";
 import type { AdapterManifest, ConfigFieldDef } from "./catalog.ts";
-import { emptyDraft, adopt, setEnvironment, canSave, splitTools } from "./connectionDraft.ts";
+import { emptyDraft, adopt, setEnvironment, canSave, splitTools, draftFromConnection, configToSave, forgetSecret } from "./connectionDraft.ts";
+import { renderField } from "./render.ts";
 import { coerceToStored, coerceFromStored, serializeConfig, parseConfig, serializeToolSettings } from "./coercion.ts";
 import { overridableFields, inheritPlaceholder, updateOverride, serializeGroup, groupDraftFrom } from "./groupForm.ts";
 
@@ -320,5 +321,44 @@ describe("environment picker copy not leaking internals", () => {
     // This is a design-check, not runtime: field labels come from catalog verbatim.
     const m = makeManifest();
     expect(m.configFields[0].label).toBe("Host");
+  });
+});
+
+describe("saved secrets", () => {
+  const fields: ConfigFieldDef[] = [
+    { key: "url", label: "Server URL", type: "text", required: true },
+    { key: "token", label: "Token", type: "password", secret: true, required: true },
+    { key: "client_secret", label: "Client secret", type: "password", secret: true },
+  ];
+  const manifest = makeManifest({ id: "mcp", policyKind: "action", tools: [], configFields: fields });
+
+  function edited(): ReturnType<typeof emptyDraft> {
+    const base = draftFromConnection({ name: "Linear", type: "mcp", config: { url: "https://x/mcp" }, secretsSet: ["token", "client_secret"] });
+    return adopt(base, manifest, false);
+  }
+
+  it("a saved secret counts as filled and is left out of the save", () => {
+    const d = edited();
+    expect(canSave(d)).toBe(true);
+    expect(configToSave(d)).toEqual({ url: "https://x/mcp" });
+  });
+
+  it("a typed secret replaces the saved one and a removed one is cleared", () => {
+    let d = edited();
+    d = { ...d, config: { ...d.config, token: "new" } };
+    d = forgetSecret(d, "client_secret");
+    expect(configToSave(d)).toEqual({ url: "https://x/mcp", token: "new", client_secret: null });
+  });
+
+  it("removing a required secret asks for a new one", () => {
+    expect(canSave(forgetSecret(edited(), "token"))).toBe(false);
+  });
+
+  it("a saved secret's input says it is saved and never shows a value", () => {
+    const row = renderField(fields[1], "", () => {}, () => {});
+    const input = row.querySelector("input");
+    expect(input?.value).toBe("");
+    expect(row.textContent).toContain("Saved. Leave this blank to keep it.");
+    expect(row.querySelector("button")?.textContent).toBe("Remove");
   });
 });
