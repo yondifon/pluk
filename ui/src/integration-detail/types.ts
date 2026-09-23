@@ -21,6 +21,8 @@ export interface Integration {
   /** This integration's own tools, when its adapter publishes a list per integration. */
   tools?: ToolSpec[];
   approvals?: { ask: boolean; allow: string[]; deny: string[] };
+  /** Tools an imported config turned off that the server has not listed yet. */
+  pendingToolsOff?: string[];
   token: string;
   createdAt: string;
   readOnly?: boolean;

@@ -50,6 +50,18 @@ const STATE_RANK: Record<ProxyToolState, number> = {
   missing: 3,
 };
 
+/**
+ * The line naming tools an imported config turned off that the server has
+ * not listed yet. A listed one was switched off when it was found, so only
+ * the rest are named.
+ */
+export function pendingOffNote(pending: string[] | undefined, rows: ProxyToolRow[] | null): string | null {
+  const listed = new Set((rows ?? []).filter((row) => row.present).map((row) => row.name));
+  const waiting = (pending ?? []).filter((name) => !listed.has(name));
+  if (!waiting.length) return null;
+  return `Your pasted config turned off ${waiting.join(", ")}. The server hasn't listed them yet. Pluk turns them off when it does.`;
+}
+
 export function orderedProxyTools(rows: ProxyToolRow[]): ProxyToolRow[] {
   return [...rows].sort(
     (a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || a.label.localeCompare(b.label),

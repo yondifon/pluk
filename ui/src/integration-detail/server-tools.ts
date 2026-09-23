@@ -7,6 +7,7 @@ import {
   awaitingSignIn,
   canEnable,
   orderedProxyTools,
+  pendingOffNote,
   signInView,
   stateBadge,
   stateNote,
@@ -50,6 +51,9 @@ export function mountServerTools(
 
   const signIn = card("Server");
   const tools = card("Tools");
+  const pendingNote = line("", "hint");
+  pendingNote.hidden = true;
+  tools.el.appendChild(pendingNote);
   container.append(signIn.el, tools.el);
 
   let alive = true;
@@ -331,6 +335,9 @@ export function mountServerTools(
 
   function renderTools(): void {
     tools.body.innerHTML = "";
+    const pending = pendingOffNote(integration.pendingToolsOff, rows);
+    pendingNote.textContent = pending ?? "";
+    pendingNote.hidden = pending === null;
     if (toolsError) {
       tools.body.append(
         line("Pluk could not reach this server.", "empty"),

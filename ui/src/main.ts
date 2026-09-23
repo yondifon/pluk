@@ -30,6 +30,8 @@ import {
 import { wizardSteps } from "./forms/wizard.ts";
 import { addServer, type ServerHost, type ServerTemplate } from "./forms/serverTemplates.ts";
 import { markFocus, restoreFocus } from "./forms/focus.ts";
+import { doneMessage, type ImportedServer, type ParsedImport } from "./forms/importConfig.ts";
+import { renderImportFlow, type ImportHost } from "./forms/importConfigView.ts";
 import { rowNames, type ConfigProblem } from "./forms/keyValue.ts";
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
 import type { AdapterManifest as CatalogManifest, ToolDef, ToolState } from "./forms/catalog.ts";
@@ -68,6 +70,8 @@ type HostIntegration = {
   /** Present when the adapter publishes a tool list per integration. */
   tools?: ToolDef[];
   approvals: Approvals;
+  /** Tools an imported config turned off that the server has not listed yet. */
+  pendingToolsOff?: string[];
   token: string;
   createdAt: string;
 };
@@ -92,7 +96,8 @@ type FormState =
   | { kind: "new-integration"; step: number; savedId: string | null }
   | { kind: "edit-integration"; id: string; step: number }
   | { kind: "new-group" }
-  | { kind: "edit-group"; id: string };
+  | { kind: "edit-group"; id: string }
+  | { kind: "import-mcp" };
 
 let state: SidebarState = {
   integrations: [],
@@ -119,6 +124,8 @@ let ruleProblem: RuleProblem | null = null;
 let groupDraft: GroupDraft | null = null;
 /** The server picked from a tile that needs a token, until the draft moves on. */
 let tokenServer: ServerTemplate | null = null;
+/** The paste-and-review flow. It keeps its own state until the modal closes, so a redraw or a trip back to the chooser keeps what was pasted. */
+let importFlow: HTMLElement | null = null;
 /** Teardown for whatever the current wizard step is watching (Chrome pairing polling). */
 let activeStepCleanup: (() => void) | null = null;
 /** Which tab the next detail render opens on, when it should not be the usual one. */
@@ -152,6 +159,7 @@ function toDetailIntegration(row: HostIntegration): DetailIntegration {
     toolConfig: row.toolConfig,
     tools: row.tools,
     approvals: row.approvals,
+    pendingToolsOff: row.pendingToolsOff,
     token: row.token,
     createdAt: row.createdAt,
   };
@@ -244,6 +252,7 @@ const FORM_TITLES: Record<FormState["kind"], string> = {
   "edit-integration": "Edit Integration",
   "new-group": "New Group",
   "edit-group": "Edit Group",
+  "import-mcp": "Add Servers from Config",
 };
 
 /** The screen a form state draws, so a redraw of the one on show is told apart from a move to another. */
@@ -277,6 +286,7 @@ function openForm(next: FormState): void {
         draft = null;
         groupDraft = null;
         tokenServer = null;
+        importFlow = null;
       },
     });
     formModal.content.classList.add("modal-body-form");
@@ -295,6 +305,7 @@ function closeForm(): void {
   draft = null;
   groupDraft = null;
   tokenServer = null;
+  importFlow = null;
 }
 
 /** Re-renders the open form, keeping the caret where the person left it. */
@@ -374,6 +385,7 @@ function buildForm(current: FormState): { el: HTMLElement; destroy?: () => void 
             onPickServer: (template) =>
               addServer(template, serverHost()).catch((error) => report(error, "Server not added")),
             serverUrls: addedServerUrls(),
+            onPasteConfig: () => openForm({ kind: "import-mcp" }),
           }),
         };
       }
@@ -451,6 +463,9 @@ function buildForm(current: FormState): { el: HTMLElement; destroy?: () => void 
         }
       }
     }
+    case "import-mcp":
+      importFlow ??= renderImportFlow(importHost());
+      return { el: importFlow };
     case "new-group":
     case "edit-group": {
       if (!groupDraft) return { el: document.createElement("div") };
@@ -523,6 +538,28 @@ function serverHost(): ServerHost {
       form = { kind: "new-integration", step: wizardSteps(manifest, "create").indexOf("connect"), savedId: null };
       renderForm();
     },
+  };
+}
+
+/** What the paste-and-review flow can reach out to. */
+function importHost(): ImportHost {
+  return {
+    takenNames: () => hostIntegrations.map((row) => row.name),
+    parse: (text) => invoke<ParsedImport>("parse_mcp_config", { text }),
+    save: async (servers) => {
+      const outcomes = await invoke<ImportedServer[]>("import_mcp_servers", { servers });
+      await loadData();
+      return outcomes;
+    },
+    onDone: async (ids, added) => {
+      closeForm();
+      const { title, description } = doneMessage(added);
+      toast.success(title, description ? { description } : undefined);
+      selection = { kind: "integration", id: ids[0] };
+      await loadData();
+    },
+    onBack: () => openForm({ kind: "new-integration", step: 0, savedId: null }),
+    onCancel: closeForm,
   };
 }
 

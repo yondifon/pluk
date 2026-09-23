@@ -70,6 +70,7 @@ function serverTile(
 function renderPopularServers(
   serverUrls: string[],
   onPick: (template: ServerTemplate) => Promise<void>,
+  onPasteConfig?: () => void,
 ): HTMLElement {
   const section = document.createElement("section");
   section.className = "server-section";
@@ -101,6 +102,14 @@ function renderPopularServers(
     });
     section.appendChild(more);
   }
+  if (onPasteConfig) {
+    const paste = createButton("Paste a server config", { size: "sm", variant: "secondary", onClick: onPasteConfig });
+    paste.classList.add("server-paste");
+    const pasteHint = document.createElement("p");
+    pasteHint.className = "hint";
+    pasteHint.textContent = "Already set up a server in another app? Paste its config to add it here.";
+    section.append(pasteHint, paste);
+  }
   return section;
 }
 
@@ -115,6 +124,8 @@ export function renderTypeChooser(
     onPickServer?: (template: ServerTemplate) => Promise<void>;
     /** Addresses of the servers already added, so a tile can say so. */
     serverUrls?: string[];
+    /** Adding servers from a config copied out of another app. */
+    onPasteConfig?: () => void;
   },
 ): HTMLElement {
   const adapters = catalog.filter((a) => a.offeredForSetup);
@@ -163,7 +174,7 @@ export function renderTypeChooser(
     const onPickServer = opts?.onPickServer;
     const showServers = onPickServer != null && adapters.some((a) => a.id === MCP_TYPE);
     if (showServers) {
-      wrap.appendChild(renderPopularServers(opts?.serverUrls ?? [], onPickServer));
+      wrap.appendChild(renderPopularServers(opts?.serverUrls ?? [], onPickServer, opts?.onPasteConfig));
       const rest = document.createElement("h3");
       rest.className = "ui-card-title";
       rest.textContent = "Everything else";

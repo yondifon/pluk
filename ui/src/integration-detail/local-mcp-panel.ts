@@ -23,6 +23,7 @@ import { callProxyApi as call } from "./proxy-api";
 import {
   canEnable,
   orderedProxyTools,
+  pendingOffNote,
   stateBadge as toolStateBadge,
   stateNote as toolStateNote,
   type ProxyToolRow,
@@ -128,6 +129,9 @@ export function mountLocalMcp(
   const approval = card("Local server");
   const status = card("Status");
   const tools = card("Tools");
+  const pendingNote = line("", "hint");
+  pendingNote.hidden = true;
+  tools.el.appendChild(pendingNote);
   container.append(approval.el, status.el, tools.el);
 
   let alive = true;
@@ -396,6 +400,9 @@ export function mountLocalMcp(
 
   function renderTools(): void {
     tools.body.innerHTML = "";
+    const pending = pendingOffNote(integration.pendingToolsOff, rows);
+    pendingNote.textContent = pending ?? "";
+    pendingNote.hidden = pending === null;
     if (!preview?.approved) {
       tools.body.appendChild(line("Approve the command above to see what it offers.", "empty"));
       return;
