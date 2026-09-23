@@ -146,7 +146,7 @@ pub async fn complete(store: &Store, callback_url: &str) -> Result<(), AdapterEr
     store
         .set_proxy_auth(&stored_from(&pending, &tokens)?)
         .map_err(store_failure)?;
-    client::invalidate(&pending.integration_id);
+    client::shutdown(&pending.integration_id);
 
     // The tool list is read now rather than on whatever call comes first. A
     // server that answers the token endpoint but not this one is still signed
@@ -190,7 +190,7 @@ pub fn disconnect(store: &Store, integration_id: &str) -> Result<(), AdapterErro
     store
         .delete_proxy_auth(integration_id)
         .map_err(store_failure)?;
-    client::invalidate(integration_id);
+    client::shutdown(integration_id);
     Ok(())
 }
 
@@ -199,7 +199,7 @@ pub fn disconnect(store: &Store, integration_id: &str) -> Result<(), AdapterErro
 pub fn require_sign_in(store: &Store, integration_id: &str) -> AdapterError {
     match store.set_proxy_auth_status(integration_id, AuthStatus::ReconnectNeeded) {
         Ok(_) => {
-            client::invalidate(integration_id);
+            client::shutdown(integration_id);
             reconnect_error()
         }
         Err(error) => store_failure(error),
@@ -272,7 +272,7 @@ async fn renewed_token(
             },
         )
         .map_err(store_failure)?;
-    client::invalidate(integration_id);
+    client::shutdown(integration_id);
     if landed {
         return Ok(fresh.access_token);
     }
@@ -1168,7 +1168,7 @@ mod tests {
             self.conn
                 .config
                 .insert("url".to_string(), Value::String(endpoint.to_string()));
-            client::invalidate(&self.conn.id);
+            client::shutdown(&self.conn.id);
         }
 
         /// A sign-in that already happened, pointed at one authorization
@@ -1186,7 +1186,7 @@ mod tests {
                     metadata_json: Some(self.context_json(authority)),
                 })
                 .expect("seed");
-            client::invalidate(&self.conn.id);
+            client::shutdown(&self.conn.id);
         }
 
         fn context_json(&self, authority: &AuthorityState) -> String {
@@ -1262,7 +1262,7 @@ mod tests {
 
     impl Drop for World {
         fn drop(&mut self) {
-            client::invalidate(&self.conn.id);
+            client::shutdown(&self.conn.id);
         }
     }
 

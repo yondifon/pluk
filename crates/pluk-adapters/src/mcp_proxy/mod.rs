@@ -12,8 +12,10 @@
 
 pub mod api;
 pub mod catalog;
+mod child;
 pub mod client;
 mod discovery;
+pub mod local;
 pub mod oauth;
 pub mod probe;
 pub mod transport;
@@ -72,7 +74,31 @@ const MAX_REASON_CHARS: usize = 200;
 const TRUNCATED: &str = "…[truncated]";
 
 fn mcp_fields() -> Vec<ConfigField> {
+    let when_local = || json!(local::LOCAL);
     vec![
+        ConfigField::new(local::CONNECTION_KEY, "Connection", FieldType::Select)
+            .group("Connection")
+            .options(&[(local::REMOTE, "Remote server"), (local::LOCAL, "Local server")])
+            .default_value(&json!(local::REMOTE))
+            .help("A remote server has a URL. A local server is a command Pluk starts on this Mac."),
+        ConfigField::new(local::COMMAND_KEY, "Command", FieldType::Text)
+            .group("Connection")
+            .show_if_eq(local::CONNECTION_KEY, &when_local())
+            .placeholder("npx")
+            .help("The program that starts the server, such as npx, node or uvx."),
+        ConfigField::new(local::ARGS_KEY, "Arguments", FieldType::List)
+            .group("Connection")
+            .show_if_eq(local::CONNECTION_KEY, &when_local())
+            .help("Passed to the command one by one, exactly as written."),
+        ConfigField::new(local::CWD_KEY, "Working folder", FieldType::Text)
+            .group("Connection")
+            .show_if_eq(local::CONNECTION_KEY, &when_local())
+            .placeholder("~")
+            .help("Where the command runs. Leave this empty to use your home folder."),
+        ConfigField::key_value(local::ENV_KEY, "Environment variables", SecretKind::Env)
+            .group("Connection")
+            .show_if_eq(local::CONNECTION_KEY, &when_local())
+            .help("Set for this server only. Values are kept secret unless you turn that off."),
         ConfigField::new("url", "Server URL", FieldType::Text)
             .group("Connection")
             .required()
@@ -178,18 +204,24 @@ impl Adapter for McpProxyAdapter {
     /// Reaching the server is the test. A server that will only answer someone
     /// who signed in is working as built, so the failure it reports is the step
     /// the user still owes it rather than the refusal it gave Pluk.
+    /// A local server is started for the test, once the user approved its
+    /// command.
     async fn test_connection(&self, conn: &Integration) -> Result<(), AdapterError> {
         credentials_in_hand(&self.store, conn).await?;
         catalog::discover(&self.store, conn).await.map(|_| ())
     }
 
-    /// Header rows the transport would refuse, or that clash with the
-    /// sign-in this integration already sends.
+    /// For a remote server, header rows the transport would refuse, or that
+    /// clash with the sign-in this integration already sends. For a local
+    /// one, a command, args, folder or variable Pluk could not start it with.
     fn check_config(
         &self,
         integration_id: Option<&str>,
         config: &Config,
     ) -> Result<(), ConfigProblem> {
+        if local::is_local_config(config) {
+            return local::check_config(config);
+        }
         let token = config
             .get("token")
             .and_then(Value::as_str)
@@ -216,6 +248,9 @@ impl Adapter for McpProxyAdapter {
     fn humanize_error(&self, error: &AdapterError) -> Option<String> {
         if error.has_code(SIGN_IN_NEEDED_CODE) {
             return Some(SIGN_IN_NEEDED.to_string());
+        }
+        if error.has_code(local::LAUNCH_NOT_APPROVED_CODE) {
+            return Some(local::LAUNCH_NOT_APPROVED.to_string());
         }
         error
             .has_code(TOKEN_NEEDED_CODE)
@@ -457,6 +492,9 @@ fn agent_text(error: &AdapterError, verdict: Verdict) -> String {
         || error.has_code(TOKEN_REJECTED_CODE)
         || error.has_code(client::PERMISSION_DENIED_CODE)
         || error.has_code(oauth::RECONNECT_NEEDED_CODE)
+        || error.has_code(local::LAUNCH_NOT_APPROVED_CODE)
+        || error.has_code(client::SERVER_CRASHED_CODE)
+        || error.has_code(client::SERVER_STOPPED_CODE)
     {
         return error.message.clone();
     }
@@ -786,7 +824,7 @@ mod tests {
             assert_eq!(header_of(headers, "x-org").as_deref(), Some("acme"));
         }
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -816,7 +854,7 @@ mod tests {
             Some("account-1")
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -848,7 +886,7 @@ mod tests {
             );
         }
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -868,7 +906,7 @@ mod tests {
         let last = received.last().expect("requests");
         assert_eq!(header_of(last, "x-key").as_deref(), Some("second"));
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -902,7 +940,7 @@ mod tests {
         assert_eq!(result.text(), HEADERS_REJECTED);
         assert!(!format!("{:?}{result:?}", logs(&store)).contains(TOKEN));
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[test]
@@ -1064,7 +1102,7 @@ mod tests {
             json!({"type": "object", "properties": {"q": {"type": "string"}}})
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -1083,7 +1121,7 @@ mod tests {
         // so an approved tool with no toggle stays unreachable.
         assert!(registered(&adapter, &conn).names().is_empty());
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -1118,7 +1156,7 @@ mod tests {
             "no credential reaches the log"
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -1148,7 +1186,7 @@ mod tests {
             LOG_RESPONSE_LIMIT
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -1178,7 +1216,7 @@ mod tests {
             Some("the document is locked")
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -1208,7 +1246,7 @@ mod tests {
         assert!(result.is_error);
         assert_eq!(result.text(), TOOL_CHANGED);
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -1252,7 +1290,7 @@ mod tests {
             ["publish".to_string()]
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -1302,7 +1340,7 @@ mod tests {
         .expect("tools route");
         assert!(!String::from_utf8_lossy(&listed.body).contains(TOKEN));
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -1342,7 +1380,7 @@ mod tests {
             "an open server asks for nothing, so the screen offers no sign-in"
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -1396,7 +1434,7 @@ mod tests {
             ["search".to_string()]
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     async fn call_api(
@@ -1455,6 +1493,6 @@ mod tests {
             "{some}"
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 }

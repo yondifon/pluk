@@ -14,6 +14,7 @@ mod error;
 mod groups;
 mod ids;
 mod integrations;
+mod launch_approvals;
 mod masked_columns;
 mod migrate;
 mod models;

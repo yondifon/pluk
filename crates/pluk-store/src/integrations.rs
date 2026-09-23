@@ -225,6 +225,10 @@ impl Store {
             conn.execute("DELETE FROM proxy_tools WHERE integration_id = ?", [id])?;
             conn.execute("DELETE FROM proxy_auth WHERE integration_id = ?", [id])?;
             conn.execute("DELETE FROM proxy_secrets WHERE integration_id = ?", [id])?;
+            conn.execute(
+                "DELETE FROM proxy_launch_approvals WHERE integration_id = ?",
+                [id],
+            )?;
         }
         Ok(deleted)
     }
@@ -315,9 +319,17 @@ mod tests {
                     }],
                 )
                 .expect("secrets");
+            store.approve_launch(id, "launch-1").expect("approval");
         }
 
         assert!(store.delete_integration(&removed.id).expect("delete"));
+        assert!(
+            store
+                .approved_launch(&removed.id)
+                .expect("approval")
+                .is_none()
+        );
+        assert!(store.approved_launch(&kept.id).expect("approval").is_some());
         assert!(
             store
                 .list_proxy_secrets(&removed.id)

@@ -19,6 +19,7 @@ use crate::error::AdapterError;
 use crate::tool_spec::ToolSpec;
 
 use super::client::{self, DEFAULT_AUTH_HEADER, McpProxyClient, UpstreamAuth, UpstreamTool};
+use super::local;
 use super::oauth;
 use super::transport::{self, StaticHeader};
 
@@ -102,19 +103,31 @@ pub fn static_auth(conn: &Integration) -> UpstreamAuth {
 
 /// A client for one integration, with the pooled session dropped when the
 /// address, the credentials or the headers moved since it was opened.
+///
+/// A local server's session is dropped, and the server stopped, when its
+/// launch moved; the new launch starts only once the user approved it.
 pub async fn client_for(store: &Store, conn: &Integration) -> Result<McpProxyClient, AdapterError> {
+    if local::is_local(conn) {
+        let spec = local::launch_spec(store, conn).await?;
+        keep_session_if_unchanged(&conn.id, spec.launch_hash());
+        return local::client_for(store, conn, spec).await;
+    }
     let endpoint = endpoint(conn)?;
     let auth = upstream_auth(store, conn).await?;
     let headers = transport::static_headers(store, conn)?;
-    let fingerprint = fingerprint(&endpoint, &auth, &headers);
+    keep_session_if_unchanged(&conn.id, fingerprint(&endpoint, &auth, &headers));
+    Ok(McpProxyClient::new(&conn.id, endpoint, auth).with_headers(headers))
+}
+
+/// Shut the pooled session down when what it was opened with moved.
+fn keep_session_if_unchanged(integration_id: &str, fingerprint: String) {
     let previous = session_fingerprints()
         .lock()
         .expect("mcp proxy fingerprints")
-        .insert(conn.id.clone(), fingerprint.clone());
+        .insert(integration_id.to_string(), fingerprint.clone());
     if previous.is_some_and(|previous| previous != fingerprint) {
-        client::invalidate(&conn.id);
+        client::shutdown(integration_id);
     }
-    Ok(McpProxyClient::new(&conn.id, endpoint, auth).with_headers(headers))
 }
 
 /// Ask upstream what it offers now and replace the snapshot with the answer.

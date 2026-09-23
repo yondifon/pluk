@@ -45,6 +45,8 @@ pub enum FieldType {
     /// A list of named values, each either plain or secret. See
     /// [`crate::key_value`] for how the rows are stored.
     KeyValue,
+    /// An ordered list of strings, stored as a JSON array.
+    List,
 }
 
 impl FieldType {
@@ -57,6 +59,7 @@ impl FieldType {
             FieldType::Select => "select",
             FieldType::Toggle => "toggle",
             FieldType::KeyValue => "keyvalue",
+            FieldType::List => "list",
         }
     }
 }

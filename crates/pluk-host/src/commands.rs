@@ -497,8 +497,10 @@ pub fn check_approval_rules(approvals: pluk_store::Approvals) -> Option<pluk_pol
     approvals.validate().err()
 }
 
+/// Async so the runtime is there to stop a local MCP server the edit
+/// changed, gracefully and in the background.
 #[tauri::command]
-pub fn update_integration(
+pub async fn update_integration(
     state: State<'_, HostState>,
     id: String,
     payload: UpdateIntegrationPayload,
@@ -521,6 +523,7 @@ fn update_integration_in(
         payload.approvals,
     )?;
     let r#type = payload.r#type.as_deref().unwrap_or(&stored.r#type);
+    let reconnects = payload.config.is_some() || payload.r#type.is_some();
     let prepared = payload
         .config
         .map(|sent| prepare_config(store, registry, r#type, Some(id), Some(&stored), sent))
@@ -548,28 +551,129 @@ fn update_integration_in(
     store
         .write_proxy_secrets(id, &secrets)
         .map_err(|e| e.to_string())?;
+    if reconnects {
+        // A local MCP server keeps running on the launch it started with, so
+        // it is stopped now rather than on its next call.
+        pluk_adapters::mcp_proxy::client::shutdown(id);
+    }
     Ok(Some(IntegrationJson::from_integration(
         updated, registry, store,
     )))
 }
 
+/// Async for the same reason as [`update_integration`].
 #[tauri::command]
-pub fn delete_integration(state: State<'_, HostState>, id: String) -> CmdResult<bool> {
+pub async fn delete_integration(state: State<'_, HostState>, id: String) -> CmdResult<bool> {
     if let Some(browser) = state.shared.browser.as_deref() {
         browser
             .disconnect_integration(&id)
             .map_err(|error| error.message)?;
     }
-    let did = state
-        .store
-        .delete_integration(&id)
-        .map_err(|e| e.to_string())?;
+    let did = delete_integration_in(&state.store, &id)?;
     if did {
         // Drop owner's pooled resources so stale creds/tunnels are gone.
         let owners = state.shared.owners.clone();
         owners.reset_owners(Some(&id));
     }
     Ok(did)
+}
+
+fn delete_integration_in(store: &pluk_store::Store, id: &str) -> CmdResult<bool> {
+    let did = store.delete_integration(id).map_err(|e| e.to_string())?;
+    if did {
+        pluk_adapters::mcp_proxy::client::shutdown(id);
+    }
+    Ok(did)
+}
+
+/// The local MCP server integration `id`, or why it is not one.
+fn local_mcp(store: &pluk_store::Store, id: &str) -> CmdResult<pluk_store::Integration> {
+    let integration = store
+        .integration_by_id(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Integration not found".to_string())?;
+    if integration.r#type != pluk_adapters::mcp_proxy::ADAPTER_ID
+        || !pluk_adapters::mcp_proxy::local::is_local(&integration)
+    {
+        return Err("This integration is not a local MCP server.".to_string());
+    }
+    Ok(integration)
+}
+
+/// The exact command a local MCP server would start with, for the user to
+/// review before approving it. Secret values are never part of it.
+#[tauri::command]
+pub async fn mcp_launch_preview(
+    state: State<'_, HostState>,
+    id: String,
+) -> CmdResult<pluk_adapters::mcp_proxy::local::LaunchPreview> {
+    let integration = local_mcp(&state.store, &id)?;
+    pluk_adapters::mcp_proxy::local::preview(&state.store, &integration)
+        .await
+        .map_err(|error| error.message)
+}
+
+/// Approve the launch the preview showed as `launch_hash`, so Pluk may start
+/// it. A Tauri command and nothing else: an adapter route would let any
+/// process on this machine approve a command.
+#[tauri::command]
+pub async fn approve_mcp_launch(
+    state: State<'_, HostState>,
+    id: String,
+    launch_hash: String,
+) -> CmdResult<()> {
+    approve_mcp_launch_in(&state.store, &id, &launch_hash).await
+}
+
+async fn approve_mcp_launch_in(
+    store: &pluk_store::Store,
+    id: &str,
+    launch_hash: &str,
+) -> CmdResult<()> {
+    let integration = local_mcp(store, id)?;
+    pluk_adapters::mcp_proxy::local::approve(store, &integration, launch_hash)
+        .await
+        .map_err(|error| error.message)
+}
+
+#[tauri::command]
+pub fn mcp_server_status(
+    state: State<'_, HostState>,
+    id: String,
+) -> CmdResult<pluk_adapters::mcp_proxy::client::ServerStatus> {
+    local_mcp(&state.store, &id)?;
+    Ok(pluk_adapters::mcp_proxy::client::status(&id))
+}
+
+/// The last lines the local MCP server printed, secrets scrubbed.
+#[tauri::command]
+pub fn mcp_server_output(state: State<'_, HostState>, id: String) -> CmdResult<Vec<String>> {
+    local_mcp(&state.store, &id)?;
+    Ok(pluk_adapters::mcp_proxy::client::output(&id))
+}
+
+/// Stop the local MCP server and keep it stopped until it is restarted.
+#[tauri::command]
+pub async fn stop_mcp_server(state: State<'_, HostState>, id: String) -> CmdResult<()> {
+    local_mcp(&state.store, &id)?;
+    pluk_adapters::mcp_proxy::client::stop(&id).await;
+    Ok(())
+}
+
+/// Start the local MCP server again, clearing a stop or the crash limit, and
+/// refresh its tools.
+#[tauri::command]
+pub async fn restart_mcp_server(state: State<'_, HostState>, id: String) -> CmdResult<()> {
+    let integration = local_mcp(&state.store, &id)?;
+    let registry = state.shared.registry.clone();
+    pluk_adapters::mcp_proxy::local::restart(&state.store, &integration)
+        .await
+        .map_err(|error| {
+            registry
+                .get(&integration.r#type)
+                .and_then(|adapter| adapter.humanize_error(&error))
+                .unwrap_or(error.message)
+        })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1741,7 +1845,7 @@ mod secret_tests {
             .test_connection(&integration)
             .await
             .expect("connects with the kept header");
-        pluk_adapters::mcp_proxy::client::invalidate(&shown.id);
+        pluk_adapters::mcp_proxy::client::shutdown(&shown.id);
     }
 
     #[tokio::test]
@@ -1763,6 +1867,156 @@ mod secret_tests {
             .test_connection(&integration)
             .await
             .expect("connects with the kept token");
-        pluk_adapters::mcp_proxy::client::invalidate(&shown.id);
+        pluk_adapters::mcp_proxy::client::shutdown(&shown.id);
+    }
+}
+
+#[cfg(test)]
+mod local_server_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use serde_json::{Value, json};
+
+    /// A local MCP server in `/bin/sh` that records its pid under
+    /// `$STUB_STATE`, answers `initialize`, and lists no tools.
+    const STUB: &str = r#"
+echo $$ > "$STUB_STATE/pid"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      version=$(printf '%s' "$line" | sed -n 's/.*"protocolVersion":"\([^"]*\)".*/\1/p')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"%s","capabilities":{"tools":{}},"serverInfo":{"name":"stub","version":"1"}}}\n' "$id" "$version"
+      ;;
+    *'"method":"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}\n' "$id"
+      ;;
+  esac
+done
+"#;
+
+    struct World {
+        _directory: tempfile::TempDir,
+        store: Arc<pluk_store::Store>,
+        registry: Arc<pluk_adapters::AdapterRegistry>,
+    }
+
+    fn world() -> World {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(pluk_store::Store::open(&directory.path().join("pluk.db")).unwrap());
+        let registry = Arc::new(
+            pluk_adapters::default_registry(
+                store.clone(),
+                Arc::new(pluk_adapters::sql::SqlCancelRegistry::default()),
+            )
+            .unwrap(),
+        );
+        World {
+            _directory: directory,
+            store,
+            registry,
+        }
+    }
+
+    fn local_config(dir: &std::path::Path, extra_arg: Option<&str>) -> pluk_store::Config {
+        let script = dir.join("server.sh");
+        std::fs::write(&script, STUB).unwrap();
+        let mut args = vec![script.to_string_lossy().into_owned()];
+        args.extend(extra_arg.map(str::to_string));
+        match json!({
+            "connection": "local",
+            "command": "/bin/sh",
+            "args": args,
+            "cwd": dir,
+            "env": [{"name": "STUB_STATE", "value": dir, "secret": false}],
+        }) {
+            Value::Object(config) => config,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Approve the launch as it stands, through the command, and start it.
+    async fn approve_and_start(world: &World, id: &str, dir: &std::path::Path) -> u32 {
+        let integration = world.store.integration_by_id(id).unwrap().unwrap();
+        let shown = pluk_adapters::mcp_proxy::local::preview(&world.store, &integration)
+            .await
+            .unwrap();
+        approve_mcp_launch_in(&world.store, id, &shown.launch_hash)
+            .await
+            .unwrap();
+        let _ = std::fs::remove_file(dir.join("pid"));
+        world
+            .registry
+            .get("mcp")
+            .unwrap()
+            .test_connection(&integration)
+            .await
+            .expect("starts once approved");
+        std::fs::read_to_string(dir.join("pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    async fn gone(pid: u32) -> bool {
+        for _ in 0..200 {
+            let alive = std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            if !alive {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn editing_or_deleting_a_local_server_stops_it() {
+        let world = world();
+        let dir = tempfile::tempdir().unwrap();
+        let created = create_integration_in(
+            &world.store,
+            &world.registry,
+            CreateIntegrationPayload {
+                name: "Local".into(),
+                r#type: "mcp".into(),
+                config: local_config(dir.path(), None),
+                environment: None,
+                secrets_from: None,
+            },
+        )
+        .unwrap();
+
+        let first = approve_and_start(&world, &created.id, dir.path()).await;
+        let edit = UpdateIntegrationPayload {
+            config: Some(local_config(dir.path(), Some("--verbose"))),
+            ..Default::default()
+        };
+        update_integration_in(&world.store, &world.registry, &created.id, edit).unwrap();
+        assert!(gone(first).await, "the server outlived an edit");
+
+        let second = approve_and_start(&world, &created.id, dir.path()).await;
+        assert!(delete_integration_in(&world.store, &created.id).unwrap());
+        assert!(gone(second).await, "the server outlived its integration");
+    }
+
+    #[tokio::test]
+    async fn only_a_local_server_can_be_approved_or_controlled() {
+        let world = world();
+        let remote = world
+            .store
+            .create_integration(&pluk_store::IntegrationInput::new("Remote", "mcp"))
+            .unwrap();
+        let refused = approve_mcp_launch_in(&world.store, &remote.id, "hash")
+            .await
+            .expect_err("not local");
+        assert_eq!(refused, "This integration is not a local MCP server.");
+        assert!(world.store.approved_launch(&remote.id).unwrap().is_none());
     }
 }

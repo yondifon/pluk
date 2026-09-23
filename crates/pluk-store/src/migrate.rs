@@ -22,7 +22,7 @@ type Step = fn(&mut Connection) -> Result<()>;
 
 const LADDER: &[Step] = &[
     migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
-    migrate_v8, migrate_v9, migrate_v10, migrate_v11, migrate_v12,
+    migrate_v8, migrate_v9, migrate_v10, migrate_v11, migrate_v12, migrate_v13,
 ];
 
 /// Bring `conn` up to the latest version.
@@ -483,6 +483,26 @@ fn migrate_v12(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 13: the launch a user approved for a local MCP server, by hash.
+///
+/// Kept out of `integrations.config` because the window writes that blob
+/// whole, and an approval must only ever come from the user approving it.
+fn migrate_v13(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "
+        CREATE TABLE proxy_launch_approvals (
+            integration_id TEXT PRIMARY KEY,
+            launch_hash TEXT NOT NULL,
+            approved_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        ",
+    )?;
+    tx.pragma_update(None, "user_version", 13)?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn rebuild_browser_drafts(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
@@ -921,7 +941,7 @@ mod tests {
             step(&mut conn).unwrap();
         }
         run(&mut conn).unwrap();
-        assert_eq!(current_version(&conn).unwrap(), 12);
+        assert_eq!(current_version(&conn).unwrap(), LADDER.len() as u32);
         let expected: HashSet<String> = ["integration_id", "kind", "name", "value", "version"]
             .iter()
             .map(|name| (*name).to_owned())
@@ -932,6 +952,21 @@ mod tests {
             [],
         );
         assert!(refused.is_err(), "only header and env rows are kept");
+    }
+
+    #[test]
+    fn upgrades_v12_with_the_launch_approvals_table() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &LADDER[..12] {
+            step(&mut conn).unwrap();
+        }
+        run(&mut conn).unwrap();
+        assert_eq!(current_version(&conn).unwrap(), 13);
+        let expected: HashSet<String> = ["integration_id", "launch_hash", "approved_at"]
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert_eq!(columns_of(&conn, "proxy_launch_approvals"), expected);
     }
 
     fn columns_of(conn: &Connection, table: &str) -> HashSet<String> {

@@ -6,3 +6,4 @@ pub mod loopback;
 pub mod mcp_config;
 pub mod platform;
 pub mod process;
+pub mod shell_env;

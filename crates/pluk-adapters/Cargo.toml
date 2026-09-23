@@ -15,11 +15,16 @@ pluk-core = { path = "../pluk-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 async-trait = "0.1"
-tokio = { version = "1", features = ["rt", "macros", "time", "sync", "fs"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "sync", "fs", "process", "io-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Client half of rmcp: Pluk is the MCP client when it proxies a third-party
-# server. `auth` carries the OAuth flow those servers ask for.
-rmcp = { version = "3.1", default-features = false, features = ["client", "transport-streamable-http-client-reqwest", "client-side-sse", "auth", "reqwest"] }
+# server. `auth` carries the OAuth flow those servers ask for, and
+# `transport-child-process` runs a local server over stdio.
+rmcp = { version = "3.1", default-features = false, features = ["client", "transport-streamable-http-client-reqwest", "client-side-sse", "auth", "reqwest", "transport-child-process"] }
+# rmcp spawns a local server through process-wrap without re-exporting it.
+# The server leads its own process group, so stopping it also stops the
+# `node` or `python` that `npx`, `bunx` or `uvx` start under it.
+process-wrap = { version = "9", default-features = false, features = ["tokio1", "process-group"] }
 # rmcp builds its HTTP transport on reqwest 0.13, one major ahead of the
 # client the API adapters share, so the MCP proxy names that one directly.
 # The `reqwest` feature above is what puts rustls behind it.

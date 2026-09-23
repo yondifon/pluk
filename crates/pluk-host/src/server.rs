@@ -1,12 +1,12 @@
 //! In-process MCP server lifecycle.
 //!
 //! The server binds `127.0.0.1:4242` (or `PORT` when set) before any
-//! window exists and lives as long as the app. No child process, no
-//! `lsof` orphan killing, no login-shell PATH backfill.
+//! window exists and lives as long as the app. It runs in this process, and
+//! there is no `lsof` orphan killing.
 //!
 //! The handle owns the shutdown token, the shared `AppState`, and the
-//! background task. `stop` cancels the token, shuts the event hub, and
-//! waits for the task.
+//! background task. `stop` cancels the token, shuts the event hub, stops
+//! every local MCP server the proxy started, and waits for the task.
 
 use std::sync::Arc;
 
@@ -98,11 +98,12 @@ impl ServerHandle {
         &self.shutdown
     }
 
-    /// Stop the server, close pooled connections/tunnels, and stop the event
-    /// stream. Safe to call multiple times.
+    /// Stop the server, close pooled connections/tunnels, stop local MCP
+    /// servers, and stop the event stream. Safe to call multiple times.
     pub async fn stop(&mut self) {
         self.shutdown.cancel();
         self.state.owners.reset_owners(None);
+        pluk_adapters::mcp_proxy::client::shutdown_all().await;
         if let Some(task) = self.task.take() {
             let _ = tokio::time::timeout(std::time::Duration::from_secs(3), task).await;
         }

@@ -1,15 +1,24 @@
-//! The headers Pluk sends an upstream server on top of its sign-in.
+//! How Pluk reaches an upstream server: over HTTP at an address, or by
+//! starting a local command and talking to it over stdio.
 //!
-//! The integration's `headers` rows are sent on every request of a session,
-//! whatever the sign-in: none, a saved token, or an OAuth sign-in. Values go
-//! out exactly as the user wrote them. A secret row's value is read from
-//! `proxy_secrets` and is only ever held as a [`Secret`].
+//! Over HTTP, the integration's `headers` rows are sent on every request of a
+//! session, whatever the sign-in: none, a saved token, or an OAuth sign-in.
+//! Values go out exactly as the user wrote them. A secret row's value is read
+//! from `proxy_secrets` and is only ever held as a [`Secret`].
 //!
 //! A few names are refused because the transport sets them itself, or
 //! because they frame the request. `Authorization` is only taken when the
 //! integration has no other sign-in; when it later gains one, the sign-in
 //! wins and the row is not sent.
+//!
+//! A local server is a [`LaunchSpec`]. Its args may carry a credential, so
+//! nothing outside the approval preview shows them; errors and `Debug` name
+//! the program's file name alone.
 
+use std::ffi::OsString;
+use std::path::PathBuf;
+
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use upstream_http::header::{AUTHORIZATION, HeaderName, HeaderValue};
 
@@ -17,6 +26,8 @@ use pluk_store::{Integration, ProxySecret, SecretKind, Store};
 
 use crate::error::AdapterError;
 use crate::key_value::{self, Row};
+
+use super::client::UpstreamAuth;
 
 /// The config key the header rows are kept under.
 pub const HEADERS_KEY: &str = "headers";
@@ -61,34 +72,119 @@ impl std::fmt::Debug for Secret {
     }
 }
 
+/// The value of a header or environment row.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HeaderText {
+pub enum RowText {
     Plain(String),
     Secret(Secret),
+}
+
+impl RowText {
+    /// The text itself. Call only where a header, a child's environment or a
+    /// digest is built.
+    pub fn expose(&self) -> &str {
+        match self {
+            RowText::Plain(text) => text,
+            RowText::Secret(secret) => secret.expose(),
+        }
+    }
+}
+
+/// The server a client reaches, and how.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpstreamTransport {
+    Http {
+        endpoint: String,
+        auth: UpstreamAuth,
+        headers: Vec<StaticHeader>,
+    },
+    Stdio(LaunchSpec),
+}
+
+/// A local server, exactly as Pluk will start it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct LaunchSpec {
+    /// Absolute, resolved against the login shell's `PATH`.
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    /// Absolute.
+    pub cwd: PathBuf,
+    /// The user's variables, set over the ones every child gets.
+    pub env: Vec<(String, RowText)>,
+    /// The `PATH` every child gets, so a `#!/usr/bin/env node` script finds
+    /// its interpreter.
+    pub path: OsString,
+}
+
+impl LaunchSpec {
+    /// What an approval is bound to: the program, every arg, the folder, and
+    /// each variable's name with a digest of its value. Any change to one of
+    /// them is a launch nobody approved yet.
+    pub fn launch_hash(&self) -> String {
+        let env: Vec<(&str, String)> = self
+            .env
+            .iter()
+            .map(|(name, value)| (name.as_str(), hex::encode(Sha256::digest(value.expose()))))
+            .collect();
+        let launch = json!({
+            "program": self.program.to_string_lossy(),
+            "args": self.args,
+            "cwd": self.cwd.to_string_lossy(),
+            "env": env,
+        });
+        hex::encode(Sha256::digest(launch.to_string()))
+    }
+
+    /// The program's file name, the only part of a launch an error names.
+    pub fn label(&self) -> String {
+        self.program
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "the server".to_string())
+    }
+
+    /// Every secret value the server is given, for scrubbing from its output.
+    pub fn secret_values(&self) -> Vec<String> {
+        self.env
+            .iter()
+            .filter_map(|(_, value)| match value {
+                RowText::Secret(secret) => Some(secret.expose().to_string()),
+                RowText::Plain(_) => None,
+            })
+            .filter(|value| !value.is_empty())
+            .collect()
+    }
+}
+
+impl std::fmt::Debug for LaunchSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let env: Vec<&str> = self.env.iter().map(|(name, _)| name.as_str()).collect();
+        f.debug_struct("LaunchSpec")
+            .field("program", &self.label())
+            .field("args", &self.args.len())
+            .field("env", &env)
+            .finish_non_exhaustive()
+    }
 }
 
 /// One header sent on every request, as the user wrote it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StaticHeader {
     pub name: HeaderName,
-    pub value: HeaderText,
+    pub value: RowText,
 }
 
 impl StaticHeader {
     pub fn is_secret(&self) -> bool {
-        matches!(self.value, HeaderText::Secret(_))
+        matches!(self.value, RowText::Secret(_))
     }
 
     /// The value to put on the wire. A secret one is marked sensitive, so
     /// the HTTP stack keeps it out of its own debug output.
     pub fn header_value(&self) -> Result<HeaderValue, AdapterError> {
-        let (text, sensitive) = match &self.value {
-            HeaderText::Plain(text) => (text.as_str(), false),
-            HeaderText::Secret(secret) => (secret.expose(), true),
-        };
-        let mut value = HeaderValue::from_str(text)
+        let mut value = HeaderValue::from_str(self.value.expose())
             .map_err(|_| AdapterError::new(bad_value(self.name.as_str())))?;
-        value.set_sensitive(sensitive);
+        value.set_sensitive(self.is_secret());
         Ok(value)
     }
 }
@@ -174,13 +270,9 @@ pub fn has_secret_headers(store: &Store, conn: &Integration) -> Result<bool, Ada
 pub fn digest(headers: &[StaticHeader]) -> String {
     let mut hasher = Sha256::new();
     for header in headers {
-        let text = match &header.value {
-            HeaderText::Plain(text) => text.as_str(),
-            HeaderText::Secret(secret) => secret.expose(),
-        };
         hasher.update(header.name.as_str().as_bytes());
         hasher.update([0]);
-        hasher.update(text.as_bytes());
+        hasher.update(header.value.expose().as_bytes());
         hasher.update([0]);
     }
     hex::encode(hasher.finalize())
@@ -198,11 +290,11 @@ fn headers_of(rows: &[Row], saved: &[ProxySecret]) -> Result<Vec<StaticHeader>, 
                 .iter()
                 .find(|secret| secret.kind == SecretKind::Header && secret.name == row.name);
             match saved {
-                Some(secret) => HeaderText::Secret(Secret::new(secret.value.clone())),
+                Some(secret) => RowText::Secret(Secret::new(secret.value.clone())),
                 None => continue,
             }
         } else {
-            HeaderText::Plain(row.value.clone())
+            RowText::Plain(row.value.clone())
         };
         let header = StaticHeader { name, value };
         header.header_value()?;
@@ -321,7 +413,7 @@ mod tests {
     fn a_secret_prints_as_redacted() {
         let header = StaticHeader {
             name: HeaderName::from_static("dd-api-key"),
-            value: HeaderText::Secret(Secret::new("dd-secret-1")),
+            value: RowText::Secret(Secret::new("dd-secret-1")),
         };
         let printed = format!("{header:?}{:?}", Secret::new("dd-secret-1"));
         assert!(!printed.contains("dd-secret-1"), "{printed}");
@@ -343,7 +435,7 @@ mod tests {
             plain,
             [StaticHeader {
                 name: HeaderName::from_static("x-grafana-url"),
-                value: HeaderText::Plain("https://grafana.example.com".to_string()),
+                value: RowText::Plain("https://grafana.example.com".to_string()),
             }]
         );
     }

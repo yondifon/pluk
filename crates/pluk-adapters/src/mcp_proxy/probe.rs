@@ -29,6 +29,7 @@ use crate::error::AdapterError;
 use super::catalog;
 use super::client::{self, UPSTREAM_UNREACHABLE_CODE};
 use super::discovery;
+use super::local;
 use super::transport::{self, StaticHeader};
 
 /// How long the probe waits before calling the server unreachable.
@@ -63,8 +64,12 @@ impl SignInRequired {
 /// What the server this integration points at asks for.
 ///
 /// The answer is kept per integration against the address and plain headers
-/// it was found with, so changing either asks the server again.
+/// it was found with, so changing either asks the server again. A local
+/// server asks for nothing: it runs as the user.
 pub async fn required(conn: &Integration) -> Result<SignInRequired, AdapterError> {
+    if local::is_local(conn) {
+        return Ok(SignInRequired::None);
+    }
     let endpoint = catalog::endpoint(conn)?;
     let headers = transport::plain_headers(conn)?;
     let asked = format!("{endpoint}\u{0}{}", transport::digest(&headers));
@@ -715,6 +720,6 @@ mod tests {
 
         let open = integration("probe-test-open", json!({ "url": open_server().await }));
         adapter.test_connection(&open).await.expect("open server");
-        client::invalidate(&open.id);
+        client::shutdown(&open.id);
     }
 }
