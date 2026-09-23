@@ -146,7 +146,8 @@ pub trait Adapter: Send + Sync {
         None
     }
 
-    /// Per-integration REST API, routed under `/api/integrations/<id>/…`.
+    /// Per-integration REST API under `/api/integrations/<id>/…`, reached only
+    /// from the desktop window. The loopback server refuses these paths.
     /// Return `None` to decline the request.
     async fn handle_api(
         &self,

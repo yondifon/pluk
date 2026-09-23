@@ -1,9 +1,9 @@
 //! The loopback HTTP surface.
 //!
 //! Route order mirrors `pluk/src/server.ts`: the fixed REST routes, then the
-//! MCP endpoint (token → integration or group), then health. Adapter-supplied
-//! APIs are probed from the fallback handler in the TypeScript order — global
-//! handlers first, then per-integration subpaths.
+//! MCP endpoint (token → integration or group), then health. Adapters' global
+//! handlers are probed from the fallback. Per-integration adapter routes are
+//! refused here; the window reaches them through the host instead.
 //!
 //! Every route, the fallback included, is reached only through
 //! [`crate::boundary`].
@@ -24,7 +24,6 @@ use pluk_adapters::ApiRequest;
 
 use crate::AppState;
 use crate::events::parse_after;
-use crate::health::HealthStatus;
 use crate::logging;
 use crate::mcp::{build_owner_surface, resolve_owner};
 
@@ -35,7 +34,6 @@ pub fn router(state: AppState) -> Router {
         .map(|browser| pluk_browser::router((**browser).clone()));
     let router = Router::new()
         .route("/api/adapters", get(adapters_catalog))
-        .route("/api/integrations/{id}/test", post(test_integration))
         .route("/api/reload", post(reload))
         .route("/api/events", get(events))
         .route("/api/logs", get(logs).delete(clear_logs))
@@ -78,52 +76,6 @@ async fn adapters_catalog(State(state): State<AppState>) -> Response {
         })
         .collect();
     json_response(StatusCode::OK, serde_json::json!({ "adapters": adapters }))
-}
-
-/// POST /api/integrations/:id/test — run the integration's connection test and
-/// record the outcome as its health.
-async fn test_integration(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let Some(integration) = state.store.integration_by_id(&id).ok().flatten() else {
-        return json_response(
-            StatusCode::NOT_FOUND,
-            serde_json::json!({ "ok": false, "error": "Not found" }),
-        );
-    };
-    let Some(adapter) = state.registry.get(&integration.r#type) else {
-        return json_response(
-            StatusCode::BAD_REQUEST,
-            serde_json::json!({ "ok": false, "error": format!("No adapter for type: {}", integration.r#type) }),
-        );
-    };
-
-    match adapter.test_connection(&integration).await {
-        Ok(()) => {
-            logging::log_info(&format!(
-                "connection test ok: {} ({})",
-                integration.name, integration.id
-            ));
-            state.health.record(&integration.id, HealthStatus::Ok, None);
-            json_response(StatusCode::OK, serde_json::json!({ "ok": true }))
-        }
-        Err(error) => {
-            logging::log_error(
-                "connection test failed",
-                &error.message,
-                Some(serde_json::json!({ "integration": integration.id.as_str() })),
-            );
-            let reason = adapter
-                .humanize_error(&error)
-                .unwrap_or_else(|| error.message.clone());
-            state
-                .health
-                .record(&integration.id, HealthStatus::Error, Some(reason.clone()));
-            // A failed test is a valid answer, not a transport error.
-            json_response(
-                StatusCode::OK,
-                serde_json::json!({ "ok": false, "error": reason }),
-            )
-        }
-    }
 }
 
 /// POST /api/reload?id=<owner> — drop an owner's pooled drivers, tunnels and
@@ -267,6 +219,12 @@ async fn health_report(State(state): State<AppState>) -> Response {
     json_response(StatusCode::OK, serde_json::json!({ "health": report }))
 }
 
+/// Refusal for `/api/integrations/<id>/…` over loopback. Those routes approve
+/// and turn on upstream tools, change masking and saved commands, sign in, and
+/// start local servers, so only the desktop window reaches them, through its
+/// own host command. Any local process can reach this server, agents included.
+const WINDOW_ONLY: &str = "Only the Pluk window can change an integration's settings.";
+
 async fn adapter_apis_or_not_found(
     State(state): State<AppState>,
     method: Method,
@@ -274,6 +232,14 @@ async fn adapter_apis_or_not_found(
     bytes: Bytes,
 ) -> Response {
     let path = uri.path().to_string();
+    if path.starts_with("/api/integrations/") {
+        logging::log_error(
+            "refused an integration settings request over loopback",
+            &"integration settings are reachable only from the window",
+            Some(serde_json::json!({ "method": method.as_str(), "path": path })),
+        );
+        return (StatusCode::FORBIDDEN, WINDOW_ONLY).into_response();
+    }
     let request = ApiRequest {
         method: method.to_string(),
         url: build_url(&path, uri.query()),
@@ -281,37 +247,12 @@ async fn adapter_apis_or_not_found(
         body: (!bytes.is_empty()).then(|| String::from_utf8_lossy(&bytes).into_owned()),
     };
 
-    // Global handlers first: any adapter may claim any unmatched path.
     for adapter in state.registry.list() {
         if let Some(response) = adapter.handle_global_api(request.clone(), &path).await {
             return api_response(response);
         }
     }
-
-    // Then per-integration subpaths: /api/integrations/<id>/<subpath>.
-    let Some(rest) = path.strip_prefix("/api/integrations/") else {
-        return not_found();
-    };
-    let Some((id, tail)) = rest.split_once('/') else {
-        return not_found();
-    };
-    if id.is_empty() || tail.is_empty() {
-        return not_found();
-    }
-    let Ok(Some(conn)) = state.store.integration_by_id(id) else {
-        return json_response(
-            StatusCode::NOT_FOUND,
-            serde_json::json!({ "ok": false, "error": "Not found" }),
-        );
-    };
-    let Some(adapter) = state.registry.get(&conn.r#type) else {
-        return not_found();
-    };
-    let subpath = format!("/{tail}");
-    match adapter.handle_api(&conn, request, &subpath).await {
-        Some(response) => api_response(response),
-        None => not_found(),
-    }
+    not_found()
 }
 
 fn query_param(query: Option<&str>, key: &str) -> Option<String> {

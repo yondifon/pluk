@@ -1,4 +1,4 @@
-//! The REST surface: adapter catalog, health, connection tests, log paging.
+//! The REST surface: adapter catalog, health, log paging.
 
 mod common;
 
@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use common::{TestApp, spawn_app};
 
+use pluk_server::HealthStatus;
 use pluk_store::LOG_PAGE_SIZE;
 
 fn integration(app: &TestApp, name: &str) -> (String, String) {
@@ -66,25 +67,12 @@ async fn health_reports_not_checked_ok_and_error_as_three_states() {
     );
     assert!(body["health"].get(&bad_id).is_none());
 
-    // A passing test turns green…
-    reqwest::Client::new()
-        .post(format!("{}/api/integrations/{ok_id}/test", app.base_url))
-        .send()
-        .await
-        .unwrap()
-        .json::<Value>()
-        .await
-        .unwrap();
-    // …and a failing test records the error without failing the request.
-    app.adapter.set_healthy(false);
-    let failure = reqwest::Client::new()
-        .post(format!("{}/api/integrations/{bad_id}/test", app.base_url))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(failure.status(), 200, "a failed test is a valid answer");
-    let failure = failure.json::<Value>().await.unwrap();
-    assert_eq!(failure["ok"], false);
+    app.health.record(&ok_id, HealthStatus::Ok, None);
+    app.health.record(
+        &bad_id,
+        HealthStatus::Error,
+        Some("stub refuses connections".into()),
+    );
 
     let (_, body) = app.get_json("/api/health").await;
     assert_eq!(body["health"][&ok_id]["status"], "ok");
@@ -94,48 +82,22 @@ async fn health_reports_not_checked_ok_and_error_as_three_states() {
 }
 
 #[tokio::test]
-async fn a_tested_integration_that_never_existed_is_not_found() {
+async fn a_connection_test_is_not_run_over_loopback() {
     let app = spawn_app().await;
-    let response = reqwest::Client::new()
-        .post(format!("{}/api/integrations/ghost/test", app.base_url))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 404);
-}
-
-#[tokio::test]
-async fn humanized_errors_replace_the_raw_message() {
-    let app = spawn_app().await;
-    let created = app
-        .store
-        .create_integration(&pluk_store::IntegrationInput {
-            name: "Special".into(),
-            r#type: "stub".into(),
-            config: serde_json::from_str(r#"{"verbose":true}"#).unwrap(),
-            environment: None,
-            read_only: 0,
-            query_policy: None,
-        })
-        .unwrap();
-
-    // This failure's message is one the stub knows how to translate.
-    app.adapter.set_healthy(false);
-    let payload: Value = reqwest::Client::new()
-        .post(format!(
-            "{}/api/integrations/{}/test",
-            app.base_url, created.id
-        ))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(payload["ok"], false);
-    assert_eq!(payload["error"], "translated failure");
+    let (id, _) = integration(&app, "Untested");
+    for path in [
+        format!("/api/integrations/{id}/test"),
+        "/api/integrations/ghost/test".to_string(),
+    ] {
+        let response = reqwest::Client::new()
+            .post(format!("{}{path}", app.base_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 403, "{path}");
+    }
     let (_, body) = app.get_json("/api/health").await;
-    assert_eq!(body["health"][&created.id]["error"], "translated failure");
+    assert!(body["health"].get(&id).is_none(), "nothing was tested");
 }
 
 #[tokio::test]
@@ -252,35 +214,28 @@ async fn log_read_validation_rejects_bad_scopes_ranges_and_cursors() {
 }
 
 #[tokio::test]
-async fn adapter_rest_apis_dispatch_by_path_and_global_first() {
+async fn per_integration_adapter_routes_are_refused_and_global_ones_answer() {
     let app = spawn_app().await;
     let (conn_id, _) = integration(&app, "Routed");
 
-    // Per-integration subpath reaches the adapter's handler.
-    let body: Value = reqwest::Client::new()
-        .post(format!("{}/api/integrations/{conn_id}/ping", app.base_url))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(body["from"], conn_id);
+    // The adapter would answer `/ping`, but only the window may reach it.
+    for tail in ["ping", "unknown"] {
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{}/api/integrations/{conn_id}/{tail}",
+                app.base_url
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 403, "{tail}");
+        assert_eq!(
+            response.text().await.unwrap(),
+            "Only the Pluk window can change an integration's settings."
+        );
+    }
 
-    // Unclaimed subpaths fall through to Not found.
-    let status = reqwest::Client::new()
-        .post(format!(
-            "{}/api/integrations/{conn_id}/unknown",
-            app.base_url
-        ))
-        .send()
-        .await
-        .unwrap()
-        .status()
-        .as_u16();
-    assert_eq!(status, 404);
-
-    // Global handlers answer before anything else on unmatched paths.
+    // Global handlers still answer unmatched paths.
     let body = reqwest::get(format!("{}/api/stub-global", app.base_url))
         .await
         .unwrap()

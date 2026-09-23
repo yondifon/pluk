@@ -271,8 +271,9 @@ pub struct ApiAnswer {
 }
 
 /// The window's one way into an integration's own REST API, the routes its
-/// adapter serves under `/api/integrations/<id>/…`. The loopback server is
-/// closed to browser origins, so the request is resolved here instead.
+/// adapter serves under `/api/integrations/<id>/…`. The loopback server
+/// refuses those routes, because agents reach it too, so approving and
+/// turning on tools happens only here.
 #[tauri::command]
 pub async fn integration_api(
     state: State<'_, HostState>,
@@ -1548,6 +1549,52 @@ mod integration_api_tests {
         assert_eq!(response.status, 200);
         assert_eq!(response.body["ok"], true);
         assert!(response.body["tools"].is_array());
+    }
+
+    #[tokio::test]
+    async fn the_window_turns_on_an_offered_tool_through_the_command() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(pluk_store::Store::open(&directory.path().join("pluk.db")).unwrap());
+        let registry = Arc::new(
+            pluk_adapters::default_registry(
+                store.clone(),
+                Arc::new(pluk_adapters::sql::SqlCancelRegistry::default()),
+            )
+            .unwrap(),
+        );
+        let integration = store
+            .create_integration(&pluk_store::IntegrationInput::new("Proxy", "mcp"))
+            .unwrap();
+        store
+            .replace_proxy_tools(
+                &integration.id,
+                &[pluk_store::DiscoveredTool {
+                    name: "search".to_string(),
+                    description: "Search".to_string(),
+                    schema_json: r#"{"type":"object"}"#.to_string(),
+                    annotations_json: None,
+                    content_hash: "h1".to_string(),
+                }],
+            )
+            .unwrap();
+
+        let response = integration_api_request(
+            &store,
+            &registry,
+            integration.id.clone(),
+            "POST".to_string(),
+            "/proxy/enable".to_string(),
+            Some(r#"{"names":["search"],"enabled":true}"#.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status, 200, "{}", response.body);
+        let tools = store.list_proxy_tools(&integration.id).unwrap();
+        assert_eq!(tools[0].approved_hash.as_deref(), Some("h1"));
+        let stored = store.integration_by_id(&integration.id).unwrap().unwrap();
+        let policy = pluk_store::parse_query_policy(stored.query_policy.as_deref()).unwrap();
+        assert!(policy.tools["search"].enabled);
     }
 }
 
