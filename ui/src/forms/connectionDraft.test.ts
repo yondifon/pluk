@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { isVisible, visibleFields } from "./catalog.ts";
 import type { AdapterManifest, ConfigFieldDef } from "./catalog.ts";
 import { emptyDraft, adopt, setEnvironment, canSave, splitTools, draftFromConnection, configToSave, forgetSecret } from "./connectionDraft.ts";
-import { markProblem, renderField, renderKeyValueField } from "./render.ts";
+import { markProblem, renderField, renderKeyValueField, renderListField } from "./render.ts";
 import { rowNames, type KeyValueRow } from "./keyValue.ts";
 import { coerceToStored, coerceFromStored, serializeConfig, parseConfig, serializeToolSettings } from "./coercion.ts";
 import { overridableFields, inheritPlaceholder, updateOverride, serializeGroup, groupDraftFrom } from "./groupForm.ts";
@@ -435,5 +435,96 @@ describe("header rows", () => {
 
   it("the overview names the rows and shows no value", () => {
     expect(rowNames(stored.headers)).toBe("DD_API_KEY, X-Org");
+  });
+});
+
+describe("remote vs local connection mode", () => {
+  const fields: ConfigFieldDef[] = [
+    { key: "connection", label: "Connection", type: "select", default: "remote" },
+    { key: "command", label: "Command", type: "text", showIf: { key: "connection", equals: "local" } },
+    { key: "args", label: "Arguments", type: "list", showIf: { key: "connection", equals: "local" } },
+    { key: "env", label: "Environment variables", type: "keyvalue", defaultSecret: false, showIf: { key: "connection", equals: "local" } },
+    {
+      key: "url",
+      label: "Server URL",
+      type: "text",
+      required: true,
+      showIf: { key: "connection", equals: "local", negate: true },
+    },
+  ];
+  const manifest = makeManifest({ id: "mcp", policyKind: "action", tools: [], configFields: fields });
+
+  it("shows the remote field and hides the local ones when connection is missing, matching an old integration", () => {
+    const visible = visibleFields(fields, {}).map((f) => f.key);
+    expect(visible).toContain("url");
+    expect(visible).not.toContain("command");
+  });
+
+  it("swaps which fields show as the connection mode changes", () => {
+    expect(visibleFields(fields, { connection: "remote" }).map((f) => f.key)).toEqual(["connection", "url"]);
+    expect(visibleFields(fields, { connection: "local" }).map((f) => f.key)).toEqual([
+      "connection",
+      "command",
+      "args",
+      "env",
+    ]);
+  });
+
+  it("a local integration does not need the URL to save", () => {
+    let d = adopt(emptyDraft(), manifest, true);
+    d.name = "Sentry";
+    d.config["connection"] = "local";
+    d.lists["args"] = ["--port", "0"];
+    expect(canSave(d)).toBe(true);
+  });
+
+  it("draftFromConnection tells a list of strings apart from a list of rows", () => {
+    const d = draftFromConnection({
+      name: "Sentry",
+      type: "mcp",
+      config: {
+        connection: "local",
+        command: "node",
+        args: ["/path/to/index.js", "--verbose"],
+        env: [{ name: "SENTRY_URL", value: "https://sentry.internal", secret: false }],
+      },
+    });
+    expect(d.lists["args"]).toEqual(["/path/to/index.js", "--verbose"]);
+    expect(d.rows["env"]).toEqual([{ name: "SENTRY_URL", value: "https://sentry.internal", secret: false }]);
+  });
+
+  it("configToSave sends a list field as an ordered array, never a joined string", () => {
+    let d = adopt(emptyDraft(), manifest, true);
+    d.config["connection"] = "local";
+    d.lists["args"] = ["--port", "0"];
+    expect(configToSave(d).args).toEqual(["--port", "0"]);
+  });
+
+  it("a new environment row starts plain, unlike a header row", () => {
+    const changes: KeyValueRow[][] = [];
+    const field = renderKeyValueField(fields[3], [], (rows) => changes.push(rows));
+    [...field.querySelectorAll("button")].find((b) => b.textContent === "Add environment variable")!.click();
+    expect(changes[0][0]).toEqual({ name: "", value: "", secret: false });
+  });
+});
+
+describe("argument list rows", () => {
+  const field: ConfigFieldDef = { key: "args", label: "Arguments", type: "list" };
+
+  it("renders one row per argument and adds a blank one on request", () => {
+    const changes: string[][] = [];
+    const el = renderListField(field, ["--port", "0"], (items) => changes.push(items));
+    const rows = el.querySelectorAll<HTMLInputElement>(".kv-row .kv-value");
+    expect([...rows].map((r) => r.value)).toEqual(["--port", "0"]);
+
+    [...el.querySelectorAll("button")].find((b) => b.textContent === "Add argument")!.click();
+    expect(changes[0]).toEqual(["--port", "0", ""]);
+  });
+
+  it("removing a row drops only that argument", () => {
+    const changes: string[][] = [];
+    const el = renderListField(field, ["a", "b", "c"], (items) => changes.push(items));
+    [...el.querySelectorAll("button")].find((b) => b.textContent === "Remove")!.click();
+    expect(changes[0]).toEqual(["b", "c"]);
   });
 });

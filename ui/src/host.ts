@@ -82,6 +82,65 @@ export async function integrationApi<T>(args: {
   });
 }
 
+/** One environment variable of a local MCP server's launch, as the preview shows it. */
+export interface LaunchEnvRow {
+  name: string;
+  secret: boolean;
+}
+
+/**
+ * The exact command Pluk would run for a local MCP server: the resolved
+ * program, every argument, the working folder, and each variable's name.
+ * Secret values never appear here.
+ */
+export interface LaunchPreview {
+  program: string;
+  args: string[];
+  cwd: string;
+  env: LaunchEnvRow[];
+  /** One line per variable that can make the program load other code. */
+  warnings: string[];
+  /** What approving this preview approves. */
+  launchHash: string;
+  approved: boolean;
+}
+
+/** The exact command a local MCP server would start with, before it is approved. */
+export async function mcpLaunchPreview(id: string): Promise<LaunchPreview> {
+  return invoke("mcp_launch_preview", { id });
+}
+
+/** Approve the launch a preview showed, so Pluk may start it. */
+export async function approveMcpLaunch(id: string, launchHash: string): Promise<void> {
+  return invoke("approve_mcp_launch", { id, launchHash });
+}
+
+export type McpServerState = "starting" | "running" | "stopped" | "crashed";
+
+export interface McpServerStatus {
+  state: McpServerState;
+  pid?: number;
+}
+
+export async function mcpServerStatus(id: string): Promise<McpServerStatus> {
+  return invoke("mcp_server_status", { id });
+}
+
+/** The last lines a local MCP server printed, secrets already scrubbed. */
+export async function mcpServerOutput(id: string): Promise<string[]> {
+  return invoke("mcp_server_output", { id });
+}
+
+/** Stop a local MCP server; it stays stopped until restarted. */
+export async function stopMcpServer(id: string): Promise<void> {
+  return invoke("stop_mcp_server", { id });
+}
+
+/** Start a local MCP server again, clearing a stop or the crash limit. */
+export async function restartMcpServer(id: string): Promise<void> {
+  return invoke("restart_mcp_server", { id });
+}
+
 /** Subscribe to a host event. Resolves to an unlisten function. */
 export async function listen<T>(event: string, fn: (payload: T) => void): Promise<() => void> {
   const subscribe = tauri()?.event?.listen;

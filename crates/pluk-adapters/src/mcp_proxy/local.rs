@@ -49,7 +49,7 @@ const NO_COMMAND: &str = "Add the command that starts this server.";
 const RELATIVE_COMMAND: &str =
     "Use the program's name, such as node, or its full path starting with /.";
 const RELATIVE_CWD: &str = "Use a full path for the working folder, such as ~/code/server.";
-const MISSING_CWD: &str = "The working folder does not exist.";
+const MISSING_CWD: &str = "This working folder does not exist. Check the path, or leave it empty to use your home folder.";
 const ARGS_NOT_LIST: &str = "Arguments have to be a list of text values.";
 
 /// Variables that make a program load code it was not asked to run.

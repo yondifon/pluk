@@ -30,8 +30,8 @@ export interface ConfigProblem {
   message: string;
 }
 
-export function emptyRow(): KeyValueRow {
-  return { name: "", value: "", secret: true };
+export function emptyRow(secret = true): KeyValueRow {
+  return { name: "", value: "", secret };
 }
 
 /** The rows a stored config holds, ready to edit. */

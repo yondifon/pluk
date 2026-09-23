@@ -3,6 +3,8 @@ import { renderAgentSetup } from "./agent-setup";
 import { renderOverview } from "./overview";
 import { renderTools } from "./tools";
 import { mountServerTools } from "./server-tools";
+import { mountLocalMcp } from "./local-mcp-panel";
+import { isLocalMcp } from "./local-mcp";
 import { type InjectFn } from "./mcp-section";
 import { INTEGRATION_TAB_ORDER, renderTabs, type TabId } from "./tabs";
 import { mountActivityLog } from "../activityLog/activityLog";
@@ -129,7 +131,7 @@ export function mountIntegrationDetail(
       panel.setAttribute("role", "tabpanel");
       panel.setAttribute("aria-labelledby", "tab-tools");
       if (integration.type === MCP_TYPE) {
-        serverTools = mountServerTools(panel, integration, (mcp) => {
+        const onMcpStatus = (mcp: { signedIn: boolean; toolCount: number }) => {
           if (mcpStatusApplied) return;
           mcpStatusApplied = true;
           if (userSelectedTab) return;
@@ -137,7 +139,10 @@ export function mountIntegrationDetail(
           if (nextTab === selectedTab) return;
           selectedTab = nextTab;
           render();
-        });
+        };
+        serverTools = isLocalMcp(integration)
+          ? mountLocalMcp(panel, integration, onMcpStatus)
+          : mountServerTools(panel, integration, onMcpStatus);
       }
       else renderTools(panel, integration, manifest ?? null);
       contentEl.appendChild(panel);

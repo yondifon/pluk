@@ -72,12 +72,16 @@ pub struct SelectOption {
 }
 
 /// Conditional visibility: show this field only when `config[key]` equals
-/// `equals`, both compared as normalised strings.
+/// `equals` (or, with [`ShowIf::negated`], only when it does not), both
+/// compared as normalised strings. A missing key never equals anything, so a
+/// negated condition is how a field shows by default for integrations saved
+/// before the key existed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShowIf {
     pub key: String,
     /// Normalised comparison target (booleans become `"true"`/`"false"`).
     pub equals: String,
+    pub negate: bool,
 }
 
 impl ShowIf {
@@ -86,6 +90,7 @@ impl ShowIf {
         ShowIf {
             key: key.into(),
             equals: normalize_scalar(equals),
+            negate: false,
         }
     }
 
@@ -93,21 +98,34 @@ impl ShowIf {
         ShowIf {
             key: key.into(),
             equals: equals.to_string(),
+            negate: false,
         }
+    }
+
+    /// Show when the config value does *not* equal `equals`, instead of when
+    /// it does.
+    pub fn negated(mut self) -> Self {
+        self.negate = true;
+        self
     }
 
     /// Whether a stored config value satisfies the condition.
     pub fn matches(&self, value: Option<&Value>) -> bool {
-        value.map(normalize_scalar).as_deref() == Some(self.equals.as_str())
+        let equal = value.map(normalize_scalar).as_deref() == Some(self.equals.as_str());
+        equal != self.negate
     }
 }
 
 impl Serialize for ShowIf {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("ShowIf", 2)?;
+        let len = if self.negate { 3 } else { 2 };
+        let mut state = serializer.serialize_struct("ShowIf", len)?;
         state.serialize_field("key", &self.key)?;
         state.serialize_field("equals", &self.equals)?;
+        if self.negate {
+            state.serialize_field("negate", &self.negate)?;
+        }
         state.end()
     }
 }
@@ -146,6 +164,15 @@ pub struct ConfigField {
     /// Never sent to the window.
     #[serde(skip)]
     pub secret_kind: Option<SecretKind>,
+    /// Whether a new row of a [`FieldType::KeyValue`] field starts secret.
+    /// Headers default to secret; a field of routing data, such as
+    /// environment variables, can default the other way.
+    #[serde(rename = "defaultSecret", skip_serializing_if = "is_true")]
+    pub default_secret: bool,
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl ConfigField {
@@ -165,6 +192,7 @@ impl ConfigField {
             danger: false,
             help: None,
             secret_kind: None,
+            default_secret: true,
         }
     }
 
@@ -220,6 +248,21 @@ impl ConfigField {
 
     pub fn show_if_eq(mut self, key: impl Into<String>, equals: &Value) -> Self {
         self.show_if = Some(ShowIf::new(key, equals));
+        self
+    }
+
+    /// Show this field except when `config[key]` equals `equals`. A key the
+    /// config never set counts as not equal, so this is how a field already
+    /// on integrations saved before `key` existed keeps showing.
+    pub fn show_unless_eq(mut self, key: impl Into<String>, equals: &Value) -> Self {
+        self.show_if = Some(ShowIf::new(key, equals).negated());
+        self
+    }
+
+    /// A new row of this [`FieldType::KeyValue`] field starts plain instead
+    /// of secret.
+    pub fn default_not_secret(mut self) -> Self {
+        self.default_secret = false;
         self
     }
 
@@ -348,6 +391,44 @@ mod tests {
         assert!(show_if.matches(Some(&json!("true"))));
         assert!(!show_if.matches(Some(&json!(false))));
         assert!(!show_if.matches(None));
+    }
+
+    #[test]
+    fn a_negated_show_if_shows_by_default_for_a_key_never_saved() {
+        let show_if = ShowIf::new("connection", &json!("local")).negated();
+        // Never saved (old integrations) or saved as something else: shown.
+        assert!(show_if.matches(None));
+        assert!(show_if.matches(Some(&json!("remote"))));
+        // Saved as the excluded value: hidden.
+        assert!(!show_if.matches(Some(&json!("local"))));
+
+        let field = ConfigField::new("url", "URL", FieldType::Text)
+            .show_unless_eq("connection", &json!("local"));
+        let value = serde_json::to_value(&field).unwrap();
+        assert_eq!(
+            value["showIf"],
+            json!({ "key": "connection", "equals": "local", "negate": true })
+        );
+    }
+
+    #[test]
+    fn a_key_value_field_defaults_new_rows_to_secret_unless_told_otherwise() {
+        let headers = ConfigField::key_value("headers", "Headers", SecretKind::Header);
+        assert!(headers.default_secret);
+        assert!(
+            serde_json::to_value(&headers)
+                .unwrap()
+                .get("defaultSecret")
+                .is_none()
+        );
+
+        let env = ConfigField::key_value("env", "Environment variables", SecretKind::Env)
+            .default_not_secret();
+        assert!(!env.default_secret);
+        assert_eq!(
+            serde_json::to_value(&env).unwrap()["defaultSecret"],
+            json!(false)
+        );
     }
 
     #[test]

@@ -440,7 +440,57 @@ export function renderKeyValueField(
     if (saved) slot.appendChild(saved);
   });
 
-  slot.appendChild(createButton(`Add ${noun}`, { size: "sm", onClick: () => onChange([...rows, emptyRow()]) }));
+  slot.appendChild(
+    createButton(`Add ${noun}`, { size: "sm", onClick: () => onChange([...rows, emptyRow(field.defaultSecret ?? true)]) }),
+  );
+  if (help) wrap.appendChild(help);
+  return wrap;
+}
+
+/**
+ * An ordered list field, such a command's arguments: one plain text row per
+ * item, never joined into a single string. Order matters, so rows have no
+ * way to reorder beyond removing and re-adding.
+ */
+export function renderListField(
+  field: ConfigFieldDef,
+  items: string[],
+  onChange: (items: string[]) => void,
+): HTMLElement {
+  const { row: wrap, slot, controlId } = settingRow(field.key, field.label);
+  wrap.dataset.fieldKey = field.key;
+  wrap.classList.add("inspector-row-wrap");
+  slot.classList.add("kv-list");
+  const noun = rowNoun(field);
+  const help = field.help ? helpText(`help-${field.key}`, field.help) : null;
+  const update = (index: number, value: string) =>
+    onChange(items.map((item, i) => (i === index ? value : item)));
+
+  items.forEach((item, index) => {
+    const line = document.createElement("div");
+    line.className = "kv-row";
+    line.dataset.row = String(index);
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "field-input mono kv-value";
+    if (index === 0) input.id = controlId;
+    input.spellcheck = false;
+    input.value = item;
+    input.setAttribute("aria-label", `${field.label} ${index + 1}`);
+    input.addEventListener("input", () => update(index, input.value));
+
+    const remove = createButton("Remove", {
+      size: "sm",
+      ariaLabel: `Remove ${noun} ${index + 1}`,
+      onClick: () => onChange(items.filter((_, i) => i !== index)),
+    });
+
+    line.append(input, remove);
+    slot.appendChild(line);
+  });
+
+  slot.appendChild(createButton(`Add ${noun}`, { size: "sm", onClick: () => onChange([...items, ""]) }));
   if (help) wrap.appendChild(help);
   return wrap;
 }
@@ -834,6 +884,12 @@ export function renderConnectFieldsStep(
       if (f.type === "keyvalue") {
         card.appendChild(renderKeyValueField(f, draft.rows[f.key] ?? [], (rows) => {
           onDraftChange({ ...draft, rows: { ...draft.rows, [f.key]: rows } });
+        }));
+        continue;
+      }
+      if (f.type === "list") {
+        card.appendChild(renderListField(f, draft.lists[f.key] ?? [], (items) => {
+          onDraftChange({ ...draft, lists: { ...draft.lists, [f.key]: items } });
         }));
         continue;
       }

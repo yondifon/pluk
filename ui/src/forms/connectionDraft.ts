@@ -30,6 +30,8 @@ export interface ConnectionDraft {
   config: Record<string, string>;
   /** The rows of each key/value field, kept apart from the scalar config. */
   rows: Record<string, KeyValueRow[]>;
+  /** The items of each ordered-list field, such as a command's arguments. */
+  lists: Record<string, string[]>;
   /**
    * Secret fields that hold a saved value. The window never reads a secret
    * back, so such a field's config entry stays blank until the user types a
@@ -51,6 +53,7 @@ export function emptyDraft(): ConnectionDraft {
     type: "postgres",
     config: {},
     rows: {},
+    lists: {},
     savedSecrets: [],
     environment: "development",
     policyKind: "sql",
@@ -72,9 +75,12 @@ export function draftFromConnection(conn: {
   // Hydrate config blob: values may be string/number/bool -> normalize to string
   const config: Record<string, string> = {};
   const rows: Record<string, KeyValueRow[]> = {};
+  const lists: Record<string, string[]> = {};
   for (const [k, v] of Object.entries(conn.config ?? {})) {
-    if (Array.isArray(v)) rows[k] = rowsFromStored(v);
-    else if (typeof v === "string") config[k] = v;
+    if (Array.isArray(v)) {
+      if (v.every((item) => typeof item === "string")) lists[k] = [...v];
+      else rows[k] = rowsFromStored(v);
+    } else if (typeof v === "string") config[k] = v;
     else if (typeof v === "boolean") config[k] = v ? "true" : "false";
     else if (typeof v === "number") config[k] = String(v);
     else if (v != null) config[k] = String(v);
@@ -111,6 +117,7 @@ export function draftFromConnection(conn: {
     type: conn.type,
     config,
     rows,
+    lists,
     savedSecrets: conn.secretsSet ?? [],
     environment: conn.environment ?? null,
     policyKind: "sql",
@@ -129,6 +136,7 @@ export function adopt(draft: ConnectionDraft, manifest: AdapterManifest, resetCo
     fields: manifest.configFields,
     tools: manifest.tools,
     config: { ...draft.config },
+    lists: { ...draft.lists },
     toolConfig: { ...draft.toolConfig },
   };
 
@@ -139,6 +147,7 @@ export function adopt(draft: ConnectionDraft, manifest: AdapterManifest, resetCo
     }
     next.config = seededCfg;
     next.rows = {};
+    next.lists = {};
     next.savedSecrets = [];
     next.toolConfig = {};
     next.approvals = emptyApprovals();
@@ -211,11 +220,15 @@ export function canSave(draft: ConnectionDraft): boolean {
  * `null` so the host drops it. Each key/value field goes as its full row
  * list, so a row left out is removed.
  */
-export function configToSave(draft: ConnectionDraft): Record<string, string | null | SentRow[]> {
-  const config: Record<string, string | null | SentRow[]> = { ...draft.config };
+export function configToSave(draft: ConnectionDraft): Record<string, string | null | SentRow[] | string[]> {
+  const config: Record<string, string | null | SentRow[] | string[]> = { ...draft.config };
   for (const f of draft.fields) {
     if (f.type === "keyvalue") {
       config[f.key] = rowsToSave(draft.rows[f.key] ?? []);
+      continue;
+    }
+    if (f.type === "list") {
+      config[f.key] = draft.lists[f.key] ?? [];
       continue;
     }
     if (!f.secret || (config[f.key] ?? "") !== "") continue;

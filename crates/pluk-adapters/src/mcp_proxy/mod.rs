@@ -98,31 +98,38 @@ fn mcp_fields() -> Vec<ConfigField> {
         ConfigField::key_value(local::ENV_KEY, "Environment variables", SecretKind::Env)
             .group("Connection")
             .show_if_eq(local::CONNECTION_KEY, &when_local())
-            .help("Set for this server only. Values are kept secret unless you turn that off."),
+            .default_not_secret()
+            .help("Set for this server only. Turn Secret on for anything like a token or key."),
         ConfigField::new("url", "Server URL", FieldType::Text)
             .group("Connection")
             .required()
+            .show_unless_eq(local::CONNECTION_KEY, &when_local())
             .placeholder("https://example.com/mcp")
             .help("Pluk works out what this server needs. The other fields are only for the few servers that ask for more."),
         ConfigField::key_value(HEADERS_KEY, "Headers", SecretKind::Header)
             .group("Connection")
+            .show_unless_eq(local::CONNECTION_KEY, &when_local())
             .help("Sent with every request, exactly as written. Most servers do not need any. Add them if the server asked for them."),
         ConfigField::new("token", "Token", FieldType::Password)
             .group("Sign-in")
             .secret()
+            .show_unless_eq(local::CONNECTION_KEY, &when_local())
             .placeholder("leave empty")
             .help("Most servers do not need one. Add the token if the server gave you one."),
         ConfigField::new("header_name", "Header name", FieldType::Text)
             .group("Sign-in")
+            .show_unless_eq(local::CONNECTION_KEY, &when_local())
             .default_value(&json!(client::DEFAULT_AUTH_HEADER))
             .help("Leave this as it is unless the server asked for the token under another name."),
         ConfigField::new("client_id", "Client ID", FieldType::Text)
             .group("Sign-in")
+            .show_unless_eq(local::CONNECTION_KEY, &when_local())
             .placeholder("leave empty")
             .help("Most servers do not need one. Add it if the server asked you to register Pluk first."),
         ConfigField::new("client_secret", "Client secret", FieldType::Password)
             .group("Sign-in")
             .secret()
+            .show_unless_eq(local::CONNECTION_KEY, &when_local())
             .placeholder("leave empty")
             .help("Add this only if the server gave you one with the client ID."),
     ]
