@@ -114,6 +114,15 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 /* A rule list is typed a line at a time, so its box fills the column and grows. */
 .field-slot:has(> .rule-list) { align-items: stretch; }
 .rule-list { min-height: calc(var(--control-target) * 2); padding: var(--space-xs) var(--space-sm); resize: vertical; line-height: 1.5; }
+/* A key/value field stacks one line per row, name then value, with the add
+   button under the last. An error on a row takes a line of its own. */
+.field-slot.kv-list { flex-direction: column; align-items: stretch; }
+.field-slot.kv-list > .ui-button { align-self: flex-start; }
+.kv-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
+.kv-row > .kv-name { flex: 2 1 0; min-width: 0; }
+.kv-row > .kv-value { flex: 3 1 0; min-width: 0; }
+.kv-row > .field-error { flex-basis: 100%; margin-top: 0; }
+.kv-secret { display: flex; align-items: center; gap: var(--space-xs); color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
 .member-form-label { display: flex; align-items: center; gap: var(--space-sm); min-height: var(--control-target); }
 .form-footer, .client-controls, .al-actions { display: flex; align-items: center; gap: var(--space-sm); }
 .client-controls label { color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }

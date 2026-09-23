@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { isVisible, visibleFields } from "./catalog.ts";
 import type { AdapterManifest, ConfigFieldDef } from "./catalog.ts";
 import { emptyDraft, adopt, setEnvironment, canSave, splitTools, draftFromConnection, configToSave, forgetSecret } from "./connectionDraft.ts";
-import { renderField } from "./render.ts";
+import { markProblem, renderField, renderKeyValueField } from "./render.ts";
+import { rowNames, type KeyValueRow } from "./keyValue.ts";
 import { coerceToStored, coerceFromStored, serializeConfig, parseConfig, serializeToolSettings } from "./coercion.ts";
 import { overridableFields, inheritPlaceholder, updateOverride, serializeGroup, groupDraftFrom } from "./groupForm.ts";
 
@@ -360,5 +361,79 @@ describe("saved secrets", () => {
     expect(input?.value).toBe("");
     expect(row.textContent).toContain("Saved. Leave this blank to keep it.");
     expect(row.querySelector("button")?.textContent).toBe("Remove");
+  });
+});
+
+describe("header rows", () => {
+  const fields: ConfigFieldDef[] = [
+    { key: "url", label: "Server URL", type: "text", required: true },
+    { key: "headers", label: "Headers", type: "keyvalue" },
+  ];
+  const manifest = makeManifest({ id: "mcp", policyKind: "action", tools: [], configFields: fields });
+  const stored = {
+    url: "https://x/mcp",
+    headers: [
+      { name: "DD_API_KEY", secret: true, set: true },
+      { name: "X-Org", value: "acme", secret: false },
+    ],
+  };
+
+  function edited(): ReturnType<typeof emptyDraft> {
+    return adopt(draftFromConnection({ name: "Datadog", type: "mcp", config: stored }), manifest, false);
+  }
+
+  it("reads rows apart from the scalar config, a saved secret blank", () => {
+    const d = edited();
+    expect(d.config).toEqual({ url: "https://x/mcp" });
+    expect(d.rows.headers).toEqual([
+      { name: "DD_API_KEY", value: "", secret: true, savedName: "DD_API_KEY" },
+      { name: "X-Org", value: "acme", secret: false },
+    ]);
+  });
+
+  it("an untouched edit sends every row back, the saved secret by its saved name", () => {
+    expect(configToSave(edited())).toEqual({
+      url: "https://x/mcp",
+      headers: [
+        { name: "DD_API_KEY", value: "", secret: true, savedName: "DD_API_KEY" },
+        { name: "X-Org", value: "acme", secret: false },
+      ],
+    });
+  });
+
+  it("a renamed secret keeps its saved name, and a row made plain lets it go", () => {
+    const d = edited();
+    const [key, org] = d.rows.headers;
+    const renamed = { ...d, rows: { headers: [{ ...key, name: "X-Api-Key" }, org] } };
+    expect((configToSave(renamed).headers as Array<{ savedName?: string }>)[0].savedName).toBe("DD_API_KEY");
+    const plain = { ...d, rows: { headers: [{ ...key, secret: false, value: "shown" }, org] } };
+    expect((configToSave(plain).headers as Array<{ savedName?: string }>)[0].savedName).toBeUndefined();
+  });
+
+  it("a new row starts secret, and a saved one says it is kept without showing it", () => {
+    const changes: KeyValueRow[][] = [];
+    const field = renderKeyValueField(fields[1], edited().rows.headers, (rows) => changes.push(rows));
+    const [keyRow, orgRow] = field.querySelectorAll<HTMLElement>(".kv-row");
+    const keyValue = keyRow.querySelector<HTMLInputElement>(".kv-value")!;
+    expect(keyValue.type).toBe("password");
+    expect(keyValue.value).toBe("");
+    expect(field.textContent).toContain("Saved. Leave this blank to keep it.");
+    expect(orgRow.querySelector<HTMLInputElement>(".kv-value")!.type).toBe("text");
+
+    [...field.querySelectorAll("button")].find((b) => b.textContent === "Add header")!.click();
+    expect(changes[0][2]).toEqual({ name: "", value: "", secret: true });
+  });
+
+  it("a refused row gets its message beside it", () => {
+    const host = document.createElement("div");
+    host.appendChild(renderKeyValueField(fields[1], edited().rows.headers, () => {}));
+    markProblem(host, { field: "headers", row: 1, message: "Pluk cannot send Host. Remove this header." });
+    const orgRow = host.querySelectorAll(".kv-row")[1];
+    expect(orgRow.querySelector(".field-error")?.textContent).toBe("Pluk cannot send Host. Remove this header.");
+    expect(orgRow.querySelector(".kv-name")?.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("the overview names the rows and shows no value", () => {
+    expect(rowNames(stored.headers)).toBe("DD_API_KEY, X-Org");
   });
 });

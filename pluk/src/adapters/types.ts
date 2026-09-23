@@ -7,7 +7,9 @@ import type { ToolHost } from "../mcp/namespace.js";
  * means adding one module — no edits to the store, MCP transport, or REST layer.
  */
 
-export type FieldType = "text" | "password" | "number" | "file" | "select" | "toggle";
+/** `keyvalue`: a list of `{ name, value, secret }` rows. A secret row's value
+ *  is kept out of `integration.config` and never read back by the UI. */
+export type FieldType = "text" | "password" | "number" | "file" | "select" | "toggle" | "keyvalue";
 
 /** A single config input, rendered dynamically by the UI form. */
 export interface ConfigField {

@@ -30,6 +30,7 @@ import {
 import { wizardSteps } from "./forms/wizard.ts";
 import { addServer, type ServerHost, type ServerTemplate } from "./forms/serverTemplates.ts";
 import { markFocus, restoreFocus } from "./forms/focus.ts";
+import { rowNames, type ConfigProblem } from "./forms/keyValue.ts";
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
 import type { AdapterManifest as CatalogManifest, ToolDef, ToolState } from "./forms/catalog.ts";
 import { renderConnectChromeStep } from "./integration-detail/browser-access.ts";
@@ -138,7 +139,8 @@ function manifestFor(type: string): CatalogManifest | undefined {
 function toDetailIntegration(row: HostIntegration): DetailIntegration {
   const config: Record<string, string> = {};
   for (const [key, value] of Object.entries(row.config)) {
-    config[key] = value == null ? "" : String(value);
+    if (Array.isArray(value)) config[key] = rowNames(value);
+    else config[key] = value == null ? "" : String(value);
   }
   return {
     id: row.id,
@@ -392,7 +394,15 @@ function buildForm(current: FormState): { el: HTMLElement; destroy?: () => void 
         case "connect": {
           if (manifest.configFields.length > 0) {
             const landOn = tokenServer?.tokenHint ? { field: "token", text: tokenServer.tokenHint } : undefined;
-            return { el: renderConnectFieldsStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => goToStep(1), landOn) };
+            const savedId = current.kind === "edit-integration" ? current.id : current.savedId;
+            const check = (checked: ConnectionDraft) =>
+              invoke<ConfigProblem | null>("check_integration_config", {
+                payload: { type: checked.type, id: savedId, config: configToSave(checked) },
+              }).catch((error) => {
+                report(error, "Settings not checked");
+                return null;
+              });
+            return { el: renderConnectFieldsStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => goToStep(1), landOn, check) };
           }
           const integrationId = current.kind === "edit-integration" ? current.id : current.savedId;
           if (!integrationId) return { el: document.createElement("div") };

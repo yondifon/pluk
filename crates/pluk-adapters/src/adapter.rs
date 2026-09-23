@@ -9,10 +9,11 @@ use std::borrow::Cow;
 
 use async_trait::async_trait;
 
-use pluk_store::Integration;
+use pluk_store::{Config, Integration};
 
 use crate::config_field::ConfigField;
 use crate::error::AdapterError;
+use crate::key_value::ConfigProblem;
 use crate::tool_host::ToolHost;
 use crate::tool_spec::ToolSpec;
 
@@ -121,6 +122,19 @@ pub trait Adapter: Send + Sync {
     /// The form schema served verbatim to the frontend (definitions only —
     /// never secret values).
     fn config_fields(&self) -> &[ConfigField];
+
+    /// Refuse a config before it is saved, naming the field and row to fix.
+    /// `integration_id` is the integration being edited, `None` for a new
+    /// one. The config is as the window sent it, with saved secrets folded
+    /// back in and key/value rows still carrying what was typed.
+    fn check_config(
+        &self,
+        integration_id: Option<&str>,
+        config: &Config,
+    ) -> Result<(), ConfigProblem> {
+        let _ = (integration_id, config);
+        Ok(())
+    }
 
     /// Verify the config can reach the service. `Err` on failure.
     async fn test_connection(&self, conn: &Integration) -> Result<(), AdapterError>;

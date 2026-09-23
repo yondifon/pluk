@@ -122,6 +122,7 @@ impl IntegrationJson {
     fn from_integration(
         i: pluk_store::Integration,
         registry: &pluk_adapters::AdapterRegistry,
+        store: &pluk_store::Store,
     ) -> Self {
         let adapter = registry.get(&i.r#type);
         let tools = match adapter.as_deref() {
@@ -136,7 +137,17 @@ impl IntegrationJson {
         };
         let mut config = i.config;
         let secrets_set = adapter
-            .map(|adapter| pluk_adapters::withhold_secrets(&mut config, adapter.config_fields()))
+            .as_deref()
+            .map(|adapter| {
+                let fields = adapter.config_fields();
+                if pluk_adapters::key_value::has_secret_rows(fields) {
+                    // A read that fails shows every secret row as not saved,
+                    // which never shows more than is there.
+                    let saved = store.list_proxy_secrets(&i.id).unwrap_or_default();
+                    pluk_adapters::show_secret_rows(&mut config, fields, &saved);
+                }
+                pluk_adapters::withhold_secrets(&mut config, fields)
+            })
             .unwrap_or_default();
         let policy = pluk_store::parse_query_policy(i.query_policy.as_deref());
         IntegrationJson {
@@ -155,19 +166,67 @@ impl IntegrationJson {
     }
 }
 
-/// Fold a config the window sent over a stored one, keeping every secret the
-/// window left untouched. An unknown type has no fields to go by, so the
-/// config is taken as sent.
-fn with_kept_secrets(
+/// What a save stores: the config with the secrets the window left untouched
+/// folded back in and secret row values taken out, and the writes that save
+/// those values.
+struct PreparedConfig {
+    config: pluk_store::Config,
+    secrets: Vec<pluk_store::SecretWrite>,
+}
+
+/// Why a config cannot be saved: a problem the window shows at its field, or
+/// a failure reading what is stored.
+enum SaveRefused {
+    Problem(pluk_adapters::ConfigProblem),
+    Failed(String),
+}
+
+impl From<SaveRefused> for String {
+    fn from(refused: SaveRefused) -> Self {
+        match refused {
+            SaveRefused::Problem(problem) => problem.message,
+            SaveRefused::Failed(message) => message,
+        }
+    }
+}
+
+/// Check a config the window sent and fold it over what is saved. `source`
+/// holds the secrets a blank value keeps: the integration being edited
+/// (`editing`), or the one a new integration copies. An unknown type has no
+/// fields to go by, so the config is taken as sent.
+fn prepare_config(
+    store: &pluk_store::Store,
     registry: &pluk_adapters::AdapterRegistry,
     r#type: &str,
-    stored: &pluk_store::Config,
+    editing: Option<&str>,
+    source: Option<&pluk_store::Integration>,
     sent: pluk_store::Config,
-) -> pluk_store::Config {
-    match registry.get(r#type) {
-        Some(adapter) => pluk_adapters::keep_secrets(stored, sent, adapter.config_fields()),
-        None => sent,
-    }
+) -> Result<PreparedConfig, SaveRefused> {
+    let Some(adapter) = registry.get(r#type) else {
+        return Ok(PreparedConfig {
+            config: sent,
+            secrets: Vec::new(),
+        });
+    };
+    let fields = adapter.config_fields();
+    let stored = source.map(|i| i.config.clone()).unwrap_or_default();
+    let mut config = pluk_adapters::keep_secrets(&stored, sent, fields);
+    adapter
+        .check_config(editing, &config)
+        .map_err(SaveRefused::Problem)?;
+    let saved = match source {
+        Some(source) if pluk_adapters::key_value::has_secret_rows(fields) => store
+            .list_proxy_secrets(&source.id)
+            .map_err(|e| SaveRefused::Failed(e.to_string()))?,
+        _ => Vec::new(),
+    };
+    let kept = match editing {
+        Some(_) => pluk_adapters::KeptFrom::Itself(&saved),
+        None => pluk_adapters::KeptFrom::Copy(&saved),
+    };
+    let secrets =
+        pluk_adapters::fold_secret_rows(fields, &mut config, kept).map_err(SaveRefused::Problem)?;
+    Ok(PreparedConfig { config, secrets })
 }
 
 #[tauri::command]
@@ -178,7 +237,7 @@ pub fn list_integrations(state: State<'_, HostState>) -> CmdResult<Vec<Integrati
         .list_integrations()
         .map(|v| {
             v.into_iter()
-                .map(|i| IntegrationJson::from_integration(i, &registry))
+                .map(|i| IntegrationJson::from_integration(i, &registry, &state.store))
                 .collect()
         })
         .map_err(|e| e.to_string())
@@ -193,7 +252,7 @@ pub fn get_integration(
     state
         .store
         .integration_by_id(&id)
-        .map(|o| o.map(|i| IntegrationJson::from_integration(i, &registry)))
+        .map(|o| o.map(|i| IntegrationJson::from_integration(i, &registry, &state.store)))
         .map_err(|e| e.to_string())
 }
 
@@ -287,27 +346,92 @@ fn create_integration_in(
     registry: &pluk_adapters::AdapterRegistry,
     payload: CreateIntegrationPayload,
 ) -> CmdResult<IntegrationJson> {
-    let source = match payload.secrets_from.as_deref() {
-        Some(source) => {
-            store
-                .integration_by_id(source)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "Integration not found".to_string())?
-                .config
-        }
-        None => pluk_store::Config::new(),
-    };
-    let config = with_kept_secrets(registry, &payload.r#type, &source, payload.config);
+    let source = copy_source(store, payload.secrets_from.as_deref())?;
+    let prepared = prepare_config(
+        store,
+        registry,
+        &payload.r#type,
+        None,
+        source.as_ref(),
+        payload.config,
+    )?;
     let mut input = pluk_store::IntegrationInput::new(payload.name, payload.r#type);
-    input.config = config;
+    input.config = prepared.config;
     input.environment = payload
         .environment
         .as_deref()
         .and_then(pluk_store::Environment::parse);
-    store
+    let created = store
         .create_integration(&input)
-        .map(|i| IntegrationJson::from_integration(i, registry))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    store
+        .write_proxy_secrets(&created.id, &prepared.secrets)
+        .map_err(|e| e.to_string())?;
+    Ok(IntegrationJson::from_integration(created, registry, store))
+}
+
+/// The integration a new one copies its saved secrets from.
+fn copy_source(
+    store: &pluk_store::Store,
+    secrets_from: Option<&str>,
+) -> CmdResult<Option<pluk_store::Integration>> {
+    let Some(id) = secrets_from else {
+        return Ok(None);
+    };
+    store
+        .integration_by_id(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Integration not found".to_string())
+        .map(Some)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckConfigPayload {
+    #[serde(rename = "type")]
+    pub r#type: String,
+    /// The integration being edited; absent for a new one.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// For a new integration, the one whose saved secrets it copies.
+    #[serde(default)]
+    pub secrets_from: Option<String>,
+    #[serde(default)]
+    pub config: pluk_store::Config,
+}
+
+/// The first thing in a config that saving it would refuse, so the form can
+/// show it beside the field and row that hold it.
+#[tauri::command]
+pub fn check_integration_config(
+    state: State<'_, HostState>,
+    payload: CheckConfigPayload,
+) -> CmdResult<Option<pluk_adapters::ConfigProblem>> {
+    check_integration_config_in(&state.store, &state.shared.registry, payload)
+}
+
+fn check_integration_config_in(
+    store: &pluk_store::Store,
+    registry: &pluk_adapters::AdapterRegistry,
+    payload: CheckConfigPayload,
+) -> CmdResult<Option<pluk_adapters::ConfigProblem>> {
+    let source = match payload.id.as_deref() {
+        Some(id) => store.integration_by_id(id).map_err(|e| e.to_string())?,
+        None => copy_source(store, payload.secrets_from.as_deref())?,
+    };
+    let prepared = prepare_config(
+        store,
+        registry,
+        &payload.r#type,
+        payload.id.as_deref(),
+        source.as_ref(),
+        payload.config,
+    );
+    match prepared {
+        Ok(_) => Ok(None),
+        Err(SaveRefused::Problem(problem)) => Ok(Some(problem)),
+        Err(SaveRefused::Failed(message)) => Err(message),
+    }
 }
 
 /// Read a field so an explicit `null` keeps its own meaning: an absent field
@@ -328,7 +452,9 @@ pub struct UpdateIntegrationPayload {
     #[serde(rename = "type")]
     pub r#type: Option<String>,
     /// Replaces the stored config, except that a secret field left out or
-    /// empty keeps its stored value and one sent as `null` is removed.
+    /// empty keeps its stored value and one sent as `null` is removed. Key/value
+    /// rows follow `pluk_adapters::key_value`: a secret row sent without a
+    /// value keeps the one saved for it.
     pub config: Option<serde_json::Map<String, serde_json::Value>>,
     /// Absent leaves the stored environment; `null` clears it.
     #[serde(default, deserialize_with = "nullable")]
@@ -395,9 +521,14 @@ fn update_integration_in(
         payload.approvals,
     )?;
     let r#type = payload.r#type.as_deref().unwrap_or(&stored.r#type);
-    let config = payload
+    let prepared = payload
         .config
-        .map(|sent| with_kept_secrets(registry, r#type, &stored.config, sent));
+        .map(|sent| prepare_config(store, registry, r#type, Some(id), Some(&stored), sent))
+        .transpose()?;
+    let (config, secrets) = match prepared {
+        Some(prepared) => (Some(prepared.config), prepared.secrets),
+        None => (None, Vec::new()),
+    };
     let update = pluk_store::IntegrationUpdate {
         name: payload.name,
         r#type: payload.r#type,
@@ -408,10 +539,18 @@ fn update_integration_in(
         read_only: None,
         query_policy,
     };
-    store
+    let Some(updated) = store
         .update_integration(id, &update)
-        .map(|o| o.map(|i| IntegrationJson::from_integration(i, registry)))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(None);
+    };
+    store
+        .write_proxy_secrets(id, &secrets)
+        .map_err(|e| e.to_string())?;
+    Ok(Some(IntegrationJson::from_integration(
+        updated, registry, store,
+    )))
 }
 
 #[tauri::command]
@@ -1397,6 +1536,212 @@ mod secret_tests {
             _ => json!({}),
         };
         axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
+    }
+
+    /// The same server, answering only a caller holding the token in the
+    /// `DD_API_KEY` header.
+    async fn keyed_mcp(mut headers: HeaderMap, body: axum::Json<Value>) -> Response {
+        match headers.remove("DD_API_KEY") {
+            Some(key) if key == TOKEN => {
+                headers.insert(
+                    header::AUTHORIZATION,
+                    format!("Bearer {TOKEN}").parse().unwrap(),
+                );
+                guarded_mcp(headers, body).await
+            }
+            _ => StatusCode::UNAUTHORIZED.into_response(),
+        }
+    }
+
+    fn header_rows(rows: Value) -> pluk_store::Config {
+        config(json!({"url": "https://example.com/mcp", "headers": rows}))
+    }
+
+    #[test]
+    fn secret_header_values_never_reach_the_window() {
+        let world = world();
+        let shown = create(
+            &world,
+            "mcp",
+            header_rows(json!([
+                {"name": "DD_API_KEY", "value": TOKEN, "secret": true},
+                {"name": "X-Org", "value": "acme", "secret": false},
+            ])),
+        );
+        let listed = list_of(&world);
+        let read = serde_json::to_string(&(&shown, &listed)).unwrap();
+
+        assert!(!read.contains(TOKEN), "{read}");
+        assert_eq!(
+            shown.config["headers"],
+            json!([
+                {"name": "DD_API_KEY", "secret": true, "set": true},
+                {"name": "X-Org", "value": "acme", "secret": false},
+            ])
+        );
+        assert!(
+            !serde_json::to_string(&stored(&world, &shown.id))
+                .unwrap()
+                .contains(TOKEN)
+        );
+        let saved = world.store.list_proxy_secrets(&shown.id).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].value, TOKEN);
+    }
+
+    fn list_of(world: &World) -> Vec<IntegrationJson> {
+        world
+            .store
+            .list_integrations()
+            .unwrap()
+            .into_iter()
+            .map(|i| IntegrationJson::from_integration(i, &world.registry, &world.store))
+            .collect()
+    }
+
+    #[test]
+    fn a_renamed_secret_header_keeps_its_value_and_a_removed_one_is_cleared() {
+        let world = world();
+        let shown = create(
+            &world,
+            "mcp",
+            header_rows(json!([
+                {"name": "DD_API_KEY", "value": "api-1"},
+                {"name": "DD_APPLICATION_KEY", "value": "app-1"},
+            ])),
+        );
+
+        let edited = resave(
+            &world,
+            &shown,
+            header_rows(json!([{"name": "X-Api-Key", "savedName": "DD_API_KEY", "secret": true}])),
+        );
+
+        let saved = world.store.list_proxy_secrets(&shown.id).unwrap();
+        let saved: Vec<(&str, &str)> = saved
+            .iter()
+            .map(|s| (s.name.as_str(), s.value.as_str()))
+            .collect();
+        assert_eq!(saved, [("X-Api-Key", "api-1")]);
+        assert_eq!(
+            edited.config["headers"],
+            json!([{"name": "X-Api-Key", "secret": true, "set": true}])
+        );
+    }
+
+    #[test]
+    fn a_header_the_save_would_refuse_is_named_at_its_row() {
+        let world = world();
+        let check = |id: Option<String>, rows: Value| {
+            check_integration_config_in(
+                &world.store,
+                &world.registry,
+                CheckConfigPayload {
+                    r#type: "mcp".into(),
+                    id,
+                    secrets_from: None,
+                    config: header_rows(rows),
+                },
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            check(None, json!([{"name": "X-Org", "value": "acme"}])),
+            None
+        );
+        let problem = check(
+            None,
+            json!([{"name": "X-Org", "value": "acme"}, {"name": "Content-Type", "value": "text/plain"}]),
+        )
+        .expect("refused");
+        assert_eq!((problem.field.as_str(), problem.row), ("headers", Some(1)));
+
+        let shown = create(
+            &world,
+            "mcp",
+            header_rows(json!([{"name": "X-Key", "value": "k"}])),
+        );
+        assert_eq!(
+            check(
+                Some(shown.id.clone()),
+                json!([{"name": "X-Key", "savedName": "X-Key"}])
+            ),
+            None,
+            "a saved value counts as given"
+        );
+        let missing =
+            check(None, json!([{"name": "X-Key", "savedName": "X-Key"}])).expect("refused");
+        assert_eq!(missing.message, "Add a value for X-Key.");
+
+        let refused = create_integration_in(
+            &world.store,
+            &world.registry,
+            CreateIntegrationPayload {
+                name: "bad".into(),
+                r#type: "mcp".into(),
+                config: header_rows(json!([{"name": "Host", "value": "evil.example.com"}])),
+                environment: None,
+                secrets_from: None,
+            },
+        )
+        .expect_err("refused");
+        assert_eq!(refused, "Pluk cannot send Host. Remove this header.");
+    }
+
+    #[test]
+    fn a_copy_keeps_the_secret_headers_of_the_integration_it_copies() {
+        let world = world();
+        let shown = create(
+            &world,
+            "mcp",
+            header_rows(json!([{"name": "DD_API_KEY", "value": TOKEN}])),
+        );
+        let copy = create_integration_in(
+            &world.store,
+            &world.registry,
+            CreateIntegrationPayload {
+                name: "copy".into(),
+                r#type: "mcp".into(),
+                config: shown.config.clone(),
+                environment: None,
+                secrets_from: Some(shown.id.clone()),
+            },
+        )
+        .unwrap();
+
+        let saved = world.store.list_proxy_secrets(&copy.id).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(
+            (saved[0].name.as_str(), saved[0].value.as_str()),
+            ("DD_API_KEY", TOKEN)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_mcp_integration_still_connects_after_an_edit_that_skips_its_secret_header() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let router = axum::Router::new().route("/mcp", axum::routing::post(keyed_mcp));
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let world = world();
+        let shown = create(
+            &world,
+            "mcp",
+            config(json!({"url": url, "headers": [{"name": "DD_API_KEY", "value": TOKEN}]})),
+        );
+
+        resave(&world, &shown, shown.config.clone());
+
+        let integration = world.store.integration_by_id(&shown.id).unwrap().unwrap();
+        let adapter = world.registry.get("mcp").unwrap();
+        adapter
+            .test_connection(&integration)
+            .await
+            .expect("connects with the kept header");
+        pluk_adapters::mcp_proxy::client::invalidate(&shown.id);
     }
 
     #[tokio::test]

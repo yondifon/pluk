@@ -16,6 +16,7 @@
 //! - [`ShowIf`] `equals` compares as a string after the same normalisation,
 //!   so a toggle's `true` matches the string `"true"`.
 
+use pluk_store::SecretKind;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -41,6 +42,9 @@ pub enum FieldType {
     File,
     Select,
     Toggle,
+    /// A list of named values, each either plain or secret. See
+    /// [`crate::key_value`] for how the rows are stored.
+    KeyValue,
 }
 
 impl FieldType {
@@ -52,6 +56,7 @@ impl FieldType {
             FieldType::File => "file",
             FieldType::Select => "select",
             FieldType::Toggle => "toggle",
+            FieldType::KeyValue => "keyvalue",
         }
     }
 }
@@ -134,6 +139,10 @@ pub struct ConfigField {
     pub danger: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
+    /// Where a [`FieldType::KeyValue`] field's secret row values are saved.
+    /// Never sent to the window.
+    #[serde(skip)]
+    pub secret_kind: Option<SecretKind>,
 }
 
 impl ConfigField {
@@ -152,6 +161,15 @@ impl ConfigField {
             file_types: Vec::new(),
             danger: false,
             help: None,
+            secret_kind: None,
+        }
+    }
+
+    /// A list of named values whose secret rows are saved as `kind`.
+    pub fn key_value(key: impl Into<String>, label: impl Into<String>, kind: SecretKind) -> Self {
+        ConfigField {
+            secret_kind: Some(kind),
+            ..ConfigField::new(key, label, FieldType::KeyValue)
         }
     }
 

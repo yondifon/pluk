@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use reqwest::header::{HeaderName, HeaderValue};
+use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientInfo, ContentBlock, JsonObject, Tool,
 };
@@ -32,6 +32,8 @@ use tokio::time::timeout;
 
 use crate::error::AdapterError;
 use crate::gate::{TextContent, ToolResult};
+
+use super::transport::StaticHeader;
 
 /// Upstream refused the credentials we presented. The caller may refresh the
 /// token and retry once.
@@ -148,6 +150,7 @@ pub struct McpProxyClient {
     integration_id: String,
     endpoint: String,
     auth: UpstreamAuth,
+    headers: Vec<StaticHeader>,
 }
 
 impl McpProxyClient {
@@ -160,7 +163,15 @@ impl McpProxyClient {
             integration_id: integration_id.into(),
             endpoint: endpoint.into(),
             auth,
+            headers: Vec::new(),
         }
+    }
+
+    /// Headers sent on every request on top of the sign-in. Where one names
+    /// the header the sign-in uses, the sign-in wins.
+    pub fn with_headers(mut self, headers: Vec<StaticHeader>) -> Self {
+        self.headers = headers;
+        self
     }
 
     /// Every tool the upstream server offers, following pagination to the end.
@@ -238,6 +249,17 @@ impl McpProxyClient {
 
     async fn connect(&self, tools_changed: Arc<AtomicBool>) -> Result<Upstream, AdapterError> {
         let mut config = StreamableHttpClientTransportConfig::with_uri(self.endpoint.clone());
+        let oauth = matches!(self.auth, UpstreamAuth::Bearer { .. });
+        for header in &self.headers {
+            // rmcp adds the OAuth token on its own, next to these rather than
+            // in place of them.
+            if oauth && header.name == AUTHORIZATION {
+                continue;
+            }
+            config
+                .custom_headers
+                .insert(header.name.clone(), header.header_value()?);
+        }
         match &self.auth {
             UpstreamAuth::None => {}
             UpstreamAuth::Bearer { access_token } => {

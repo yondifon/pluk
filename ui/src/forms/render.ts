@@ -15,6 +15,7 @@ import {
   setMemberTool,
 } from "./groupForm.ts";
 import { isWorkingIn } from "./focus.ts";
+import { emptyRow, keepsSaved, type ConfigProblem, type KeyValueRow } from "./keyValue.ts";
 import { SERVER_TEMPLATES, SERVERS_SHOWN, isAdded, type ServerTemplate } from "./serverTemplates.ts";
 import { createIcon } from "../icon";
 import { createButton, createBadge, wizardStepHeader, wizardStepFooter } from "../primitives";
@@ -365,6 +366,92 @@ export function renderField(
   if (saved) row.appendChild(saved);
   if (help) row.appendChild(help);
   return row;
+}
+
+/** What one row of a key/value field is called in labels: "Headers" gives "header". */
+function rowNoun(field: ConfigFieldDef): string {
+  return field.label.toLowerCase().replace(/s$/, "");
+}
+
+/**
+ * A key/value field: one line per row with its name, its value, whether the
+ * value is secret, and a way to remove it. New rows start secret. A secret row
+ * with a saved value starts blank and keeps that value unless a new one is
+ * typed.
+ */
+export function renderKeyValueField(
+  field: ConfigFieldDef,
+  rows: KeyValueRow[],
+  onChange: (rows: KeyValueRow[]) => void,
+): HTMLElement {
+  const { row: wrap, slot, controlId } = settingRow(field.key, field.label);
+  wrap.dataset.fieldKey = field.key;
+  wrap.classList.add("inspector-row-wrap");
+  slot.classList.add("kv-list");
+  const noun = rowNoun(field);
+  const help = field.help ? helpText(`help-${field.key}`, field.help) : null;
+  const update = (index: number, next: Partial<KeyValueRow>) =>
+    onChange(rows.map((row, i) => (i === index ? { ...row, ...next } : row)));
+
+  rows.forEach((row, index) => {
+    const line = document.createElement("div");
+    line.className = "kv-row";
+    line.dataset.row = String(index);
+    const named = row.name.trim() || `${noun} ${index + 1}`;
+
+    const name = document.createElement("input");
+    name.type = "text";
+    name.className = "field-input mono kv-name";
+    if (index === 0) name.id = controlId;
+    name.placeholder = "Name";
+    name.spellcheck = false;
+    name.value = row.name;
+    name.setAttribute("aria-label", `Name of ${noun} ${index + 1}`);
+    name.addEventListener("input", () => update(index, { name: name.value }));
+
+    const saved = keepsSaved(row) ? helpText(`saved-${field.key}-${index}`, "Saved. Leave this blank to keep it.") : null;
+    const value = document.createElement("input");
+    value.type = row.secret ? "password" : "text";
+    value.className = "field-input mono kv-value";
+    value.placeholder = saved ? "Saved" : "Value";
+    value.spellcheck = false;
+    value.value = row.value;
+    value.setAttribute("aria-label", `Value of ${named}`);
+    if (saved) value.setAttribute("aria-describedby", saved.id);
+    value.addEventListener("input", () => update(index, { value: value.value }));
+
+    const secretLabel = document.createElement("label");
+    secretLabel.className = "kv-secret";
+    const secret = document.createElement("input");
+    secret.type = "checkbox";
+    secret.checked = row.secret;
+    secret.setAttribute("aria-label", `Keep ${named} secret`);
+    secret.addEventListener("change", () => update(index, { secret: secret.checked }));
+    secretLabel.append(secret, document.createTextNode("Secret"));
+
+    const remove = createButton("Remove", {
+      size: "sm",
+      ariaLabel: `Remove ${named}`,
+      onClick: () => onChange(rows.filter((_, i) => i !== index)),
+    });
+
+    line.append(name, value, secretLabel, remove);
+    slot.appendChild(line);
+    if (saved) slot.appendChild(saved);
+  });
+
+  slot.appendChild(createButton(`Add ${noun}`, { size: "sm", onClick: () => onChange([...rows, emptyRow()]) }));
+  if (help) wrap.appendChild(help);
+  return wrap;
+}
+
+/** Shows a save the host would refuse beside the field, and the row, it names. */
+export function markProblem(host: HTMLElement, problem: ConfigProblem): void {
+  const field = host.querySelector<HTMLElement>(`[data-field-key="${problem.field}"]`);
+  if (!field) return;
+  const line = problem.row != null ? field.querySelector<HTMLElement>(`.kv-row[data-row="${problem.row}"]`) : null;
+  const control = (line ?? field).querySelector<HTMLElement>("input, select");
+  if (control) markMissing(control, line ?? field, problem.message);
 }
 
 export function renderToolsSection(
@@ -728,6 +815,8 @@ export function renderConnectFieldsStep(
   onContinue: () => void,
   /** The field to open on, and the line above it saying what belongs there. */
   landOn?: { field: string; text: string },
+  /** Asks the host what saving this draft would refuse, before moving on. */
+  check?: (draft: ConnectionDraft) => Promise<ConfigProblem | null>,
 ): HTMLElement {
   const wrap = wizardStepHeader(stepIndex, totalSteps, "Connect", `Fill in what Pluk needs to reach ${manifest.label}.`);
   const body = document.createElement("div");
@@ -742,6 +831,12 @@ export function renderConnectFieldsStep(
     card.appendChild(h);
     for (const f of shown) {
       if (landOn?.field === f.key) card.appendChild(helpText(`land-on-${f.key}`, landOn.text));
+      if (f.type === "keyvalue") {
+        card.appendChild(renderKeyValueField(f, draft.rows[f.key] ?? [], (rows) => {
+          onDraftChange({ ...draft, rows: { ...draft.rows, [f.key]: rows } });
+        }));
+        continue;
+      }
       const onForget = draft.savedSecrets.includes(f.key)
         ? () => onDraftChange({ ...forgetSecret(draft, f.key), config: { ...draft.config, [f.key]: "" } })
         : undefined;
@@ -771,7 +866,14 @@ export function renderConnectFieldsStep(
     onPrimary: () => {
       const invalid = visibleFields(draft.fields, draft.config).find((field) => field.required && !isFilled(draft, field));
       if (!invalid) {
-        onContinue();
+        if (!check) {
+          onContinue();
+          return;
+        }
+        void check(draft).then((problem) => {
+          if (problem) markProblem(wrap, problem);
+          else onContinue();
+        });
         return;
       }
       const invalidRow = wrap.querySelector<HTMLElement>(`[data-field-key="${invalid.key}"]`);

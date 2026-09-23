@@ -1,5 +1,7 @@
 import type { AdapterManifest, ConfigFieldDef, ToolDef, ToolState } from "./catalog";
 import { seededState, isVisible } from "./catalog";
+import { rowsFromStored, rowsToSave } from "./keyValue";
+import type { KeyValueRow, SentRow } from "./keyValue";
 
 export type Environment = "production" | "staging" | "development" | "local";
 
@@ -26,6 +28,8 @@ export interface ConnectionDraft {
   name: string;
   type: string;
   config: Record<string, string>;
+  /** The rows of each key/value field, kept apart from the scalar config. */
+  rows: Record<string, KeyValueRow[]>;
   /**
    * Secret fields that hold a saved value. The window never reads a secret
    * back, so such a field's config entry stays blank until the user types a
@@ -46,6 +50,7 @@ export function emptyDraft(): ConnectionDraft {
     name: "",
     type: "postgres",
     config: {},
+    rows: {},
     savedSecrets: [],
     environment: "development",
     policyKind: "sql",
@@ -66,8 +71,10 @@ export function draftFromConnection(conn: {
 }): ConnectionDraft {
   // Hydrate config blob: values may be string/number/bool -> normalize to string
   const config: Record<string, string> = {};
+  const rows: Record<string, KeyValueRow[]> = {};
   for (const [k, v] of Object.entries(conn.config ?? {})) {
-    if (typeof v === "string") config[k] = v;
+    if (Array.isArray(v)) rows[k] = rowsFromStored(v);
+    else if (typeof v === "string") config[k] = v;
     else if (typeof v === "boolean") config[k] = v ? "true" : "false";
     else if (typeof v === "number") config[k] = String(v);
     else if (v != null) config[k] = String(v);
@@ -103,6 +110,7 @@ export function draftFromConnection(conn: {
     name: conn.name,
     type: conn.type,
     config,
+    rows,
     savedSecrets: conn.secretsSet ?? [],
     environment: conn.environment ?? null,
     policyKind: "sql",
@@ -130,6 +138,7 @@ export function adopt(draft: ConnectionDraft, manifest: AdapterManifest, resetCo
       if (f.default != null) seededCfg[f.key] = f.default;
     }
     next.config = seededCfg;
+    next.rows = {};
     next.savedSecrets = [];
     next.toolConfig = {};
     next.approvals = emptyApprovals();
@@ -199,11 +208,16 @@ export function canSave(draft: ConnectionDraft): boolean {
 /**
  * The config a save sends. A blank secret keeps its saved value by being left
  * out; a blank secret with nothing saved, or one the user removed, goes as
- * `null` so the host drops it.
+ * `null` so the host drops it. Each key/value field goes as its full row
+ * list, so a row left out is removed.
  */
-export function configToSave(draft: ConnectionDraft): Record<string, string | null> {
-  const config: Record<string, string | null> = { ...draft.config };
+export function configToSave(draft: ConnectionDraft): Record<string, string | null | SentRow[]> {
+  const config: Record<string, string | null | SentRow[]> = { ...draft.config };
   for (const f of draft.fields) {
+    if (f.type === "keyvalue") {
+      config[f.key] = rowsToSave(draft.rows[f.key] ?? []);
+      continue;
+    }
     if (!f.secret || (config[f.key] ?? "") !== "") continue;
     if (draft.savedSecrets.includes(f.key)) delete config[f.key];
     else config[f.key] = null;

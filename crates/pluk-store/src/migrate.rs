@@ -22,7 +22,7 @@ type Step = fn(&mut Connection) -> Result<()>;
 
 const LADDER: &[Step] = &[
     migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
-    migrate_v8, migrate_v9, migrate_v10, migrate_v11,
+    migrate_v8, migrate_v9, migrate_v10, migrate_v11, migrate_v12,
 ];
 
 /// Bring `conn` up to the latest version.
@@ -462,6 +462,27 @@ fn migrate_v11(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 12: the secret values of a proxied server's header and environment
+/// rows, kept out of `integrations.config` for the reason `proxy_auth` is.
+fn migrate_v12(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "
+        CREATE TABLE proxy_secrets (
+            integration_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('header', 'env')),
+            name TEXT NOT NULL,
+            value TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (integration_id, kind, name)
+        );
+        ",
+    )?;
+    tx.pragma_update(None, "user_version", 12)?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn rebuild_browser_drafts(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
@@ -882,14 +903,35 @@ mod tests {
                 ],
             ),
         ];
+        assert_eq!(current_version(&upgraded).unwrap(), 11);
+        assert_eq!(current_version(&fresh).unwrap(), LADDER.len() as u32);
         for conn in [&upgraded, &fresh] {
-            assert_eq!(current_version(conn).unwrap(), 11);
             for (table, columns) in tables {
                 let expected: HashSet<String> =
                     columns.iter().map(|name| (*name).to_owned()).collect();
                 assert_eq!(columns_of(conn, table), expected, "{table}");
             }
         }
+    }
+
+    #[test]
+    fn upgrades_v11_with_the_proxy_secrets_table() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &LADDER[..11] {
+            step(&mut conn).unwrap();
+        }
+        run(&mut conn).unwrap();
+        assert_eq!(current_version(&conn).unwrap(), 12);
+        let expected: HashSet<String> = ["integration_id", "kind", "name", "value", "version"]
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert_eq!(columns_of(&conn, "proxy_secrets"), expected);
+        let refused = conn.execute(
+            "INSERT INTO proxy_secrets (integration_id, kind, name, value) VALUES ('i', 'cookie', 'n', 'v')",
+            [],
+        );
+        assert!(refused.is_err(), "only header and env rows are kept");
     }
 
     fn columns_of(conn: &Connection, table: &str) -> HashSet<String> {

@@ -5,9 +5,12 @@
 //! in can be signed in to; a server that refuses and publishes nothing wants a
 //! token only the user can get.
 //!
-//! Nothing the user stored is presented here. The answer has to describe the
-//! server rather than what Pluk already holds, and a credential sent to find
-//! that out would be sent before anyone decided it belonged there.
+//! No credential the user stored is presented here. The answer has to
+//! describe the server rather than what Pluk already holds, and a credential
+//! sent to find that out would be sent before anyone decided it belonged
+//! there. Header rows not marked secret do go along: they carry routing data,
+//! such as which account or instance to answer for, that some servers need
+//! before they answer at all.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -26,6 +29,7 @@ use crate::error::AdapterError;
 use super::catalog;
 use super::client::{self, UPSTREAM_UNREACHABLE_CODE};
 use super::discovery;
+use super::transport::{self, StaticHeader};
 
 /// How long the probe waits before calling the server unreachable.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -58,15 +62,17 @@ impl SignInRequired {
 
 /// What the server this integration points at asks for.
 ///
-/// The answer is kept per integration against the address it was found at, so
-/// pointing the integration somewhere else asks the new server for itself.
+/// The answer is kept per integration against the address and plain headers
+/// it was found with, so changing either asks the server again.
 pub async fn required(conn: &Integration) -> Result<SignInRequired, AdapterError> {
     let endpoint = catalog::endpoint(conn)?;
-    if let Some(known) = remembered(&conn.id, &endpoint) {
+    let headers = transport::plain_headers(conn)?;
+    let asked = format!("{endpoint}\u{0}{}", transport::digest(&headers));
+    if let Some(known) = remembered(&conn.id, &asked) {
         return Ok(known);
     }
-    let detected = detect(&endpoint).await?;
-    remember(&conn.id, &endpoint, detected);
+    let detected = detect(&endpoint, &headers).await?;
+    remember(&conn.id, &asked, detected);
     Ok(detected)
 }
 
@@ -86,13 +92,15 @@ pub fn needs_client_id(conn: &Integration, required: SignInRequired) -> bool {
     ) && catalog::config_str(conn, "client_id").is_none()
 }
 
-async fn detect(endpoint: &str) -> Result<SignInRequired, AdapterError> {
-    let sent = client::upstream_client()?
+async fn detect(endpoint: &str, headers: &[StaticHeader]) -> Result<SignInRequired, AdapterError> {
+    let mut request = client::upstream_client()?
         .post(endpoint)
         .header(ACCEPT, "application/json, text/event-stream")
-        .header(CONTENT_TYPE, "application/json")
-        .body(initialize().to_string())
-        .send();
+        .header(CONTENT_TYPE, "application/json");
+    for header in headers {
+        request = request.header(header.name.clone(), header.header_value()?);
+    }
+    let sent = request.body(initialize().to_string()).send();
     let Ok(Ok(response)) = timeout(PROBE_TIMEOUT, sent).await else {
         return Err(AdapterError::new(UNREACHABLE).with_code(UPSTREAM_UNREACHABLE_CODE));
     };
@@ -135,17 +143,17 @@ fn initialize() -> Value {
     })
 }
 
-fn remembered(integration_id: &str, endpoint: &str) -> Option<SignInRequired> {
+fn remembered(integration_id: &str, asked: &str) -> Option<SignInRequired> {
     let held = detected().lock().expect("mcp probe");
-    let (address, required) = held.get(integration_id)?;
-    (address == endpoint).then_some(*required)
+    let (previous, required) = held.get(integration_id)?;
+    (previous == asked).then_some(*required)
 }
 
-fn remember(integration_id: &str, endpoint: &str, required: SignInRequired) {
+fn remember(integration_id: &str, asked: &str, required: SignInRequired) {
     detected()
         .lock()
         .expect("mcp probe")
-        .insert(integration_id.to_string(), (endpoint.to_string(), required));
+        .insert(integration_id.to_string(), (asked.to_string(), required));
 }
 
 fn detected() -> &'static Mutex<HashMap<String, (String, SignInRequired)>> {
@@ -648,6 +656,33 @@ mod tests {
         forget(&conn.id);
         required(&conn).await.expect("probe after forgetting");
         assert_eq!(presented.headers.lock().expect("presented").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn new_plain_headers_ask_again_and_secret_ones_never_go() {
+        let (endpoint, presented) = guarded_server(true).await;
+        let with_rows = |org: &str| {
+            integration(
+                "probe-headers",
+                json!({ "url": endpoint.clone(), "headers": [
+                    {"name": "X-Org", "value": org, "secret": false},
+                    {"name": "Authorization", "secret": true},
+                ]}),
+            )
+        };
+
+        required(&with_rows("acme")).await.expect("probe");
+        required(&with_rows("acme")).await.expect("remembered");
+        assert_eq!(presented.carried().len(), 1);
+
+        required(&with_rows("globex"))
+            .await
+            .expect("probe with new headers");
+        assert_eq!(
+            presented.carried(),
+            [None, None],
+            "no Authorization went out"
+        );
     }
 
     #[tokio::test]

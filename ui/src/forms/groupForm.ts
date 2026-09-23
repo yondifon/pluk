@@ -92,7 +92,7 @@ export function canSaveGroup(draft: GroupDraft): boolean {
 
 export function overridableFields(manifest: AdapterManifest | undefined): ConfigFieldDef[] {
   if (!manifest) return [];
-  return manifest.configFields.filter((f) => !(f.secret ?? false));
+  return manifest.configFields.filter((f) => !(f.secret ?? false) && f.type !== "keyvalue");
 }
 
 export function inheritPlaceholder(

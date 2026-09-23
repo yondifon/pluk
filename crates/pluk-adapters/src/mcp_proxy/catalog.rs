@@ -20,6 +20,7 @@ use crate::tool_spec::ToolSpec;
 
 use super::client::{self, DEFAULT_AUTH_HEADER, McpProxyClient, UpstreamAuth, UpstreamTool};
 use super::oauth;
+use super::transport::{self, StaticHeader};
 
 /// The address would carry a credential in the clear to somewhere else.
 pub const INSECURE_ADDRESS_CODE: &str = "MCP_PROXY_INSECURE_ADDRESS";
@@ -100,11 +101,12 @@ pub fn static_auth(conn: &Integration) -> UpstreamAuth {
 }
 
 /// A client for one integration, with the pooled session dropped when the
-/// address or the credentials moved since it was opened.
+/// address, the credentials or the headers moved since it was opened.
 pub async fn client_for(store: &Store, conn: &Integration) -> Result<McpProxyClient, AdapterError> {
     let endpoint = endpoint(conn)?;
     let auth = upstream_auth(store, conn).await?;
-    let fingerprint = fingerprint(&endpoint, &auth);
+    let headers = transport::static_headers(store, conn)?;
+    let fingerprint = fingerprint(&endpoint, &auth, &headers);
     let previous = session_fingerprints()
         .lock()
         .expect("mcp proxy fingerprints")
@@ -112,7 +114,7 @@ pub async fn client_for(store: &Store, conn: &Integration) -> Result<McpProxyCli
     if previous.is_some_and(|previous| previous != fingerprint) {
         client::invalidate(&conn.id);
     }
-    Ok(McpProxyClient::new(&conn.id, endpoint, auth))
+    Ok(McpProxyClient::new(&conn.id, endpoint, auth).with_headers(headers))
 }
 
 /// Ask upstream what it offers now and replace the snapshot with the answer.
@@ -210,13 +212,14 @@ pub(super) fn config_str(conn: &Integration, key: &str) -> Option<String> {
 }
 
 /// What an open session was opened with, without keeping the secret around.
-fn fingerprint(endpoint: &str, auth: &UpstreamAuth) -> String {
+fn fingerprint(endpoint: &str, auth: &UpstreamAuth, headers: &[StaticHeader]) -> String {
     let credential = match auth {
         UpstreamAuth::None => String::new(),
         UpstreamAuth::Header { name, value } => format!("{name}\u{0}{value}"),
         UpstreamAuth::Bearer { access_token } => format!("bearer\u{0}{access_token}"),
     };
-    digest(&format!("{endpoint}\u{0}{credential}"))
+    let headers = transport::digest(headers);
+    digest(&format!("{endpoint}\u{0}{credential}\u{0}{headers}"))
 }
 
 fn session_fingerprints() -> &'static Mutex<HashMap<String, String>> {

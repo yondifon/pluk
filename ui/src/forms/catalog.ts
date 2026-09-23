@@ -1,4 +1,5 @@
-export type FieldType = "text" | "password" | "number" | "file" | "select" | "toggle";
+/** `keyvalue` is a list of named rows, each plain or secret; see `keyValue.ts`. */
+export type FieldType = "text" | "password" | "number" | "file" | "select" | "toggle" | "keyvalue";
 
 export interface FieldOption {
   value: string;
