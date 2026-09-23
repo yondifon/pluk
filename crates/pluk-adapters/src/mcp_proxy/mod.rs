@@ -15,6 +15,7 @@ pub mod catalog;
 mod child;
 pub mod client;
 mod discovery;
+pub mod import;
 pub mod local;
 pub mod oauth;
 pub mod probe;
@@ -1108,6 +1109,48 @@ mod tests {
             Value::Object(host.tools[0].input_schema.clone()),
             json!({"type": "object", "properties": {"q": {"type": "string"}}})
         );
+
+        client::shutdown(&conn.id);
+    }
+
+    #[tokio::test]
+    async fn imported_tools_to_turn_off_apply_once_discovery_finds_them() {
+        let (endpoint, _tools) = upstream().await;
+        let (_dir, store) = store();
+        let mut input = IntegrationInput::new("Imported", ADAPTER_ID);
+        input.config = integration("unused", json!({ "url": endpoint })).config;
+        input.query_policy =
+            import::policy_with_pending_off(&["search".to_string(), "not_offered".to_string()]);
+        let conn = store.create_integration(&input).expect("create");
+        let policy = |store: &Store| {
+            let stored = store.integration_by_id(&conn.id).unwrap().unwrap();
+            pluk_store::parse_query_policy(stored.query_policy.as_deref()).expect("policy")
+        };
+        assert!(policy(&store).tools.is_empty());
+
+        catalog::discover(&store, &conn).await.expect("discover");
+        let after = policy(&store);
+        assert!(!after.tools["search"].enabled);
+        assert_eq!(import::pending_off(Some(&after)), ["not_offered"]);
+
+        // Once applied, the switch is the user's: turning it on sticks.
+        let on = api::handle_proxy_api(
+            &store,
+            &conn,
+            ApiRequest {
+                method: "POST".to_string(),
+                url: String::new(),
+                body: Some(json!({ "names": ["search"], "enabled": true }).to_string()),
+            },
+            "/proxy/enable",
+        )
+        .await
+        .expect("route");
+        assert_eq!(on.status, 200);
+        catalog::discover(&store, &conn)
+            .await
+            .expect("discover again");
+        assert!(policy(&store).tools["search"].enabled);
 
         client::shutdown(&conn.id);
     }

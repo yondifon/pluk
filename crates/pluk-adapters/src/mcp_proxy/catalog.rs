@@ -19,6 +19,7 @@ use crate::error::AdapterError;
 use crate::tool_spec::ToolSpec;
 
 use super::client::{self, DEFAULT_AUTH_HEADER, McpProxyClient, UpstreamAuth, UpstreamTool};
+use super::import;
 use super::local;
 use super::oauth;
 use super::transport::{self, StaticHeader};
@@ -131,12 +132,15 @@ fn keep_session_if_unchanged(integration_id: &str, fingerprint: String) {
 }
 
 /// Ask upstream what it offers now and replace the snapshot with the answer.
+/// Tools an imported config turned off are switched off once they are found.
 pub async fn discover(store: &Store, conn: &Integration) -> Result<Vec<ProxyTool>, AdapterError> {
     let tools = client_for(store, conn).await?.list_tools().await?;
     let discovered: Vec<DiscoveredTool> = tools.iter().map(discovered_from).collect();
     store
         .replace_proxy_tools(&conn.id, &discovered)
         .map_err(store_failure)?;
+    let found: Vec<String> = tools.iter().map(|tool| tool.name.clone()).collect();
+    import::apply_pending_off(store, &conn.id, &found).map_err(store_failure)?;
     snapshot(store, &conn.id)
 }
 

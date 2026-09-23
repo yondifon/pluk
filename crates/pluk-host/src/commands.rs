@@ -107,6 +107,9 @@ pub struct IntegrationJson {
     pub tool_config: std::collections::BTreeMap<String, pluk_store::ToolPolicy>,
     /// The rules deciding what runs without asking, and whether to ask at all.
     pub approvals: pluk_store::Approvals,
+    /// Tools an imported config turned off that the server has not listed yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_tools_off: Vec<String>,
     pub token: String,
     pub created_at: String,
     /// This integration's own tool catalog, which for some adapters is only
@@ -157,6 +160,7 @@ impl IntegrationJson {
             config,
             secrets_set,
             environment: i.environment.map(|e| e.as_str().to_string()),
+            pending_tools_off: pluk_adapters::mcp_proxy::import::pending_off(policy.as_ref()),
             tool_config: policy.clone().map(|p| p.tools).unwrap_or_default(),
             approvals: policy.map(|p| p.approvals).unwrap_or_default(),
             token: i.token,
@@ -346,6 +350,16 @@ fn create_integration_in(
     registry: &pluk_adapters::AdapterRegistry,
     payload: CreateIntegrationPayload,
 ) -> CmdResult<IntegrationJson> {
+    create_with_policy(store, registry, payload, None)
+}
+
+/// The one create path, with the policy blob the new integration starts with.
+fn create_with_policy(
+    store: &pluk_store::Store,
+    registry: &pluk_adapters::AdapterRegistry,
+    payload: CreateIntegrationPayload,
+    query_policy: Option<String>,
+) -> CmdResult<IntegrationJson> {
     let source = copy_source(store, payload.secrets_from.as_deref())?;
     let prepared = prepare_config(
         store,
@@ -361,6 +375,7 @@ fn create_integration_in(
         .environment
         .as_deref()
         .and_then(pluk_store::Environment::parse);
+    input.query_policy = query_policy;
     let created = store
         .create_integration(&input)
         .map_err(|e| e.to_string())?;
@@ -432,6 +447,89 @@ fn check_integration_config_in(
         Err(SaveRefused::Problem(problem)) => Ok(Some(problem)),
         Err(SaveRefused::Failed(message)) => Err(message),
     }
+}
+
+/// The MCP servers a config copied from another client lists, for the window
+/// to review before anything is saved.
+#[tauri::command]
+pub fn parse_mcp_config(
+    text: String,
+) -> Result<pluk_core::mcp_import::ParsedImport, pluk_core::mcp_import::ImportError> {
+    pluk_core::mcp_import::parse(&text)
+}
+
+/// How saving one reviewed server went: the integration it became, or why
+/// it was not added.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedServer {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integration: Option<IntegrationJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Add each reviewed server as its own MCP integration through the create
+/// path the settings form uses. One that cannot be added leaves the others
+/// saved. A local server is saved like any other and still waits for the
+/// user to approve its command.
+#[tauri::command]
+pub fn import_mcp_servers(
+    state: State<'_, HostState>,
+    servers: Vec<pluk_core::mcp_import::ServerDraft>,
+) -> CmdResult<Vec<ImportedServer>> {
+    import_mcp_servers_in(&state.store, &state.shared.registry, servers)
+}
+
+fn import_mcp_servers_in(
+    store: &pluk_store::Store,
+    registry: &pluk_adapters::AdapterRegistry,
+    servers: Vec<pluk_core::mcp_import::ServerDraft>,
+) -> CmdResult<Vec<ImportedServer>> {
+    use pluk_adapters::mcp_proxy::{ADAPTER_ID, import};
+
+    let mut taken: Vec<String> = store
+        .list_integrations()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|i| i.name.trim().to_lowercase())
+        .collect();
+    let mut outcomes = Vec::new();
+    for server in servers {
+        let name = server.name.trim().to_string();
+        let result = if name.is_empty() {
+            Err("Add a name for this server.".to_string())
+        } else if taken.contains(&name.to_lowercase()) {
+            Err(format!("{name} is already in Pluk. Choose another name."))
+        } else {
+            create_with_policy(
+                store,
+                registry,
+                CreateIntegrationPayload {
+                    name: name.clone(),
+                    r#type: ADAPTER_ID.to_string(),
+                    config: import::config_for(&server),
+                    environment: None,
+                    secrets_from: None,
+                },
+                import::policy_with_pending_off(&server.disabled_tools),
+            )
+        };
+        let (integration, error) = match result {
+            Ok(created) => {
+                taken.push(name.to_lowercase());
+                (Some(created), None)
+            }
+            Err(message) => (None, Some(message)),
+        };
+        outcomes.push(ImportedServer {
+            name,
+            integration,
+            error,
+        });
+    }
+    Ok(outcomes)
 }
 
 /// Read a field so an explicit `null` keeps its own meaning: an absent field
@@ -1608,6 +1706,79 @@ mod secret_tests {
 
         assert_eq!(stored(&world, &copy.id)["token"], json!(TOKEN));
         assert!(!copy.config.contains_key("token"));
+    }
+
+    #[test]
+    fn a_pasted_config_saves_each_server_with_its_secrets_in_the_secret_store() {
+        let world = world();
+        create(
+            &world,
+            "mcp",
+            config(json!({"url": "https://taken.example/mcp"})),
+        );
+        let parsed = parse_mcp_config(
+            r#"{"mcpServers":{
+              "sentry-selfhosted":{"command":"node","args":["/path/to/sentry-mcp/build/index.js"],
+                "env":{"SENTRY_URL":"https://sentry.internal.domain","SENTRY_AUTH_TOKEN":"sntrys_secret","SENTRY_ORG_SLUG":"my-org"},
+                "disabledTools":["create_sentry_issue_comment","update_sentry_issue_status"]},
+              "datadog":{"type":"http","url":"https://mcp.datadoghq.com/mcp","headers":{"DD-API-KEY":"dd_secret"}},
+              "clash":{"url":"https://other.example/mcp"}}}"#
+                .to_string(),
+        )
+        .unwrap();
+        let mut servers = parsed.servers;
+        let clash = servers.iter_mut().find(|s| s.name == "clash").unwrap();
+        clash.name = "MCP integration".into();
+
+        let outcomes = import_mcp_servers_in(&world.store, &world.registry, servers).unwrap();
+        let by_name = |name: &str| outcomes.iter().find(|o| o.name == name).unwrap();
+        assert_eq!(
+            by_name("MCP integration").error.as_deref(),
+            Some("MCP integration is already in Pluk. Choose another name.")
+        );
+
+        let sentry = by_name("sentry-selfhosted").integration.as_ref().unwrap();
+        let config = stored(&world, &sentry.id);
+        assert_eq!(config["connection"], json!("local"));
+        assert_eq!(config["command"], json!("node"));
+        assert!(
+            !serde_json::to_string(&config)
+                .unwrap()
+                .contains("sntrys_secret")
+        );
+        assert!(
+            !serde_json::to_string(&sentry.config)
+                .unwrap()
+                .contains("sntrys_secret")
+        );
+        let saved = world.store.list_proxy_secrets(&sentry.id).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].name, "SENTRY_AUTH_TOKEN");
+        assert_eq!(saved[0].value, "sntrys_secret");
+        assert!(
+            config["env"]
+                .as_array()
+                .unwrap()
+                .contains(&json!({"name": "SENTRY_ORG_SLUG", "value": "my-org", "secret": false}))
+        );
+        assert_eq!(
+            sentry.pending_tools_off,
+            ["create_sentry_issue_comment", "update_sentry_issue_status"]
+        );
+        assert!(sentry.tool_config.is_empty());
+        assert_eq!(world.store.approved_launch(&sentry.id).unwrap(), None);
+
+        let datadog = by_name("datadog").integration.as_ref().unwrap();
+        assert!(
+            !serde_json::to_string(&stored(&world, &datadog.id))
+                .unwrap()
+                .contains("dd_secret")
+        );
+        let saved = world.store.list_proxy_secrets(&datadog.id).unwrap();
+        assert_eq!(
+            (saved[0].name.as_str(), saved[0].value.as_str()),
+            ("DD-API-KEY", "dd_secret")
+        );
     }
 
     /// Just enough of an MCP server to open a session and list one tool, and

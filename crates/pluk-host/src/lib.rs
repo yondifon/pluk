@@ -201,6 +201,8 @@ pub fn run() {
             commands::update_integration,
             commands::check_approval_rules,
             commands::check_integration_config,
+            commands::parse_mcp_config,
+            commands::import_mcp_servers,
             commands::delete_integration,
             commands::mcp_launch_preview,
             commands::approve_mcp_launch,
