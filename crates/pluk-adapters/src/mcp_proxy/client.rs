@@ -255,7 +255,7 @@ impl McpProxyClient {
                 config.custom_headers.insert(name, value);
             }
         }
-        let transport = StreamableHttpClientTransport::with_client(upstream_client()?, config);
+        let transport = StreamableHttpClientTransport::with_client(session_client()?, config);
         let handler = ProxyHandler { tools_changed };
         match timeout(CONNECT_TIMEOUT, serve_client(handler, transport)).await {
             Err(_) => Err(self.timed_out()),
@@ -294,17 +294,32 @@ pub fn invalidate(integration_id: &str) {
         .remove(integration_id);
 }
 
-/// The HTTP client every upstream MCP server is reached through. It is not
-/// the one [`crate::http_client`] hands the API adapters: rmcp's transport is
-/// built on the next major of reqwest, so the two cannot be the same value.
+/// The HTTP client the probe and sign-in discovery reach an upstream server
+/// through. It follows redirects, since metadata documents are often moved,
+/// and it never carries a credential. It is not the one
+/// [`crate::http_client`] hands the API adapters: rmcp's transport is built on
+/// the next major of reqwest, so the two cannot be the same value.
 pub(super) fn upstream_client() -> Result<upstream_http::Client, AdapterError> {
     static CLIENT: OnceLock<Result<upstream_http::Client, String>> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            upstream_http::Client::builder()
-                .build()
-                .map_err(|e| e.to_string())
-        })
+    shared(&CLIENT, upstream_http::Client::builder())
+}
+
+/// The HTTP client a session is carried on. It never follows a redirect: on a
+/// hop to another host reqwest drops only `Authorization` and cookies, so any
+/// other header holding a credential would go along to the new host.
+fn session_client() -> Result<upstream_http::Client, AdapterError> {
+    static CLIENT: OnceLock<Result<upstream_http::Client, String>> = OnceLock::new();
+    shared(
+        &CLIENT,
+        upstream_http::Client::builder().redirect(upstream_http::redirect::Policy::none()),
+    )
+}
+
+fn shared(
+    cell: &'static OnceLock<Result<upstream_http::Client, String>>,
+    builder: upstream_http::ClientBuilder,
+) -> Result<upstream_http::Client, AdapterError> {
+    cell.get_or_init(|| builder.build().map_err(|e| e.to_string()))
         .clone()
         .map_err(AdapterError::new)
 }
@@ -748,6 +763,54 @@ mod tests {
         assert!(!format!("{client:?}").contains(TOKEN));
 
         invalidate("auth-rejected");
+    }
+
+    /// A server at another host that counts the requests reaching it, and one
+    /// at the endpoint that sends every request there.
+    async fn redirecting_upstream() -> (String, Arc<AtomicUsize>) {
+        let reached = Arc::new(AtomicUsize::new(0));
+        let counter = reached.clone();
+        let elsewhere = serve(Router::new().route(
+            "/mcp",
+            any(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async { "reached" }
+            }),
+        ))
+        .await
+        .replace("127.0.0.1", "localhost");
+        let endpoint = serve(Router::new().route(
+            "/mcp",
+            any(move || {
+                let elsewhere = elsewhere.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::TEMPORARY_REDIRECT,
+                        [(axum::http::header::LOCATION, elsewhere)],
+                    )
+                }
+            }),
+        ))
+        .await;
+        (endpoint, reached)
+    }
+
+    #[tokio::test]
+    async fn a_session_does_not_follow_a_redirect_with_its_credentials() {
+        let (endpoint, reached) = redirecting_upstream().await;
+        let client = McpProxyClient::new(
+            "no-redirects",
+            endpoint,
+            UpstreamAuth::header("X-Api-Key", TOKEN),
+        );
+
+        client
+            .list_tools()
+            .await
+            .expect_err("a redirect is not a session");
+        assert_eq!(reached.load(Ordering::SeqCst), 0);
+
+        invalidate("no-redirects");
     }
 
     #[test]
