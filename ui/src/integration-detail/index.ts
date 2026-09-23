@@ -40,8 +40,9 @@ export function mountIntegrationDetail(
   const tabs: TabId[] = INTEGRATION_TAB_ORDER;
   let selectedTab: TabId = openAt && tabs.includes(openAt)
     ? openAt
-    : initialTab({ kind: "integration", integration, manifest, health: currentHealth });
+    : initialTab({ integration, manifest, health: currentHealth });
   let userSelectedTab = false;
+  let mcpStatusApplied = false;
   let testing = false;
   const logsMount = document.createElement("div");
   logsMount.className = "logs-mount";
@@ -129,8 +130,12 @@ export function mountIntegrationDetail(
       panel.setAttribute("aria-labelledby", "tab-tools");
       if (integration.type === MCP_TYPE) {
         serverTools = mountServerTools(panel, integration, (mcp) => {
+          if (mcpStatusApplied) return;
+          mcpStatusApplied = true;
           if (userSelectedTab) return;
-          selectedTab = initialTab({ kind: "integration", integration, manifest, health: currentHealth, mcp });
+          const nextTab = initialTab({ integration, manifest, health: currentHealth, mcp });
+          if (nextTab === selectedTab) return;
+          selectedTab = nextTab;
           render();
         });
       }

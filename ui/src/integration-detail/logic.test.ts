@@ -63,32 +63,27 @@ describe("initial detail tab", () => {
     configFields: [{ key: "host", label: "Host", type: "text", required: true }],
   };
 
-  test("groups open on Logs", () => {
-    expect(initialTab({ kind: "group" })).toBe("logs");
-  });
-
   test("a required empty config field opens Overview", () => {
-    expect(initialTab({ kind: "integration", integration: { ...base, config: { host: " " } }, manifest })).toBe("overview");
+    expect(initialTab({ integration: { ...base, config: { host: " " } }, manifest })).toBe("overview");
   });
 
   test("a failed health check opens Overview", () => {
-    expect(initialTab({ kind: "integration", integration: base, manifest, health: { status: "error", at: 1 } })).toBe("overview");
+    expect(initialTab({ integration: base, manifest, health: { status: "error", at: 1 } })).toBe("overview");
   });
 
   test("a complete integration with unknown or healthy status opens Logs", () => {
-    expect(initialTab({ kind: "integration", integration: base, manifest })).toBe("logs");
-    expect(initialTab({ kind: "integration", integration: base, manifest, health: { status: "ok", at: 1 } })).toBe("logs");
+    expect(initialTab({ integration: base, manifest })).toBe("logs");
+    expect(initialTab({ integration: base, manifest, health: { status: "ok", at: 1 } })).toBe("logs");
   });
 
   test("an MCP integration without sign-in or discovered tools opens Tools", () => {
     const mcp = { ...base, type: "mcp" };
-    expect(initialTab({ kind: "integration", integration: mcp, mcp: { signedIn: false, toolCount: 2 } })).toBe("tools");
-    expect(initialTab({ kind: "integration", integration: mcp, mcp: { signedIn: true, toolCount: 0 } })).toBe("tools");
+    expect(initialTab({ integration: mcp, mcp: { signedIn: false, toolCount: 2 } })).toBe("tools");
+    expect(initialTab({ integration: mcp, mcp: { signedIn: true, toolCount: 0 } })).toBe("tools");
   });
 
   test("a signed-in MCP integration with discovered tools opens Logs", () => {
     expect(initialTab({
-      kind: "integration",
       integration: { ...base, type: "mcp" },
       mcp: { signedIn: true, toolCount: 1 },
     })).toBe("logs");

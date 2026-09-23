@@ -2,19 +2,14 @@ import type { AdapterManifest, ConfigField, ConnHealth, ConnStatus, FanOutResult
 import { MCP_TYPE } from "./types";
 import type { TabId } from "./tabs";
 
-export type InitialTabItem =
-  | { kind: "group" }
-  | {
-      kind: "integration";
-      integration: Integration;
-      manifest?: AdapterManifest | null;
-      health?: ConnHealth | null;
-      mcp?: { signedIn: boolean; toolCount: number };
-    };
+export type InitialTabItem = {
+  integration: Integration;
+  manifest?: AdapterManifest | null;
+  health?: ConnHealth | null;
+  mcp?: { signedIn: boolean; toolCount: number };
+};
 
 export function initialTab(item: InitialTabItem): TabId {
-  if (item.kind === "group") return "logs";
-
   if (
     item.integration.type === MCP_TYPE &&
     (!item.mcp || !item.mcp.signedIn || item.mcp.toolCount === 0)

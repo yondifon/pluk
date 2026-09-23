@@ -150,6 +150,71 @@ describe("mountIntegrationDetail health update", () => {
     databaseHandle.destroy();
   });
 
+  test("an MCP server awaiting sign-in loads auth once and stays on Tools", async () => {
+    let authCalls = 0;
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+      core: {
+        invoke: async (cmd: string, args?: { subpath?: string }) => {
+          if (cmd !== "integration_api") return undefined;
+          if (args?.subpath === "/proxy/auth") {
+            authCalls += 1;
+            return { status: 200, body: { auth: { kind: "oauth", status: "not_connected", required: "oauth" } } };
+          }
+          return { status: 200, body: { tools: [] } };
+        },
+      },
+      event: { listen: async () => () => {} },
+    } as never;
+    const root = document.createElement("div");
+    const handle = mountIntegrationDetail(root, { ...integration, type: "mcp" }, null, null, {
+      onEdit: () => {},
+      onDuplicate: () => {},
+      onDelete: () => {},
+      onTest: async () => ({ ok: true }),
+      inject: async () => ({ status: "added" as const, path: "" }),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(root.querySelector<HTMLButtonElement>("#tab-tools")!.getAttribute("aria-selected")).toBe("true");
+    expect(authCalls).toBe(1);
+    handle.destroy();
+  });
+
+  test("a signed-in MCP server with discovered tools settles on Logs", async () => {
+    let authCalls = 0;
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+      core: {
+        invoke: async (cmd: string, args?: { subpath?: string }) => {
+          if (cmd !== "integration_api") return undefined;
+          if (args?.subpath === "/proxy/auth") {
+            authCalls += 1;
+            return { status: 200, body: { auth: { kind: "oauth", status: "connected", required: "oauth" } } };
+          }
+          return {
+            status: 200,
+            body: { tools: [{ name: "search", label: "Search", description: "", category: "read", state: "approved", present: true, updatedAt: "" }] },
+          };
+        },
+      },
+      event: { listen: async () => () => {} },
+    } as never;
+    const root = document.createElement("div");
+    const handle = mountIntegrationDetail(root, { ...integration, type: "mcp" }, null, null, {
+      onEdit: () => {},
+      onDuplicate: () => {},
+      onDelete: () => {},
+      onTest: async () => ({ ok: true }),
+      inject: async () => ({ status: "added" as const, path: "" }),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(root.querySelector<HTMLButtonElement>("#tab-logs")!.getAttribute("aria-selected")).toBe("true");
+    expect(authCalls).toBe(1);
+    handle.destroy();
+  });
+
   test("Overview shows adapter configuration without MCP setup", () => {
     const root = document.createElement("div");
     mountIntegrationDetail(root, integration, null, null, {
