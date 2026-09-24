@@ -1,11 +1,7 @@
 //! The environment a program the user named expects to start in.
 //!
-//! An app opened from Finder inherits launchd's `PATH`, which holds none of
-//! Homebrew, bun, uv, cargo or volta. A command such as `npx` resolves only
-//! against the `PATH` the user's login shell builds, and the interpreter a
-//! script's `#!/usr/bin/env node` line names has to be on the child's `PATH`
-//! too. So that `PATH` is read from the login shell once, and both the lookup
-//! and the child use it.
+//! An app opened from Finder inherits launchd's `PATH`, which has no Homebrew,
+//! bun or uv, so the login shell's `PATH` is read once and used for both.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -21,12 +17,11 @@ use crate::process::run_capture;
 /// How long the login shell gets to print its `PATH`.
 const SHELL_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Surrounds the `PATH` in the shell's output, so whatever the user's
-/// dotfiles print around it is skipped.
+/// Fences the `PATH` off from whatever the user's dotfiles print.
 const MARKER: &str = "__PLUK_PATH__";
 
 /// Where the usual installers put programs, for when the login shell cannot
-/// be read. `~` is the user's home folder.
+/// be read.
 const FALLBACK_DIRS: &[&str] = &[
     "/opt/homebrew/bin",
     "/usr/local/bin",
@@ -41,12 +36,10 @@ const FALLBACK_DIRS: &[&str] = &[
     "/sbin",
 ];
 
-/// Variables a child gets from Pluk's own environment, on top of `PATH`.
-/// Everything else Pluk runs with stays out of third-party code.
+/// All a child gets from Pluk's own environment, besides `PATH`.
 const PASSED_THROUGH: &[&str] = &["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG"];
 
-/// The login shell's `PATH`, read once on first use. When the shell cannot
-/// be read, the usual install folders stand in for it.
+/// Read once; the usual install folders stand in when the shell cannot be read.
 pub async fn login_path() -> &'static OsStr {
     static PATH: OnceCell<OsString> = OnceCell::const_new();
     PATH.get_or_init(|| async {
@@ -60,8 +53,6 @@ pub async fn login_path() -> &'static OsStr {
     .await
 }
 
-/// The `PATH` `shell` builds as a login, interactive shell, or `None` when it
-/// fails, runs past `timeout`, or prints no `PATH`.
 pub async fn read_login_path(shell: &Path, timeout: Duration) -> Option<OsString> {
     let mut command = Command::new(shell);
     command.args([
@@ -77,13 +68,11 @@ pub async fn read_login_path(shell: &Path, timeout: Duration) -> Option<OsString
     (!path.is_empty()).then(|| OsString::from(path))
 }
 
-/// [`FALLBACK_DIRS`] joined as a `PATH`, with `~` expanded.
 pub fn fallback_path() -> OsString {
     let dirs: Vec<PathBuf> = FALLBACK_DIRS.iter().map(|dir| expand_home(dir)).collect();
     std::env::join_paths(dirs).unwrap_or_default()
 }
 
-/// `path` with a leading `~` replaced by the user's home folder.
 pub fn expand_home(path: &str) -> PathBuf {
     let home = || std::env::var_os("HOME").map(PathBuf::from);
     if path == "~" {
@@ -98,11 +87,8 @@ pub fn expand_home(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// The absolute path of the program `command` names.
-///
-/// An absolute path (or one under `~`) must be an executable file. A relative
-/// path with a `/` in it is refused, because what it names would depend on
-/// the folder Pluk happens to run in. A bare name is looked up in `path`.
+/// A relative path with a `/` is refused: it would depend on the folder Pluk
+/// happens to run in. A bare name is looked up in `path`.
 pub fn resolve_program(command: &str, path: &OsStr) -> io::Result<PathBuf> {
     let command = command.trim();
     if command.is_empty() {
@@ -135,8 +121,6 @@ pub fn resolve_program(command: &str, path: &OsStr) -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not found on the PATH"))
 }
 
-/// What a child starts with: the variables in [`PASSED_THROUGH`] and every
-/// `LC_*` one Pluk has, then `path` as `PATH`.
 pub fn base_env(path: &OsStr) -> Vec<(OsString, OsString)> {
     let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
         .filter(|(name, _)| {
@@ -164,8 +148,6 @@ mod tests {
         path
     }
 
-    /// A shell that prints dotfile noise around whatever it is asked to run,
-    /// with its own `PATH`.
     fn fake_shell(dir: &Path) -> PathBuf {
         script(
             dir,

@@ -4,11 +4,6 @@
 //! secret values, only the shape of the inputs (`secret` marks which stored
 //! values must not be echoed back).
 //!
-//! Secret values are write-only for the window. [`withhold_secrets`] takes
-//! them out of a config before it is sent there, and [`keep_secrets`] folds
-//! what the window sends back over the stored config, so a secret it never
-//! saw is not lost.
-//!
 //! Two normalisations are part of the contract:
 //!
 //! - [`ConfigField`] `default` accepts a string, integer or boolean and is
@@ -72,10 +67,8 @@ pub struct SelectOption {
 }
 
 /// Conditional visibility: show this field only when `config[key]` equals
-/// `equals` (or, with [`ShowIf::negated`], only when it does not), both
-/// compared as normalised strings. A missing key never equals anything, so a
-/// negated condition is how a field shows by default for integrations saved
-/// before the key existed.
+/// `equals` (or, when `negate`, when it does not), both compared as
+/// normalised strings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShowIf {
     pub key: String,
@@ -102,8 +95,6 @@ impl ShowIf {
         }
     }
 
-    /// Show when the config value does *not* equal `equals`, instead of when
-    /// it does.
     pub fn negated(mut self) -> Self {
         self.negate = true;
         self
@@ -165,8 +156,6 @@ pub struct ConfigField {
     #[serde(skip)]
     pub secret_kind: Option<SecretKind>,
     /// Whether a new row of a [`FieldType::KeyValue`] field starts secret.
-    /// Headers default to secret; a field of routing data, such as
-    /// environment variables, can default the other way.
     #[serde(rename = "defaultSecret", skip_serializing_if = "is_true")]
     pub default_secret: bool,
 }
@@ -251,16 +240,13 @@ impl ConfigField {
         self
     }
 
-    /// Show this field except when `config[key]` equals `equals`. A key the
-    /// config never set counts as not equal, so this is how a field already
-    /// on integrations saved before `key` existed keeps showing.
+    /// Show this field except when `config[key]` equals `equals`. A key never
+    /// saved counts as not equal, so the field shows on older integrations.
     pub fn show_unless_eq(mut self, key: impl Into<String>, equals: &Value) -> Self {
         self.show_if = Some(ShowIf::new(key, equals).negated());
         self
     }
 
-    /// A new row of this [`FieldType::KeyValue`] field starts plain instead
-    /// of secret.
     pub fn default_not_secret(mut self) -> Self {
         self.default_secret = false;
         self
@@ -396,10 +382,8 @@ mod tests {
     #[test]
     fn a_negated_show_if_shows_by_default_for_a_key_never_saved() {
         let show_if = ShowIf::new("connection", &json!("local")).negated();
-        // Never saved (old integrations) or saved as something else: shown.
         assert!(show_if.matches(None));
         assert!(show_if.matches(Some(&json!("remote"))));
-        // Saved as the excluded value: hidden.
         assert!(!show_if.matches(Some(&json!("local"))));
 
         let field = ConfigField::new("url", "URL", FieldType::Text)

@@ -11,10 +11,7 @@ export interface Integration {
   name: string;
   type: string;
   environment?: Environment | null;
-  /**
-   * Holds no secret values; `secretsSet` names the secret fields that are
-   * saved. A key/value field reads as the names of its rows.
-   */
+  /** Holds no secret values; a key/value field reads as the names of its rows. */
   config: Record<string, string>;
   secretsSet?: string[];
   toolConfig: Record<string, { enabled: boolean; settings: Record<string, string> }>;

@@ -8,8 +8,7 @@
 //! No credential the user stored is presented here. The answer has to
 //! describe the server rather than what Pluk already holds, and a credential
 //! sent to find that out would be sent before anyone decided it belonged
-//! there. Header rows not marked secret do go along: they carry routing data,
-//! such as which account or instance to answer for, that some servers need
+//! there. Plain header rows do go along: some servers need that routing data
 //! before they answer at all.
 
 use std::collections::HashMap;
@@ -64,8 +63,7 @@ impl SignInRequired {
 /// What the server this integration points at asks for.
 ///
 /// The answer is kept per integration against the address and plain headers
-/// it was found with, so changing either asks the server again. A local
-/// server asks for nothing: it runs as the user.
+/// it was found with, so changing either asks again.
 pub async fn required(conn: &Integration) -> Result<SignInRequired, AdapterError> {
     if local::is_local(conn) {
         return Ok(SignInRequired::None);

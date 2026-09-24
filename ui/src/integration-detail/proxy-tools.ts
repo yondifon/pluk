@@ -50,11 +50,7 @@ const STATE_RANK: Record<ProxyToolState, number> = {
   missing: 3,
 };
 
-/**
- * The line naming tools an imported config turned off that the server has
- * not listed yet. A listed one was switched off when it was found, so only
- * the rest are named.
- */
+/** Names the imported tools to turn off that the server has not listed yet. */
 export function pendingOffNote(pending: string[] | undefined, rows: ProxyToolRow[] | null): string | null {
   const listed = new Set((rows ?? []).filter((row) => row.present).map((row) => row.name));
   const waiting = (pending ?? []).filter((name) => !listed.has(name));

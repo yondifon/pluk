@@ -1,10 +1,6 @@
 /**
- * Rows of a key/value field, such as an MCP server's headers.
- *
- * The window never reads a secret row's value back: the host sends such a
- * row as its name, `secret: true`, and whether a value is saved (`set`). A
- * row sent back with a blank value keeps what is saved under `savedName`, so
- * renaming a saved row without retyping its value keeps the value too.
+ * Rows of a key/value field. A secret row arrives without its value; sent back
+ * blank, it keeps what is saved under `savedName`, even after a rename.
  */
 
 export interface KeyValueRow {
@@ -15,7 +11,6 @@ export interface KeyValueRow {
   savedName?: string;
 }
 
-/** One row as the host takes it back. */
 export interface SentRow {
   name: string;
   value: string;
@@ -34,7 +29,6 @@ export function emptyRow(secret = true): KeyValueRow {
   return { name: "", value: "", secret };
 }
 
-/** The rows a stored config holds, ready to edit. */
 export function rowsFromStored(stored: unknown): KeyValueRow[] {
   if (!Array.isArray(stored)) return [];
   return stored.map((item) => {
@@ -51,10 +45,7 @@ export function keepsSaved(row: KeyValueRow): boolean {
   return row.secret && row.savedName != null && row.value === "";
 }
 
-/**
- * The rows a save sends, blank ones included so the host's row numbers match
- * the form's. A plain row never claims a saved value.
- */
+/** Blank rows are kept so the host's row numbers match the form's. */
 export function rowsToSave(rows: KeyValueRow[]): SentRow[] {
   return rows.map((row) => {
     const sent: SentRow = { name: row.name.trim(), value: row.value, secret: row.secret };

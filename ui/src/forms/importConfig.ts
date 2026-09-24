@@ -1,10 +1,4 @@
-/**
- * Adding MCP servers from a config copied out of another client.
- *
- * The host reads the text into one draft per server. The user reviews them
- * here: renames any whose name is taken, flips secret guesses, skips the ones
- * they do not want. The host then adds the rest through the usual create path.
- */
+/** Reviewing MCP servers the host read from another client's config. */
 
 export interface DraftRow {
   name: string;
@@ -46,14 +40,12 @@ export interface ImportError {
   column?: number;
 }
 
-/** How saving one server went. */
 export interface ImportedServer {
   name: string;
   integration?: { id: string };
   error?: string;
 }
 
-/** A draft under review, with the user's choice to leave it out. */
 export interface ReviewItem {
   draft: ServerDraft;
   skip: boolean;
@@ -70,7 +62,6 @@ function key(name: string): string {
   return name.trim().toLowerCase();
 }
 
-/** Why an item's name cannot be saved, or null when it can. */
 export function nameProblem(items: ReviewItem[], index: number, taken: string[]): string | null {
   const item = items[index];
   if (item.skip) return null;
@@ -106,10 +97,7 @@ export function describeImportError(error: unknown): string {
   return String(error);
 }
 
-/**
- * What is left to review after a save: the items that were not added, each
- * with its reason. Saved and skipped ones drop out.
- */
+/** The items a save did not add, each with its reason. */
 export function afterSave(items: ReviewItem[], outcomes: ImportedServer[]): ReviewItem[] {
   const failed = new Map(outcomes.filter((o) => o.error).map((o) => [key(o.name), o.error]));
   return chosen(items)

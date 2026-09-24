@@ -115,24 +115,21 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 /* A rule list is typed a line at a time, so its box fills the column and grows. */
 .field-slot:has(> .rule-list) { align-items: stretch; }
 .rule-list { min-height: calc(var(--control-target) * 2); padding: var(--space-xs) var(--space-sm); resize: vertical; line-height: 1.5; }
-/* A key/value field stacks one line per row, name then value, with the add
-   button under the last. An error on a row takes a line of its own. */
+/* A key/value field stacks one line per row; a row's error takes its own line. */
 .field-slot.kv-list { flex-direction: column; align-items: stretch; }
 .field-slot.kv-list > .ui-button { align-self: flex-start; }
 .kv-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
 .kv-row > .kv-name { flex: 2 1 0; min-width: 0; }
 .kv-row > .kv-value { flex: 3 1 0; min-width: 0; }
 .kv-row > .field-error { flex-basis: 100%; margin-top: 0; }
-/* The exact command a local MCP server would run: a term/definition pair per
-   part, the argument and variable lists indented under theirs. */
+/* A local MCP server's launch preview. */
 .launch-preview { display: flex; flex-direction: column; gap: var(--space-xs); margin: 0 0 var(--space-sm); }
 .launch-preview dt { color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
 .launch-preview dd { margin: 0 0 var(--space-xs); overflow-wrap: anywhere; }
 .launch-preview-args, .launch-preview-env { margin: 0; padding: 0; list-style: none; }
 .launch-preview-args li, .launch-preview-env li { padding: var(--space-xxs) 0; }
 .launch-preview-env li { display: flex; align-items: center; gap: var(--space-xs); }
-/* A local server's stderr tail, collapsed by default so it doesn't dominate
-   the status card. */
+/* A local server's stderr tail. */
 .output-disclosure { margin-top: var(--space-sm); }
 .output-disclosure > summary { cursor: pointer; color: var(--surface-secondary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
 .output-lines { margin: var(--space-xs) 0 0; padding: var(--space-sm); overflow-x: auto; border-radius: var(--radius-sm); background: var(--surface-sunken); font-size: calc(var(--type-caption) * var(--zoom-scale)); white-space: pre-wrap; }

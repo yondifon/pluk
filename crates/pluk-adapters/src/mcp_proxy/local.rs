@@ -1,15 +1,7 @@
-//! A local MCP server: a command, its args, a working folder and environment
-//! variables, which Pluk starts and talks to over stdio.
+//! A local MCP server: a command Pluk starts and talks to over stdio.
 //!
-//! Pluk runs the command with the user's full access, so it runs only in the
-//! exact form the user approved: the resolved program, every arg, the folder,
-//! and each variable's name and value, hashed. Any change to them is a launch
-//! nobody approved, and nothing starts it until the user approves it again.
-//! Approving is the desktop window's alone; see `approve`.
-//!
-//! An integration is local when its config says so under [`CONNECTION_KEY`].
-//! Everything else about it being remote — the address, the probe, sign-in —
-//! is skipped.
+//! It runs with the user's full access, so it runs only in the exact form the
+//! user approved, bound by [`LaunchSpec::launch_hash`].
 
 use std::path::{Path, PathBuf};
 
@@ -26,18 +18,14 @@ use super::catalog;
 use super::client::{self, McpProxyClient};
 use super::transport::{LaunchSpec, RowText, Secret};
 
-/// Which way the integration reaches its server: [`REMOTE`] or [`LOCAL`].
-/// Absent means remote, which is every integration saved before local
-/// servers existed.
+/// [`REMOTE`] or [`LOCAL`]; absent means remote, as older integrations have it.
 pub const CONNECTION_KEY: &str = "connection";
 pub const REMOTE: &str = "remote";
 pub const LOCAL: &str = "local";
 
 pub const COMMAND_KEY: &str = "command";
-/// A list of strings, passed as they are, one arg each.
 pub const ARGS_KEY: &str = "args";
 pub const CWD_KEY: &str = "cwd";
-/// Key/value rows, their secret values saved as [`SecretKind::Env`].
 pub const ENV_KEY: &str = "env";
 
 /// The launch as configured now is not one the user approved.
@@ -64,8 +52,6 @@ pub fn is_local_config(config: &Config) -> bool {
     config.get(CONNECTION_KEY).and_then(Value::as_str) == Some(LOCAL)
 }
 
-/// The launch the integration's config describes now, with the program
-/// resolved and secret values read from the store.
 pub async fn launch_spec(store: &Store, conn: &Integration) -> Result<LaunchSpec, AdapterError> {
     let command = text(&conn.config, COMMAND_KEY).ok_or_else(|| AdapterError::new(NO_COMMAND))?;
     let path = shell_env::login_path().await;
@@ -84,8 +70,6 @@ pub async fn launch_spec(store: &Store, conn: &Integration) -> Result<LaunchSpec
     })
 }
 
-/// A client for the local server, refused until the user approved this
-/// exact launch.
 pub async fn client_for(
     store: &Store,
     conn: &Integration,
@@ -100,8 +84,7 @@ pub async fn client_for(
     Ok(McpProxyClient::stdio(&conn.id, spec))
 }
 
-/// Everything the user is shown before approving a launch. Secret values
-/// never appear: a variable is its name and whether it is secret.
+/// What the user approves. Secret values never appear in it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchPreview {
@@ -109,7 +92,6 @@ pub struct LaunchPreview {
     pub args: Vec<String>,
     pub cwd: String,
     pub env: Vec<EnvPreview>,
-    /// One line per variable that can make the program load other code.
     pub warnings: Vec<String>,
     /// What approving this preview approves.
     pub launch_hash: String,
@@ -152,11 +134,8 @@ pub async fn preview(store: &Store, conn: &Integration) -> Result<LaunchPreview,
     })
 }
 
-/// Approve the launch the user was shown as `launch_hash`. Refused when the
-/// launch changed since, so what runs is always what they saw.
-///
-/// Only the desktop window may call this. An adapter route would be open to
-/// every process on this machine.
+/// Refused when the launch changed since the user was shown `launch_hash`.
+/// Only the desktop window may call this; an adapter route is open to every local process.
 pub async fn approve(
     store: &Store,
     conn: &Integration,
@@ -171,15 +150,13 @@ pub async fn approve(
         .map_err(|error| AdapterError::new(error.to_string()))
 }
 
-/// Stop the server if it runs, clear a stop or the crash limit, and start it
-/// again by asking it for its tools.
+/// Starts the server again by asking it for its tools.
 pub async fn restart(store: &Store, conn: &Integration) -> Result<(), AdapterError> {
     client::restart(&conn.id).await;
     catalog::discover(store, conn).await.map(|_| ())
 }
 
-/// A local config the save would refuse. Whether the program exists is not
-/// checked here: that depends on the machine, and the preview shows it.
+/// Whether the program exists is left to the preview: it depends on the machine.
 pub fn check_config(config: &Config) -> Result<(), ConfigProblem> {
     let problem = |field: &str, message: &str| ConfigProblem {
         field: field.to_string(),
@@ -227,8 +204,7 @@ fn args(config: &Config) -> Result<Vec<String>, &'static str> {
     }
 }
 
-/// The folder the server starts in: the one configured, `~` expanded, or
-/// the user's home folder. Never Pluk's own, which is `/` from Finder.
+/// The configured folder, or home. Never Pluk's own, which is `/` from Finder.
 fn working_folder(config: &Config) -> Result<PathBuf, &'static str> {
     let folder = match text(config, CWD_KEY) {
         Some(folder) => shell_env::expand_home(&folder),
@@ -241,8 +217,7 @@ fn working_folder(config: &Config) -> Result<PathBuf, &'static str> {
     }
 }
 
-/// The user's variables in order, secret values read from the store. A
-/// secret row with nothing saved is left out.
+/// A secret row with nothing saved is left out.
 fn env(store: &Store, conn: &Integration) -> Result<Vec<(String, RowText)>, AdapterError> {
     let rows = key_value::rows(&conn.config, ENV_KEY);
     let saved = if rows.iter().any(|row| row.secret) {
@@ -277,7 +252,6 @@ fn is_relative_path(command: &str) -> bool {
     command.contains('/') && !command.starts_with('/') && !command.starts_with("~/")
 }
 
-/// Why the program could not be found, naming only its file name.
 fn not_found(command: &str, error: &std::io::Error) -> String {
     if error.kind() == std::io::ErrorKind::InvalidInput {
         return RELATIVE_COMMAND.to_string();

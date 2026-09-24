@@ -1,14 +1,6 @@
-//! Secret values a proxied MCP server is reached with (`proxy_secrets` table):
-//! the values of header rows, and of environment variables, marked secret.
-//!
-//! These rows stay out of `integrations.config` for the same reason
-//! `proxy_auth` does: that blob is what the window reads. The config keeps
-//! each row's name and its secret flag; the value lives only here, and the
-//! window learns no more than whether one is saved. Values are stored as
-//! written, like every other secret in `pluk.db`.
-//!
-//! Writes go by name and land together: [`Store::write_proxy_secrets`]
-//! applies a whole save, sets, clears and renames, in one transaction.
+//! Secret header and environment values of a proxied MCP server
+//! (`proxy_secrets` table), kept out of `integrations.config` because the
+//! window reads that blob.
 
 use std::fmt;
 
@@ -17,12 +9,9 @@ use rusqlite::{Row, params};
 use crate::Store;
 use crate::error::Result;
 
-/// What a secret value is sent as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SecretKind {
-    /// An HTTP header on every request to the server.
     Header,
-    /// An environment variable of a server Pluk starts.
     Env,
 }
 
@@ -43,7 +32,6 @@ impl SecretKind {
     }
 }
 
-/// One saved secret value.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ProxySecret {
     pub integration_id: String,
@@ -66,18 +54,14 @@ impl fmt::Debug for ProxySecret {
     }
 }
 
-/// One change to an integration's saved secrets.
 #[derive(Clone, PartialEq, Eq)]
 pub enum SecretWrite {
-    /// Save `value` under `name`, replacing what was there.
     Set {
         kind: SecretKind,
         name: String,
         value: String,
     },
-    /// Drop the value saved under `name`, if any.
     Clear { kind: SecretKind, name: String },
-    /// Move the value saved under `from` to `to`, keeping it.
     Rename {
         kind: SecretKind,
         from: String,
@@ -125,7 +109,6 @@ fn hydrate(row: &Row<'_>) -> rusqlite::Result<Option<ProxySecret>> {
 }
 
 impl Store {
-    /// Every secret saved for one integration, by kind and then name.
     pub fn list_proxy_secrets(&self, integration_id: &str) -> Result<Vec<ProxySecret>> {
         let conn = self.conn.lock().expect("store lock");
         let mut stmt = conn.prepare_cached(
@@ -140,7 +123,7 @@ impl Store {
         Ok(secrets)
     }
 
-    /// Apply one save's changes in order, all or none.
+    /// All or none, in order.
     pub fn write_proxy_secrets(&self, integration_id: &str, writes: &[SecretWrite]) -> Result<()> {
         if writes.is_empty() {
             return Ok(());

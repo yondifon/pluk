@@ -1,19 +1,8 @@
-//! How Pluk reaches an upstream server: over HTTP at an address, or by
-//! starting a local command and talking to it over stdio.
+//! How Pluk reaches an upstream server: over HTTP with the integration's
+//! header rows, or a local command over stdio.
 //!
-//! Over HTTP, the integration's `headers` rows are sent on every request of a
-//! session, whatever the sign-in: none, a saved token, or an OAuth sign-in.
-//! Values go out exactly as the user wrote them. A secret row's value is read
-//! from `proxy_secrets` and is only ever held as a [`Secret`].
-//!
-//! A few names are refused because the transport sets them itself, or
-//! because they frame the request. `Authorization` is only taken when the
-//! integration has no other sign-in; when it later gains one, the sign-in
-//! wins and the row is not sent.
-//!
-//! A local server is a [`LaunchSpec`]. Its args may carry a credential, so
-//! nothing outside the approval preview shows them; errors and `Debug` name
-//! the program's file name alone.
+//! A [`LaunchSpec`]'s args may carry a credential, so only the approval
+//! preview shows them; errors and `Debug` name the program's file name alone.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -29,7 +18,6 @@ use crate::key_value::{self, Row};
 
 use super::client::UpstreamAuth;
 
-/// The config key the header rows are kept under.
 pub const HEADERS_KEY: &str = "headers";
 
 /// Names the transport sets itself or that frame the request, lowercase. Any
@@ -50,9 +38,8 @@ const AUTHORIZATION_WITH_TOKEN: &str =
 const AUTHORIZATION_WITH_SIGN_IN: &str =
     "Authorization is already sent by the sign-in. Remove this header.";
 
-/// A value that never renders. There is no `Display` or `Serialize`, and
-/// `Debug` prints `<redacted>`; [`Secret::expose`] is called only where a
-/// header value is built or hashed.
+/// A value that never renders: no `Display` or `Serialize`, and `Debug`
+/// prints `<redacted>`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Secret(String);
 
@@ -72,7 +59,6 @@ impl std::fmt::Debug for Secret {
     }
 }
 
-/// The value of a header or environment row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RowText {
     Plain(String),
@@ -80,8 +66,7 @@ pub enum RowText {
 }
 
 impl RowText {
-    /// The text itself. Call only where a header, a child's environment or a
-    /// digest is built.
+    /// Call only where a header, a child's environment or a digest is built.
     pub fn expose(&self) -> &str {
         match self {
             RowText::Plain(text) => text,
@@ -90,7 +75,6 @@ impl RowText {
     }
 }
 
-/// The server a client reaches, and how.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UpstreamTransport {
     Http {
@@ -117,9 +101,7 @@ pub struct LaunchSpec {
 }
 
 impl LaunchSpec {
-    /// What an approval is bound to: the program, every arg, the folder, and
-    /// each variable's name with a digest of its value. Any change to one of
-    /// them is a launch nobody approved yet.
+    /// What an approval is bound to; any change is a launch nobody approved yet.
     pub fn launch_hash(&self) -> String {
         let env: Vec<(&str, String)> = self
             .env
@@ -189,8 +171,7 @@ impl StaticHeader {
     }
 }
 
-/// Which sign-in an integration already sends. `Authorization` is taken only
-/// without one, and a row cannot reuse the token's own header.
+/// Which sign-in an integration already sends. A header row may not repeat it.
 pub enum SignIn {
     None,
     /// A saved token, sent in the named header.
@@ -233,7 +214,6 @@ pub fn check_rows(rows: &[Row], sign_in: &SignIn) -> Result<(), (usize, String)>
     Ok(())
 }
 
-/// Every header row of the integration, secret values read from the store.
 /// A secret row with nothing saved is skipped.
 pub fn static_headers(
     store: &Store,
@@ -249,24 +229,19 @@ pub fn static_headers(
     headers_of(&rows, &saved)
 }
 
-/// Only the plain header rows, which carry routing data rather than
-/// credentials.
 pub fn plain_headers(conn: &Integration) -> Result<Vec<StaticHeader>, AdapterError> {
     let rows = key_value::rows(&conn.config, HEADERS_KEY);
     let plain: Vec<Row> = rows.into_iter().filter(|row| !row.secret).collect();
     headers_of(&plain, &[])
 }
 
-/// Whether a saved secret header goes out with every request, which counts
-/// as a sign-in the user already handed over.
+/// A saved secret header counts as a sign-in the user already handed over.
 pub fn has_secret_headers(store: &Store, conn: &Integration) -> Result<bool, AdapterError> {
     Ok(static_headers(store, conn)?
         .iter()
         .any(StaticHeader::is_secret))
 }
 
-/// A digest of the headers, so a change to any name or value reads as a
-/// change without the values being kept around.
 pub fn digest(headers: &[StaticHeader]) -> String {
     let mut hasher = Sha256::new();
     for header in headers {

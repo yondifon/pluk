@@ -384,12 +384,6 @@ function rowNoun(field: ConfigFieldDef): string {
   return field.label.toLowerCase().replace(/s$/, "");
 }
 
-/**
- * A key/value field: one line per row with its name, its value, whether the
- * value is secret, and a way to remove it. New rows start secret. A secret row
- * with a saved value starts blank and keeps that value unless a new one is
- * typed.
- */
 export function renderKeyValueField(
   field: ConfigFieldDef,
   rows: KeyValueRow[],
@@ -458,11 +452,6 @@ export function renderKeyValueField(
   return wrap;
 }
 
-/**
- * An ordered list field, such a command's arguments: one plain text row per
- * item, never joined into a single string. Order matters, so rows have no
- * way to reorder beyond removing and re-adding.
- */
 export function renderListField(
   field: ConfigFieldDef,
   items: string[],
@@ -506,7 +495,7 @@ export function renderListField(
   return wrap;
 }
 
-/** Shows a save the host would refuse beside the field, and the row, it names. */
+/** Shows a save the host would refuse beside the field and row it names. */
 export function markProblem(host: HTMLElement, problem: ConfigProblem): void {
   const field = host.querySelector<HTMLElement>(`[data-field-key="${problem.field}"]`);
   if (!field) return;

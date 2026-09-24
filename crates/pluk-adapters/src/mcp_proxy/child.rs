@@ -1,17 +1,8 @@
-//! A local MCP server as a process: how it is started, what it prints, and
-//! how it is stopped.
+//! A local MCP server as a process: started as its own process group from an
+//! empty environment, its stderr kept in a scrubbed ring.
 //!
-//! The server leads its own process group, so a kill reaches whatever it
-//! started too: `npx`, `bunx` and `uvx` hand the work to a `node` or `python`
-//! under them. It starts from an empty environment plus a short list of
-//! Pluk's own variables, so nothing Pluk runs with reaches third-party code.
-//!
-//! A kill is `pluk_core::platform::kill_process_group`: synchronous, so it
-//! holds when the runtime is going away.
-//!
-//! What it prints to stderr is kept in a small ring, with every secret value
-//! it was given scrubbed first. None of it reaches Pluk's own log: a server
-//! can print a token Pluk never knew was one.
+//! None of that output reaches Pluk's log: a server can print a token Pluk
+//! never knew was one.
 
 use std::collections::VecDeque;
 use std::io;
@@ -59,8 +50,7 @@ impl Output {
     }
 }
 
-/// Start `spec` as the leader of its own process group. Returns the
-/// transport to serve a session on, the group's id, and the server's stderr.
+/// Returns the transport, the process group's id, and the server's stderr.
 pub fn spawn(spec: &LaunchSpec) -> io::Result<(TokioChildProcess, u32, ChildStderr)> {
     let mut command = CommandWrap::from(command(spec));
     command.wrap(ProcessGroup::leader());
@@ -85,8 +75,6 @@ fn command(spec: &LaunchSpec) -> Command {
     command
 }
 
-/// Read the server's stderr into `output` until it closes, each line
-/// scrubbed of `secrets` before it is kept.
 pub fn drain(stderr: ChildStderr, secrets: Vec<String>, output: Arc<Mutex<Output>>) {
     let mut secrets = secrets;
     // Longest first, so a secret that contains another is scrubbed whole.

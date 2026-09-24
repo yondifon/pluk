@@ -124,9 +124,7 @@ pub trait Adapter: Send + Sync {
     fn config_fields(&self) -> &[ConfigField];
 
     /// Refuse a config before it is saved, naming the field and row to fix.
-    /// `integration_id` is the integration being edited, `None` for a new
-    /// one. The config is as the window sent it, with saved secrets folded
-    /// back in and key/value rows still carrying what was typed.
+    /// Saved secrets are folded back in; key/value rows are still as typed.
     fn check_config(
         &self,
         integration_id: Option<&str>,

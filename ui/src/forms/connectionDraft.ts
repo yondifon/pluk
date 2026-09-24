@@ -28,15 +28,9 @@ export interface ConnectionDraft {
   name: string;
   type: string;
   config: Record<string, string>;
-  /** The rows of each key/value field, kept apart from the scalar config. */
   rows: Record<string, KeyValueRow[]>;
-  /** The items of each ordered-list field, such as a command's arguments. */
   lists: Record<string, string[]>;
-  /**
-   * Secret fields that hold a saved value. The window never reads a secret
-   * back, so such a field's config entry stays blank until the user types a
-   * new one.
-   */
+  /** Secret fields with a saved value, which the window never reads back. */
   savedSecrets: string[];
   /** `null` when the integration carries no environment. */
   environment: Environment | null;
@@ -214,12 +208,7 @@ export function canSave(draft: ConnectionDraft): boolean {
   return draft.fields.every((f) => !f.required || !isVisible(f, draft.config) || isFilled(draft, f));
 }
 
-/**
- * The config a save sends. A blank secret keeps its saved value by being left
- * out; a blank secret with nothing saved, or one the user removed, goes as
- * `null` so the host drops it. Each key/value field goes as its full row
- * list, so a row left out is removed.
- */
+/** A blank secret is left out to keep its saved value, or sent as `null` to drop it. */
 export function configToSave(draft: ConnectionDraft): Record<string, string | null | SentRow[] | string[]> {
   const config: Record<string, string | null | SentRow[] | string[]> = { ...draft.config };
   for (const f of draft.fields) {
@@ -238,7 +227,6 @@ export function configToSave(draft: ConnectionDraft): Record<string, string | nu
   return config;
 }
 
-/** The draft with a saved secret let go of, so saving removes it. */
 export function forgetSecret(draft: ConnectionDraft, key: string): ConnectionDraft {
   return { ...draft, savedSecrets: draft.savedSecrets.filter((saved) => saved !== key) };
 }

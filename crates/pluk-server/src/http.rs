@@ -219,10 +219,8 @@ async fn health_report(State(state): State<AppState>) -> Response {
     json_response(StatusCode::OK, serde_json::json!({ "health": report }))
 }
 
-/// Refusal for `/api/integrations/<id>/…` over loopback. Those routes approve
-/// and turn on upstream tools, change masking and saved commands, sign in, and
-/// start local servers, so only the desktop window reaches them, through its
-/// own host command. Any local process can reach this server, agents included.
+/// `/api/integrations/<id>/…` changes what agents may use, and any local
+/// process reaches this server, so only the window's host command serves it.
 const WINDOW_ONLY: &str = "Only the Pluk window can change an integration's settings.";
 
 async fn adapter_apis_or_not_found(

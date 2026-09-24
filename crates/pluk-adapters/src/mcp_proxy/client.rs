@@ -7,10 +7,8 @@
 //! every handler, and dropped only when the integration's config or
 //! credentials change.
 //!
-//! A local server lives in the same place: its session is the process, so
-//! the pool starts it on first use, notices when it exits, holds it after
-//! [`MAX_STARTS`] starts within [`CRASH_WINDOW`], and stops it for good on
-//! [`shutdown`]. Listing an integration never starts one.
+//! A local server's session is its process: the first call starts it, and
+//! one that keeps exiting is held after [`MAX_STARTS`] within [`CRASH_WINDOW`].
 //!
 //! Credentials are passed in by the caller. Nothing here reads the store, and
 //! no token reaches a log line, an error message, or a `Debug` rendering.
@@ -194,8 +192,7 @@ impl McpProxyClient {
         }
     }
 
-    /// A client for a local server Pluk starts from `spec`. The caller has
-    /// already checked the user approved this exact launch.
+    /// The caller has already checked the user approved this exact launch.
     pub fn stdio(integration_id: impl Into<String>, spec: LaunchSpec) -> Self {
         McpProxyClient {
             integration_id: integration_id.into(),
@@ -203,9 +200,8 @@ impl McpProxyClient {
         }
     }
 
-    /// Headers sent on every request on top of the sign-in. Where one names
-    /// the header the sign-in uses, the sign-in wins. A local server takes
-    /// none.
+    /// Headers sent on every request. Where one names the header the sign-in
+    /// uses, the sign-in wins. A local server takes none.
     pub fn with_headers(mut self, headers: Vec<StaticHeader>) -> Self {
         if let UpstreamTransport::Http { headers: held, .. } = &mut self.transport {
             *held = headers;
@@ -268,8 +264,6 @@ impl McpProxyClient {
         }
     }
 
-    /// The open session, or a new one. A session whose transport closed under
-    /// it, such as a local server that exited, is not reused.
     async fn session(&self) -> Result<Arc<Upstream>, AdapterError> {
         let slot = slot(&self.integration_id);
         let mut held = slot.session.lock().await;
@@ -306,8 +300,6 @@ impl McpProxyClient {
         }
     }
 
-    /// How an error names the server: the address it is reached at, or the
-    /// file name of the program that runs it.
     fn server(&self) -> String {
         match &self.transport {
             UpstreamTransport::Http { endpoint, .. } => format!("the MCP server at {endpoint}"),
@@ -378,9 +370,8 @@ async fn connect_http(
     }
 }
 
-/// Start the local server and open a session on it. Every start counts
-/// toward the crash limit, and a server that does not get as far as a
-/// session is stopped and counts as crashed.
+/// Every start counts toward the crash limit, and a server that never gets
+/// as far as a session counts as crashed.
 async fn connect_stdio(
     spec: &LaunchSpec,
     slot: &Slot,
@@ -415,12 +406,7 @@ async fn connect_stdio(
 }
 
 /// Close one integration's session and forget everything held for it. A
-/// local server is stopped: closed, given [`CLOSE_TIMEOUT`] to exit, then its
-/// whole process group is killed. The next call starts over with whatever
-/// config and credentials are current by then.
-///
-/// Returns at once. The server is stopped on the runtime when there is one,
-/// and killed on the spot when there is not.
+/// local server is stopped in the background, or killed at once off a runtime.
 pub fn shutdown(integration_id: &str) {
     let Some(slot) = pool()
         .lock()
@@ -437,9 +423,8 @@ pub fn shutdown(integration_id: &str) {
     }
 }
 
-/// Stop every local server and close every session, for when Pluk quits.
-/// Whatever is still alive afterwards is killed synchronously, so nothing
-/// outlives Pluk waiting on a runtime that is gone.
+/// For when Pluk quits. What is still alive after the grace period is killed
+/// synchronously, so nothing outlives the runtime.
 pub async fn shutdown_all() {
     let slots: Vec<Arc<Slot>> = pool()
         .lock()
@@ -466,8 +451,7 @@ pub async fn stop(integration_id: &str) {
     slot.close().await;
 }
 
-/// Stop the local server if it runs and clear what kept it from starting:
-/// a stop, or the crash limit. The next call starts it.
+/// Clear a stop or the crash limit. The next call starts the server.
 pub async fn restart(integration_id: &str) {
     let slot = slot(integration_id);
     slot.close().await;
@@ -477,7 +461,6 @@ pub async fn restart(integration_id: &str) {
     local.crashed = false;
 }
 
-/// Whether the local server runs, and its pid while it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerStatus {
@@ -540,19 +523,15 @@ pub fn output(integration_id: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The HTTP client the probe and sign-in discovery reach an upstream server
-/// through. It follows redirects, since metadata documents are often moved,
-/// and it never carries a credential. It is not the one
-/// [`crate::http_client`] hands the API adapters: rmcp's transport is built on
-/// the next major of reqwest, so the two cannot be the same value.
+/// The probe's client: it follows redirects and never carries a credential.
+/// rmcp builds on the next major of reqwest, so this is not [`crate::http_client`].
 pub(super) fn upstream_client() -> Result<upstream_http::Client, AdapterError> {
     static CLIENT: OnceLock<Result<upstream_http::Client, String>> = OnceLock::new();
     shared(&CLIENT, upstream_http::Client::builder())
 }
 
-/// The HTTP client a session is carried on. It never follows a redirect: on a
-/// hop to another host reqwest drops only `Authorization` and cookies, so any
-/// other header holding a credential would go along to the new host.
+/// A session's client never follows a redirect: reqwest drops only
+/// `Authorization` and cookies on a cross-host hop, not other secret headers.
 fn session_client() -> Result<upstream_http::Client, AdapterError> {
     static CLIENT: OnceLock<Result<upstream_http::Client, String>> = OnceLock::new();
     shared(
@@ -572,10 +551,8 @@ fn shared(
 
 type Upstream = RunningService<RoleClient, ProxyHandler>;
 
-/// One integration's place in the pool. The flag outlives the session so a
-/// reconnect does not swallow an announcement that arrived just before it,
-/// and the output and crash count outlive it so a server that keeps exiting
-/// can be seen and held.
+/// One integration's place in the pool. The flag, output and crash count
+/// outlive the session, so a reconnect loses none of them.
 struct Slot {
     tools_changed: Arc<AtomicBool>,
     session: AsyncMutex<Option<Arc<Upstream>>>,
@@ -592,7 +569,6 @@ struct Local {
     starts: VecDeque<Instant>,
     /// Why no call may start the server until the user restarts it.
     held: Option<Held>,
-    /// The last server exited, or failed to start, without Pluk stopping it.
     crashed: bool,
 }
 
@@ -612,8 +588,7 @@ impl Slot {
         }
     }
 
-    /// Count one start of the local server, or refuse it: the user stopped
-    /// it, or it already started [`MAX_STARTS`] times within [`CRASH_WINDOW`].
+    /// Count one start, or refuse it when stopped or over the crash limit.
     fn claim_start(&self) -> Result<(), AdapterError> {
         let mut local = self.local.lock().expect("local server");
         match local.held {
@@ -641,8 +616,7 @@ impl Slot {
         Ok(())
     }
 
-    /// The session ended without Pluk ending it. Whatever the server left
-    /// running in its group is killed.
+    /// The session ended without Pluk ending it; kill what is left of the group.
     fn lost_server(&self) {
         let mut local = self.local.lock().expect("local server");
         if let Some(pgid) = local.pgid.take() {
@@ -651,8 +625,7 @@ impl Slot {
         }
     }
 
-    /// Close the session. A local server is closed, which ends its stdin and
-    /// gives it [`CLOSE_TIMEOUT`] to exit, and then its group is killed.
+    /// Closing ends a local server's stdin; its group is killed after the grace period.
     async fn close(&self) {
         let upstream = self.session.lock().await.take();
         if let Some(upstream) = upstream {
@@ -668,7 +641,6 @@ impl Slot {
         self.kill();
     }
 
-    /// Kill the local server's group on the spot.
     fn kill(&self) {
         if let Some(pgid) = self.local.lock().expect("local server").pgid.take() {
             pluk_core::platform::kill_process_group(pgid);
@@ -1112,8 +1084,6 @@ pub(super) mod tests {
         shutdown("auth-rejected");
     }
 
-    /// A server at another host that counts the requests reaching it, and one
-    /// at the endpoint that sends every request there.
     async fn redirecting_upstream() -> (String, Arc<AtomicUsize>) {
         let reached = Arc::new(AtomicUsize::new(0));
         let counter = reached.clone();
@@ -1204,10 +1174,9 @@ pub(super) mod tests {
         assert!(!call.logged.contains("iVBORw0KGgo="));
         assert!(call.result.content[1].text.contains("iVBORw0KGgo="));
     }
-    /// A local MCP server in `/bin/sh`: it answers `initialize` with the
-    /// version it was asked for and lists one tool. It records its pid and
-    /// environment under `$STUB_STATE`, prints `$STUB_TOKEN` to stderr, and
-    /// leaves a `sleep` running in its group whose pid it records too.
+
+    /// A local MCP server in `/bin/sh` that lists one tool, records its pid,
+    /// env and a grandchild's pid under `$STUB_STATE`, and prints `$STUB_TOKEN`.
     pub(in crate::mcp_proxy) const STUB: &str = r#"
 echo $$ > "$STUB_STATE/pid"
 env > "$STUB_STATE/env"
@@ -1230,8 +1199,6 @@ done
 
     const STUB_TOKEN: &str = "stub-secret-token-1";
 
-    /// A server that stops as soon as it starts, the way one missing a module
-    /// does.
     const EXITING: &str = "echo 'Cannot find module' >&2\nexit 1\n";
 
     fn launch(dir: &std::path::Path, body: &str) -> LaunchSpec {

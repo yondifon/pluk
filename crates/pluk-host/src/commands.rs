@@ -97,8 +97,7 @@ pub struct IntegrationJson {
     pub name: String,
     #[serde(rename = "type")]
     pub r#type: String,
-    /// The stored config without its secret values, which the window never
-    /// reads back.
+    /// Secret values withheld.
     pub config: serde_json::Map<String, serde_json::Value>,
     /// The secret fields that hold a saved value.
     pub secrets_set: Vec<String>,
@@ -170,16 +169,12 @@ impl IntegrationJson {
     }
 }
 
-/// What a save stores: the config with the secrets the window left untouched
-/// folded back in and secret row values taken out, and the writes that save
-/// those values.
+/// A config ready to store, and the secret writes that go with it.
 struct PreparedConfig {
     config: pluk_store::Config,
     secrets: Vec<pluk_store::SecretWrite>,
 }
 
-/// Why a config cannot be saved: a problem the window shows at its field, or
-/// a failure reading what is stored.
 enum SaveRefused {
     Problem(pluk_adapters::ConfigProblem),
     Failed(String),
@@ -195,9 +190,7 @@ impl From<SaveRefused> for String {
 }
 
 /// Check a config the window sent and fold it over what is saved. `source`
-/// holds the secrets a blank value keeps: the integration being edited
-/// (`editing`), or the one a new integration copies. An unknown type has no
-/// fields to go by, so the config is taken as sent.
+/// holds the secrets a blank value keeps: the one being edited, or the one copied.
 fn prepare_config(
     store: &pluk_store::Store,
     registry: &pluk_adapters::AdapterRegistry,
@@ -332,8 +325,7 @@ pub struct CreateIntegrationPayload {
     #[serde(default)]
     pub config: serde_json::Map<String, serde_json::Value>,
     pub environment: Option<String>,
-    /// An integration whose saved secrets fill the ones this config leaves
-    /// untouched, so a copy keeps secrets the window never saw.
+    /// A copy keeps this integration's saved secrets, which the window never saw.
     #[serde(default)]
     pub secrets_from: Option<String>,
 }
@@ -343,19 +335,11 @@ pub fn create_integration(
     state: State<'_, HostState>,
     payload: CreateIntegrationPayload,
 ) -> CmdResult<IntegrationJson> {
-    create_integration_in(&state.store, &state.shared.registry, payload)
-}
-
-fn create_integration_in(
-    store: &pluk_store::Store,
-    registry: &pluk_adapters::AdapterRegistry,
-    payload: CreateIntegrationPayload,
-) -> CmdResult<IntegrationJson> {
-    create_with_policy(store, registry, payload, None)
+    create_integration_in(&state.store, &state.shared.registry, payload, None)
 }
 
 /// The one create path, with the policy blob the new integration starts with.
-fn create_with_policy(
+fn create_integration_in(
     store: &pluk_store::Store,
     registry: &pluk_adapters::AdapterRegistry,
     payload: CreateIntegrationPayload,
@@ -450,8 +434,6 @@ fn check_integration_config_in(
     }
 }
 
-/// The MCP servers a config copied from another client lists, for the window
-/// to review before anything is saved.
 #[tauri::command]
 pub fn parse_mcp_config(
     text: String,
@@ -459,8 +441,6 @@ pub fn parse_mcp_config(
     pluk_core::mcp_import::parse(&text)
 }
 
-/// How saving one reviewed server went: the integration it became, or why
-/// it was not added.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportedServer {
@@ -471,10 +451,8 @@ pub struct ImportedServer {
     pub error: Option<String>,
 }
 
-/// Add each reviewed server as its own MCP integration through the create
-/// path the settings form uses. One that cannot be added leaves the others
-/// saved. A local server is saved like any other and still waits for the
-/// user to approve its command.
+/// Add each reviewed server as its own MCP integration. One that cannot be
+/// added leaves the others saved.
 #[tauri::command]
 pub fn import_mcp_servers(
     state: State<'_, HostState>,
@@ -504,7 +482,7 @@ fn import_mcp_servers_in(
         } else if taken.contains(&name.to_lowercase()) {
             Err(format!("{name} is already in Pluk. Choose another name."))
         } else {
-            create_with_policy(
+            create_integration_in(
                 store,
                 registry,
                 CreateIntegrationPayload {
@@ -550,10 +528,8 @@ pub struct UpdateIntegrationPayload {
     pub name: Option<String>,
     #[serde(rename = "type")]
     pub r#type: Option<String>,
-    /// Replaces the stored config, except that a secret field left out or
-    /// empty keeps its stored value and one sent as `null` is removed. Key/value
-    /// rows follow `pluk_adapters::key_value`: a secret row sent without a
-    /// value keeps the one saved for it.
+    /// Replaces the stored config, except that a secret left out or empty
+    /// keeps its stored value and one sent as `null` is removed.
     pub config: Option<serde_json::Map<String, serde_json::Value>>,
     /// Absent leaves the stored environment; `null` clears it.
     #[serde(default, deserialize_with = "nullable")]
@@ -651,8 +627,7 @@ fn update_integration_in(
         .write_proxy_secrets(id, &secrets)
         .map_err(|e| e.to_string())?;
     if reconnects {
-        // A local MCP server keeps running on the launch it started with, so
-        // it is stopped now rather than on its next call.
+        // A local MCP server keeps running on its old launch until stopped.
         pluk_adapters::mcp_proxy::client::shutdown(id);
     }
     Ok(Some(IntegrationJson::from_integration(
@@ -699,8 +674,6 @@ fn local_mcp(store: &pluk_store::Store, id: &str) -> CmdResult<pluk_store::Integ
     Ok(integration)
 }
 
-/// The exact command a local MCP server would start with, for the user to
-/// review before approving it. Secret values are never part of it.
 #[tauri::command]
 pub async fn mcp_launch_preview(
     state: State<'_, HostState>,
@@ -712,9 +685,8 @@ pub async fn mcp_launch_preview(
         .map_err(|error| error.message)
 }
 
-/// Approve the launch the preview showed as `launch_hash`, so Pluk may start
-/// it. A Tauri command and nothing else: an adapter route would let any
-/// process on this machine approve a command.
+/// A Tauri command only: an adapter route would let any process on this
+/// machine approve a command.
 #[tauri::command]
 pub async fn approve_mcp_launch(
     state: State<'_, HostState>,
@@ -744,14 +716,12 @@ pub fn mcp_server_status(
     Ok(pluk_adapters::mcp_proxy::client::status(&id))
 }
 
-/// The last lines the local MCP server printed, secrets scrubbed.
 #[tauri::command]
 pub fn mcp_server_output(state: State<'_, HostState>, id: String) -> CmdResult<Vec<String>> {
     local_mcp(&state.store, &id)?;
     Ok(pluk_adapters::mcp_proxy::client::output(&id))
 }
 
-/// Stop the local MCP server and keep it stopped until it is restarted.
 #[tauri::command]
 pub async fn stop_mcp_server(state: State<'_, HostState>, id: String) -> CmdResult<()> {
     local_mcp(&state.store, &id)?;
@@ -759,8 +729,6 @@ pub async fn stop_mcp_server(state: State<'_, HostState>, id: String) -> CmdResu
     Ok(())
 }
 
-/// Start the local MCP server again, clearing a stop or the crash limit, and
-/// refresh its tools.
 #[tauri::command]
 pub async fn restart_mcp_server(state: State<'_, HostState>, id: String) -> CmdResult<()> {
     let integration = local_mcp(&state.store, &id)?;
@@ -1650,6 +1618,7 @@ mod secret_tests {
                 environment: None,
                 secrets_from: None,
             },
+            None,
         )
         .unwrap()
     }
@@ -1748,6 +1717,7 @@ mod secret_tests {
                 environment: None,
                 secrets_from: Some(shown.id.clone()),
             },
+            None,
         )
         .unwrap();
 
@@ -2006,6 +1976,7 @@ mod secret_tests {
                 environment: None,
                 secrets_from: None,
             },
+            None,
         )
         .expect_err("refused");
         assert_eq!(refused, "Pluk cannot send Host. Remove this header.");
@@ -2029,6 +2000,7 @@ mod secret_tests {
                 environment: None,
                 secrets_from: Some(shown.id.clone()),
             },
+            None,
         )
         .unwrap();
 
@@ -2208,6 +2180,7 @@ done
                 environment: None,
                 secrets_from: None,
             },
+            None,
         )
         .unwrap();
 

@@ -67,9 +67,6 @@ async fn a_web_page_is_refused_before_it_reaches_the_api() {
     );
 }
 
-/// Every route that changes what agents may use, reveals a credential's
-/// state, or starts a local server. The window reaches these through its host
-/// command; over loopback, where agents live, each is refused.
 const WINDOW_ONLY_ROUTES: [(&str, &str); 14] = [
     ("POST", "/proxy/approve"),
     ("POST", "/proxy/enable"),

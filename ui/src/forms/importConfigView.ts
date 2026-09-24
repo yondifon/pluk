@@ -1,8 +1,4 @@
-/**
- * The paste-and-review flow for adding MCP servers from another client's
- * config. It keeps its own state and draws into one element, so the modal
- * around it only has to open and close it.
- */
+/** The paste-and-review flow. It keeps its own state, so the modal only opens and closes it. */
 
 import { createBadge, createButton } from "../primitives";
 import {
@@ -24,7 +20,6 @@ import {
   type ServerProblem,
 } from "./importConfig";
 
-/** What the flow needs from the app around it. */
 export interface ImportHost {
   /** The names already in use, read fresh each time a name is checked. */
   takenNames(): string[];

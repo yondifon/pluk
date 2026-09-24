@@ -1,16 +1,9 @@
-//! Rows of a [`FieldType::KeyValue`] field: a list of named values, each one
-//! plain or secret.
+//! Rows of a [`FieldType::KeyValue`] field. A secret row keeps only its name
+//! in the config; its value lives in `proxy_secrets` under the field's [`SecretKind`].
 //!
-//! The config holds the rows in order. A plain row keeps its value there; a
-//! secret row keeps only its name, and its value is saved in `proxy_secrets`
-//! under the field's [`SecretKind`]. So the config can go to the window as it
-//! is, and [`show_secret_rows`] adds whether each secret row holds a value.
-//!
-//! What the window sends back is one object per row:
-//! `{ "name", "value", "secret", "savedName" }`. A secret row sent without a
-//! value keeps the one saved under `savedName` (or its own name), which is how
-//! a row renamed without retyping its value keeps it. A row left out is
-//! cleared. `secret` defaults to on.
+//! The window sends `{ "name", "value", "secret", "savedName" }` per row. A
+//! secret row with no value keeps the one saved under `savedName`, so a rename
+//! keeps it; a row left out is cleared.
 //!
 //! [`FieldType::KeyValue`]: crate::FieldType::KeyValue
 
@@ -56,9 +49,8 @@ impl std::fmt::Debug for Row {
     }
 }
 
-/// A config the save would refuse, and where: the field, the row counted
-/// from zero as sent, and what to fix. The message names the row, never its
-/// value.
+/// A config the save would refuse. `row` counts from zero; the message never
+/// holds a value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConfigProblem {
     pub field: String,
@@ -209,10 +201,8 @@ fn saved_values<'a>(kept: KeptFrom<'a>, kind: SecretKind) -> HashMap<&'a str, &'
         .collect()
 }
 
-/// The writes that leave exactly `wanted` saved. On the integration itself a
-/// kept value is renamed in place, unless its new name is still saved or its
-/// old one is still wanted; then it is written as a set from the value read
-/// before the save. A copy starts from nothing, so every value is set.
+/// The writes that leave exactly `wanted` saved. A kept value is renamed in
+/// place unless that would collide; then, and on a copy, it is set anew.
 fn writes_for(
     kind: SecretKind,
     wanted: Vec<(String, Wanted)>,
@@ -290,7 +280,6 @@ pub fn show_secret_rows(config: &mut Config, fields: &[ConfigField], saved: &[Pr
     }
 }
 
-/// Whether any field keeps secret rows, so a caller can skip reading them.
 pub fn has_secret_rows(fields: &[ConfigField]) -> bool {
     fields.iter().any(|field| field.secret_kind.is_some())
 }

@@ -1,20 +1,11 @@
 //! Reading MCP server configs copied from other clients into server drafts.
 //!
-//! [`parse`] is pure: text in, one [`ServerDraft`] per server it recognised
-//! out, plus a [`ServerProblem`] for each entry it could not read. One bad
-//! entry never costs the others.
+//! Accepted shapes, JSON or TOML: `mcpServers` (Claude Code, Cursor, Windsurf,
+//! Claude Desktop), `servers` and `mcp.servers` (VS Code), `mcp` (opencode),
+//! `mcp_servers` (Codex), the bare server map, or one server object.
 //!
-//! Accepted shapes, JSON or TOML:
-//! - `mcpServers` (Claude Code, Cursor, Windsurf, Claude Desktop), `servers`
-//!   and `mcp.servers` (VS Code), `mcp` (opencode), `mcp_servers` (Codex),
-//!   anywhere at the top of a full client config file.
-//! - The server map on its own, `{ "<name>": { … } }`, or a single server
-//!   object, whose name is made up from its address or command.
-//!
-//! Every entry is read with the union of those clients' keys, so a server
-//! copied from one client's docs into another's file still reads. A key that
-//! decides nothing Pluk stores is listed in [`ServerDraft::not_imported`],
-//! never dropped quietly.
+//! Every entry is read with the union of those clients' keys. A key Pluk has
+//! nowhere to put is listed in [`ServerDraft::not_imported`], never dropped.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -35,7 +26,6 @@ pub struct DraftRow {
     pub secret: bool,
 }
 
-/// One server as Pluk would add it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerDraft {
@@ -71,7 +61,6 @@ pub struct ServerDraft {
     pub sse: bool,
 }
 
-/// An entry that could not be read, and why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ServerProblem {
     pub name: String,
@@ -84,8 +73,7 @@ pub struct ParsedImport {
     pub problems: Vec<ServerProblem>,
 }
 
-/// Text that is not JSON or TOML, or holds no server. `line` and `column`
-/// count from 1 and point at the problem when the parser knows where it is.
+/// `line` and `column` count from 1.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ImportError {
     pub message: String,
@@ -134,7 +122,6 @@ pub fn parse(text: &str) -> Result<ParsedImport, ImportError> {
     Ok(parsed)
 }
 
-/// Whether an env variable's name suggests its value is a credential.
 pub fn looks_secret(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     SECRET_WORDS.iter().any(|word| upper.contains(word))
@@ -202,7 +189,6 @@ fn position(text: &str, offset: usize) -> (Option<usize>, Option<usize>) {
     (Some(line), Some(column))
 }
 
-/// The named server entries `root` holds, from the first container found.
 fn server_entries(root: &Map<String, Value>) -> Option<Vec<(String, Value)>> {
     let containers = [
         root.get("mcpServers"),
@@ -235,8 +221,7 @@ fn is_server(entry: &Map<String, Value>) -> bool {
     entry.contains_key("command") || ADDRESS_KEYS.iter().any(|key| entry.contains_key(*key))
 }
 
-/// A name for a single pasted server: its URL's host, or what the command
-/// runs, with any version and file extension taken off.
+/// A single pasted server's host, or what its command runs.
 fn made_up_name(entry: &Map<String, Value>) -> String {
     let url = ADDRESS_KEYS
         .iter()
@@ -269,7 +254,6 @@ fn host_of(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_string())
 }
 
-/// A program that runs whatever package or file it is given.
 fn is_runner(program: &str) -> bool {
     matches!(
         file_stem(program).as_str(),
@@ -290,8 +274,7 @@ fn file_stem(word: &str) -> String {
     }
 }
 
-/// Keys read into the draft or used to classify it. Any other key is listed
-/// as not imported.
+/// Any other key is listed as not imported.
 const READ_KEYS: &[&str] = &[
     "type",
     "transport",
@@ -477,7 +460,6 @@ fn optional_text(entry: &Map<String, Value>, key: &str) -> Result<Option<String>
     }
 }
 
-/// Rows under the first of `keys` present, each guessed secret by `secret`.
 fn rows_under(
     entry: &Map<String, Value>,
     keys: &[&str],
@@ -521,7 +503,7 @@ fn turned_off(entry: &Map<String, Value>) -> bool {
         || entry.get("disabled").and_then(Value::as_bool) == Some(true)
 }
 
-/// What an `npx mcp-remote <url>` entry reaches, read from its args.
+/// What an `npx mcp-remote <url>` entry reaches.
 struct McpRemote {
     url: String,
     headers: Vec<DraftRow>,

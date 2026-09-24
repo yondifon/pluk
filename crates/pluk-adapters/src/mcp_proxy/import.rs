@@ -1,12 +1,6 @@
-//! Adding servers read from another client's config.
-//!
-//! A [`ServerDraft`] becomes the same config the settings form sends, so it
-//! goes through the one create path: secret rows land in `proxy_secrets`, and
-//! a local server still waits for the user to approve its command.
-//!
-//! The tools a config turned off are not known to Pluk until discovery lists
-//! them, so they wait in the integration's policy under [`PENDING_OFF_KEY`].
-//! Each discovery switches off the ones it found and keeps the rest waiting.
+//! Adding servers read from another client's config, through the same config
+//! the settings form sends. Tools it turned off wait under [`PENDING_OFF_KEY`]
+//! until discovery finds them.
 
 use serde_json::{Value, json};
 
@@ -23,7 +17,6 @@ use super::transport::HEADERS_KEY;
 /// policy blob, whose other writers keep sibling keys as they are.
 pub const PENDING_OFF_KEY: &str = "pendingToolsOff";
 
-/// The config the settings form would send for this server.
 pub fn config_for(draft: &ServerDraft) -> Config {
     let mut config = Config::new();
     match draft.connection {
@@ -58,7 +51,6 @@ fn rows(rows: &[DraftRow]) -> Value {
     )
 }
 
-/// A policy blob holding `names` as tools still to switch off.
 pub fn policy_with_pending_off(names: &[String]) -> Option<String> {
     if names.is_empty() {
         return None;
@@ -68,7 +60,6 @@ pub fn policy_with_pending_off(names: &[String]) -> Option<String> {
     Some(serialize_query_policy(&policy))
 }
 
-/// The tools still waiting to be switched off, in the order they were given.
 pub fn pending_off(policy: Option<&QueryPolicy>) -> Vec<String> {
     policy
         .and_then(|policy| policy.extra.get(PENDING_OFF_KEY))

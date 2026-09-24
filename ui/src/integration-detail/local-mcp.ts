@@ -1,17 +1,6 @@
-/**
- * A local MCP server: the exact command Pluk would run for it, and whether it
- * is running.
- *
- * Nothing here talks to the host; see `local-mcp-panel.ts` for that. This is
- * the words each state is shown with, and the small decisions ("can this be
- * stopped right now?") the panel would otherwise repeat.
- */
-
-export type { LaunchPreview, LaunchEnvRow, McpServerState, McpServerStatus } from "../host";
 import type { McpServerState } from "../host";
 import type { Integration } from "./types";
 
-/** Whether an MCP integration is a command Pluk starts, rather than a URL. */
 export function isLocalMcp(integration: Pick<Integration, "config">): boolean {
   return integration.config.connection === "local";
 }
@@ -32,7 +21,6 @@ export function stateLabel(state: McpServerState): string {
   }
 }
 
-/** The tone a status badge takes: settled and good, settled and off, or wrong. */
 export function stateTone(state: McpServerState): "on" | "off" | "warn" {
   switch (state) {
     case "running":
@@ -53,7 +41,6 @@ export function canRestart(state: McpServerState): boolean {
   return state !== "starting";
 }
 
-/** The line under a crashed server, pointing at the fix. */
 export function stateNote(state: McpServerState): string | null {
   return state === "crashed" ? "This server keeps stopping. Check its output below, then restart it." : null;
 }

@@ -1,11 +1,4 @@
-/**
- * A local MCP server: the command Pluk would run for it, approving that
- * command, and, once approved, whether it is running.
- *
- * The tools list sits below, but nothing in it is asked for until the launch
- * is approved: refreshing it before then would only come back with the same
- * "not approved" refusal the approval card already explains.
- */
+/** A local MCP server's approval, status and tools. Nothing asks the server for tools before approval. */
 
 import {
   approveMcpLaunch,
@@ -31,7 +24,6 @@ import {
 import { canRestart, canStop, RUNS_WITH_FULL_ACCESS, stateLabel, stateNote, stateTone } from "./local-mcp";
 import type { Integration } from "./types";
 
-/** How often the status card checks in while it is mounted. */
 const STATUS_POLL_MS = 2000;
 
 function line(text: string, className: string): HTMLParagraphElement {
@@ -59,11 +51,6 @@ function actionRow(...controls: HTMLElement[]): HTMLElement {
   return el;
 }
 
-/**
- * The command Pluk would run, for the user to read before it does: the
- * resolved program, every argument, the working folder, and each variable's
- * name. Secret values never appear.
- */
 function commandDetails(preview: LaunchPreview): HTMLElement {
   const list = document.createElement("dl");
   list.className = "launch-preview";
@@ -114,10 +101,6 @@ function commandDetails(preview: LaunchPreview): HTMLElement {
   return list;
 }
 
-/**
- * The approval card, the status card, and the tools list for one local MCP
- * server integration.
- */
 export function mountLocalMcp(
   container: HTMLElement,
   integration: Integration,
