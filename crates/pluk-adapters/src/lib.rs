@@ -14,6 +14,7 @@ mod error;
 mod gate;
 mod http_client;
 mod instructions;
+pub mod key_value;
 pub mod linear;
 pub mod mcp_proxy;
 pub mod mongodb;
@@ -36,7 +37,9 @@ pub use action::{
     TestConnectionFn, ToolErrorHook, ToolsFn, action_adapter,
 };
 pub use adapter::{Adapter, ApiRequest, ApiResponse, PolicyKind};
-pub use config_field::{ConfigField, FieldType, SelectOption, ShowIf, normalize_scalar};
+pub use config_field::{
+    ConfigField, FieldType, SelectOption, ShowIf, keep_secrets, normalize_scalar, withhold_secrets,
+};
 pub use confirm::{ANSWER_WINDOW, ConfirmChoice, ConfirmPrompter, ConfirmRequest, set_prompter};
 pub use error::{AdapterError, SSH_CONNECT_PENDING_CODE};
 pub use gate::{
@@ -44,6 +47,7 @@ pub use gate::{
     approvals_for, cancelled_when_message_contains, err, ok, run_gated,
 };
 pub use instructions::{InstructionParts, build_instructions};
+pub use key_value::{ConfigProblem, KeptFrom, fold_secret_rows, show_secret_rows};
 pub use projection::{
     FieldMap, OnlyError, Preset, ReduceFn, apply_only, only_param_description, only_param_schema,
     only_value, pick_paths,

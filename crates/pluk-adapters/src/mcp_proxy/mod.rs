@@ -12,10 +12,14 @@
 
 pub mod api;
 pub mod catalog;
+mod child;
 pub mod client;
 mod discovery;
+pub mod import;
+pub mod local;
 pub mod oauth;
 pub mod probe;
+pub mod transport;
 
 use std::borrow::Cow;
 use std::sync::{Arc, OnceLock};
@@ -24,18 +28,20 @@ use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
 use pluk_policy::tool_gate;
-use pluk_store::{Integration, ProxyTool, Store, ToolState, Verdict};
+use pluk_store::{Config, Integration, ProxyTool, SecretKind, Store, ToolState, Verdict};
 
 use crate::adapter::{Adapter, ApiRequest, ApiResponse, PolicyKind};
 use crate::config_field::{ConfigField, FieldType};
 use crate::error::AdapterError;
 use crate::gate::{CallTarget, GateMeta, GateOpts, Outcome, RunOutcome, run_gated};
 use crate::instructions::{InstructionParts, build_instructions};
+use crate::key_value::{self, ConfigProblem};
 use crate::tool_host::{ToolHandler, ToolHost, ToolRegistration};
 use crate::tool_spec::ToolSpec;
 
 use client::{UpstreamAuth, UpstreamCall};
 use probe::SignInRequired;
+use transport::{HEADERS_KEY, SignIn};
 
 pub const ADAPTER_ID: &str = "mcp";
 
@@ -50,6 +56,8 @@ pub const TOKEN_NEEDED_CODE: &str = "MCP_PROXY_TOKEN_NEEDED";
 
 const TOOL_CHANGED: &str = "This tool changed. Turn it on again in Pluk.";
 const TOKEN_REJECTED: &str = "Pluk could not sign in to this MCP server. Check the token in Pluk.";
+const HEADERS_REJECTED: &str =
+    "Pluk could not sign in to this MCP server. Check the headers in Pluk.";
 const PERMISSION_DENIED: &str =
     "This MCP server refused the request. The account signed in to Pluk may not have permission.";
 const SIGN_IN_NEEDED: &str = "This server needs you to sign in. Open the Tools tab and sign in.";
@@ -67,28 +75,62 @@ const MAX_REASON_CHARS: usize = 200;
 const TRUNCATED: &str = "…[truncated]";
 
 fn mcp_fields() -> Vec<ConfigField> {
+    let when_local = || json!(local::LOCAL);
     vec![
+        ConfigField::new(local::CONNECTION_KEY, "Connection", FieldType::Select)
+            .group("Connection")
+            .options(&[(local::REMOTE, "Remote server"), (local::LOCAL, "Local server")])
+            .default_value(&json!(local::REMOTE))
+            .help("A remote server has a URL. A local server is a command Pluk starts on this Mac."),
+        ConfigField::new(local::COMMAND_KEY, "Command", FieldType::Text)
+            .group("Connection")
+            .show_if_eq(local::CONNECTION_KEY, &when_local())
+            .placeholder("npx")
+            .help("The program that starts the server, such as npx, node or uvx."),
+        ConfigField::new(local::ARGS_KEY, "Arguments", FieldType::List)
+            .group("Connection")
+            .show_if_eq(local::CONNECTION_KEY, &when_local())
+            .help("Passed to the command one by one, exactly as written."),
+        ConfigField::new(local::CWD_KEY, "Working folder", FieldType::Text)
+            .group("Connection")
+            .show_if_eq(local::CONNECTION_KEY, &when_local())
+            .placeholder("~")
+            .help("Where the command runs. Leave this empty to use your home folder."),
+        ConfigField::key_value(local::ENV_KEY, "Environment variables", SecretKind::Env)
+            .group("Connection")
+            .show_if_eq(local::CONNECTION_KEY, &when_local())
+            .default_not_secret()
+            .help("Set for this server only. Turn Secret on for anything like a token or key."),
         ConfigField::new("url", "Server URL", FieldType::Text)
             .group("Connection")
             .required()
+            .show_unless_eq(local::CONNECTION_KEY, &when_local())
             .placeholder("https://example.com/mcp")
             .help("Pluk works out what this server needs. The other fields are only for the few servers that ask for more."),
+        ConfigField::key_value(HEADERS_KEY, "Headers", SecretKind::Header)
+            .group("Connection")
+            .show_unless_eq(local::CONNECTION_KEY, &when_local())
+            .help("Sent with every request, exactly as written. Most servers do not need any. Add them if the server asked for them."),
         ConfigField::new("token", "Token", FieldType::Password)
             .group("Sign-in")
             .secret()
+            .show_unless_eq(local::CONNECTION_KEY, &when_local())
             .placeholder("leave empty")
             .help("Most servers do not need one. Add the token if the server gave you one."),
         ConfigField::new("header_name", "Header name", FieldType::Text)
             .group("Sign-in")
+            .show_unless_eq(local::CONNECTION_KEY, &when_local())
             .default_value(&json!(client::DEFAULT_AUTH_HEADER))
             .help("Leave this as it is unless the server asked for the token under another name."),
         ConfigField::new("client_id", "Client ID", FieldType::Text)
             .group("Sign-in")
+            .show_unless_eq(local::CONNECTION_KEY, &when_local())
             .placeholder("leave empty")
             .help("Most servers do not need one. Add it if the server asked you to register Pluk first."),
         ConfigField::new("client_secret", "Client secret", FieldType::Password)
             .group("Sign-in")
             .secret()
+            .show_unless_eq(local::CONNECTION_KEY, &when_local())
             .placeholder("leave empty")
             .help("Add this only if the server gave you one with the client ID."),
     ]
@@ -101,6 +143,12 @@ pub struct McpProxyAdapter {
 impl McpProxyAdapter {
     pub fn new(store: Arc<Store>) -> Arc<Self> {
         Arc::new(McpProxyAdapter { store })
+    }
+
+    /// Whether the user signed in to this integration's server through Pluk.
+    /// A read that fails counts as signed in, so the check errs on refusing.
+    fn has_sign_in(&self, integration_id: Option<&str>) -> bool {
+        integration_id.is_some_and(|id| !matches!(self.store.get_proxy_auth(id), Ok(None)))
     }
 
     /// The tools an agent can actually reach right now: approved, still
@@ -164,14 +212,53 @@ impl Adapter for McpProxyAdapter {
     /// Reaching the server is the test. A server that will only answer someone
     /// who signed in is working as built, so the failure it reports is the step
     /// the user still owes it rather than the refusal it gave Pluk.
+    /// A local server is started for the test, once the user approved its
+    /// command.
     async fn test_connection(&self, conn: &Integration) -> Result<(), AdapterError> {
         credentials_in_hand(&self.store, conn).await?;
         catalog::discover(&self.store, conn).await.map(|_| ())
     }
 
+    /// For a remote server, header rows the transport would refuse, or that
+    /// clash with the sign-in this integration already sends. For a local
+    /// one, a command, args, folder or variable Pluk could not start it with.
+    fn check_config(
+        &self,
+        integration_id: Option<&str>,
+        config: &Config,
+    ) -> Result<(), ConfigProblem> {
+        if local::is_local_config(config) {
+            return local::check_config(config);
+        }
+        let token = config
+            .get("token")
+            .and_then(Value::as_str)
+            .is_some_and(|token| !token.trim().is_empty());
+        let sign_in = if token {
+            let header = config
+                .get("header_name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(client::DEFAULT_AUTH_HEADER);
+            SignIn::Token {
+                header: header.to_string(),
+            }
+        } else if self.has_sign_in(integration_id) {
+            SignIn::Oauth
+        } else {
+            SignIn::None
+        };
+        transport::check_rows(&key_value::rows(config, HEADERS_KEY), &sign_in)
+            .map_err(|(row, message)| ConfigProblem::at_row(HEADERS_KEY, row, message))
+    }
+
     fn humanize_error(&self, error: &AdapterError) -> Option<String> {
         if error.has_code(SIGN_IN_NEEDED_CODE) {
             return Some(SIGN_IN_NEEDED.to_string());
+        }
+        if error.has_code(local::LAUNCH_NOT_APPROVED_CODE) {
+            return Some(local::LAUNCH_NOT_APPROVED.to_string());
         }
         error
             .has_code(TOKEN_NEEDED_CODE)
@@ -234,12 +321,14 @@ impl Adapter for McpProxyAdapter {
     }
 }
 
-/// Whether Pluk holds what this server asks for. The failure names the step
-/// the user still owes it.
+/// Whether Pluk holds what this server asks for. A saved secret header
+/// counts: it is how a server that takes keys in headers is signed in to.
+/// The failure names the step the user still owes it.
 async fn credentials_in_hand(store: &Store, conn: &Integration) -> Result<(), AdapterError> {
     let required = probe::required(conn).await?;
     if required == SignInRequired::None
         || catalog::upstream_auth(store, conn).await? != UpstreamAuth::None
+        || transport::has_secret_headers(store, conn)?
     {
         return Ok(());
     }
@@ -347,8 +436,9 @@ async fn proxy_call(
 /// Upstream would not take the credentials Pluk presented.
 ///
 /// A sign-in Pluk owns is renewed once and the call repeated, because an
-/// access token can run out mid-call. A token the user typed in is theirs to
-/// fix, and an open server refusing us is its own failure to report.
+/// access token can run out mid-call. A token or secret header the user typed
+/// in is theirs to fix, and an open server refusing us is its own failure to
+/// report.
 async fn after_refusal(
     store: &Store,
     conn: &Integration,
@@ -358,6 +448,9 @@ async fn after_refusal(
 ) -> Result<Outcome, AdapterError> {
     if !oauth::renew(store, conn).await? {
         return match catalog::static_auth(conn) {
+            UpstreamAuth::None if transport::has_secret_headers(store, conn)? => {
+                Err(AdapterError::new(HEADERS_REJECTED).with_code(TOKEN_REJECTED_CODE))
+            }
             UpstreamAuth::None => Err(error),
             _ => Err(AdapterError::new(TOKEN_REJECTED).with_code(TOKEN_REJECTED_CODE)),
         };
@@ -407,6 +500,9 @@ fn agent_text(error: &AdapterError, verdict: Verdict) -> String {
         || error.has_code(TOKEN_REJECTED_CODE)
         || error.has_code(client::PERMISSION_DENIED_CODE)
         || error.has_code(oauth::RECONNECT_NEEDED_CODE)
+        || error.has_code(local::LAUNCH_NOT_APPROVED_CODE)
+        || error.has_code(client::SERVER_CRASHED_CODE)
+        || error.has_code(client::SERVER_STOPPED_CODE)
     {
         return error.message.clone();
     }
@@ -424,6 +520,7 @@ mod tests {
     use std::sync::Mutex;
 
     use axum::Router;
+    use axum::response::IntoResponse;
     use axum::routing::any;
     use rmcp::ErrorData as McpError;
     use rmcp::model::{
@@ -596,6 +693,351 @@ mod tests {
         (serve(router).await, tools)
     }
 
+    /// Every request's headers, as the upstream server received them.
+    type Received = Arc<Mutex<Vec<axum::http::HeaderMap>>>;
+
+    /// An upstream that answers only a request carrying `key` in
+    /// `DD_API_KEY`, and otherwise refuses with a bare 401 while publishing a
+    /// sign-in it would never honor, the way Datadog does.
+    async fn keyed_upstream(key: &'static str) -> (String, Received) {
+        let received: Received = Arc::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("addr"));
+        let handler = TestServer {
+            tools: Arc::new(Mutex::new(vec![tool("search", "Search the docs")])),
+        };
+        let service = StreamableHttpService::new(
+            move || Ok(handler.clone()),
+            Arc::new(LocalSessionManager::default()),
+            StreamableHttpServerConfig::default(),
+        );
+        let seen = received.clone();
+        let issuer = base.clone();
+        let router = Router::new()
+            .route(
+                "/.well-known/oauth-authorization-server",
+                any(move || {
+                    let issuer = issuer.clone();
+                    async move {
+                        axum::Json(json!({
+                            "issuer": issuer,
+                            "authorization_endpoint": format!("{issuer}/authorize"),
+                            "token_endpoint": format!("{issuer}/token"),
+                            "registration_endpoint": format!("{issuer}/register"),
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/mcp",
+                any(move |request: axum::extract::Request| {
+                    let service = service.clone();
+                    let seen = seen.clone();
+                    async move {
+                        seen.lock()
+                            .expect("received")
+                            .push(request.headers().clone());
+                        let keyed = request
+                            .headers()
+                            .get("DD_API_KEY")
+                            .is_some_and(|value| value == key);
+                        if !keyed {
+                            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+                        }
+                        match service.oneshot(request).await {
+                            Ok(response) => response.map(axum::body::Body::new).into_response(),
+                            Err(never) => match never {},
+                        }
+                    }
+                }),
+            );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        (format!("{base}/mcp"), received)
+    }
+
+    fn save_header(store: &Store, id: &str, name: &str, value: &str) {
+        store
+            .write_proxy_secrets(
+                id,
+                &[pluk_store::SecretWrite::Set {
+                    kind: SecretKind::Header,
+                    name: name.to_string(),
+                    value: value.to_string(),
+                }],
+            )
+            .expect("save header");
+    }
+
+    fn header_of(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+    }
+
+    #[tokio::test]
+    async fn key_headers_reach_a_server_that_takes_no_other_sign_in() {
+        let (endpoint, received) = keyed_upstream("dd-key-1").await;
+        let (_dir, store) = store();
+        let adapter = McpProxyAdapter::new(store.clone());
+        let conn = integration(
+            "datadog-headers",
+            json!({ "url": endpoint, "headers": [
+                {"name": "DD_API_KEY", "secret": true},
+                {"name": "DD_APPLICATION_KEY", "secret": true},
+                {"name": "X-Org", "value": "acme", "secret": false},
+            ]}),
+        );
+        save_header(&store, &conn.id, "DD_API_KEY", "dd-key-1");
+        save_header(&store, &conn.id, "DD_APPLICATION_KEY", "dd-app-1");
+
+        adapter
+            .test_connection(&conn)
+            .await
+            .expect("a saved key header counts as signed in");
+        assert_eq!(
+            states(&store, &conn.id),
+            [("search".to_string(), ToolState::New)]
+        );
+
+        // The session asks for either reply format, SSE first; the probe and
+        // its sign-in discovery ask otherwise.
+        let received = received.lock().expect("received").clone();
+        let (session, probe): (Vec<_>, Vec<_>) = received.iter().partition(|headers| {
+            header_of(headers, "accept").as_deref() == Some("text/event-stream, application/json")
+        });
+        assert_eq!(header_of(probe[0], "x-org").as_deref(), Some("acme"));
+        for headers in &probe {
+            assert_eq!(
+                header_of(headers, "dd_api_key"),
+                None,
+                "the probe carries no secret"
+            );
+            assert_eq!(header_of(headers, "dd_application_key"), None);
+        }
+        assert!(!session.is_empty());
+        for headers in &session {
+            assert_eq!(
+                header_of(headers, "dd_api_key").as_deref(),
+                Some("dd-key-1")
+            );
+            assert_eq!(
+                header_of(headers, "dd_application_key").as_deref(),
+                Some("dd-app-1")
+            );
+            assert_eq!(header_of(headers, "x-org").as_deref(), Some("acme"));
+        }
+
+        client::shutdown(&conn.id);
+    }
+
+    #[tokio::test]
+    async fn an_authorization_header_goes_out_exactly_as_written() {
+        let (endpoint, received) = recording_upstream().await;
+        let (_dir, store) = store();
+        let adapter = McpProxyAdapter::new(store.clone());
+        let conn = integration(
+            "wix-headers",
+            json!({ "url": endpoint, "headers": [
+                {"name": "Authorization", "secret": true},
+                {"name": "wix-account-id", "value": "account-1", "secret": false},
+            ]}),
+        );
+        save_header(&store, &conn.id, "Authorization", "IST.wix-key");
+
+        adapter.test_connection(&conn).await.expect("discover");
+
+        let received = received.lock().expect("received").clone();
+        let session = received.last().expect("requests");
+        assert_eq!(
+            header_of(session, "authorization").as_deref(),
+            Some("IST.wix-key")
+        );
+        assert_eq!(
+            header_of(session, "wix-account-id").as_deref(),
+            Some("account-1")
+        );
+
+        client::shutdown(&conn.id);
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_wins_over_an_authorization_header_and_other_headers_still_go() {
+        let (endpoint, received) = recording_upstream().await;
+        let (_dir, store) = store();
+        let conn = integration(
+            "grafana-headers",
+            json!({ "url": endpoint, "headers": [
+                {"name": "Authorization", "secret": true},
+                {"name": "X-Grafana-URL", "value": "https://grafana.example.com", "secret": false},
+            ]}),
+        );
+        save_header(&store, &conn.id, "Authorization", "stale-key");
+        let headers = transport::static_headers(&store, &conn).expect("headers");
+        let client =
+            client::McpProxyClient::new(&conn.id, endpoint, UpstreamAuth::bearer("oauth-1"))
+                .with_headers(headers);
+
+        client.list_tools().await.expect("list");
+
+        let received = received.lock().expect("received").clone();
+        for headers in &received {
+            let sent: Vec<_> = headers.get_all("authorization").iter().collect();
+            assert_eq!(sent, ["Bearer oauth-1"]);
+            assert_eq!(
+                header_of(headers, "x-grafana-url").as_deref(),
+                Some("https://grafana.example.com")
+            );
+        }
+
+        client::shutdown(&conn.id);
+    }
+
+    #[tokio::test]
+    async fn changing_a_header_reconnects_the_session() {
+        let (endpoint, received) = recording_upstream().await;
+        let (_dir, store) = store();
+        let adapter = McpProxyAdapter::new(store.clone());
+        let rows = json!([{"name": "X-Key", "secret": true}]);
+        let conn = integration("header-edit", json!({ "url": endpoint, "headers": rows }));
+        save_header(&store, &conn.id, "X-Key", "first");
+        adapter.test_connection(&conn).await.expect("discover");
+
+        save_header(&store, &conn.id, "X-Key", "second");
+        adapter.test_connection(&conn).await.expect("rediscover");
+
+        let received = received.lock().expect("received").clone();
+        let last = received.last().expect("requests");
+        assert_eq!(header_of(last, "x-key").as_deref(), Some("second"));
+
+        client::shutdown(&conn.id);
+    }
+
+    #[tokio::test]
+    async fn a_refused_key_header_is_named_without_being_shown() {
+        let (endpoint, _tools) = upstream().await;
+        let (_dir, store) = store();
+        let adapter = McpProxyAdapter::new(store.clone());
+        let rows = json!([{"name": "DD_API_KEY", "secret": true}]);
+        let mut conn = integration(
+            "header-refused",
+            json!({ "url": endpoint, "headers": rows }),
+        );
+        conn.query_policy = Some(enabling("search"));
+        save_header(&store, &conn.id, "DD_API_KEY", TOKEN);
+        adapter.test_connection(&conn).await.expect("discover");
+        store
+            .approve_proxy_tools(&conn.id, &["search".to_string()])
+            .expect("approve");
+
+        let mut refused = conn.clone();
+        refused
+            .config
+            .insert("url".to_string(), Value::String(rejecting_upstream().await));
+        let mut host = RecordingHost::default();
+        adapter
+            .register(&mut host, &refused, "owner")
+            .expect("register");
+        let result = host.handlers["search"](json!({ "q": "onboarding" })).await;
+
+        assert!(result.is_error);
+        assert_eq!(result.text(), HEADERS_REJECTED);
+        assert!(!format!("{:?}{result:?}", logs(&store)).contains(TOKEN));
+
+        client::shutdown(&conn.id);
+    }
+
+    #[test]
+    fn a_save_is_refused_at_the_header_row_that_breaks_a_rule() {
+        let (_dir, store) = store();
+        let adapter = McpProxyAdapter::new(store.clone());
+        let config = |value: Value| match value {
+            Value::Object(map) => map,
+            _ => unreachable!(),
+        };
+        let rows = json!([
+            {"name": "X-Org", "value": "acme", "secret": false},
+            {"name": "Authorization", "value": "IST.key-1"},
+        ]);
+
+        assert_eq!(
+            adapter.check_config(None, &config(json!({ "headers": rows }))),
+            Ok(())
+        );
+        let with_token = adapter
+            .check_config(None, &config(json!({ "headers": rows, "token": "t0ken" })))
+            .expect_err("a token is saved");
+        assert_eq!(with_token.field, HEADERS_KEY);
+        assert_eq!(with_token.row, Some(1));
+        assert!(!with_token.message.contains("IST.key-1"));
+
+        let signed_in = store
+            .create_integration(&IntegrationInput::new("Signed in", ADAPTER_ID))
+            .expect("create");
+        store
+            .set_proxy_auth(&pluk_store::ProxyAuthInput {
+                integration_id: signed_in.id.clone(),
+                kind: "oauth".to_string(),
+                access_token: "access-1".to_string(),
+                refresh_token: None,
+                expires_at: None,
+                client_id: None,
+                client_secret: None,
+                metadata_json: None,
+            })
+            .expect("sign in");
+        let problem = adapter
+            .check_config(Some(&signed_in.id), &config(json!({ "headers": rows })))
+            .expect_err("signed in");
+        assert_eq!(
+            problem.message,
+            "Authorization is already sent by the sign-in. Remove this header."
+        );
+
+        let reserved = adapter
+            .check_config(
+                None,
+                &config(json!({ "headers": [{"name": "Mcp-Session-Id", "value": "x"}] })),
+            )
+            .expect_err("reserved");
+        assert_eq!(reserved.row, Some(0));
+    }
+
+    /// An open upstream that records the headers of every request.
+    async fn recording_upstream() -> (String, Received) {
+        let received: Received = Arc::default();
+        let handler = TestServer {
+            tools: Arc::new(Mutex::new(vec![tool("search", "Search the docs")])),
+        };
+        let service = StreamableHttpService::new(
+            move || Ok(handler.clone()),
+            Arc::new(LocalSessionManager::default()),
+            StreamableHttpServerConfig::default(),
+        );
+        let seen = received.clone();
+        let router = Router::new().route(
+            "/mcp",
+            any(move |request: axum::extract::Request| {
+                let service = service.clone();
+                let seen = seen.clone();
+                async move {
+                    seen.lock()
+                        .expect("received")
+                        .push(request.headers().clone());
+                    match service.oneshot(request).await {
+                        Ok(response) => response.map(axum::body::Body::new),
+                        Err(never) => match never {},
+                    }
+                }
+            }),
+        );
+        (serve(router).await, received)
+    }
+
     async fn rejecting_upstream() -> String {
         let router = Router::new().route(
             "/mcp",
@@ -668,7 +1110,49 @@ mod tests {
             json!({"type": "object", "properties": {"q": {"type": "string"}}})
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
+    }
+
+    #[tokio::test]
+    async fn imported_tools_to_turn_off_apply_once_discovery_finds_them() {
+        let (endpoint, _tools) = upstream().await;
+        let (_dir, store) = store();
+        let mut input = IntegrationInput::new("Imported", ADAPTER_ID);
+        input.config = integration("unused", json!({ "url": endpoint })).config;
+        input.query_policy =
+            import::policy_with_pending_off(&["search".to_string(), "not_offered".to_string()]);
+        let conn = store.create_integration(&input).expect("create");
+        let policy = |store: &Store| {
+            let stored = store.integration_by_id(&conn.id).unwrap().unwrap();
+            pluk_store::parse_query_policy(stored.query_policy.as_deref()).expect("policy")
+        };
+        assert!(policy(&store).tools.is_empty());
+
+        catalog::discover(&store, &conn).await.expect("discover");
+        let after = policy(&store);
+        assert!(!after.tools["search"].enabled);
+        assert_eq!(import::pending_off(Some(&after)), ["not_offered"]);
+
+        // Once applied, the switch is the user's: turning it on sticks.
+        let on = api::handle_proxy_api(
+            &store,
+            &conn,
+            ApiRequest {
+                method: "POST".to_string(),
+                url: String::new(),
+                body: Some(json!({ "names": ["search"], "enabled": true }).to_string()),
+            },
+            "/proxy/enable",
+        )
+        .await
+        .expect("route");
+        assert_eq!(on.status, 200);
+        catalog::discover(&store, &conn)
+            .await
+            .expect("discover again");
+        assert!(policy(&store).tools["search"].enabled);
+
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -687,7 +1171,7 @@ mod tests {
         // so an approved tool with no toggle stays unreachable.
         assert!(registered(&adapter, &conn).names().is_empty());
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -722,7 +1206,7 @@ mod tests {
             "no credential reaches the log"
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -752,7 +1236,7 @@ mod tests {
             LOG_RESPONSE_LIMIT
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -782,7 +1266,7 @@ mod tests {
             Some("the document is locked")
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -812,7 +1296,7 @@ mod tests {
         assert!(result.is_error);
         assert_eq!(result.text(), TOOL_CHANGED);
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -856,7 +1340,7 @@ mod tests {
             ["publish".to_string()]
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -906,7 +1390,7 @@ mod tests {
         .expect("tools route");
         assert!(!String::from_utf8_lossy(&listed.body).contains(TOKEN));
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -946,7 +1430,7 @@ mod tests {
             "an open server asks for nothing, so the screen offers no sign-in"
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     #[tokio::test]
@@ -1000,7 +1484,7 @@ mod tests {
             ["search".to_string()]
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 
     async fn call_api(
@@ -1059,6 +1543,6 @@ mod tests {
             "{some}"
         );
 
-        client::invalidate(&conn.id);
+        client::shutdown(&conn.id);
     }
 }

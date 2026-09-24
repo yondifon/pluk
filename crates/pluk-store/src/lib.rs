@@ -14,10 +14,12 @@ mod error;
 mod groups;
 mod ids;
 mod integrations;
+mod launch_approvals;
 mod masked_columns;
 mod migrate;
 mod models;
 mod proxy_auth;
+mod proxy_secrets;
 mod proxy_tools;
 mod query_log;
 mod saved_commands;
@@ -44,6 +46,7 @@ pub use models::{
     SavedCommand, SavedQuery, Verdict,
 };
 pub use proxy_auth::{AuthStatus, ProxyAuth, ProxyAuthInput, RefreshedTokens};
+pub use proxy_secrets::{ProxySecret, SecretKind, SecretWrite};
 pub use proxy_tools::{DiscoveredTool, ProxyTool, ToolState};
 pub use query_log::{
     ActivityHandler, LOG_PAGE_SIZE, LOG_RESPONSE_LIMIT, LOG_RESULT_ROWS, LogActivity, LogCursor,

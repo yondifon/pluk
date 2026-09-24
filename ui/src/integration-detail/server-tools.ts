@@ -1,12 +1,13 @@
-import { humanizeHealthError } from "../health";
-import { integrationApi, invoke } from "../host";
+import { invoke } from "../host";
 import { confirmModal } from "../modal";
 import { createBadge, createButton, createCard } from "../primitives";
 import { toast } from "../toast";
+import { callProxyApi as call } from "./proxy-api";
 import {
   awaitingSignIn,
   canEnable,
   orderedProxyTools,
+  pendingOffNote,
   signInView,
   stateBadge,
   stateNote,
@@ -18,33 +19,6 @@ import type { Integration } from "./types";
 
 const SIGN_IN_POLL_MS = 2000;
 const SIGN_IN_GIVE_UP_MS = 10 * 60 * 1000;
-
-type Answer<T> = { ok: true; value: T } | { ok: false; error: string };
-
-/**
- * One call to a route the server's adapter serves. A refusal the route itself
- * chose comes back with its own wording; only a host that could not carry the
- * request at all throws.
- */
-async function call<T>(
-  integrationId: string,
-  method: string,
-  subpath: string,
-  body?: unknown,
-): Promise<Answer<T>> {
-  try {
-    const answer = await integrationApi<T & { error?: string }>({
-      integrationId,
-      method,
-      subpath,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (answer.status >= 200 && answer.status < 300) return { ok: true, value: answer.body };
-    return { ok: false, error: humanizeHealthError(answer.body?.error) };
-  } catch (e) {
-    return { ok: false, error: humanizeHealthError(e instanceof Error ? e.message : String(e)) };
-  }
-}
 
 function line(text: string, className: string): HTMLParagraphElement {
   const el = document.createElement("p");
@@ -77,6 +51,9 @@ export function mountServerTools(
 
   const signIn = card("Server");
   const tools = card("Tools");
+  const pendingNote = line("", "hint");
+  pendingNote.hidden = true;
+  tools.el.appendChild(pendingNote);
   container.append(signIn.el, tools.el);
 
   let alive = true;
@@ -358,6 +335,9 @@ export function mountServerTools(
 
   function renderTools(): void {
     tools.body.innerHTML = "";
+    const pending = pendingOffNote(integration.pendingToolsOff, rows);
+    pendingNote.textContent = pending ?? "";
+    pendingNote.hidden = pending === null;
     if (toolsError) {
       tools.body.append(
         line("Pluk could not reach this server.", "empty"),

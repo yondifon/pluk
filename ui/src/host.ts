@@ -82,6 +82,54 @@ export async function integrationApi<T>(args: {
   });
 }
 
+export interface LaunchEnvRow {
+  name: string;
+  secret: boolean;
+}
+
+/** The exact command Pluk would run for a local MCP server. Secret values never appear. */
+export interface LaunchPreview {
+  program: string;
+  args: string[];
+  cwd: string;
+  env: LaunchEnvRow[];
+  warnings: string[];
+  /** What approving this preview approves. */
+  launchHash: string;
+  approved: boolean;
+}
+
+export async function mcpLaunchPreview(id: string): Promise<LaunchPreview> {
+  return invoke("mcp_launch_preview", { id });
+}
+
+export async function approveMcpLaunch(id: string, launchHash: string): Promise<void> {
+  return invoke("approve_mcp_launch", { id, launchHash });
+}
+
+export type McpServerState = "starting" | "running" | "stopped" | "crashed";
+
+export interface McpServerStatus {
+  state: McpServerState;
+  pid?: number;
+}
+
+export async function mcpServerStatus(id: string): Promise<McpServerStatus> {
+  return invoke("mcp_server_status", { id });
+}
+
+export async function mcpServerOutput(id: string): Promise<string[]> {
+  return invoke("mcp_server_output", { id });
+}
+
+export async function stopMcpServer(id: string): Promise<void> {
+  return invoke("stop_mcp_server", { id });
+}
+
+export async function restartMcpServer(id: string): Promise<void> {
+  return invoke("restart_mcp_server", { id });
+}
+
 /** Subscribe to a host event. Resolves to an unlisten function. */
 export async function listen<T>(event: string, fn: (payload: T) => void): Promise<() => void> {
   const subscribe = tauri()?.event?.listen;

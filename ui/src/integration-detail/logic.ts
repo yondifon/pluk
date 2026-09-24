@@ -18,7 +18,10 @@ export function initialTab(item: InitialTabItem): TabId {
   }
 
   const missingRequiredConfig = item.manifest?.configFields.some(
-    (field) => field.required && !item.integration.config[field.key]?.trim(),
+    (field) =>
+      field.required &&
+      !item.integration.config[field.key]?.trim() &&
+      !item.integration.secretsSet?.includes(field.key),
   );
   if (missingRequiredConfig) return "overview";
   if (item.health?.status === "error") return "overview";
@@ -102,12 +105,14 @@ export function settingsSummary(tool: ToolSpec, toolConfig: Integration["toolCon
 
 const MASK = "••••••";
 
+/** One row per setting. A saved secret shows as a mask; its value never reaches the window. */
 export function genericConfigRows(
   config: Record<string, string>,
   fields: ConfigField[],
+  secretsSet: string[] = [],
 ): Array<[string, string]> {
   const secretKeys = new Set(fields.filter((f) => f.secret).map((f) => f.key));
-  return Object.keys(config)
+  return [...Object.keys(config), ...secretsSet]
     .sort()
     .map((key) => {
       const pretty = key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -152,7 +157,7 @@ export function overviewRows(
     ];
   }
 
-  return genericConfigRows(integration.config, fields);
+  return genericConfigRows(integration.config, fields, integration.secretsSet);
 }
 
 export function formatMetaLine(integration: Integration, manifest: AdapterManifest | null | undefined): string {

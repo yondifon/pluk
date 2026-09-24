@@ -19,7 +19,10 @@ use crate::error::AdapterError;
 use crate::tool_spec::ToolSpec;
 
 use super::client::{self, DEFAULT_AUTH_HEADER, McpProxyClient, UpstreamAuth, UpstreamTool};
+use super::import;
+use super::local;
 use super::oauth;
+use super::transport::{self, StaticHeader};
 
 /// The address would carry a credential in the clear to somewhere else.
 pub const INSECURE_ADDRESS_CODE: &str = "MCP_PROXY_INSECURE_ADDRESS";
@@ -100,28 +103,44 @@ pub fn static_auth(conn: &Integration) -> UpstreamAuth {
 }
 
 /// A client for one integration, with the pooled session dropped when the
-/// address or the credentials moved since it was opened.
+/// address, the credentials or the headers moved since it was opened.
+///
+/// A local server's session is dropped, and the server stopped, when its
+/// launch moved; the new launch starts only once the user approved it.
 pub async fn client_for(store: &Store, conn: &Integration) -> Result<McpProxyClient, AdapterError> {
+    if local::is_local(conn) {
+        let spec = local::launch_spec(store, conn).await?;
+        keep_session_if_unchanged(&conn.id, spec.launch_hash());
+        return local::client_for(store, conn, spec).await;
+    }
     let endpoint = endpoint(conn)?;
     let auth = upstream_auth(store, conn).await?;
-    let fingerprint = fingerprint(&endpoint, &auth);
+    let headers = transport::static_headers(store, conn)?;
+    keep_session_if_unchanged(&conn.id, fingerprint(&endpoint, &auth, &headers));
+    Ok(McpProxyClient::new(&conn.id, endpoint, auth).with_headers(headers))
+}
+
+/// Shut the pooled session down when what it was opened with moved.
+fn keep_session_if_unchanged(integration_id: &str, fingerprint: String) {
     let previous = session_fingerprints()
         .lock()
         .expect("mcp proxy fingerprints")
-        .insert(conn.id.clone(), fingerprint.clone());
+        .insert(integration_id.to_string(), fingerprint.clone());
     if previous.is_some_and(|previous| previous != fingerprint) {
-        client::invalidate(&conn.id);
+        client::shutdown(integration_id);
     }
-    Ok(McpProxyClient::new(&conn.id, endpoint, auth))
 }
 
 /// Ask upstream what it offers now and replace the snapshot with the answer.
+/// Tools an imported config turned off are switched off once they are found.
 pub async fn discover(store: &Store, conn: &Integration) -> Result<Vec<ProxyTool>, AdapterError> {
     let tools = client_for(store, conn).await?.list_tools().await?;
     let discovered: Vec<DiscoveredTool> = tools.iter().map(discovered_from).collect();
     store
         .replace_proxy_tools(&conn.id, &discovered)
         .map_err(store_failure)?;
+    let found: Vec<String> = tools.iter().map(|tool| tool.name.clone()).collect();
+    import::apply_pending_off(store, &conn.id, &found).map_err(store_failure)?;
     snapshot(store, &conn.id)
 }
 
@@ -210,13 +229,14 @@ pub(super) fn config_str(conn: &Integration, key: &str) -> Option<String> {
 }
 
 /// What an open session was opened with, without keeping the secret around.
-fn fingerprint(endpoint: &str, auth: &UpstreamAuth) -> String {
+fn fingerprint(endpoint: &str, auth: &UpstreamAuth, headers: &[StaticHeader]) -> String {
     let credential = match auth {
         UpstreamAuth::None => String::new(),
         UpstreamAuth::Header { name, value } => format!("{name}\u{0}{value}"),
         UpstreamAuth::Bearer { access_token } => format!("bearer\u{0}{access_token}"),
     };
-    digest(&format!("{endpoint}\u{0}{credential}"))
+    let headers = transport::digest(headers);
+    digest(&format!("{endpoint}\u{0}{credential}\u{0}{headers}"))
 }
 
 fn session_fingerprints() -> &'static Mutex<HashMap<String, String>> {

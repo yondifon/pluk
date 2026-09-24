@@ -1,7 +1,7 @@
 import type { AdapterManifest, ConfigFieldDef, ToolDef } from "./catalog.ts";
 import { visibleFields, groupedFields, groupedByCategory, prettyCategory } from "./catalog.ts";
 import type { ConnectionDraft, Environment } from "./connectionDraft.ts";
-import { parseRules, setEnvironment, splitTools } from "./connectionDraft.ts";
+import { forgetSecret, isFilled, parseRules, setEnvironment, splitTools } from "./connectionDraft.ts";
 import type { Approvals } from "./connectionDraft.ts";
 import type { GroupDraft, GroupFormConnection } from "./groupForm.ts";
 import {
@@ -15,6 +15,7 @@ import {
   setMemberTool,
 } from "./groupForm.ts";
 import { isWorkingIn } from "./focus.ts";
+import { emptyRow, keepsSaved, type ConfigProblem, type KeyValueRow } from "./keyValue.ts";
 import { SERVER_TEMPLATES, SERVERS_SHOWN, isAdded, type ServerTemplate } from "./serverTemplates.ts";
 import { createIcon } from "../icon";
 import { createButton, createBadge, wizardStepHeader, wizardStepFooter } from "../primitives";
@@ -69,6 +70,7 @@ function serverTile(
 function renderPopularServers(
   serverUrls: string[],
   onPick: (template: ServerTemplate) => Promise<void>,
+  onPasteConfig?: () => void,
 ): HTMLElement {
   const section = document.createElement("section");
   section.className = "server-section";
@@ -100,6 +102,14 @@ function renderPopularServers(
     });
     section.appendChild(more);
   }
+  if (onPasteConfig) {
+    const paste = createButton("Paste a server config", { size: "sm", variant: "secondary", onClick: onPasteConfig });
+    paste.classList.add("server-paste");
+    const pasteHint = document.createElement("p");
+    pasteHint.className = "hint";
+    pasteHint.textContent = "Already set up a server in another app? Paste its config to add it here.";
+    section.append(pasteHint, paste);
+  }
   return section;
 }
 
@@ -114,6 +124,8 @@ export function renderTypeChooser(
     onPickServer?: (template: ServerTemplate) => Promise<void>;
     /** Addresses of the servers already added, so a tile can say so. */
     serverUrls?: string[];
+    /** Adding servers from a config copied out of another app. */
+    onPasteConfig?: () => void;
   },
 ): HTMLElement {
   const adapters = catalog.filter((a) => a.offeredForSetup);
@@ -162,7 +174,7 @@ export function renderTypeChooser(
     const onPickServer = opts?.onPickServer;
     const showServers = onPickServer != null && adapters.some((a) => a.id === MCP_TYPE);
     if (showServers) {
-      wrap.appendChild(renderPopularServers(opts?.serverUrls ?? [], onPickServer));
+      wrap.appendChild(renderPopularServers(opts?.serverUrls ?? [], onPickServer, opts?.onPasteConfig));
       const rest = document.createElement("h3");
       rest.className = "ui-card-title";
       rest.textContent = "Everything else";
@@ -255,12 +267,23 @@ function helpText(id: string, text: string): HTMLElement {
   return el;
 }
 
-export function renderField(field: ConfigFieldDef, value: string, onChange: (v: string) => void): HTMLElement {
+/**
+ * One config input. `onForget` marks a secret that already has a saved value:
+ * the input starts blank, says the value is saved, and offers to remove it.
+ */
+export function renderField(
+  field: ConfigFieldDef,
+  value: string,
+  onChange: (v: string) => void,
+  onForget?: () => void,
+): HTMLElement {
   const { row, slot, controlId } = settingRow(field.key, field.required ? `${field.label} *` : field.label);
   row.dataset.fieldKey = field.key;
 
   const help = field.help ? helpText(`help-${field.key}`, field.help) : null;
-  const describe = (el: HTMLElement) => { if (help) el.setAttribute("aria-describedby", help.id); };
+  const saved = onForget ? helpText(`saved-${field.key}`, "Saved. Leave this blank to keep it.") : null;
+  const describedBy = [saved?.id, help?.id].filter(Boolean).join(" ");
+  const describe = (el: HTMLElement) => { if (describedBy) el.setAttribute("aria-describedby", describedBy); };
 
   switch (field.type) {
     case "toggle": {
@@ -339,17 +362,146 @@ export function renderField(field: ConfigFieldDef, value: string, onChange: (v: 
       const input = document.createElement("input");
       input.type = field.type === "password" ? "password" : "text";
       input.id = controlId;
-      input.placeholder = field.placeholder ?? (field.type === "password" ? "••••••" : "");
+      input.placeholder = saved ? "Saved" : field.placeholder ?? (field.type === "password" ? "••••••" : "");
       input.value = value;
       input.className = "field-input mono";
       describe(input);
       input.addEventListener("input", () => onChange(input.value));
       slot.appendChild(input);
+      if (onForget) {
+        slot.appendChild(createButton("Remove", { size: "sm", onClick: onForget, ariaLabel: `Remove saved ${field.label.toLowerCase()}` }));
+      }
       break;
     }
   }
+  if (saved) row.appendChild(saved);
   if (help) row.appendChild(help);
   return row;
+}
+
+/** What one row of a key/value field is called in labels: "Headers" gives "header". */
+function rowNoun(field: ConfigFieldDef): string {
+  return field.label.toLowerCase().replace(/s$/, "");
+}
+
+export function renderKeyValueField(
+  field: ConfigFieldDef,
+  rows: KeyValueRow[],
+  onChange: (rows: KeyValueRow[]) => void,
+): HTMLElement {
+  const { row: wrap, slot, controlId } = settingRow(field.key, field.label);
+  wrap.dataset.fieldKey = field.key;
+  wrap.classList.add("inspector-row-wrap");
+  slot.classList.add("kv-list");
+  const noun = rowNoun(field);
+  const help = field.help ? helpText(`help-${field.key}`, field.help) : null;
+  const update = (index: number, next: Partial<KeyValueRow>) =>
+    onChange(rows.map((row, i) => (i === index ? { ...row, ...next } : row)));
+
+  rows.forEach((row, index) => {
+    const line = document.createElement("div");
+    line.className = "kv-row";
+    line.dataset.row = String(index);
+    const named = row.name.trim() || `${noun} ${index + 1}`;
+
+    const name = document.createElement("input");
+    name.type = "text";
+    name.className = "field-input mono kv-name";
+    if (index === 0) name.id = controlId;
+    name.placeholder = "Name";
+    name.spellcheck = false;
+    name.value = row.name;
+    name.setAttribute("aria-label", `Name of ${noun} ${index + 1}`);
+    name.addEventListener("input", () => update(index, { name: name.value }));
+
+    const saved = keepsSaved(row) ? helpText(`saved-${field.key}-${index}`, "Saved. Leave this blank to keep it.") : null;
+    const value = document.createElement("input");
+    value.type = row.secret ? "password" : "text";
+    value.className = "field-input mono kv-value";
+    value.placeholder = saved ? "Saved" : "Value";
+    value.spellcheck = false;
+    value.value = row.value;
+    value.setAttribute("aria-label", `Value of ${named}`);
+    if (saved) value.setAttribute("aria-describedby", saved.id);
+    value.addEventListener("input", () => update(index, { value: value.value }));
+
+    const secretLabel = document.createElement("label");
+    secretLabel.className = "kv-secret";
+    const secret = document.createElement("input");
+    secret.type = "checkbox";
+    secret.checked = row.secret;
+    secret.setAttribute("aria-label", `Keep ${named} secret`);
+    secret.addEventListener("change", () => update(index, { secret: secret.checked }));
+    secretLabel.append(secret, document.createTextNode("Secret"));
+
+    const remove = createButton("Remove", {
+      size: "sm",
+      ariaLabel: `Remove ${named}`,
+      onClick: () => onChange(rows.filter((_, i) => i !== index)),
+    });
+
+    line.append(name, value, secretLabel, remove);
+    slot.appendChild(line);
+    if (saved) slot.appendChild(saved);
+  });
+
+  slot.appendChild(
+    createButton(`Add ${noun}`, { size: "sm", onClick: () => onChange([...rows, emptyRow(field.defaultSecret ?? true)]) }),
+  );
+  if (help) wrap.appendChild(help);
+  return wrap;
+}
+
+export function renderListField(
+  field: ConfigFieldDef,
+  items: string[],
+  onChange: (items: string[]) => void,
+): HTMLElement {
+  const { row: wrap, slot, controlId } = settingRow(field.key, field.label);
+  wrap.dataset.fieldKey = field.key;
+  wrap.classList.add("inspector-row-wrap");
+  slot.classList.add("kv-list");
+  const noun = rowNoun(field);
+  const help = field.help ? helpText(`help-${field.key}`, field.help) : null;
+  const update = (index: number, value: string) =>
+    onChange(items.map((item, i) => (i === index ? value : item)));
+
+  items.forEach((item, index) => {
+    const line = document.createElement("div");
+    line.className = "kv-row";
+    line.dataset.row = String(index);
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "field-input mono kv-value";
+    if (index === 0) input.id = controlId;
+    input.spellcheck = false;
+    input.value = item;
+    input.setAttribute("aria-label", `${field.label} ${index + 1}`);
+    input.addEventListener("input", () => update(index, input.value));
+
+    const remove = createButton("Remove", {
+      size: "sm",
+      ariaLabel: `Remove ${noun} ${index + 1}`,
+      onClick: () => onChange(items.filter((_, i) => i !== index)),
+    });
+
+    line.append(input, remove);
+    slot.appendChild(line);
+  });
+
+  slot.appendChild(createButton(`Add ${noun}`, { size: "sm", onClick: () => onChange([...items, ""]) }));
+  if (help) wrap.appendChild(help);
+  return wrap;
+}
+
+/** Shows a save the host would refuse beside the field and row it names. */
+export function markProblem(host: HTMLElement, problem: ConfigProblem): void {
+  const field = host.querySelector<HTMLElement>(`[data-field-key="${problem.field}"]`);
+  if (!field) return;
+  const line = problem.row != null ? field.querySelector<HTMLElement>(`.kv-row[data-row="${problem.row}"]`) : null;
+  const control = (line ?? field).querySelector<HTMLElement>("input, select");
+  if (control) markMissing(control, line ?? field, problem.message);
 }
 
 export function renderToolsSection(
@@ -713,6 +865,8 @@ export function renderConnectFieldsStep(
   onContinue: () => void,
   /** The field to open on, and the line above it saying what belongs there. */
   landOn?: { field: string; text: string },
+  /** Asks the host what saving this draft would refuse, before moving on. */
+  check?: (draft: ConnectionDraft) => Promise<ConfigProblem | null>,
 ): HTMLElement {
   const wrap = wizardStepHeader(stepIndex, totalSteps, "Connect", `Fill in what Pluk needs to reach ${manifest.label}.`);
   const body = document.createElement("div");
@@ -727,9 +881,24 @@ export function renderConnectFieldsStep(
     card.appendChild(h);
     for (const f of shown) {
       if (landOn?.field === f.key) card.appendChild(helpText(`land-on-${f.key}`, landOn.text));
+      if (f.type === "keyvalue") {
+        card.appendChild(renderKeyValueField(f, draft.rows[f.key] ?? [], (rows) => {
+          onDraftChange({ ...draft, rows: { ...draft.rows, [f.key]: rows } });
+        }));
+        continue;
+      }
+      if (f.type === "list") {
+        card.appendChild(renderListField(f, draft.lists[f.key] ?? [], (items) => {
+          onDraftChange({ ...draft, lists: { ...draft.lists, [f.key]: items } });
+        }));
+        continue;
+      }
+      const onForget = draft.savedSecrets.includes(f.key)
+        ? () => onDraftChange({ ...forgetSecret(draft, f.key), config: { ...draft.config, [f.key]: "" } })
+        : undefined;
       const row = renderField(f, draft.config[f.key] ?? "", (v) => {
         onDraftChange({ ...draft, config: { ...draft.config, [f.key]: v } });
-      });
+      }, onForget);
       card.appendChild(row);
     }
     body.appendChild(card);
@@ -751,9 +920,16 @@ export function renderConnectFieldsStep(
     onCancel,
     primaryLabel: "Continue",
     onPrimary: () => {
-      const invalid = visibleFields(draft.fields, draft.config).find((field) => field.required && (draft.config[field.key] ?? "") === "");
+      const invalid = visibleFields(draft.fields, draft.config).find((field) => field.required && !isFilled(draft, field));
       if (!invalid) {
-        onContinue();
+        if (!check) {
+          onContinue();
+          return;
+        }
+        void check(draft).then((problem) => {
+          if (problem) markProblem(wrap, problem);
+          else onContinue();
+        });
         return;
       }
       const invalidRow = wrap.querySelector<HTMLElement>(`[data-field-key="${invalid.key}"]`);

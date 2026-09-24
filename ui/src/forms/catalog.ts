@@ -1,13 +1,19 @@
-export type FieldType = "text" | "password" | "number" | "file" | "select" | "toggle";
+/**
+ * `keyvalue` is a list of named rows, each plain or secret; see `keyValue.ts`.
+ * `list` is an ordered list of plain strings, one row per entry.
+ */
+export type FieldType = "text" | "password" | "number" | "file" | "select" | "toggle" | "keyvalue" | "list";
 
 export interface FieldOption {
   value: string;
   label: string;
 }
 
+/** Shows the field when `config[key]` equals `equals` — or, with `negate`, when it does not. */
 export interface ShowIf {
   key: string;
   equals: string;
+  negate?: boolean;
 }
 
 export interface ConfigFieldDef {
@@ -24,6 +30,8 @@ export interface ConfigFieldDef {
   default?: string;
   help?: string;
   danger?: boolean;
+  /** Whether a new row of a `keyvalue` field starts secret. Defaults to true. */
+  defaultSecret?: boolean;
 }
 
 export interface ToolDef {
@@ -94,7 +102,8 @@ export function prettyCategory(c: string): string {
 
 export function isVisible(field: ConfigFieldDef, config: Record<string, string>): boolean {
   if (!field.showIf) return true;
-  return (config[field.showIf.key] ?? "") === field.showIf.equals;
+  const equal = (config[field.showIf.key] ?? "") === field.showIf.equals;
+  return field.showIf.negate ? !equal : equal;
 }
 
 export function visibleFields(fields: ConfigFieldDef[], config: Record<string, string>): ConfigFieldDef[] {

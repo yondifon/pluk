@@ -224,6 +224,11 @@ impl Store {
             )?;
             conn.execute("DELETE FROM proxy_tools WHERE integration_id = ?", [id])?;
             conn.execute("DELETE FROM proxy_auth WHERE integration_id = ?", [id])?;
+            conn.execute("DELETE FROM proxy_secrets WHERE integration_id = ?", [id])?;
+            conn.execute(
+                "DELETE FROM proxy_launch_approvals WHERE integration_id = ?",
+                [id],
+            )?;
         }
         Ok(deleted)
     }
@@ -234,8 +239,8 @@ mod tests {
     use crate::models::Environment;
     use crate::testing::temp_store;
     use crate::{
-        DiscoveredTool, IntegrationInput, IntegrationUpdate, ProxyAuthInput,
-        codec::parse_query_policy,
+        DiscoveredTool, IntegrationInput, IntegrationUpdate, ProxyAuthInput, SecretKind,
+        SecretWrite, codec::parse_query_policy,
     };
 
     fn allow_list(store: &crate::Store, id: &str) -> Vec<String> {
@@ -304,9 +309,37 @@ mod tests {
                     metadata_json: None,
                 })
                 .expect("credentials");
+            store
+                .write_proxy_secrets(
+                    id,
+                    &[SecretWrite::Set {
+                        kind: SecretKind::Header,
+                        name: "DD_API_KEY".to_owned(),
+                        value: "api-1".to_owned(),
+                    }],
+                )
+                .expect("secrets");
+            store.approve_launch(id, "launch-1").expect("approval");
         }
 
         assert!(store.delete_integration(&removed.id).expect("delete"));
+        assert!(
+            store
+                .approved_launch(&removed.id)
+                .expect("approval")
+                .is_none()
+        );
+        assert!(store.approved_launch(&kept.id).expect("approval").is_some());
+        assert!(
+            store
+                .list_proxy_secrets(&removed.id)
+                .expect("secrets")
+                .is_empty()
+        );
+        assert_eq!(
+            store.list_proxy_secrets(&kept.id).expect("secrets").len(),
+            1
+        );
 
         assert!(store.list_proxy_tools(&removed.id).expect("tools").is_empty());
         assert!(store.get_proxy_auth(&removed.id).expect("auth").is_none());

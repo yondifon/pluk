@@ -9,10 +9,11 @@ use std::borrow::Cow;
 
 use async_trait::async_trait;
 
-use pluk_store::Integration;
+use pluk_store::{Config, Integration};
 
 use crate::config_field::ConfigField;
 use crate::error::AdapterError;
+use crate::key_value::ConfigProblem;
 use crate::tool_host::ToolHost;
 use crate::tool_spec::ToolSpec;
 
@@ -122,6 +123,17 @@ pub trait Adapter: Send + Sync {
     /// never secret values).
     fn config_fields(&self) -> &[ConfigField];
 
+    /// Refuse a config before it is saved, naming the field and row to fix.
+    /// Saved secrets are folded back in; key/value rows are still as typed.
+    fn check_config(
+        &self,
+        integration_id: Option<&str>,
+        config: &Config,
+    ) -> Result<(), ConfigProblem> {
+        let _ = (integration_id, config);
+        Ok(())
+    }
+
     /// Verify the config can reach the service. `Err` on failure.
     async fn test_connection(&self, conn: &Integration) -> Result<(), AdapterError>;
 
@@ -132,7 +144,8 @@ pub trait Adapter: Send + Sync {
         None
     }
 
-    /// Per-integration REST API, routed under `/api/integrations/<id>/…`.
+    /// Per-integration REST API under `/api/integrations/<id>/…`, reached only
+    /// from the desktop window. The loopback server refuses these paths.
     /// Return `None` to decline the request.
     async fn handle_api(
         &self,

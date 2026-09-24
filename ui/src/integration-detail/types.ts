@@ -11,11 +11,15 @@ export interface Integration {
   name: string;
   type: string;
   environment?: Environment | null;
+  /** Holds no secret values; a key/value field reads as the names of its rows. */
   config: Record<string, string>;
+  secretsSet?: string[];
   toolConfig: Record<string, { enabled: boolean; settings: Record<string, string> }>;
   /** This integration's own tools, when its adapter publishes a list per integration. */
   tools?: ToolSpec[];
   approvals?: { ask: boolean; allow: string[]; deny: string[] };
+  /** Tools an imported config turned off that the server has not listed yet. */
+  pendingToolsOff?: string[];
   token: string;
   createdAt: string;
   readOnly?: boolean;

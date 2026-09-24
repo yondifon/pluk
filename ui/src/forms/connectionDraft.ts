@@ -1,5 +1,7 @@
 import type { AdapterManifest, ConfigFieldDef, ToolDef, ToolState } from "./catalog";
 import { seededState, isVisible } from "./catalog";
+import { rowsFromStored, rowsToSave } from "./keyValue";
+import type { KeyValueRow, SentRow } from "./keyValue";
 
 export type Environment = "production" | "staging" | "development" | "local";
 
@@ -26,6 +28,10 @@ export interface ConnectionDraft {
   name: string;
   type: string;
   config: Record<string, string>;
+  rows: Record<string, KeyValueRow[]>;
+  lists: Record<string, string[]>;
+  /** Secret fields with a saved value, which the window never reads back. */
+  savedSecrets: string[];
   /** `null` when the integration carries no environment. */
   environment: Environment | null;
   policyKind: string;
@@ -40,6 +46,9 @@ export function emptyDraft(): ConnectionDraft {
     name: "",
     type: "postgres",
     config: {},
+    rows: {},
+    lists: {},
+    savedSecrets: [],
     environment: "development",
     policyKind: "sql",
     fields: [],
@@ -53,13 +62,19 @@ export function draftFromConnection(conn: {
   name: string;
   type: string;
   config: Record<string, unknown>;
+  secretsSet?: string[];
   environment?: Environment | null;
   queryPolicy?: string | null;
 }): ConnectionDraft {
   // Hydrate config blob: values may be string/number/bool -> normalize to string
   const config: Record<string, string> = {};
+  const rows: Record<string, KeyValueRow[]> = {};
+  const lists: Record<string, string[]> = {};
   for (const [k, v] of Object.entries(conn.config ?? {})) {
-    if (typeof v === "string") config[k] = v;
+    if (Array.isArray(v)) {
+      if (v.every((item) => typeof item === "string")) lists[k] = [...v];
+      else rows[k] = rowsFromStored(v);
+    } else if (typeof v === "string") config[k] = v;
     else if (typeof v === "boolean") config[k] = v ? "true" : "false";
     else if (typeof v === "number") config[k] = String(v);
     else if (v != null) config[k] = String(v);
@@ -95,6 +110,9 @@ export function draftFromConnection(conn: {
     name: conn.name,
     type: conn.type,
     config,
+    rows,
+    lists,
+    savedSecrets: conn.secretsSet ?? [],
     environment: conn.environment ?? null,
     policyKind: "sql",
     fields: [],
@@ -112,6 +130,7 @@ export function adopt(draft: ConnectionDraft, manifest: AdapterManifest, resetCo
     fields: manifest.configFields,
     tools: manifest.tools,
     config: { ...draft.config },
+    lists: { ...draft.lists },
     toolConfig: { ...draft.toolConfig },
   };
 
@@ -121,6 +140,9 @@ export function adopt(draft: ConnectionDraft, manifest: AdapterManifest, resetCo
       if (f.default != null) seededCfg[f.key] = f.default;
     }
     next.config = seededCfg;
+    next.rows = {};
+    next.lists = {};
+    next.savedSecrets = [];
     next.toolConfig = {};
     next.approvals = emptyApprovals();
   } else {
@@ -175,14 +197,38 @@ export function setEnvironment(draft: ConnectionDraft, env: Environment | null):
   return applyEnvironmentDefaults(next);
 }
 
+/** Whether a field holds a value, counting a secret saved earlier. */
+export function isFilled(draft: ConnectionDraft, field: ConfigFieldDef): boolean {
+  if ((draft.config[field.key] ?? "") !== "") return true;
+  return draft.savedSecrets.includes(field.key);
+}
+
 export function canSave(draft: ConnectionDraft): boolean {
   if (draft.name.trim() === "") return false;
+  return draft.fields.every((f) => !f.required || !isVisible(f, draft.config) || isFilled(draft, f));
+}
+
+/** A blank secret is left out to keep its saved value, or sent as `null` to drop it. */
+export function configToSave(draft: ConnectionDraft): Record<string, string | null | SentRow[] | string[]> {
+  const config: Record<string, string | null | SentRow[] | string[]> = { ...draft.config };
   for (const f of draft.fields) {
-    if (f.required && isVisible(f, draft.config)) {
-      if ((draft.config[f.key] ?? "") === "") return false;
+    if (f.type === "keyvalue") {
+      config[f.key] = rowsToSave(draft.rows[f.key] ?? []);
+      continue;
     }
+    if (f.type === "list") {
+      config[f.key] = draft.lists[f.key] ?? [];
+      continue;
+    }
+    if (!f.secret || (config[f.key] ?? "") !== "") continue;
+    if (draft.savedSecrets.includes(f.key)) delete config[f.key];
+    else config[f.key] = null;
   }
-  return true;
+  return config;
+}
+
+export function forgetSecret(draft: ConnectionDraft, key: string): ConnectionDraft {
+  return { ...draft, savedSecrets: draft.savedSecrets.filter((saved) => saved !== key) };
 }
 
 export function splitTools(tools: ToolDef[]): { defaults: ToolDef[]; extras: ToolDef[] } {

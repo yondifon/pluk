@@ -21,6 +21,7 @@ import {
 import {
   adopt,
   applyEnvironmentDefaults,
+  configToSave,
   draftFromConnection,
   emptyDraft,
   type Approvals,
@@ -29,6 +30,9 @@ import {
 import { wizardSteps } from "./forms/wizard.ts";
 import { addServer, type ServerHost, type ServerTemplate } from "./forms/serverTemplates.ts";
 import { markFocus, restoreFocus } from "./forms/focus.ts";
+import { doneMessage, type ImportedServer, type ParsedImport } from "./forms/importConfig.ts";
+import { renderImportFlow, type ImportHost } from "./forms/importConfigView.ts";
+import { rowNames, type ConfigProblem } from "./forms/keyValue.ts";
 import { groupDraftFrom, serializeGroup, type GroupDraft } from "./forms/groupForm.ts";
 import type { AdapterManifest as CatalogManifest, ToolDef, ToolState } from "./forms/catalog.ts";
 import { renderConnectChromeStep } from "./integration-detail/browser-access.ts";
@@ -58,12 +62,16 @@ type HostIntegration = {
   id: string;
   name: string;
   type: string;
+  /** Holds no secret values; `secretsSet` names the secret fields that are saved. */
   config: Record<string, unknown>;
+  secretsSet: string[];
   environment: string | null;
   toolConfig: Record<string, ToolState>;
   /** Present when the adapter publishes a tool list per integration. */
   tools?: ToolDef[];
   approvals: Approvals;
+  /** Tools an imported config turned off that the server has not listed yet. */
+  pendingToolsOff?: string[];
   token: string;
   createdAt: string;
 };
@@ -88,7 +96,8 @@ type FormState =
   | { kind: "new-integration"; step: number; savedId: string | null }
   | { kind: "edit-integration"; id: string; step: number }
   | { kind: "new-group" }
-  | { kind: "edit-group"; id: string };
+  | { kind: "edit-group"; id: string }
+  | { kind: "import-mcp" };
 
 let state: SidebarState = {
   integrations: [],
@@ -115,6 +124,8 @@ let ruleProblem: RuleProblem | null = null;
 let groupDraft: GroupDraft | null = null;
 /** The server picked from a tile that needs a token, until the draft moves on. */
 let tokenServer: ServerTemplate | null = null;
+/** The paste-and-review flow. It keeps its own state until the modal closes, so a redraw or a trip back to the chooser keeps what was pasted. */
+let importFlow: HTMLElement | null = null;
 /** Teardown for whatever the current wizard step is watching (Chrome pairing polling). */
 let activeStepCleanup: (() => void) | null = null;
 /** Which tab the next detail render opens on, when it should not be the usual one. */
@@ -135,7 +146,8 @@ function manifestFor(type: string): CatalogManifest | undefined {
 function toDetailIntegration(row: HostIntegration): DetailIntegration {
   const config: Record<string, string> = {};
   for (const [key, value] of Object.entries(row.config)) {
-    config[key] = value == null ? "" : String(value);
+    if (Array.isArray(value)) config[key] = rowNames(value);
+    else config[key] = value == null ? "" : String(value);
   }
   return {
     id: row.id,
@@ -143,9 +155,11 @@ function toDetailIntegration(row: HostIntegration): DetailIntegration {
     type: row.type,
     environment: row.environment as DetailIntegration["environment"],
     config,
+    secretsSet: row.secretsSet,
     toolConfig: row.toolConfig,
     tools: row.tools,
     approvals: row.approvals,
+    pendingToolsOff: row.pendingToolsOff,
     token: row.token,
     createdAt: row.createdAt,
   };
@@ -238,6 +252,7 @@ const FORM_TITLES: Record<FormState["kind"], string> = {
   "edit-integration": "Edit Integration",
   "new-group": "New Group",
   "edit-group": "Edit Group",
+  "import-mcp": "Add Servers from Config",
 };
 
 /** The screen a form state draws, so a redraw of the one on show is told apart from a move to another. */
@@ -271,6 +286,7 @@ function openForm(next: FormState): void {
         draft = null;
         groupDraft = null;
         tokenServer = null;
+        importFlow = null;
       },
     });
     formModal.content.classList.add("modal-body-form");
@@ -289,6 +305,7 @@ function closeForm(): void {
   draft = null;
   groupDraft = null;
   tokenServer = null;
+  importFlow = null;
 }
 
 /** Re-renders the open form, keeping the caret where the person left it. */
@@ -368,6 +385,7 @@ function buildForm(current: FormState): { el: HTMLElement; destroy?: () => void 
             onPickServer: (template) =>
               addServer(template, serverHost()).catch((error) => report(error, "Server not added")),
             serverUrls: addedServerUrls(),
+            onPasteConfig: () => openForm({ kind: "import-mcp" }),
           }),
         };
       }
@@ -388,7 +406,15 @@ function buildForm(current: FormState): { el: HTMLElement; destroy?: () => void 
         case "connect": {
           if (manifest.configFields.length > 0) {
             const landOn = tokenServer?.tokenHint ? { field: "token", text: tokenServer.tokenHint } : undefined;
-            return { el: renderConnectFieldsStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => goToStep(1), landOn) };
+            const savedId = current.kind === "edit-integration" ? current.id : current.savedId;
+            const check = (checked: ConnectionDraft) =>
+              invoke<ConfigProblem | null>("check_integration_config", {
+                payload: { type: checked.type, id: savedId, config: configToSave(checked) },
+              }).catch((error) => {
+                report(error, "Settings not checked");
+                return null;
+              });
+            return { el: renderConnectFieldsStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => goToStep(1), landOn, check) };
           }
           const integrationId = current.kind === "edit-integration" ? current.id : current.savedId;
           if (!integrationId) return { el: document.createElement("div") };
@@ -437,6 +463,9 @@ function buildForm(current: FormState): { el: HTMLElement; destroy?: () => void 
         }
       }
     }
+    case "import-mcp":
+      importFlow ??= renderImportFlow(importHost());
+      return { el: importFlow };
     case "new-group":
     case "edit-group": {
       if (!groupDraft) return { el: document.createElement("div") };
@@ -512,6 +541,28 @@ function serverHost(): ServerHost {
   };
 }
 
+/** What the paste-and-review flow can reach out to. */
+function importHost(): ImportHost {
+  return {
+    takenNames: () => hostIntegrations.map((row) => row.name),
+    parse: (text) => invoke<ParsedImport>("parse_mcp_config", { text }),
+    save: async (servers) => {
+      const outcomes = await invoke<ImportedServer[]>("import_mcp_servers", { servers });
+      await loadData();
+      return outcomes;
+    },
+    onDone: async (ids, added) => {
+      closeForm();
+      const { title, description } = doneMessage(added);
+      toast.success(title, description ? { description } : undefined);
+      selection = { kind: "integration", id: ids[0] };
+      await loadData();
+    },
+    onBack: () => openForm({ kind: "new-integration", step: 0, savedId: null }),
+    onCancel: closeForm,
+  };
+}
+
 function startEditIntegration(id: string): void {
   const row = hostIntegrations.find((c) => c.id === id);
   if (!row) return;
@@ -519,6 +570,7 @@ function startEditIntegration(id: string): void {
     name: row.name,
     type: row.type,
     config: row.config,
+    secretsSet: row.secretsSet,
     environment: row.environment as Environment | null,
   });
   const catalog = manifestFor(row.type);
@@ -549,7 +601,7 @@ async function saveIntegration(saved: ConnectionDraft): Promise<void> {
   const payload = {
     name: saved.name,
     type: saved.type,
-    config: saved.config,
+    config: configToSave(saved),
     environment: saved.environment,
     toolConfig: saved.toolConfig,
     approvals: saved.approvals,
@@ -617,6 +669,7 @@ async function duplicateIntegration(id: string): Promise<void> {
         type: row.type,
         config: row.config,
         environment: row.environment,
+        secretsFrom: row.id,
       },
     });
     await loadData();

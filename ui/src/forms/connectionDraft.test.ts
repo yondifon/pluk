@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { isVisible, visibleFields } from "./catalog.ts";
 import type { AdapterManifest, ConfigFieldDef } from "./catalog.ts";
-import { emptyDraft, adopt, setEnvironment, canSave, splitTools } from "./connectionDraft.ts";
+import { emptyDraft, adopt, setEnvironment, canSave, splitTools, draftFromConnection, configToSave, forgetSecret } from "./connectionDraft.ts";
+import { markProblem, renderField, renderKeyValueField, renderListField } from "./render.ts";
+import { rowNames, type KeyValueRow } from "./keyValue.ts";
 import { coerceToStored, coerceFromStored, serializeConfig, parseConfig, serializeToolSettings } from "./coercion.ts";
 import { overridableFields, inheritPlaceholder, updateOverride, serializeGroup, groupDraftFrom } from "./groupForm.ts";
 
@@ -320,5 +322,209 @@ describe("environment picker copy not leaking internals", () => {
     // This is a design-check, not runtime: field labels come from catalog verbatim.
     const m = makeManifest();
     expect(m.configFields[0].label).toBe("Host");
+  });
+});
+
+describe("saved secrets", () => {
+  const fields: ConfigFieldDef[] = [
+    { key: "url", label: "Server URL", type: "text", required: true },
+    { key: "token", label: "Token", type: "password", secret: true, required: true },
+    { key: "client_secret", label: "Client secret", type: "password", secret: true },
+  ];
+  const manifest = makeManifest({ id: "mcp", policyKind: "action", tools: [], configFields: fields });
+
+  function edited(): ReturnType<typeof emptyDraft> {
+    const base = draftFromConnection({ name: "Linear", type: "mcp", config: { url: "https://x/mcp" }, secretsSet: ["token", "client_secret"] });
+    return adopt(base, manifest, false);
+  }
+
+  it("a saved secret counts as filled and is left out of the save", () => {
+    const d = edited();
+    expect(canSave(d)).toBe(true);
+    expect(configToSave(d)).toEqual({ url: "https://x/mcp" });
+  });
+
+  it("a typed secret replaces the saved one and a removed one is cleared", () => {
+    let d = edited();
+    d = { ...d, config: { ...d.config, token: "new" } };
+    d = forgetSecret(d, "client_secret");
+    expect(configToSave(d)).toEqual({ url: "https://x/mcp", token: "new", client_secret: null });
+  });
+
+  it("removing a required secret asks for a new one", () => {
+    expect(canSave(forgetSecret(edited(), "token"))).toBe(false);
+  });
+
+  it("a saved secret's input says it is saved and never shows a value", () => {
+    const row = renderField(fields[1], "", () => {}, () => {});
+    const input = row.querySelector("input");
+    expect(input?.value).toBe("");
+    expect(row.textContent).toContain("Saved. Leave this blank to keep it.");
+    expect(row.querySelector("button")?.textContent).toBe("Remove");
+  });
+});
+
+describe("header rows", () => {
+  const fields: ConfigFieldDef[] = [
+    { key: "url", label: "Server URL", type: "text", required: true },
+    { key: "headers", label: "Headers", type: "keyvalue" },
+  ];
+  const manifest = makeManifest({ id: "mcp", policyKind: "action", tools: [], configFields: fields });
+  const stored = {
+    url: "https://x/mcp",
+    headers: [
+      { name: "DD_API_KEY", secret: true, set: true },
+      { name: "X-Org", value: "acme", secret: false },
+    ],
+  };
+
+  function edited(): ReturnType<typeof emptyDraft> {
+    return adopt(draftFromConnection({ name: "Datadog", type: "mcp", config: stored }), manifest, false);
+  }
+
+  it("reads rows apart from the scalar config, a saved secret blank", () => {
+    const d = edited();
+    expect(d.config).toEqual({ url: "https://x/mcp" });
+    expect(d.rows.headers).toEqual([
+      { name: "DD_API_KEY", value: "", secret: true, savedName: "DD_API_KEY" },
+      { name: "X-Org", value: "acme", secret: false },
+    ]);
+  });
+
+  it("an untouched edit sends every row back, the saved secret by its saved name", () => {
+    expect(configToSave(edited())).toEqual({
+      url: "https://x/mcp",
+      headers: [
+        { name: "DD_API_KEY", value: "", secret: true, savedName: "DD_API_KEY" },
+        { name: "X-Org", value: "acme", secret: false },
+      ],
+    });
+  });
+
+  it("a renamed secret keeps its saved name, and a row made plain lets it go", () => {
+    const d = edited();
+    const [key, org] = d.rows.headers;
+    const renamed = { ...d, rows: { headers: [{ ...key, name: "X-Api-Key" }, org] } };
+    expect((configToSave(renamed).headers as Array<{ savedName?: string }>)[0].savedName).toBe("DD_API_KEY");
+    const plain = { ...d, rows: { headers: [{ ...key, secret: false, value: "shown" }, org] } };
+    expect((configToSave(plain).headers as Array<{ savedName?: string }>)[0].savedName).toBeUndefined();
+  });
+
+  it("a new row starts secret, and a saved one says it is kept without showing it", () => {
+    const changes: KeyValueRow[][] = [];
+    const field = renderKeyValueField(fields[1], edited().rows.headers, (rows) => changes.push(rows));
+    const [keyRow, orgRow] = field.querySelectorAll<HTMLElement>(".kv-row");
+    const keyValue = keyRow.querySelector<HTMLInputElement>(".kv-value")!;
+    expect(keyValue.type).toBe("password");
+    expect(keyValue.value).toBe("");
+    expect(field.textContent).toContain("Saved. Leave this blank to keep it.");
+    expect(orgRow.querySelector<HTMLInputElement>(".kv-value")!.type).toBe("text");
+
+    [...field.querySelectorAll("button")].find((b) => b.textContent === "Add header")!.click();
+    expect(changes[0][2]).toEqual({ name: "", value: "", secret: true });
+  });
+
+  it("a refused row gets its message beside it", () => {
+    const host = document.createElement("div");
+    host.appendChild(renderKeyValueField(fields[1], edited().rows.headers, () => {}));
+    markProblem(host, { field: "headers", row: 1, message: "Pluk cannot send Host. Remove this header." });
+    const orgRow = host.querySelectorAll(".kv-row")[1];
+    expect(orgRow.querySelector(".field-error")?.textContent).toBe("Pluk cannot send Host. Remove this header.");
+    expect(orgRow.querySelector(".kv-name")?.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("the overview names the rows and shows no value", () => {
+    expect(rowNames(stored.headers)).toBe("DD_API_KEY, X-Org");
+  });
+});
+
+describe("remote vs local connection mode", () => {
+  const fields: ConfigFieldDef[] = [
+    { key: "connection", label: "Connection", type: "select", default: "remote" },
+    { key: "command", label: "Command", type: "text", showIf: { key: "connection", equals: "local" } },
+    { key: "args", label: "Arguments", type: "list", showIf: { key: "connection", equals: "local" } },
+    { key: "env", label: "Environment variables", type: "keyvalue", defaultSecret: false, showIf: { key: "connection", equals: "local" } },
+    {
+      key: "url",
+      label: "Server URL",
+      type: "text",
+      required: true,
+      showIf: { key: "connection", equals: "local", negate: true },
+    },
+  ];
+  const manifest = makeManifest({ id: "mcp", policyKind: "action", tools: [], configFields: fields });
+
+  it("shows the remote field and hides the local ones when connection is missing, matching an old integration", () => {
+    const visible = visibleFields(fields, {}).map((f) => f.key);
+    expect(visible).toContain("url");
+    expect(visible).not.toContain("command");
+  });
+
+  it("swaps which fields show as the connection mode changes", () => {
+    expect(visibleFields(fields, { connection: "remote" }).map((f) => f.key)).toEqual(["connection", "url"]);
+    expect(visibleFields(fields, { connection: "local" }).map((f) => f.key)).toEqual([
+      "connection",
+      "command",
+      "args",
+      "env",
+    ]);
+  });
+
+  it("a local integration does not need the URL to save", () => {
+    let d = adopt(emptyDraft(), manifest, true);
+    d.name = "Sentry";
+    d.config["connection"] = "local";
+    d.lists["args"] = ["--port", "0"];
+    expect(canSave(d)).toBe(true);
+  });
+
+  it("draftFromConnection tells a list of strings apart from a list of rows", () => {
+    const d = draftFromConnection({
+      name: "Sentry",
+      type: "mcp",
+      config: {
+        connection: "local",
+        command: "node",
+        args: ["/path/to/index.js", "--verbose"],
+        env: [{ name: "SENTRY_URL", value: "https://sentry.internal", secret: false }],
+      },
+    });
+    expect(d.lists["args"]).toEqual(["/path/to/index.js", "--verbose"]);
+    expect(d.rows["env"]).toEqual([{ name: "SENTRY_URL", value: "https://sentry.internal", secret: false }]);
+  });
+
+  it("configToSave sends a list field as an ordered array, never a joined string", () => {
+    let d = adopt(emptyDraft(), manifest, true);
+    d.config["connection"] = "local";
+    d.lists["args"] = ["--port", "0"];
+    expect(configToSave(d).args).toEqual(["--port", "0"]);
+  });
+
+  it("a new environment row starts plain, unlike a header row", () => {
+    const changes: KeyValueRow[][] = [];
+    const field = renderKeyValueField(fields[3], [], (rows) => changes.push(rows));
+    [...field.querySelectorAll("button")].find((b) => b.textContent === "Add environment variable")!.click();
+    expect(changes[0][0]).toEqual({ name: "", value: "", secret: false });
+  });
+});
+
+describe("argument list rows", () => {
+  const field: ConfigFieldDef = { key: "args", label: "Arguments", type: "list" };
+
+  it("renders one row per argument and adds a blank one on request", () => {
+    const changes: string[][] = [];
+    const el = renderListField(field, ["--port", "0"], (items) => changes.push(items));
+    const rows = el.querySelectorAll<HTMLInputElement>(".kv-row .kv-value");
+    expect([...rows].map((r) => r.value)).toEqual(["--port", "0"]);
+
+    [...el.querySelectorAll("button")].find((b) => b.textContent === "Add argument")!.click();
+    expect(changes[0]).toEqual(["--port", "0", ""]);
+  });
+
+  it("removing a row drops only that argument", () => {
+    const changes: string[][] = [];
+    const el = renderListField(field, ["a", "b", "c"], (items) => changes.push(items));
+    [...el.querySelectorAll("button")].find((b) => b.textContent === "Remove")!.click();
+    expect(changes[0]).toEqual(["b", "c"]);
   });
 });

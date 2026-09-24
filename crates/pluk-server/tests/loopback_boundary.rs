@@ -48,7 +48,7 @@ async fn a_request_arriving_under_another_host_is_refused_on_every_route() {
 }
 
 #[tokio::test]
-async fn a_web_page_cannot_post_to_the_api_but_a_local_client_can() {
+async fn a_web_page_is_refused_before_it_reaches_the_api() {
     let app = spawn_app().await;
     let (id, _) = integration(&app, "Proxied");
     let approve = format!("/api/integrations/{id}/proxy/approve");
@@ -65,22 +65,41 @@ async fn a_web_page_cannot_post_to_the_api_but_a_local_client_can() {
         refused.text().await.expect("body"),
         "Pluk does not answer requests made by a web page."
     );
+}
 
-    // No Origin at all is how an agent, the CLI and the desktop app arrive.
-    let served = send(&app, Method::POST, &approve, &[]).await;
-    assert_ne!(
-        served.status(),
-        403,
-        "a local client must reach the adapter"
-    );
-    let ping = send(
-        &app,
-        Method::POST,
-        &format!("/api/integrations/{id}/ping"),
-        &[],
-    )
-    .await;
-    assert_eq!(ping.status(), 200);
+const WINDOW_ONLY_ROUTES: [(&str, &str); 14] = [
+    ("POST", "/proxy/approve"),
+    ("POST", "/proxy/enable"),
+    ("POST", "/proxy/refresh"),
+    ("GET", "/proxy/tools"),
+    ("GET", "/proxy/auth"),
+    ("POST", "/proxy/oauth/start"),
+    ("POST", "/proxy/disconnect"),
+    ("GET", "/masked_columns"),
+    ("POST", "/masked_columns"),
+    ("DELETE", "/masked_columns/email"),
+    ("POST", "/saved_queries"),
+    ("POST", "/saved_commands"),
+    ("DELETE", "/saved_commands/deploy"),
+    ("POST", "/test"),
+];
+
+#[tokio::test]
+async fn a_local_client_without_the_window_cannot_change_an_integration() {
+    let app = spawn_app().await;
+    let (id, _) = integration(&app, "Proxied");
+
+    for (method, tail) in WINDOW_ONLY_ROUTES {
+        let path = format!("/api/integrations/{id}{tail}");
+        let method = Method::from_bytes(method.as_bytes()).expect("method");
+        // No Origin at all is how an agent and any other local program arrive.
+        let refused = send(&app, method, &path, &[]).await;
+        assert_eq!(refused.status(), 403, "{path} answered a local client");
+        assert_eq!(
+            refused.text().await.expect("body"),
+            "Only the Pluk window can change an integration's settings."
+        );
+    }
 }
 
 #[tokio::test]
