@@ -96,6 +96,7 @@ function appendLocalServerCategories(section: HTMLElement, serverUrls: string[],
     const details = document.createElement("details");
     details.className = "server-category";
     const summary = document.createElement("summary");
+    summary.className = "chooser-subheading";
     summary.textContent = `${category} · ${templates.length}`;
     const grid = document.createElement("div");
     grid.className = "server-grid";
@@ -115,32 +116,37 @@ function renderPopularServers(
   const section = document.createElement("section");
   section.className = "server-section";
 
+  const popular = document.createElement("div");
+  popular.className = "chooser-block";
   const title = document.createElement("h3");
-  title.className = "ui-card-title";
+  title.className = "chooser-section-title";
   title.textContent = "Popular servers";
   const note = document.createElement("p");
   note.className = "hint";
-  note.textContent = "Linear, Sentry, and Slack connect through their official MCP servers. Pick one below.";
-  section.append(title, note);
+  note.textContent = "Official MCP servers from these services. Pick one to add it.";
+  popular.append(title, note);
+  appendTileGrid(popular, "Popular servers", SERVER_TEMPLATES.map((template) => serverTile(template, serverUrls, onPick)), SERVERS_SHOWN);
+  section.appendChild(popular);
 
-  appendTileGrid(section, "Popular servers", SERVER_TEMPLATES.map((template) => serverTile(template, serverUrls, onPick)), SERVERS_SHOWN);
-
-  const localTitle = document.createElement("h4");
-  localTitle.className = "ui-card-title";
+  const local = document.createElement("div");
+  local.className = "chooser-block";
+  const localTitle = document.createElement("h3");
+  localTitle.className = "chooser-section-title";
   localTitle.textContent = "Runs on this Mac";
   const localNote = document.createElement("p");
   localNote.className = "hint";
   localNote.textContent = "Pluk starts these itself. You check the command before it runs.";
-  section.append(localTitle, localNote);
-  appendLocalServerCategories(section, serverUrls, onPick);
+  local.append(localTitle, localNote);
+  appendLocalServerCategories(local, serverUrls, onPick);
   if (onPasteConfig) {
     const paste = createButton("Paste a server config", { size: "sm", variant: "secondary", onClick: onPasteConfig });
     paste.classList.add("server-paste");
     const pasteHint = document.createElement("p");
     pasteHint.className = "hint";
     pasteHint.textContent = "Already set up a server in another app? Paste its config to add it here.";
-    section.append(pasteHint, paste);
+    local.append(pasteHint, paste);
   }
+  section.appendChild(local);
   return section;
 }
 
@@ -163,19 +169,8 @@ export function renderTypeChooser(
   const wrap = document.createElement("div");
   wrap.className = "form-chooser";
   wrap.setAttribute("role", "region");
-   wrap.setAttribute("aria-label", "Choose what to connect");
-
-  const heading = document.createElement("h2");
-  heading.className = "ui-card-title";
-  heading.id = "chooser-heading";
-   heading.textContent = "Choose what to connect";
-  heading.setAttribute("tabindex", "-1");
-  wrap.appendChild(heading);
-
-  const helper = document.createElement("p");
-  helper.className = "hint";
-  helper.textContent = "Pick what Pluk should talk to.";
-  wrap.appendChild(helper);
+  wrap.setAttribute("aria-label", "Choose what to connect");
+  wrap.setAttribute("tabindex", "-1");
 
   if (!adapters.length) {
     const card = document.createElement("div");
@@ -207,7 +202,7 @@ export function renderTypeChooser(
     if (showServers) {
       wrap.appendChild(renderPopularServers(opts?.serverUrls ?? [], onPickServer, opts?.onPasteConfig));
       const rest = document.createElement("h3");
-      rest.className = "ui-card-title";
+      rest.className = "chooser-section-title";
       rest.textContent = "Everything else";
       wrap.appendChild(rest);
     }
@@ -216,7 +211,7 @@ export function renderTypeChooser(
       section.className = "chooser-section";
       const label = prettyCategory(category);
       const sectionTitle = document.createElement(showServers ? "h4" : "h3");
-      sectionTitle.className = "ui-card-title";
+      sectionTitle.className = showServers ? "chooser-subheading" : "chooser-section-title";
       sectionTitle.textContent = label;
       section.appendChild(sectionTitle);
 
@@ -256,7 +251,7 @@ export function renderTypeChooser(
   queueMicrotask(() => {
     const first = wrap.querySelector<HTMLButtonElement>(".server-tile, .chooser-row");
     if (first) first.focus();
-    else heading.focus();
+    else wrap.focus();
   });
 
   return wrap;

@@ -153,7 +153,11 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .snippet-targets { padding: var(--space-xs) var(--space-md); }
 .form-footer { justify-content: flex-end; margin-top: var(--space-lg); }
 .modal-body .form-footer { position: sticky; bottom: 0; margin: auto calc(var(--space-xl) * -1) 0; padding: var(--space-md) var(--space-xl); border-top: var(--border-width) solid var(--border-subtle); background: var(--surface-panel); }
-.chooser-section { display: flex; flex-direction: column; gap: var(--space-sm); }
+.chooser-section-title { margin: 0; color: var(--surface-label); font-size: calc(var(--type-headline) * var(--zoom-scale)); font-weight: 600; letter-spacing: normal; text-transform: none; }
+.chooser-subheading { margin: 0; color: var(--surface-secondary-label); font-size: calc(var(--type-subheadline) * var(--zoom-scale)); font-weight: 600; letter-spacing: normal; text-transform: none; }
+.chooser-block { display: flex; flex-direction: column; gap: var(--space-xs); width: 100%; }
+.chooser-block > .hint { margin: 0; }
+.chooser-section { display: flex; flex-direction: column; gap: var(--space-xs); }
 .wizard-head { display: flex; flex-direction: column; gap: var(--space-xs); }
 .wizard-progress { margin: 0; color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
 .wizard-body { display: flex; flex-direction: column; gap: var(--space-lg); }
@@ -167,12 +171,11 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .form-body, .form-chooser { display: flex; flex-direction: column; gap: var(--space-lg); }
 /* A well-known server is a name and a line about it, two to a row. The line is
    held to one line so a long one cannot push the grid out of the dialog. */
-.server-section { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-sm); }
-.server-category { width: 100%; }
-.server-category > summary { display: list-item; min-height: var(--control-target); padding: var(--space-sm); border-radius: var(--radius-sm); background: var(--surface-control); color: var(--surface-label); cursor: pointer; font-size: calc(var(--type-callout) * var(--zoom-scale)); font-weight: 600; }
+.server-section { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-xl); }
+.server-category { display: flex; flex-direction: column; gap: var(--space-xs); width: 100%; }
+.server-category > summary { display: list-item; min-height: var(--control-target); margin: 0; padding: var(--space-sm); border-radius: var(--radius-sm); background: var(--surface-control); color: var(--surface-secondary-label); cursor: pointer; font-size: calc(var(--type-subheadline) * var(--zoom-scale)); font-weight: 600; }
 .server-category > summary:hover { background: var(--surface-hover); }
 .server-category > summary:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
-.server-category[open] > summary { margin-bottom: var(--space-xs); }
 .server-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-xs); width: 100%; }
 .server-tile { display: flex; align-items: center; width: 100%; gap: var(--space-sm); padding: var(--space-xs) var(--space-sm); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--surface-label); text-align: left; font: inherit; }
 .server-tile:hover:not(:disabled) { background: var(--surface-hover); }

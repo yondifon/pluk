@@ -81,7 +81,7 @@ describe("the server list", () => {
     for (const id of ["linear", "sentry", "slack"]) {
       expect(el.querySelector(`[data-server="${id}"]`)).not.toBeNull();
     }
-    expect(el.textContent).toContain("Linear, Sentry, and Slack connect through their official MCP servers.");
+    expect(el.textContent).toContain("Official MCP servers from these services. Pick one to add it.");
   });
 
   it("steps around a name already in use", () => {
