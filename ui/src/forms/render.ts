@@ -16,7 +16,7 @@ import {
 } from "./groupForm.ts";
 import { isWorkingIn } from "./focus.ts";
 import { emptyRow, keepsSaved, type ConfigProblem, type KeyValueRow } from "./keyValue.ts";
-import { LOCAL_SHOWN, LOCAL_TEMPLATES, SERVER_TEMPLATES, SERVERS_SHOWN, isAdded, type ServerTemplate } from "./serverTemplates.ts";
+import { LOCAL_CATEGORIES, LOCAL_TEMPLATES, SERVER_TEMPLATES, SERVERS_SHOWN, isAdded, type ServerTemplate } from "./serverTemplates.ts";
 import { createIcon } from "../icon";
 import { createButton, createBadge, wizardStepHeader, wizardStepFooter } from "../primitives";
 import { faviconBadge, typeBadge } from "../glyph";
@@ -88,6 +88,25 @@ function appendTileGrid(section: HTMLElement, label: string, tiles: HTMLButtonEl
   }
 }
 
+function appendLocalServerCategories(section: HTMLElement, serverUrls: string[], onPick: (template: ServerTemplate) => Promise<void>): void {
+  for (const category of LOCAL_CATEGORIES) {
+    const templates = LOCAL_TEMPLATES.filter((template) => template.category === category);
+    if (!templates.length) continue;
+
+    const details = document.createElement("details");
+    details.className = "server-category";
+    const summary = document.createElement("summary");
+    summary.textContent = `${category} · ${templates.length}`;
+    const grid = document.createElement("div");
+    grid.className = "server-grid";
+    grid.setAttribute("role", "group");
+    grid.setAttribute("aria-label", category);
+    for (const template of templates) grid.appendChild(serverTile(template, serverUrls, onPick));
+    details.append(summary, grid);
+    section.appendChild(details);
+  }
+}
+
 function renderPopularServers(
   serverUrls: string[],
   onPick: (template: ServerTemplate) => Promise<void>,
@@ -113,7 +132,7 @@ function renderPopularServers(
   localNote.className = "hint";
   localNote.textContent = "Pluk starts these itself. You check the command before it runs.";
   section.append(localTitle, localNote);
-  appendTileGrid(section, "Runs on this Mac", LOCAL_TEMPLATES.map((template) => serverTile(template, serverUrls, onPick)), LOCAL_SHOWN);
+  appendLocalServerCategories(section, serverUrls, onPick);
   if (onPasteConfig) {
     const paste = createButton("Paste a server config", { size: "sm", variant: "secondary", onClick: onPasteConfig });
     paste.classList.add("server-paste");

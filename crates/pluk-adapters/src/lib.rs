@@ -40,7 +40,7 @@ pub use adapter::{Adapter, ApiRequest, ApiResponse, PolicyKind};
 pub use config_field::{
     ConfigField, FieldType, SelectOption, ShowIf, keep_secrets, normalize_scalar, withhold_secrets,
 };
-pub use confirm::{ANSWER_WINDOW, ConfirmChoice, ConfirmPrompter, ConfirmRequest, set_prompter};
+pub use confirm::{ConfirmChoice, ConfirmPrompter, ConfirmRequest, set_prompter};
 pub use error::{AdapterError, SSH_CONNECT_PENDING_CODE};
 pub use gate::{
     CallTarget, GateMeta, GateOpts, Guard, Outcome, RunOutcome, TextContent, ToolResult,

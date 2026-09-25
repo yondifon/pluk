@@ -240,7 +240,6 @@ pub fn run() {
             updater::install_update,
             confirm::confirm_question,
             confirm::confirm_answer,
-            confirm::confirm_answer_window,
         ])
         .on_window_event(|window, event| {
             // Only the main window survives its close button; the confirm

@@ -135,9 +135,11 @@ fn open_window(app: &AppHandle, id: &str) {
     }
 }
 
+/// Destroyed rather than closed: `close` raises the same event as the owner
+/// closing it, which would answer the next question "no" before it is seen.
 fn close_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
-        let _ = window.close();
+        let _ = window.destroy();
     }
 }
 
@@ -157,7 +159,7 @@ fn answer_all(app: &AppHandle, choice: ConfirmChoice) {
 }
 
 /// What the confirm window shows. `None` once the question has been answered
-/// or has run out of time.
+/// or the caller stopped waiting.
 #[tauri::command]
 pub fn confirm_question(
     state: tauri::State<'_, ConfirmState>,
@@ -169,13 +171,6 @@ pub fn confirm_question(
         .expect("pending questions")
         .get(&id)
         .map(|pending| pending.request.clone())
-}
-
-/// How long an unanswered question stays open, in seconds — the window counts
-/// down with it.
-#[tauri::command]
-pub fn confirm_answer_window() -> u64 {
-    pluk_adapters::ANSWER_WINDOW.as_secs()
 }
 
 #[tauri::command]

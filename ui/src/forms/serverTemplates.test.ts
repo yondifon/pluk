@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { renderTypeChooser } from "./render.ts";
 import type { AdapterManifest } from "./catalog.ts";
 import {
+  LOCAL_CATEGORIES,
   LOCAL_TEMPLATES,
   SERVER_TEMPLATES,
   SERVERS_SHOWN,
@@ -10,6 +11,17 @@ import {
   type ServerHost,
   type ServerTemplate,
 } from "./serverTemplates.ts";
+
+const allowedLocalCategories = [
+  "Browser & testing",
+  "Search & web",
+  "Developer tools",
+  "Databases",
+  "Cloud & infrastructure",
+  "Productivity & docs",
+  "Design",
+  "AI & memory",
+];
 
 function manifest(id: string, label: string, category = "database"): AdapterManifest {
   return {
@@ -137,12 +149,37 @@ describe("picking a server that runs on this Mac", () => {
     expect(prefilled[0].template).toMatchObject({ command: "npx", args: ["-y", "@playwright/mcp@latest"] });
   });
 
+  it("gives every local server an allowed category", () => {
+    expect(LOCAL_CATEGORIES).toEqual(allowedLocalCategories);
+    for (const template of LOCAL_TEMPLATES) {
+      expect(allowedLocalCategories).toContain(template.category);
+    }
+  });
+
   it("has a unique id across both lists and a key hint wherever a key is read", () => {
     const ids = [...SERVER_TEMPLATES, ...LOCAL_TEMPLATES].map((t) => t.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const template of LOCAL_TEMPLATES) {
       expect(Boolean(template.tokenEnv)).toBe(Boolean(template.tokenHint));
     }
+  });
+
+  it("renders every non-empty category as a closed group with all its tiles", () => {
+    const categories = LOCAL_CATEGORIES.filter((category) => LOCAL_TEMPLATES.some((template) => template.category === category));
+    const el = chooser(spyHost().host);
+    const rendered = [...el.querySelectorAll<HTMLDetailsElement>("details.server-category")];
+
+    expect(rendered).toHaveLength(categories.length);
+    rendered.forEach((details, index) => {
+      const category = categories[index];
+      const templates = LOCAL_TEMPLATES.filter((template) => template.category === category);
+      const grid = details.querySelector<HTMLElement>(".server-grid");
+      expect(details.open).toBe(false);
+      expect(details.querySelector("summary")?.textContent).toBe(`${category} · ${templates.length}`);
+      expect(grid?.getAttribute("aria-label")).toBe(category);
+      expect(grid?.querySelectorAll(".server-tile")).toHaveLength(templates.length);
+      expect([...details.querySelectorAll("button")].some((button) => button.textContent?.startsWith("Show "))).toBe(false);
+    });
   });
 });
 

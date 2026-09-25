@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  countdownText,
   postCountdownText,
   renderClosed,
   renderConfirm,
@@ -47,21 +46,6 @@ describe("the confirm window", () => {
     expect(answers).toEqual(["deny", "always", "session", "once"]);
   });
 
-  test("counts down, and says so when the time is up", () => {
-    const root = document.createElement("div");
-    const view = renderConfirm(root, question(), () => {});
-    view.setSecondsLeft(58.4);
-    expect(root.querySelector(".confirm-countdown")?.textContent).toBe(
-      "Nothing runs if you don’t answer (59s).",
-    );
-    view.setSecondsLeft(0);
-    expect(root.querySelector(".confirm-countdown")?.textContent).toBe("Time is up. Nothing ran.");
-  });
-
-  test("never shows a negative countdown", () => {
-    expect(countdownText(-4)).toBe("Time is up. Nothing ran.");
-  });
-
   test("an answered question leaves nothing left to click", () => {
     const root = document.createElement("div");
     const answers: ConfirmChoice[] = [];
@@ -69,7 +53,6 @@ describe("the confirm window", () => {
     view.settle();
     const buttons = [...root.querySelectorAll<HTMLButtonElement>(".confirm-actions .ui-button")];
     expect(buttons.every((b) => b.disabled)).toBe(true);
-    expect(root.querySelector(".confirm-countdown")?.textContent).toBe("");
   });
 
   test("a question that is no longer waiting says so instead of going blank", () => {

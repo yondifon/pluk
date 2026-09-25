@@ -61,18 +61,11 @@ export interface ConfirmQuestion {
   reason: string;
 }
 
-/** The line that counts down to the question closing itself. */
-export function countdownText(secondsLeft: number): string {
-  const seconds = Math.max(0, Math.ceil(secondsLeft));
-  if (seconds === 0) return "Time is up. Nothing ran.";
-  return `Nothing runs if you don’t answer (${seconds}s).`;
-}
-
 export function renderConfirm(
   root: HTMLElement,
   question: ConfirmQuestion,
   onAnswer: (choice: ConfirmChoice) => void,
-): { setSecondsLeft: (seconds: number) => void; settle: () => void } {
+): { settle: () => void } {
   root.innerHTML = "";
   root.className = "confirm";
 
@@ -92,12 +85,6 @@ export function renderConfirm(
   reason.className = "confirm-reason";
   reason.textContent = `Pluk blocks this by default. ${question.reason}`;
 
-  // The countdown is read as it changes, so it is not announced: the
-  // consequence of waiting is already in the text above it.
-  const countdown = document.createElement("p");
-  countdown.className = "confirm-countdown";
-  countdown.setAttribute("aria-hidden", "true");
-
   const actions = document.createElement("div");
   actions.className = "confirm-actions";
   const buttons: Array<[string, ConfirmChoice, "default" | "primary"]> = [
@@ -110,17 +97,13 @@ export function renderConfirm(
     actions.appendChild(createButton(label, { variant, onClick: () => onAnswer(choice) }));
   }
 
-  root.append(source, title, command, reason, countdown, actions);
+  root.append(source, title, command, reason, actions);
   actions.querySelector<HTMLButtonElement>(".ui-button-primary")?.focus();
 
   return {
-    setSecondsLeft(seconds: number) {
-      countdown.textContent = countdownText(seconds);
-    },
     /** After an answer the window waits to be closed; nothing else to click. */
     settle() {
       for (const button of actions.querySelectorAll("button")) button.disabled = true;
-      countdown.textContent = "";
     },
   };
 }

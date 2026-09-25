@@ -5,17 +5,14 @@
 //! a window; a headless server has nobody to ask, so the refusal stands.
 //!
 //! One question is asked at a time: a second refused call waits for the first
-//! to be answered rather than opening a window behind it. An unanswered
-//! question is refused after [`ANSWER_WINDOW`].
+//! to be answered rather than opening a window behind it. A question stays
+//! open until the owner answers it or the caller stops waiting: only the
+//! owner's "no" refuses a call they were asked about.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
 
 use async_trait::async_trait;
-
-/// How long a question stays open before the call is refused.
-pub const ANSWER_WINDOW: Duration = Duration::from_secs(60);
 
 /// What one refused call needs the owner to see.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -120,8 +117,7 @@ pub fn clear_session_allowances() {
 
 /// Ask about one refused call, one question at a time.
 ///
-/// Returns [`ConfirmChoice::Deny`] when nobody is attached to ask, and when the
-/// question goes unanswered for [`ANSWER_WINDOW`].
+/// Returns [`ConfirmChoice::Deny`] when nobody is attached to ask.
 pub async fn ask(request: ConfirmRequest) -> ConfirmChoice {
     let Some(prompter) = prompter_slot().lock().expect("prompter").clone() else {
         return ConfirmChoice::Deny;
@@ -131,9 +127,7 @@ pub async fn ask(request: ConfirmRequest) -> ConfirmChoice {
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
         .await;
-    tokio::time::timeout(ANSWER_WINDOW, prompter.ask(request))
-        .await
-        .unwrap_or(ConfirmChoice::Deny)
+    prompter.ask(request).await
 }
 
 #[cfg(test)]

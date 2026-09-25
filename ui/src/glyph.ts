@@ -62,7 +62,17 @@ export function glyphElement(type: string, size = 12, serverUrl?: string): HTMLE
     return wrap;
   }
 
-  loadLogo(wrap, type, { serverUrl });
+  if (type === "mcp" && serverUrl) {
+    loadFavicon(serverUrl, (img) => {
+      img.style.width = "100%";
+      img.style.height = "100%";
+      img.style.objectFit = "contain";
+      wrap.style.background = "transparent";
+      wrap.replaceChildren(img);
+    });
+  } else {
+    loadLogo(wrap, type, { serverUrl });
+  }
   wrap.textContent = adapterAbbrev(type);
   wrap.style.fontFamily = "var(--font-mono)";
   wrap.title = type;
@@ -77,37 +87,73 @@ export function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-/** Where a vendor's icon may be, sharpest first; the last is a service that finds it in the page. */
+const FAVICON_SERVICE = "https://www.google.com/s2/favicons";
+/** The service answers a site it has no icon for with a 16px globe, even when asked for 64px. */
+const SERVICE_MIN_SIZE = 32;
+/** Second-level labels that belong to the suffix, as in `example.co.uk`. */
+const SUFFIX_LABELS = new Set(["co", "com", "org", "net", "gov", "ac", "edu"]);
+
+/** Hosts that mean something only on this network, so they are never named to the service. */
+function isPrivateHost(hostname: string): boolean {
+  if (!hostname.includes(".") || hostname.startsWith("[") || /^[\d.]+$/.test(hostname)) return true;
+  return /\.(local|localhost|internal|lan|home|corp|test)$/.test(hostname);
+}
+
+/** `mcp.linear.app` gives `linear.app`, where the brand's icon lives. */
+function mainDomain(hostname: string): string {
+  const labels = hostname.split(".");
+  const suffixed = labels.length > 2 && labels.at(-1)!.length === 2 && SUFFIX_LABELS.has(labels.at(-2)!);
+  return labels.slice(suffixed ? -3 : -2).join(".");
+}
+
+/** Where a site's icon may be, sharpest first: the host itself, its main domain, then a
+ * service that finds the icon in the page. A private host is only asked itself. */
 export function faviconSources(site: string): string[] {
   const { origin, hostname } = new URL(site);
+  const at = (base: string) => [`${base}/apple-touch-icon.png`, `${base}/favicon.ico`];
+  if (isPrivateHost(hostname)) return at(origin);
+  const main = mainDomain(hostname);
   return [
-    `${origin}/apple-touch-icon.png`,
-    `${origin}/favicon.ico`,
-    `https://www.google.com/s2/favicons?domain=${hostname}&sz=64`,
+    ...at(origin),
+    ...(main === hostname ? [] : at(`https://${main}`)),
+    `${FAVICON_SERVICE}?domain=${main}&sz=64`,
   ];
 }
 
-/** A badge showing the vendor site's own icon, or the label's first letters until one loads. */
+/** Try each source in turn and hand over the first real icon. Nothing found leaves the target as it is. */
+function loadFavicon(site: string, onIcon: (img: HTMLImageElement) => void): void {
+  let sources: string[];
+  try {
+    sources = faviconSources(site);
+  } catch {
+    return;
+  }
+  const img = document.createElement("img");
+  img.alt = "";
+  img.decoding = "async";
+  img.referrerPolicy = "no-referrer";
+  const next = () => {
+    const source = sources.shift();
+    if (source) img.src = source;
+  };
+  img.addEventListener("load", () => {
+    if (img.src.startsWith(FAVICON_SERVICE) && img.naturalWidth < SERVICE_MIN_SIZE) return next();
+    onIcon(img);
+  });
+  img.addEventListener("error", next);
+  next();
+}
+
+/** A badge showing the vendor site's own icon, or the label's first letters when it has none. */
 export function faviconBadge(label: string, site: string): HTMLElement {
   const badge = document.createElement("div");
   badge.className = "type-badge favicon-badge";
   badge.setAttribute("aria-hidden", "true");
   badge.textContent = label.slice(0, 2).toUpperCase();
-
-  const sources = faviconSources(site);
-  const img = document.createElement("img");
-  img.alt = "";
-  img.decoding = "async";
-  img.referrerPolicy = "no-referrer";
-  img.addEventListener("load", () => {
+  loadFavicon(site, (img) => {
     badge.classList.add("has-icon");
     badge.replaceChildren(img);
   });
-  img.addEventListener("error", () => {
-    const next = sources.shift();
-    if (next) img.src = next;
-  });
-  img.src = sources.shift()!;
   return badge;
 }
 
