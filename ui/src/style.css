@@ -59,6 +59,11 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .overview-tab .ui-card-title { color: var(--surface-label); font-size: calc(var(--type-body) * var(--zoom-scale)); letter-spacing: normal; text-transform: none; }
 .overview-tab .ui-button-primary { font-weight: 600; }
 .browser-status-line { display: flex; align-items: center; min-height: var(--control-target); margin-bottom: var(--space-sm); }
+.soft-actions { gap: var(--space-xs); }
+.soft-actions .ui-button { border-color: transparent; border-radius: var(--radius-md); background: var(--surface-control); }
+.soft-actions .ui-button:hover:not(:disabled) { background: color-mix(in srgb, var(--surface-control), var(--surface-label) 6%); }
+.soft-actions .ui-button-danger { background: var(--danger-fill); }
+.soft-actions .ui-button-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger-fill), var(--danger-label) 10%); }
 .browser-status { gap: var(--space-xs); font-weight: 600; }
 .browser-status-connected { background: var(--success-fill); color: var(--success-label); }
 .browser-status-disconnected { background: color-mix(in srgb, var(--status-warning) 14%, transparent); color: var(--status-warning); }
@@ -168,6 +173,8 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .server-tile:hover:not(:disabled) { background: var(--surface-hover); }
 .server-tile:disabled { opacity: var(--disabled-opacity); }
 .server-tile .type-badge { width: var(--control-target); height: var(--control-target); }
+.favicon-badge.has-icon { background: var(--surface-control); }
+.favicon-badge img { width: 60%; height: 60%; object-fit: contain; }
 .server-tile-text { display: flex; min-width: 0; flex-direction: column; }
 .server-tile-name { font-size: calc(var(--type-callout) * var(--zoom-scale)); }
 .server-tile-line { overflow: hidden; color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); text-overflow: ellipsis; white-space: nowrap; }

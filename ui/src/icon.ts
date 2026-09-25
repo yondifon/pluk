@@ -12,10 +12,12 @@ export type IconName =
   | "info"
   | "lock"
   | "more"
+  | "play"
   | "refresh"
   | "search"
   | "sidebar"
   | "spinner"
+  | "stop"
   | "terminal"
   | "trash"
   | "tray";
@@ -39,10 +41,12 @@ const paths: Record<IconName, string[]> = {
   info: ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z", "M12 11.5v5", "M12 8h.01"],
   lock: ["M6 11h12v9H6z", "M8 11V8a4 4 0 0 1 8 0v3"],
   more: ["M6 12h.01", "M12 12h.01", "M18 12h.01"],
+  play: ["M8 5.5v13l10.5-6.5Z"],
   refresh: ["M19 8V4m0 0h-4m4 0-4.5 4.5", "M20 14a8 8 0 1 1-2-5.3"],
   search: ["m20 20-4.5-4.5", "M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0Z"],
   sidebar: ["M4 5h16v14H4z", "M9.5 5v14"],
   spinner: ["M12 4a8 8 0 1 0 8 8"],
+  stop: ["M7 7h10v10H7z"],
   terminal: ["M4 5h16v14H4z", "m7 9 3 3-3 3", "M12 15h5"],
   trash: ["M5 7h14", "M9.5 7V4.5h5V7", "m7 7 1 12.5h8L17 7"],
   tray: ["M4 5h16v14H4z", "M4 14h5l1.5 2h3L15 14h5"],

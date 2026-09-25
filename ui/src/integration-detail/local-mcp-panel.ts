@@ -297,11 +297,17 @@ export function mountLocalMcp(
     const note = stateNote(serverStatus.state);
     if (note) status.body.appendChild(line(note, "hint"));
 
-    const stopBtn = createButton("Stop", { onClick: () => void working(stop) });
+    const stopBtn = createButton("Stop", { variant: "danger", icon: "stop", onClick: () => void working(stop) });
     stopBtn.disabled = busy || !canStop(serverStatus.state);
-    const restartBtn = createButton(restartLabel(serverStatus.state), { onClick: () => void working(restart) });
+    const label = restartLabel(serverStatus.state);
+    const restartBtn = createButton(label, {
+      icon: label === "Start" ? "play" : "refresh",
+      onClick: () => void working(restart),
+    });
     restartBtn.disabled = busy || !canRestart(serverStatus.state);
-    status.body.appendChild(actionRow(stopBtn, restartBtn));
+    const controls = actionRow(restartBtn, stopBtn);
+    controls.classList.add("soft-actions");
+    status.body.appendChild(controls);
 
     const details = document.createElement("details");
     details.className = "output-disclosure";

@@ -6,6 +6,8 @@ interface TemplateBase {
   name: string;
   /** The line under the name. */
   summary: string;
+  /** The vendor's own site, whose icon the tile shows. */
+  site: string;
 }
 
 /** A server Pluk can reach with nothing but its address. */
@@ -21,8 +23,6 @@ export interface LocalTemplate extends TemplateBase {
   args: string[];
   tokenEnv?: string;
   tokenHint?: string;
-  /** The vendor's own site, for the tile's logo. */
-  site: string;
 }
 
 export type ServerTemplate = RemoteTemplate | LocalTemplate;
@@ -32,6 +32,7 @@ export const SERVER_TEMPLATES: RemoteTemplate[] = [
     id: "github",
     name: "GitHub",
     url: "https://api.githubcopilot.com/mcp/",
+    site: "https://github.com",
     summary: "Repos, issues, pull requests, and code search",
     tokenHint: "Paste a personal access token from GitHub.",
   },
@@ -39,84 +40,98 @@ export const SERVER_TEMPLATES: RemoteTemplate[] = [
     id: "linear",
     name: "Linear",
     url: "https://mcp.linear.app/mcp",
+    site: "https://linear.app",
     summary: "Issues, projects, and cycles",
   },
   {
     id: "sentry",
     name: "Sentry",
     url: "https://mcp.sentry.dev/mcp",
+    site: "https://sentry.io",
     summary: "Errors, issues, and releases",
   },
   {
     id: "slack",
     name: "Slack",
     url: "https://mcp.slack.com/mcp",
+    site: "https://slack.com",
     summary: "Channels, messages, and search",
   },
   {
     id: "notion",
     name: "Notion",
     url: "https://mcp.notion.com/mcp",
+    site: "https://notion.so",
     summary: "Pages, databases, and search",
   },
   {
     id: "context7",
     name: "Context7",
     url: "https://mcp.context7.com/mcp",
+    site: "https://context7.com",
     summary: "Up-to-date library docs",
   },
   {
     id: "supabase",
     name: "Supabase",
     url: "https://mcp.supabase.com/mcp",
+    site: "https://supabase.com",
     summary: "Projects, tables, and SQL",
   },
   {
     id: "atlassian",
     name: "Atlassian",
     url: "https://mcp.atlassian.com/v2/mcp",
+    site: "https://atlassian.com",
     summary: "Jira issues and Confluence pages",
   },
   {
     id: "stripe",
     name: "Stripe",
     url: "https://mcp.stripe.com",
+    site: "https://stripe.com",
     summary: "Payments, customers, and docs",
   },
   {
     id: "cloudflare",
     name: "Cloudflare",
     url: "https://mcp.cloudflare.com/mcp",
+    site: "https://cloudflare.com",
     summary: "Workers, DNS, and account resources",
   },
   {
     id: "neon",
     name: "Neon",
     url: "https://mcp.neon.tech/mcp",
+    site: "https://neon.tech",
     summary: "Postgres projects and branches",
   },
   {
     id: "deepwiki",
     name: "DeepWiki",
     url: "https://mcp.deepwiki.com/mcp",
+    site: "https://deepwiki.com",
     summary: "Ask questions about any public repo",
   },
   {
     id: "exa",
     name: "Exa",
     url: "https://mcp.exa.ai/mcp",
+    site: "https://exa.ai",
     summary: "Web and code search",
   },
   {
     id: "posthog",
     name: "PostHog",
     url: "https://mcp.posthog.com/mcp",
+    site: "https://posthog.com",
     summary: "Product analytics and feature flags",
   },
   {
     id: "huggingface",
     name: "Hugging Face",
     url: "https://huggingface.co/mcp",
+    site: "https://huggingface.co",
     summary: "Models, datasets, and Spaces",
   },
 ];

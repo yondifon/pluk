@@ -19,7 +19,7 @@ import { emptyRow, keepsSaved, type ConfigProblem, type KeyValueRow } from "./ke
 import { LOCAL_SHOWN, LOCAL_TEMPLATES, SERVER_TEMPLATES, SERVERS_SHOWN, isAdded, type ServerTemplate } from "./serverTemplates.ts";
 import { createIcon } from "../icon";
 import { createButton, createBadge, wizardStepHeader, wizardStepFooter } from "../primitives";
-import { typeBadge } from "../glyph";
+import { faviconBadge, typeBadge } from "../glyph";
 import { MCP_TYPE } from "../integration-detail/types.ts";
 
 /** One well-known server, ready to add with a click. */
@@ -35,7 +35,7 @@ function serverTile(
   tile.dataset.server = template.id;
   tile.title = template.summary;
   tile.setAttribute("aria-label", added ? `Add another ${template.name}` : `Add ${template.name}`);
-  tile.appendChild(typeBadge(MCP_TYPE, template.name, "url" in template ? template.url : template.site));
+  tile.appendChild(faviconBadge(template.name, template.site));
 
   const text = document.createElement("span");
   text.className = "server-tile-text";

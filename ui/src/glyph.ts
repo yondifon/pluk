@@ -77,6 +77,40 @@ export function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+/** Where a vendor's icon may be, sharpest first; the last is a service that finds it in the page. */
+export function faviconSources(site: string): string[] {
+  const { origin, hostname } = new URL(site);
+  return [
+    `${origin}/apple-touch-icon.png`,
+    `${origin}/favicon.ico`,
+    `https://www.google.com/s2/favicons?domain=${hostname}&sz=64`,
+  ];
+}
+
+/** A badge showing the vendor site's own icon, or the label's first letters until one loads. */
+export function faviconBadge(label: string, site: string): HTMLElement {
+  const badge = document.createElement("div");
+  badge.className = "type-badge favicon-badge";
+  badge.setAttribute("aria-hidden", "true");
+  badge.textContent = label.slice(0, 2).toUpperCase();
+
+  const sources = faviconSources(site);
+  const img = document.createElement("img");
+  img.alt = "";
+  img.decoding = "async";
+  img.referrerPolicy = "no-referrer";
+  img.addEventListener("load", () => {
+    badge.classList.add("has-icon");
+    badge.replaceChildren(img);
+  });
+  img.addEventListener("error", () => {
+    const next = sources.shift();
+    if (next) img.src = next;
+  });
+  img.src = sources.shift()!;
+  return badge;
+}
+
 /** The large square mark used in detail headers and the type chooser. */
 export function typeBadge(type: string, label: string, serverUrl?: string): HTMLElement {
   const badge = document.createElement("div");
