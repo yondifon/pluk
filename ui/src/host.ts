@@ -107,7 +107,7 @@ export async function approveMcpLaunch(id: string, launchHash: string): Promise<
   return invoke("approve_mcp_launch", { id, launchHash });
 }
 
-export type McpServerState = "starting" | "running" | "stopped" | "crashed";
+export type McpServerState = "idle" | "starting" | "running" | "stopped" | "crashed";
 
 export interface McpServerStatus {
   state: McpServerState;

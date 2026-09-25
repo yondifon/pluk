@@ -16,7 +16,7 @@ import {
 } from "./groupForm.ts";
 import { isWorkingIn } from "./focus.ts";
 import { emptyRow, keepsSaved, type ConfigProblem, type KeyValueRow } from "./keyValue.ts";
-import { SERVER_TEMPLATES, SERVERS_SHOWN, isAdded, type ServerTemplate } from "./serverTemplates.ts";
+import { LOCAL_SHOWN, LOCAL_TEMPLATES, SERVER_TEMPLATES, SERVERS_SHOWN, isAdded, type ServerTemplate } from "./serverTemplates.ts";
 import { createIcon } from "../icon";
 import { createButton, createBadge, wizardStepHeader, wizardStepFooter } from "../primitives";
 import { typeBadge } from "../glyph";
@@ -35,7 +35,7 @@ function serverTile(
   tile.dataset.server = template.id;
   tile.title = template.summary;
   tile.setAttribute("aria-label", added ? `Add another ${template.name}` : `Add ${template.name}`);
-  tile.appendChild(typeBadge(MCP_TYPE, template.name, template.url));
+  tile.appendChild(typeBadge(MCP_TYPE, template.name, "url" in template ? template.url : template.site));
 
   const text = document.createElement("span");
   text.className = "server-tile-text";
@@ -67,6 +67,27 @@ function serverTile(
   return tile;
 }
 
+/** The first `shown` tiles, then a button that reveals the rest in place. */
+function appendTileGrid(section: HTMLElement, label: string, tiles: HTMLButtonElement[], shown: number): void {
+  const grid = document.createElement("div");
+  grid.className = "server-grid";
+  grid.setAttribute("role", "group");
+  grid.setAttribute("aria-label", label);
+  section.appendChild(grid);
+  for (const tile of tiles.slice(0, shown)) grid.appendChild(tile);
+
+  if (tiles.length > shown) {
+    const rest = tiles.slice(shown);
+    const more = createButton(`Show ${rest.length} more`, { size: "sm" });
+    more.addEventListener("click", () => {
+      for (const tile of rest) grid.appendChild(tile);
+      more.remove();
+      rest[0].focus();
+    });
+    section.appendChild(more);
+  }
+}
+
 function renderPopularServers(
   serverUrls: string[],
   onPick: (template: ServerTemplate) => Promise<void>,
@@ -83,25 +104,16 @@ function renderPopularServers(
   note.textContent = "Linear, Sentry, and Slack connect through their official MCP servers. Pick one below.";
   section.append(title, note);
 
-  const grid = document.createElement("div");
-  grid.className = "server-grid";
-  grid.setAttribute("role", "group");
-  grid.setAttribute("aria-label", "Popular servers");
-  section.appendChild(grid);
+  appendTileGrid(section, "Popular servers", SERVER_TEMPLATES.map((template) => serverTile(template, serverUrls, onPick)), SERVERS_SHOWN);
 
-  const tiles = SERVER_TEMPLATES.map((template) => serverTile(template, serverUrls, onPick));
-  for (const tile of tiles.slice(0, SERVERS_SHOWN)) grid.appendChild(tile);
-
-  if (tiles.length > SERVERS_SHOWN) {
-    const rest = tiles.slice(SERVERS_SHOWN);
-    const more = createButton(`Show ${rest.length} more`, { size: "sm" });
-    more.addEventListener("click", () => {
-      for (const tile of rest) grid.appendChild(tile);
-      more.remove();
-      rest[0].focus();
-    });
-    section.appendChild(more);
-  }
+  const localTitle = document.createElement("h4");
+  localTitle.className = "ui-card-title";
+  localTitle.textContent = "Runs on this Mac";
+  const localNote = document.createElement("p");
+  localNote.className = "hint";
+  localNote.textContent = "Pluk starts these itself. You check the command before it runs.";
+  section.append(localTitle, localNote);
+  appendTileGrid(section, "Runs on this Mac", LOCAL_TEMPLATES.map((template) => serverTile(template, serverUrls, onPick)), LOCAL_SHOWN);
   if (onPasteConfig) {
     const paste = createButton("Paste a server config", { size: "sm", variant: "secondary", onClick: onPasteConfig });
     paste.classList.add("server-paste");
@@ -906,7 +918,8 @@ export function renderConnectFieldsStep(
   wrap.appendChild(body);
 
   if (landOn) {
-    const control = body.querySelector<HTMLElement>(`[data-field-key="${landOn.field}"] input`);
+    const inputs = [...body.querySelectorAll<HTMLInputElement>(`[data-field-key="${landOn.field}"] input`)];
+    const control = inputs.find((input) => input.value === "") ?? inputs[0];
     const described = [control?.getAttribute("aria-describedby"), `land-on-${landOn.field}`];
     control?.setAttribute("aria-describedby", described.filter(Boolean).join(" "));
     // Arriving lands on the field that still needs something; a redraw mid-edit leaves them be.

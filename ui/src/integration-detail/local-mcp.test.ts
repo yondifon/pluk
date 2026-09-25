@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { canRestart, canStop, isLocalMcp, stateLabel, stateNote, stateTone } from "./local-mcp";
+import { canRestart, canStop, isLocalMcp, restartLabel, stateLabel, stateNote, stateTone } from "./local-mcp";
 
 describe("isLocalMcp", () => {
   test("only a connection of local counts, everything else is remote", () => {
@@ -11,6 +11,7 @@ describe("isLocalMcp", () => {
 
 describe("server state words and controls", () => {
   test("each state has its own label", () => {
+    expect(stateLabel("idle")).toBe("Not started");
     expect(stateLabel("starting")).toBe("Starting…");
     expect(stateLabel("running")).toBe("Running");
     expect(stateLabel("stopped")).toBe("Stopped");
@@ -34,6 +35,13 @@ describe("server state words and controls", () => {
     expect(canRestart("running")).toBe(true);
     expect(canRestart("stopped")).toBe(true);
     expect(canRestart("crashed")).toBe(true);
+  });
+
+  test("a server that is not up offers Start rather than Restart", () => {
+    expect(restartLabel("idle")).toBe("Start");
+    expect(restartLabel("stopped")).toBe("Start");
+    expect(restartLabel("running")).toBe("Restart");
+    expect(restartLabel("crashed")).toBe("Restart");
   });
 
   test("tone follows whether the server is good, off, or wrong", () => {

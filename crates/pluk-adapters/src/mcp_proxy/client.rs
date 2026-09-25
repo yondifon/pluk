@@ -472,22 +472,24 @@ pub struct ServerStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ServerState {
+    /// Not started yet; the first call starts it.
+    Idle,
     /// Started, and not yet ready for a session.
     Starting,
     Running,
-    /// Not started yet, or stopped by the user or by Pluk.
+    /// Stopped by the user, and kept stopped until restarted.
     Stopped,
     /// It exited without Pluk stopping it, or kept doing so and is held.
     Crashed,
 }
 
 pub fn status(integration_id: &str) -> ServerStatus {
-    let stopped = ServerStatus {
-        state: ServerState::Stopped,
+    let idle = ServerStatus {
+        state: ServerState::Idle,
         pid: None,
     };
     let Some(slot) = existing_slot(integration_id) else {
-        return stopped;
+        return idle;
     };
     let local = slot.local.lock().expect("local server");
     let session = match slot.session.try_lock() {
@@ -512,7 +514,11 @@ pub fn status(integration_id: &str) -> ServerStatus {
             state: ServerState::Crashed,
             pid: None,
         },
-        None => stopped,
+        None if local.held == Some(Held::Stopped) => ServerStatus {
+            state: ServerState::Stopped,
+            pid: None,
+        },
+        None => idle,
     }
 }
 
@@ -625,8 +631,12 @@ impl Slot {
         }
     }
 
-    /// Closing ends a local server's stdin; its group is killed after the grace period.
+    /// Closing ends a local server's stdin; its group is killed after the grace
+    /// period. A start still in progress holds the session, so it is killed first.
     async fn close(&self) {
+        if self.session.try_lock().is_err() {
+            self.kill();
+        }
         let upstream = self.session.lock().await.take();
         if let Some(upstream) = upstream {
             upstream.cancellation_token().cancel();
@@ -1257,7 +1267,7 @@ done
         let dir = tempfile::tempdir().unwrap();
         let id = "local-starts";
         let client = McpProxyClient::stdio(id, launch(dir.path(), STUB));
-        assert_eq!(status(id).state, ServerState::Stopped);
+        assert_eq!(status(id).state, ServerState::Idle);
 
         let tools = client.list_tools().await.expect("list tools");
         assert_eq!(tools[0].name, "echo");
@@ -1309,6 +1319,30 @@ done
         shutdown(id);
         let restarted = recorded(dir.path(), "pid").await;
         assert!(gone(restarted).await, "the server survived shutdown");
+    }
+
+    #[tokio::test]
+    async fn stopping_a_server_that_is_still_starting_does_not_wait_for_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "local-stops-starting";
+        let client = McpProxyClient::stdio(
+            id,
+            launch(
+                dir.path(),
+                "echo $$ > \"$STUB_STATE/pid\"\nexec sleep 300\n",
+            ),
+        );
+        let starting = tokio::spawn(async move { client.list_tools().await });
+        let pid = recorded(dir.path(), "pid").await;
+        assert_eq!(status(id).state, ServerState::Starting);
+
+        timeout(Duration::from_secs(5), stop(id))
+            .await
+            .expect("the stop waited for the start");
+        assert!(gone(pid).await, "the server survived a stop");
+        assert!(starting.await.unwrap().is_err());
+        assert_eq!(status(id).state, ServerState::Stopped);
+        shutdown(id);
     }
 
     #[tokio::test]

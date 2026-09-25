@@ -405,7 +405,9 @@ function buildForm(current: FormState): { el: HTMLElement; destroy?: () => void 
           return { el: renderNameStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => void continueFromName()) };
         case "connect": {
           if (manifest.configFields.length > 0) {
-            const landOn = tokenServer?.tokenHint ? { field: "token", text: tokenServer.tokenHint } : undefined;
+            const landOn = tokenServer?.tokenHint
+              ? { field: "url" in tokenServer ? "token" : "env", text: tokenServer.tokenHint }
+              : undefined;
             const savedId = current.kind === "edit-integration" ? current.id : current.savedId;
             const check = (checked: ConnectionDraft) =>
               invoke<ConfigProblem | null>("check_integration_config", {
@@ -529,11 +531,20 @@ function serverHost(): ServerHost {
       selection = { kind: "integration", id };
       await loadData();
     },
-    askForToken: (name, template) => {
+    prefill: (name, template) => {
       const manifest = manifestFor(MCP_TYPE);
       if (!manifest) return;
       const base = adopt(applyEnvironmentDefaults(emptyDraft()), manifest, true);
-      draft = { ...base, name, environment: null, config: { ...base.config, url: template.url } };
+      draft = "url" in template
+        ? { ...base, name, environment: null, config: { ...base.config, url: template.url } }
+        : {
+            ...base,
+            name,
+            environment: null,
+            config: { ...base.config, connection: "local", command: template.command },
+            lists: { args: [...template.args] },
+            rows: { env: template.tokenEnv ? [{ name: template.tokenEnv, value: "", secret: true }] : [] },
+          };
       tokenServer = template;
       form = { kind: "new-integration", step: wizardSteps(manifest, "create").indexOf("connect"), savedId: null };
       renderForm();

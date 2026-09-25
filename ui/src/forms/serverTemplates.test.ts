@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { renderTypeChooser } from "./render.ts";
 import type { AdapterManifest } from "./catalog.ts";
 import {
+  LOCAL_TEMPLATES,
   SERVER_TEMPLATES,
   SERVERS_SHOWN,
   addServer,
@@ -38,7 +39,7 @@ function spyHost(takenNames: string[] = []) {
     reveal: (id) => {
       revealed.push(id);
     },
-    askForToken: (name, template) => {
+    prefill: (name, template) => {
       prefilled.push({ name, template });
     },
   };
@@ -120,8 +121,28 @@ describe("picking a server that needs a token", () => {
     expect(revealed).toEqual([]);
     expect(prefilled.length).toBe(1);
     expect(prefilled[0].name).toBe("GitHub");
-    expect(prefilled[0].template.url).toBe("https://api.githubcopilot.com/mcp/");
+    expect(prefilled[0].template).toMatchObject({ url: "https://api.githubcopilot.com/mcp/" });
     expect(prefilled[0].template.tokenHint).toBeTruthy();
+  });
+});
+
+describe("picking a server that runs on this Mac", () => {
+  it("opens the form on its command, even with no token to paste", async () => {
+    const { host, created, prefilled } = spyHost();
+    const el = chooser(host);
+    el.querySelector<HTMLButtonElement>('[data-server="playwright"]')!.click();
+    await flush();
+
+    expect(created).toEqual([]);
+    expect(prefilled[0].template).toMatchObject({ command: "npx", args: ["-y", "@playwright/mcp@latest"] });
+  });
+
+  it("has a unique id across both lists and a key hint wherever a key is read", () => {
+    const ids = [...SERVER_TEMPLATES, ...LOCAL_TEMPLATES].map((t) => t.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const template of LOCAL_TEMPLATES) {
+      expect(Boolean(template.tokenEnv)).toBe(Boolean(template.tokenHint));
+    }
   });
 });
 
@@ -144,11 +165,12 @@ describe("the popular servers section", () => {
   it("shows the first few, then the rest on request", () => {
     const { host } = spyHost();
     const el = chooser(host);
-    expect(el.querySelectorAll(".server-tile").length).toBe(SERVERS_SHOWN);
+    const popular = el.querySelector('[aria-label="Popular servers"]')!;
+    expect(popular.querySelectorAll(".server-tile").length).toBe(SERVERS_SHOWN);
 
     const more = [...el.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Show "))!;
     more.click();
-    expect(el.querySelectorAll(".server-tile").length).toBe(SERVER_TEMPLATES.length);
+    expect(popular.querySelectorAll(".server-tile").length).toBe(SERVER_TEMPLATES.length);
     expect(el.contains(more)).toBe(false);
   });
 

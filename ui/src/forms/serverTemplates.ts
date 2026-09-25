@@ -1,18 +1,33 @@
 import { MCP_TYPE } from "../integration-detail/types.ts";
 
-/** A server Pluk can reach with nothing but its address. */
-export interface ServerTemplate {
+interface TemplateBase {
   /** Stable key, also the tile's handle in the DOM. */
   id: string;
   name: string;
-  url: string;
   /** The line under the name. */
   summary: string;
+}
+
+/** A server Pluk can reach with nothing but its address. */
+export interface RemoteTemplate extends TemplateBase {
+  url: string;
   /** Set when the server only works once the person pastes a token in. */
   tokenHint?: string;
 }
 
-export const SERVER_TEMPLATES: ServerTemplate[] = [
+/** A server Pluk starts on this Mac. One that needs a key reads it from `tokenEnv`. */
+export interface LocalTemplate extends TemplateBase {
+  command: string;
+  args: string[];
+  tokenEnv?: string;
+  tokenHint?: string;
+  /** The vendor's own site, for the tile's logo. */
+  site: string;
+}
+
+export type ServerTemplate = RemoteTemplate | LocalTemplate;
+
+export const SERVER_TEMPLATES: RemoteTemplate[] = [
   {
     id: "github",
     name: "GitHub",
@@ -106,8 +121,109 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
   },
 ];
 
+/** Started with npx, whose downloads live in ~/.npm rather than the temp folder macOS clears. */
+export const LOCAL_TEMPLATES: LocalTemplate[] = [
+  {
+    id: "sentry-local",
+    name: "Sentry (local)",
+    command: "npx",
+    args: ["-y", "@sentry/mcp-server@latest"],
+    tokenEnv: "SENTRY_ACCESS_TOKEN",
+    tokenHint: "Paste a user auth token from Sentry.",
+    site: "https://sentry.io",
+    summary: "Errors, issues, and releases",
+  },
+  {
+    id: "playwright",
+    name: "Playwright",
+    command: "npx",
+    args: ["-y", "@playwright/mcp@latest"],
+    site: "https://playwright.dev",
+    summary: "Drive a browser: click, type, and read pages",
+  },
+  {
+    id: "chrome-devtools",
+    name: "Chrome DevTools",
+    command: "npx",
+    args: ["-y", "chrome-devtools-mcp@latest"],
+    site: "https://developer.chrome.com",
+    summary: "Debug pages, network, and performance in Chrome",
+  },
+  {
+    id: "notion-local",
+    name: "Notion (local)",
+    command: "npx",
+    args: ["-y", "@notionhq/notion-mcp-server"],
+    tokenEnv: "NOTION_TOKEN",
+    tokenHint: "Paste an integration token from Notion.",
+    site: "https://notion.so",
+    summary: "Pages, databases, and search",
+  },
+  {
+    id: "figma",
+    name: "Figma",
+    command: "npx",
+    args: ["-y", "figma-developer-mcp", "--stdio"],
+    tokenEnv: "FIGMA_API_KEY",
+    tokenHint: "Paste a personal access token from Figma.",
+    site: "https://figma.com",
+    summary: "Layout and styles from Figma files",
+  },
+  {
+    id: "brave-search",
+    name: "Brave Search",
+    command: "npx",
+    args: ["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"],
+    tokenEnv: "BRAVE_API_KEY",
+    tokenHint: "Paste an API key from Brave Search.",
+    site: "https://brave.com",
+    summary: "Web, news, and image search",
+  },
+  {
+    id: "perplexity",
+    name: "Perplexity",
+    command: "npx",
+    args: ["-y", "@perplexity-ai/mcp-server"],
+    tokenEnv: "PERPLEXITY_API_KEY",
+    tokenHint: "Paste an API key from Perplexity.",
+    site: "https://perplexity.ai",
+    summary: "Web answers with sources",
+  },
+  {
+    id: "tavily",
+    name: "Tavily",
+    command: "npx",
+    args: ["-y", "tavily-mcp@latest"],
+    tokenEnv: "TAVILY_API_KEY",
+    tokenHint: "Paste an API key from Tavily.",
+    site: "https://tavily.com",
+    summary: "Web search and page extraction",
+  },
+  {
+    id: "firecrawl",
+    name: "Firecrawl",
+    command: "npx",
+    args: ["-y", "firecrawl-mcp"],
+    tokenEnv: "FIRECRAWL_API_KEY",
+    tokenHint: "Paste an API key from Firecrawl.",
+    site: "https://firecrawl.dev",
+    summary: "Scrape and crawl websites",
+  },
+  {
+    id: "heroku",
+    name: "Heroku",
+    command: "npx",
+    args: ["-y", "@heroku/mcp-server"],
+    tokenEnv: "HEROKU_API_KEY",
+    tokenHint: "Paste an API key from Heroku.",
+    site: "https://heroku.com",
+    summary: "Apps, dynos, add-ons, and logs",
+  },
+];
+
 /** How many tiles show before Show all. */
 export const SERVERS_SHOWN = 8;
+export const LOCAL_SHOWN = 4;
 
 /** Two addresses reaching the same server, give or take a trailing slash. */
 function sameServer(a: string, b: string): boolean {
@@ -116,7 +232,7 @@ function sameServer(a: string, b: string): boolean {
 }
 
 export function isAdded(template: ServerTemplate, serverUrls: string[]): boolean {
-  return serverUrls.some((url) => sameServer(url, template.url));
+  return "url" in template && serverUrls.some((url) => sameServer(url, template.url));
 }
 
 /** `Linear`, then `Linear 2`, so a second one never lands on a name in use. */
@@ -139,14 +255,14 @@ export interface ServerHost {
   }): Promise<{ id: string }>;
   /** Opens the integration that was just created. */
   reveal(id: string): void | Promise<void>;
-  /** Opens the form on the server's own fields, so the token can be pasted in. */
-  askForToken(name: string, template: ServerTemplate): void;
+  /** Opens the form on the server's own fields, so a token can be pasted in or a command checked. */
+  prefill(name: string, template: ServerTemplate): void;
 }
 
 export async function addServer(template: ServerTemplate, host: ServerHost): Promise<void> {
   const name = availableName(template.name, host.takenNames);
-  if (template.tokenHint) {
-    host.askForToken(name, template);
+  if (!("url" in template) || template.tokenHint) {
+    host.prefill(name, template);
     return;
   }
   const created = await host.create({

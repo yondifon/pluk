@@ -21,7 +21,7 @@ import {
   stateNote as toolStateNote,
   type ProxyToolRow,
 } from "./proxy-tools";
-import { canRestart, canStop, RUNS_WITH_FULL_ACCESS, stateLabel, stateNote, stateTone } from "./local-mcp";
+import { canRestart, canStop, restartLabel, RUNS_WITH_FULL_ACCESS, stateLabel, stateNote, stateTone } from "./local-mcp";
 import type { Integration } from "./types";
 
 const STATUS_POLL_MS = 2000;
@@ -299,7 +299,7 @@ export function mountLocalMcp(
 
     const stopBtn = createButton("Stop", { onClick: () => void working(stop) });
     stopBtn.disabled = busy || !canStop(serverStatus.state);
-    const restartBtn = createButton("Restart", { onClick: () => void working(restart) });
+    const restartBtn = createButton(restartLabel(serverStatus.state), { onClick: () => void working(restart) });
     restartBtn.disabled = busy || !canRestart(serverStatus.state);
     status.body.appendChild(actionRow(stopBtn, restartBtn));
 

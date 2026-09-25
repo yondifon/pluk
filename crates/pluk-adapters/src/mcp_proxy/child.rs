@@ -6,6 +6,7 @@
 
 use std::collections::VecDeque;
 use std::io;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
@@ -14,7 +15,7 @@ use rmcp::transport::TokioChildProcess;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::{ChildStderr, Command};
 
-use pluk_core::shell_env;
+use pluk_core::{platform, shell_env};
 
 use super::transport::LaunchSpec;
 
@@ -52,6 +53,7 @@ impl Output {
 
 /// Returns the transport, the process group's id, and the server's stderr.
 pub fn spawn(spec: &LaunchSpec) -> io::Result<(TokioChildProcess, u32, ChildStderr)> {
+    std::fs::create_dir_all(tmp_dir())?;
     let mut command = CommandWrap::from(command(spec));
     command.wrap(ProcessGroup::leader());
     let (transport, stderr) = TokioChildProcess::builder(command)
@@ -71,8 +73,15 @@ fn command(spec: &LaunchSpec) -> Command {
         .current_dir(&spec.cwd)
         .env_clear()
         .envs(shell_env::base_env(&spec.path))
+        .env("TMPDIR", tmp_dir())
         .envs(spec.env.iter().map(|(name, value)| (name, value.expose())));
     command
+}
+
+/// macOS clears old files out of the system temp folder, which breaks the
+/// packages `bunx` installs there; this one is left alone.
+fn tmp_dir() -> PathBuf {
+    platform::data_dir().join("mcp-tmp")
 }
 
 pub fn drain(stderr: ChildStderr, secrets: Vec<String>, output: Arc<Mutex<Output>>) {
