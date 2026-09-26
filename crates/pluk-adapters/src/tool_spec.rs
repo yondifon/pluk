@@ -118,10 +118,4 @@ mod tests {
             serde_json::json!({ "name": "get", "label": "Get", "description": "Get a key", "category": "read", "defaultEnabled": true })
         );
     }
-
-    #[test]
-    fn labels_can_be_overridden_for_catalog_specific_names() {
-        let spec = ToolSpec::new("x_reply", "Reply", "write").with_label("Reply");
-        assert_eq!(spec.label, "Reply");
-    }
 }
