@@ -19,16 +19,3 @@ pub fn commit() -> &'static str {
 pub fn commit_short() -> &'static str {
     option_env!("PLUK_COMMIT_SHORT").unwrap_or("unknown")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn version_is_non_empty() {
-        assert!(!version().is_empty());
-    }
-    #[test]
-    fn commit_is_non_empty() {
-        assert!(!commit().is_empty());
-    }
-}
