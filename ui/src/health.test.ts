@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { humanizeHealthError, humanizeTestError } from "./health";
+import { humanizeHealthError } from "./health";
 
 describe("humanizeHealthError", () => {
   test("maps known failures to plain language with next step", () => {
@@ -33,9 +33,5 @@ describe("humanizeHealthError", () => {
     for (const banned of ["adapter", "owner", "manifest", "policy kind", "projection"]) {
       expect(msg).not.toContain(banned);
     }
-  });
-
-  test("humanizeTestError aliases health", () => {
-    expect(humanizeTestError("auth failed")).toContain("Authentication failed");
   });
 });

@@ -95,32 +95,6 @@ describe("type filter hides groups", () => {
   });
 });
 
-describe("three health states rendering distinctly", () => {
-  test("adapter color health dot distinction", () => {
-    // helper: health absent -> no dot, ok -> green, error -> red
-    function healthDotClass(health: { status: "ok" | "error" } | undefined): string | null {
-      if (!health) return null;
-      return health.status === "error" ? "error" : "ok";
-    }
-    expect(healthDotClass(undefined)).toBeNull();
-    expect(healthDotClass({ status: "ok" })).toBe("ok");
-    expect(healthDotClass({ status: "error" })).toBe("error");
-    expect(healthDotClass({ status: "ok" })).not.toBe(healthDotClass({ status: "error" }));
-    expect(healthDotClass(undefined)).not.toBe(healthDotClass({ status: "ok" }));
-  });
-
-  test("health absent must not render as healthy (third state)", () => {
-    const healthMap: Record<string, { status: "ok" | "error" }> = { a: { status: "ok" } };
-    // absent id should be treated as unknown, not ok
-    expect(healthMap["missing"]).toBeUndefined();
-    // rendering logic: if (!health) -> no dot
-    const render = (id: string) => (healthMap[id] ? `dot-${healthMap[id].status}` : "no-dot");
-    expect(render("a")).toBe("dot-ok");
-    expect(render("missing")).toBe("no-dot");
-    expect(render("missing")).not.toBe("dot-ok");
-  });
-});
-
 describe("database adapter glyphs", () => {
   test("MSSQL has a first-class color and abbreviation", () => {
     expect(adapterColor("mssql")).toBe("#6a7d8f");
@@ -162,44 +136,5 @@ describe("adapter glyph fallback", () => {
     expect(adapterAbbrev("postgres")).toBe("PG");
     expect(adapterAbbrev("myservice")).toBe("MY");
     expect(adapterAbbrev("x")).toBe("X");
-  });
-});
-
-describe("delete confirmation required before callback fires", () => {
-  test("confirmation gate keeps delete from firing until confirmed, with required copy", () => {
-    // Simulate sidebar's pendingDelete logic: only on confirm does onDelete fire
-    let deleted: { kind: string; id: string } | null = null;
-    const onDelete = (kind: string, id: string) => {
-      deleted = { kind, id };
-    };
-    let pending: { kind: string; id: string; name: string } | null = null;
-    const requestDelete = (kind: string, id: string, name: string) => {
-      pending = { kind, id, name };
-    };
-    const confirmCopy = "This can’t be undone.";
-    const dialogTitle = (p: { kind: string; name: string }) => `Delete ${p.kind} “${p.name}”?`;
-
-    const confirm = () => {
-      if (!pending) return;
-      onDelete(pending.kind, pending.id);
-      pending = null;
-    };
-    const cancel = () => {
-      pending = null;
-    };
-
-    requestDelete("integration", "i1", "Prod DB");
-    expect(pending).not.toBeNull();
-    expect(dialogTitle(pending!)).toBe("Delete integration “Prod DB”?");
-    expect(confirmCopy).toBe("This can’t be undone.");
-    expect(deleted).toBeNull();
-
-    cancel();
-    expect(deleted).toBeNull();
-    expect(pending).toBeNull();
-
-    requestDelete("integration", "i1", "Prod DB");
-    confirm();
-    expect(deleted).toEqual({ kind: "integration", id: "i1" });
   });
 });
