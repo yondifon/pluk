@@ -30,6 +30,8 @@ Then run `make dev` to start the full app, or test components individually:
 - `cargo run -p pluk-host` — runs the Tauri app directly
 - `cd crates/pluk-core && cargo run --bin pluk-server` — runs the MCP server standalone
 
+Each checkout (including extra worktrees) builds its own `target/`, which grows large over time. Run `make prune` in a checkout to remove stale artifacts without a full `make clean`.
+
 ## Tests and types
 
 Run `make test` to run all tests. The suite covers:

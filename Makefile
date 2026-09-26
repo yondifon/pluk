@@ -4,7 +4,7 @@ DIST      := dist
 VERSION   := $(shell cat VERSION 2>/dev/null | tr -d ' \n')
 COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: dev deps build build-ui extension bundle bundle-unsigned bundle-signed publish _publish major minor fix check-publish-tools install test lint clean sync-version check-tauri deploy-landing help
+.PHONY: dev deps build build-ui extension bundle bundle-unsigned bundle-signed publish _publish major minor fix check-publish-tools install test lint clean prune sync-version check-tauri deploy-landing help
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:
@@ -21,6 +21,7 @@ help:
 	@printf "  make test             cargo test --workspace + extension tests\n"
 	@printf "  make lint             cargo clippy + frontend and extension typecheck\n"
 	@printf "  make clean            Remove dist/ and build artefacts\n"
+	@printf "  make prune            Remove stale target/ artefacts (needs cargo-sweep)\n"
 
 # ── Dev (Rust) ────────────────────────────────────────────────────────────────
 dev:
@@ -203,3 +204,15 @@ clean:
 	rm -rf ui/dist
 	rm -rf extension/dist
 	rm -rf ui/node_modules/.vite
+
+# Prunes target/ artefacts cargo no longer needs for the current build (stale
+# fingerprints left behind by dependency/profile/feature changes) without
+# touching anything the next build would reuse. Safe to run anytime, in any
+# checkout or worktree; cargo re-creates what it still needs.
+prune:
+	@command -v cargo-sweep >/dev/null 2>&1 || { \
+		echo "error: cargo-sweep not found."; \
+		echo "  install it with: cargo install cargo-sweep --locked"; \
+		exit 1; \
+	}
+	cargo sweep --time 14

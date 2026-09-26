@@ -67,6 +67,7 @@ The server listens on `http://localhost:4242`. Health check: `curl http://localh
 | `make test` | Run all tests (cargo test --workspace) |
 | `make lint` | Run clippy and typecheck |
 | `make clean` | Remove `dist/`, `target/`, and build artifacts |
+| `make prune` | Remove stale `target/` artifacts without a full clean (needs [`cargo-sweep`](https://github.com/BD103/cargo-sweep)) |
 
 ## Use it
 

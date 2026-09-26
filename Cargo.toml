@@ -7,6 +7,12 @@ edition = "2024"
 version = "0.1.2"
 license = "MIT"
 
+[profile.dev]
+# Full debug info roughly doubles the size of every .rlib/.o in target/debug.
+# Line tables keep panic locations and backtraces working; only variable-level
+# inspection in a source debugger is lost.
+debug = "line-tables-only"
+
 [profile.dev.package."*"]
 # Dependencies are compiled once and then reused across dev builds, so
 # optimizing them costs nothing on the edit-compile loop and keeps `make dev`
