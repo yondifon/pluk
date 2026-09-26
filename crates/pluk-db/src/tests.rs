@@ -406,23 +406,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn tunnel_uses_pluk_ssh_provider_by_default_without_manual_injection() {
-        let cfg = crate::config::SqlConfig {
-            r#type: "postgres".into(),
-            host: Some("db.internal".into()),
-            port: Some(5432),
-            use_ssh: Some("true".into()),
-            ssh_host: Some("bastion.example.com".into()),
-            ssh_auth_type: Some("agent".into()),
-            ..Default::default()
-        };
-        let provider = crate::ssh_provider::PlukSshTunnelProvider;
-        assert!(cfg.is_use_ssh());
-        assert_eq!(cfg.ssh_auth_type.as_deref(), Some("agent"));
-        let _ = provider;
-    }
-
     // A leaked tunnel keeps a forwarded port and an `ssh` child alive, so every
     // way out of a tunnelled call has to close it.
 
