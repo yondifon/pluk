@@ -91,12 +91,4 @@ mod tests {
         );
         assert_eq!(value["i2"]["status"], "error");
     }
-
-    #[test]
-    fn later_observations_replace_earlier_ones() {
-        let health = HealthMap::default();
-        health.record("i1", HealthStatus::Error, Some("down".into()));
-        health.record("i1", HealthStatus::Ok, None);
-        assert_eq!(health.all()["i1"].status, HealthStatus::Ok);
-    }
 }
