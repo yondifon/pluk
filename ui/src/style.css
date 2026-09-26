@@ -17,6 +17,7 @@ body { margin: 0; background: var(--surface-content); color: var(--surface-label
 input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console-pre, .al-summary, .al-th, .al-td, .al-policy-reason, .al-error-text, .al-reason, .response-viewer-code, .field-error, .ui-error, .toast-description, .toast-detail { -webkit-user-select: text; user-select: text; }
 .sr-only { position: absolute; width: var(--space-xxs); height: var(--space-xxs); padding: 0; margin: calc(var(--space-xxs) * -1); overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .detail-mount { height: 100%; }
+.integration-detail, .group-detail { box-sizing: border-box; width: 100%; max-width: var(--content-max-width); margin-inline: auto; padding-top: var(--space-xxl); }
 .stack-lg { display: flex; flex-direction: column; gap: var(--space-xl); }
 .detail-header { display: flex; flex-direction: column; gap: var(--space-sm); padding: 0 0 var(--space-lg); }
 .detail-header-top { display: flex; gap: var(--space-md); align-items: flex-start; }

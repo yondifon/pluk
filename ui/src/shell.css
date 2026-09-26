@@ -17,7 +17,7 @@
 .sidebar-collapsed .shell-sidebar, .sidebar-collapsed .shell-resizer { display: none; }
 /* Toasts anchor to the stage, so they never sit over the banners below it. */
 .shell-stage { position: relative; display: flex; flex: 1; min-height: 0; }
-.shell-detail { flex: 1; overflow: auto; padding: 0 var(--space-xl); }
+.shell-detail { flex: 1; overflow: auto; padding: 0 var(--space-xxl); }
 .shell-bottom { display: flex; flex-direction: column; }
 .banner { display: flex; align-items: center; gap: var(--space-sm); padding: var(--space-sm) var(--space-lg); border-top: var(--border-width) solid var(--border-subtle); background: var(--surface-panel); font-size: calc(var(--type-caption) * var(--zoom-scale)); }
 .empty-state { box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-md); min-height: 100%; padding: var(--space-xxl); text-align: center; }

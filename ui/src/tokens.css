@@ -56,6 +56,8 @@
   --search-max-width: 320px;
   --gutter-width: 36px;
   --empty-max-width: 420px;
+  /* Detail pages read as one centred column; wider windows add margin, not line length. */
+  --content-max-width: 880px;
   --modal-small-width: 440px;
   --modal-small-height: 560px;
   --modal-large-width: 960px;
