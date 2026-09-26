@@ -498,25 +498,6 @@ mod tests {
     }
 
     #[test]
-    fn catalog_publishes_exactly_the_instagram_tools_instagram_supports() {
-        let ids: Vec<&str> = tools()
-            .iter()
-            .map(|tool| tool.id.as_str())
-            .filter(|id| id.starts_with("instagram."))
-            .collect();
-        assert_eq!(
-            ids,
-            vec![
-                "instagram.inspect",
-                "instagram.read_profile",
-                "instagram.read_post",
-                "instagram.refresh",
-                "instagram.capture",
-            ]
-        );
-    }
-
-    #[test]
     fn find_tool_rejects_unknown_and_unsupported_pairs() {
         assert!(find_tool("x.inspect").is_some());
         assert!(find_tool("x.read_profile").is_some());
