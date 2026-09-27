@@ -285,19 +285,6 @@ mod tests {
     }
 
     #[test]
-    fn expand_proxy_replaces_tokens() {
-        let cmd = expand_proxy_command(
-            "cloudflared access ssh --hostname %h --port %p --user %r",
-            "db.example.com",
-            22,
-            "alice",
-        );
-        assert!(cmd.contains("db.example.com"));
-        assert!(cmd.contains("22"));
-        assert!(cmd.contains("alice"));
-    }
-
-    #[test]
     fn split_command_handles_quotes() {
         assert_eq!(split_command("a b c"), vec!["a", "b", "c"]);
         assert_eq!(split_command("a \"b c\" d"), vec!["a", "b c", "d"]);

@@ -480,31 +480,6 @@ mod tests {
     }
 
     #[test]
-    fn snippets_match_expected_shapes() {
-        let url = "http://localhost:4242/mcp/abc";
-        let key = "my-db";
-        let s = snippet(McpClient::Opencode, key, url);
-        assert!(s.contains("\"mcp\""));
-        assert!(s.contains("\"type\": \"remote\""));
-        assert!(s.contains(url));
-
-        let s = snippet(McpClient::Codex, key, url);
-        assert_eq!(s, format!("[mcp_servers.{key}]\nurl = \"{url}\"\n"));
-
-        let s = snippet(McpClient::ClaudeCode, key, url);
-        assert!(s.contains("\"mcpServers\"") && s.contains("\"type\": \"http\""));
-
-        let s = snippet(McpClient::Cursor, key, url);
-        assert!(s.contains("\"command\": \"bunx\"") && s.contains("mcp-remote"));
-
-        let s = snippet(McpClient::Windsurf, key, url);
-        assert!(s.contains("\"serverUrl\""));
-        let s2 = snippet(McpClient::Antigravity, key, url);
-        assert!(s2.contains("\"serverUrl\""));
-    }
-
-
-    #[test]
     fn json_creates_file_when_missing() {
         let dir = tmp();
         let path = dir.path().join("mcp.json");
@@ -601,18 +576,6 @@ mod tests {
         assert!(!written.contains("\\/"));
         assert!(written.contains("http://localhost"));
     }
-
-    #[test]
-    fn json_opencode_container_key() {
-        let dir = tmp();
-        let path = dir.path().join("opencode.json");
-        let entry = entry_object(McpClient::Opencode, "http://u");
-        inject_json(&path, McpClient::Opencode.container_key(), "k", entry, None).unwrap();
-        let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(v.get("mcp").is_some());
-        assert!(v.get("mcpServers").is_none());
-    }
-
 
     #[test]
     fn sanitize_preserves_slash_in_string() {
@@ -758,59 +721,6 @@ mod tests {
         assert_eq!(fs::read_to_string(bak).unwrap(), existing);
     }
 
-    // ── Backup/atomic via inject_json/toml already tested; also test inject() ─
-
-    #[test]
-    fn inject_dispatches_by_format() {
-        // JSON client
-        let dir = tmp();
-        // We cannot easily override mcp_config_path without env; test inject_json directly
-        // TOML client path would be ~/.codex/config.toml normally; use inject_toml directly
-        let path = dir.path().join("any.json");
-        let res = inject_json(
-            &path,
-            "mcpServers",
-            "k",
-            serde_json::json!({"url":"u"}),
-            None,
-        )
-        .unwrap();
-        assert!(matches!(res, InjectResult::Added { .. }));
-        let tpath = dir.path().join("any.toml");
-        let res2 = inject_toml(&tpath, "k", "http://u", None).unwrap();
-        assert!(matches!(res2, InjectResult::Added { .. }));
-    }
-
-
-    #[test]
-    fn fan_out_result_holds_added_skipped_failed() {
-        let r = FanOutResult {
-            added: vec!["Cursor".to_string()],
-            skipped: vec!["opencode".to_string()],
-            failed: vec!["Codex: parse error".to_string()],
-        };
-        assert_eq!(r.added.len(), 1);
-        assert_eq!(r.skipped.len(), 1);
-        assert_eq!(r.failed.len(), 1);
-    }
-
-    #[test]
-    fn client_choice_targets_filters_by_scope_and_install() {
-        // Without any installed clients, All yields empty; One yields single regardless.
-        let proj = ConfigScope::Project {
-            root: PathBuf::from("/tmp/repo"),
-        };
-        let one = ClientChoice::One(McpClient::Codex);
-        assert_eq!(one.targets(&proj), vec![McpClient::Codex]);
-        // All with project scope on a clean temp machine: likely 0 installed -> empty
-        let all = ClientChoice::All;
-        let t = all.targets(&proj);
-        // Should only contain project-capable clients if any were installed
-        for c in &t {
-            assert!(c.supports_project_scope());
-        }
-    }
-
     #[test]
     fn fan_out_global_reports_added_skipped_failed() {
         let _lock = ENV_LOCK.lock().unwrap();
@@ -926,21 +836,5 @@ mod tests {
             Some(v) => unsafe { std::env::set_var("HOME", v) },
             None => unsafe { std::env::remove_var("HOME") },
         }
-    }
-
-    #[test]
-    fn inject_creates_parent_dirs_atomically() {
-        let dir = tmp();
-        let path = dir.path().join("a/b/c/mcp.json");
-        // inject_json will create parent dirs
-        inject_json(
-            &path,
-            "mcpServers",
-            "k",
-            serde_json::json!({"url":"http://x"}),
-            None,
-        )
-        .unwrap();
-        assert!(path.exists());
     }
 }

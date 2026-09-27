@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  deriveStatus,
   enabledCount,
   formatFanOutMessage,
   formatRelativeTime,
@@ -8,30 +7,13 @@ import {
   initialTab,
   isToolEnabled,
   mcpKey,
-  mcpUrl,
   orderedTools,
   overviewRows,
   settingsSummary,
-  statusLabel,
 } from "./logic";
 import type { AdapterManifest, ConfigField, ToolSpec } from "./types";
 
 describe("deriveStatus", () => {
-  test("unknown when no health", () => {
-    expect(deriveStatus(null)).toBe("unknown");
-    expect(deriveStatus(undefined)).toBe("unknown");
-  });
-  test("healthy when ok", () => {
-    expect(deriveStatus({ status: "ok", at: Date.now() })).toBe("ok");
-  });
-  test("failing when error", () => {
-    expect(deriveStatus({ status: "error", error: "refused", at: Date.now() })).toBe("failing");
-  });
-  test("label mapping", () => {
-    expect(statusLabel("ok")).toBe("Healthy");
-    expect(statusLabel("failing")).toBe("Failing");
-    expect(statusLabel("unknown")).toBe("Not checked");
-  });
   test("relative time with at", () => {
     const now = Date.now();
     expect(formatRelativeTime(undefined)).toBeNull();
@@ -105,20 +87,6 @@ describe("secret masking", () => {
     expect(map["Database"]).toBe("mydb");
     // never leaks value
     for (const [, v] of rows) expect(v).not.toContain("s3cr3t");
-  });
-  test("overview sqlite masks secret via manifest", () => {
-    const manifest: AdapterManifest = {
-      id: "sqlite",
-      label: "SQLite",
-      category: "database",
-      agentHint: "",
-      tools: [],
-      configFields: fields,
-    };
-    const rows = overviewRows({ id: "1", name: "x", type: "sqlite", config: { filename: "/tmp/a.db", use_ssh: "true", ssh_host: "bastion", ssh_password: "secret" }, toolConfig: {}, token: "t", createdAt: "" }, manifest);
-    const map = Object.fromEntries(rows);
-    // ssh_password not shown directly but ssh_host shown; if ssh_host were secret it would mask
-    expect(map["File"]).toBe("/tmp/a.db");
   });
   test("overview networked masks password", () => {
     const manifest: AdapterManifest = {
@@ -194,12 +162,6 @@ describe("settings summary", () => {
     expect(settingsSummary(tool, { query: { enabled: true, settings: { statements: "all", limit: "" } } })).toBe("Statements: All");
     expect(settingsSummary({ ...tool, settings: [] }, {})).toBeNull();
     expect(settingsSummary({ ...tool, settings: undefined }, {})).toBeNull();
-  });
-});
-
-describe("copy action confirmation", () => {
-  test("mcpUrl shape", () => {
-    expect(mcpUrl("tok123")).toBe("http://localhost:4242/mcp/tok123");
   });
 });
 

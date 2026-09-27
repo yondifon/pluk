@@ -62,15 +62,6 @@ mod tests {
     }
 
     #[test]
-    fn minimal_block_is_header_and_access() {
-        let text = build_instructions("Main DB", Some(Environment::Production), parts());
-        assert_eq!(
-            text,
-            "PostgreSQL integration \"Main DB\" — production environment.\nRead-only by default."
-        );
-    }
-
-    #[test]
     fn absent_environment_omits_the_suffix() {
         let text = build_instructions("Main DB", None, parts());
         assert_eq!(

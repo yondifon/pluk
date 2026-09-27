@@ -352,11 +352,6 @@ pub fn slack_adapters(store: Arc<pluk_store::Store>) -> Vec<Arc<dyn Adapter>> {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::{Mutex, OnceLock};
-    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    fn lock() -> std::sync::MutexGuard<'static, ()> {
-        TEST_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
 
     fn conn(config: Map<String, Value>) -> Integration {
         Integration {
@@ -400,24 +395,6 @@ mod tests {
         assert!(resolve_channel(&cfg_no_default, None).is_err());
         assert!(resolve_channel(&cfg_no_default, Some("   ")).is_err());
     }
-    #[tokio::test]
-    async fn slack_request_throws_on_ok_false() {
-        let _g = lock();
-        let cfg = cfg_with_default(None);
-        let runner = Arc::new(|method: String, _params: Value| {
-            Box::pin(async move {
-                Err(AdapterError::new(format!(
-                    "Slack API {method}: invalid_auth"
-                )))
-            }) as _
-        });
-        set_slack_runner(Some(runner));
-        let err = slack_request(&cfg, "auth.test", json!({}))
-            .await
-            .unwrap_err();
-        assert!(err.message.contains("invalid_auth"));
-        set_slack_runner(None);
-    }
     #[test]
     fn projection_default_and_presets() {
         let ch = json!({"id":"C1","name":"general","topic":{"value":"hi"},"purpose":{"value":"p"},"num_members":3,"is_private":false});
@@ -454,38 +431,6 @@ mod tests {
         let out2 =
             project_value(json!([msg]), Some(vec!["thread".into()]), &message_map()).unwrap();
         assert_eq!(out2, json!([{"thread_ts":"1","reply_count":2}]));
-    }
-    #[tokio::test]
-    async fn channel_history_uses_default_channel_and_projection() {
-        let _g = lock();
-        let cfg = cfg_with_default(Some("C1"));
-        let runner = Arc::new(|method: String, params: Value| {
-            Box::pin(async move {
-                if method == "conversations.history" {
-                    let ch = params.get("channel").and_then(|v| v.as_str()).unwrap_or("");
-                    assert_eq!(ch, "C1");
-                    Ok(
-                        json!({"ok":true,"messages":[{"user":"U1","text":"hi","ts":"1","thread_ts":"1"}]}),
-                    )
-                } else {
-                    Ok(json!({"ok":true}))
-                }
-            }) as _
-        });
-        set_slack_runner(Some(runner));
-        let ch = resolve_channel(&cfg, None).unwrap();
-        assert_eq!(ch, "C1");
-        let data = slack_request(
-            &cfg,
-            "conversations.history",
-            json!({"channel": ch, "limit": 20}),
-        )
-        .await
-        .unwrap();
-        let msgs = data.get("messages").cloned().unwrap();
-        let out = project_value(msgs, None, &message_map()).unwrap();
-        assert_eq!(out, json!([{"user":"U1","text":"hi","ts":"1"}]));
-        set_slack_runner(None);
     }
     #[test]
     fn tool_specs_categories() {

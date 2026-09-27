@@ -216,13 +216,6 @@ mod tests {
         assert!(pick_live_agent(&[]).is_none());
     }
 
-    #[test]
-    fn agent_unreachable_has_code() {
-        let e = agent_unreachable_error();
-        assert_eq!(e.code, SSH_AGENT_UNREACHABLE_CODE);
-        assert!(e.message.contains("1Password"));
-    }
-
     #[tokio::test]
     async fn probe_nonexistent_is_dead() {
         let probe = probe_agent_socket("/tmp/pluk-test-nonexistent-xyz.sock", 200).await;

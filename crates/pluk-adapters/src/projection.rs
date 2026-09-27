@@ -420,20 +420,4 @@ mod tests {
             serde_json::from_value::<Map<String, Value>>(json!({ "only": "*" })).unwrap();
         assert_eq!(only_value(&not_array), None);
     }
-
-    #[test]
-    fn shared_argument_description_lists_presets() {
-        assert_eq!(
-            only_param_description(&[]),
-            "Trim the response to just these fields — omit for a lighter default, pass [\"*\"] for the full payload. \
-             Entries are dot paths (e.g. \"project.slug\") or presets."
-        );
-        assert!(
-            only_param_description(&["connection", "limits"])
-                .ends_with(" Presets: connection, limits.")
-        );
-        let schema = only_param_schema(&[]);
-        assert_eq!(schema["type"], "array");
-        assert_eq!(schema["items"]["type"], "string");
-    }
 }

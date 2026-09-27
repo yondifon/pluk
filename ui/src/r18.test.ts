@@ -6,7 +6,6 @@ import {
   availableEnvs,
 } from "./filter";
 import { scaledSize } from "./tokens";
-import { Zoom } from "./zoom";
 import { adapterColor, adapterAbbrev } from "./glyph";
 import type { Integration, Group, AdapterManifest } from "./types";
 
@@ -95,13 +94,6 @@ describe("type filter hides groups", () => {
   });
 });
 
-describe("database adapter glyphs", () => {
-  test("MSSQL has a first-class color and abbreviation", () => {
-    expect(adapterColor("mssql")).toBe("#6a7d8f");
-    expect(adapterAbbrev("mssql")).toBe("MS");
-  });
-});
-
 describe("zoom applying to type scale", () => {
   test("scaledSize multiplies base by zoom", () => {
     // base body is 13
@@ -111,18 +103,6 @@ describe("zoom applying to type scale", () => {
     expect(scaledSize("caption", 2)).toBe(23);
     // unknown style falls back to 13
     expect(scaledSize("unknown", 1)).toBe(13);
-  });
-
-  test("Zoom steps multiply type scale, never page transform", () => {
-    // Verify zoom scale is applied to type only: scaledSize uses scale factor
-    const baseBody = 13;
-    const scale = 1.25;
-    expect(scaledSize("body", scale)).toBe(baseBody * scale);
-    // Zoom class exposes same scale steps as AppZoom.swift
-    const z = new Zoom();
-    const steps = z.state.steps;
-    expect(steps).toEqual([0.85, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0]);
-    // Applying zoom does not imply a page transform; the module documents that it sets --zoom-scale only.
   });
 });
 

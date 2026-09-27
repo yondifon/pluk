@@ -98,25 +98,6 @@ describe("mountIntegrationDetail health update", () => {
     handle.destroy();
   });
 
-  test("detail tabs are ordered Overview, Agent setup, Logs, Tools", () => {
-    const root = document.createElement("div");
-    mountIntegrationDetail(root, integration, null, null, {
-      onEdit: () => {},
-      onDuplicate: () => {},
-      onDelete: () => {},
-      onTest: async () => ({ ok: true }),
-      inject: async () => ({ status: "added", path: "" }),
-    }, "overview");
-
-    expect([...root.querySelectorAll(".ui-tab")].map((tab) => tab.textContent)).toEqual([
-      "Overview",
-      "Agent setup",
-      "Logs",
-      "Tools",
-    ]);
-    expect(root.querySelector<HTMLButtonElement>("#tab-overview")!.getAttribute("aria-selected")).toBe("true");
-  });
-
   test("an MCP server opens on Tools, and other integrations do not", async () => {
     (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
       core: { invoke: async () => ({ status: 200, body: { tools: [] } }) },

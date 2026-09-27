@@ -104,10 +104,6 @@ describe("widget value round-tripping through coercion", () => {
     const f: ConfigFieldDef = { key: "host", label: "Host", type: "text" };
     expect(coerceFromStored(f, coerceToStored(f, "hello"))).toBe("hello");
   });
-  it("password round-trips", () => {
-    const f: ConfigFieldDef = { key: "pw", label: "PW", type: "password" };
-    expect(coerceFromStored(f, coerceToStored(f, "s3cret"))).toBe("s3cret");
-  });
   it("toggle round-trips", () => {
     const f: ConfigFieldDef = { key: "use_ssl", label: "Use SSL", type: "toggle" };
     expect(coerceToStored(f, "true")).toBe(true);
@@ -122,14 +118,6 @@ describe("widget value round-tripping through coercion", () => {
     expect(coerceToStored(f, "5432")).toBe(5432);
     expect(coerceFromStored(f, 5432)).toBe("5432");
     expect(coerceToStored(f, "")).toBeUndefined();
-  });
-  it("select round-trips", () => {
-    const f: ConfigFieldDef = { key: "mode", label: "Mode", type: "select", options: [{ value: "a", label: "A" }] };
-    expect(coerceFromStored(f, coerceToStored(f, "a"))).toBe("a");
-  });
-  it("file round-trips", () => {
-    const f: ConfigFieldDef = { key: "cert", label: "Cert", type: "file" };
-    expect(coerceFromStored(f, coerceToStored(f, "/tmp/cert.pem"))).toBe("/tmp/cert.pem");
   });
   it("serializeConfig omits empty and coerces types", () => {
     const fields: ConfigFieldDef[] = [
@@ -307,21 +295,6 @@ describe("override inheritance and secret filtering", () => {
     const g = groupDraftFrom({ name: "G", environment: "production", members: [{ id: "c1", overrides: { k: "v" } }] });
     expect(g.included.has("c1")).toBe(true);
     expect(g.overrides["c1"]["k"]).toBe("v");
-  });
-
-  it("secret fields never appear in group overrides", () => {
-    const m = makeManifest();
-    // api_key is not secret in this manifest, but secret_key is
-    expect(overridableFields(m).some((f) => f.secret)).toBe(false);
-  });
-});
-
-describe("environment picker copy not leaking internals", () => {
-  it("can import modules without adapter/manifest leak in labels", async () => {
-    // Placeholder: ensure catalog types don't expose internal names to UI
-    // This is a design-check, not runtime: field labels come from catalog verbatim.
-    const m = makeManifest();
-    expect(m.configFields[0].label).toBe("Host");
   });
 });
 

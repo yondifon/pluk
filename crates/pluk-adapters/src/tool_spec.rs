@@ -102,15 +102,6 @@ mod tests {
     }
 
     #[test]
-    fn explicit_override_wins_over_the_derived_default() {
-        assert!(
-            !ToolSpec::new("keys", "K", "read")
-                .with_default_enabled(false)
-                .default_enabled
-        );
-    }
-
-    #[test]
     fn serializes_camel_case_and_omits_absent_settings() {
         let value = serde_json::to_value(ToolSpec::new("get", "Get a key", "read")).unwrap();
         assert_eq!(

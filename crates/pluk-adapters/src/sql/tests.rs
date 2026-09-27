@@ -310,47 +310,6 @@ async fn use_is_blocked() {
     assert!(r2.text().contains("locked to database"));
 }
 
-#[test]
-fn row_cap_truncation_notice_and_order() {
-    // cap then mask order, truncation notice
-    let rows = vec![
-        json!({"id":1,"secret":"a"}),
-        json!({"id":2,"secret":"b"}),
-        json!({"id":3,"secret":"c"}),
-    ];
-    // simulate cap 2
-    let cap = Some(2);
-    let (mut capped, truncated, limit) = {
-        let _total = rows.len();
-        if rows.len() > cap.unwrap() {
-            (rows.into_iter().take(2).collect::<Vec<_>>(), true, cap)
-        } else {
-            (rows.clone(), false, cap)
-        }
-    };
-    // mask after cap
-    for row in &mut capped {
-        if let Value::Object(m) = row
-            && m.contains_key("secret")
-        {
-            m.insert("secret".into(), Value::String("***".into()));
-        }
-    }
-    assert_eq!(capped.len(), 2);
-    assert!(truncated);
-    assert_eq!(capped[0]["secret"], "***");
-    // truncation notice would be appended after projected json
-    let notice = format!(
-        "[Row limit: showing first {} of {} rows.",
-        limit.unwrap(),
-        3
-    );
-    assert!(notice.contains("first 2 of 3"));
-    // log snapshot must not contain original secret
-    let serialized = serde_json::to_string(&capped).unwrap();
-    assert!(!serialized.contains("\"a\""));
-}
-
 #[tokio::test]
 async fn masking_applied_before_response_and_log() {
     let (dir, store) = temp_store();

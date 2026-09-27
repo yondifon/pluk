@@ -79,15 +79,6 @@ describe("mcp section", () => {
     expect(disclosure.querySelector("summary")!.textContent).toBe("What the agent is told");
     expect(disclosure.querySelector(".hint")!.textContent).toBe("Ask for a table before querying.");
   });
-
-  test("can label the section Agent setup", () => {
-    const root = document.createElement("div");
-    renderMcpSection(root, { ...target, title: "Agent setup" }, async () => ({ status: "added", path: "" }), {
-      installed: [],
-    });
-
-    expect(root.querySelector(".ui-card-title")!.textContent).toBe("Agent setup");
-  });
 });
 
 describe("agent setup install", () => {

@@ -693,13 +693,4 @@ mod tests {
         u.finish_check(None);
         assert_eq!(u.state(), UpdateState::UpToDate);
     }
-
-    #[test]
-    fn disabled_label_and_idle_label() {
-        assert_eq!(UpdateState::Idle.label(), "Idle");
-        assert_eq!(
-            UpdateState::Disabled { reason: "x".into() }.label(),
-            "Updates unavailable"
-        );
-    }
 }

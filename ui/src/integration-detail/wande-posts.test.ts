@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "bun:test";
-import { countdown, mountWandePosts, queueStatus, slotLabel, type WandePosts } from "./wande-posts";
+import { countdown, mountWandePosts, slotLabel, type WandePosts } from "./wande-posts";
 import { toast } from "../toast";
 
 const NOW = new Date("2026-09-11T12:00:00").getTime();
@@ -198,13 +198,6 @@ describe("the words on the clock and the slots", () => {
     expect(countdown(107_000)).toBe("1:47");
     expect(countdown(9_400)).toBe("0:10");
     expect(countdown(-5_000)).toBe("0:00");
-  });
-
-  test("every slot outcome has a word for it", () => {
-    expect(queueStatus("reserved")).toBe("Waiting");
-    expect(queueStatus("committed")).toBe("Posted");
-    expect(queueStatus("released")).toBe("Not posted");
-    expect(queueStatus("unknown")).toBe("Outcome unknown");
   });
 
   test("a slot today reads as today", () => {

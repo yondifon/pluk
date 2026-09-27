@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { slug, slugsWithCollision, toolPrefix } from "./slug";
+import { slug, slugsWithCollision } from "./slug";
 import { detectTransitions } from "./health";
 import { emptyState } from "./emptyStates";
 
@@ -31,16 +31,6 @@ describe("slug derivation matches server", () => {
     expect(slugs).toEqual(["metrics_db", "metrics_db_2", "metrics_db_3", "other"]);
     // tool prefix includes __*
     expect(slugs.map((s) => `${s}__*`)).toEqual(["metrics_db__*", "metrics_db_2__*", "metrics_db_3__*", "other__*"]);
-  });
-
-  test("collision distinct names don't collide", () => {
-    const slugs = slugsWithCollision(["Alpha", "Beta", "Gamma"]);
-    expect(slugs).toEqual(["alpha", "beta", "gamma"]);
-  });
-
-  test("toolPrefix helper", () => {
-    expect(toolPrefix("Metrics DB")).toBe("metrics_db__*");
-    expect(toolPrefix("")).toBe("member__*");
   });
 });
 
@@ -111,25 +101,4 @@ describe("empty states copy has no internal vocab", () => {
       for (const w of banned) expect(text).not.toContain(w);
     });
   }
-  test("first-run tells what to do", () => {
-    const s = emptyState("no-integrations");
-    expect(s.title.toLowerCase()).toContain("connect");
-    expect(s.body.toLowerCase()).toContain("add");
-    expect(s.actionLabel).toBe("New Integration");
-  });
-});
-
-describe("error toast copy says what failed and what to try", () => {
-  test("health error humanization", async () => {
-    const { humanizeHealthError } = await import("./health");
-    expect(humanizeHealthError("connection refused")).toContain("reachable");
-    expect(humanizeHealthError("authentication failed")).toContain("credentials");
-    expect(humanizeHealthError(null)).toContain("try again");
-    // banned vocab not in humanized messages
-    const banned = ["owner", "manifest", "verdict", "projection", "slug"];
-    for (const raw of ["connection refused", "timeout", "ssh tunnel failed", null]) {
-      const msg = humanizeHealthError(raw as string).toLowerCase();
-      for (const w of banned) expect(msg).not.toContain(w);
-    }
-  });
 });

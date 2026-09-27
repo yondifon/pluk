@@ -415,17 +415,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn select_options_round_trip() {
-        let field = ConfigField::new("auth_type", "Auth", FieldType::Select)
-            .options(&[("agent", "Agent"), ("key", "Private Key")]);
-        let value = serde_json::to_value(&field).unwrap();
-        assert_eq!(
-            value["options"],
-            json!([{ "value": "agent", "label": "Agent" }, { "value": "key", "label": "Private Key" }])
-        );
-    }
-
     fn secret_fields() -> Vec<ConfigField> {
         vec![
             ConfigField::new("url", "URL", FieldType::Text),

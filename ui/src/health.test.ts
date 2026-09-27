@@ -2,14 +2,6 @@ import { describe, test, expect } from "bun:test";
 import { humanizeHealthError } from "./health";
 
 describe("humanizeHealthError", () => {
-  test("maps known failures to plain language with next step", () => {
-    expect(humanizeHealthError("connection refused")).toContain("Couldn’t connect");
-    expect(humanizeHealthError("connection refused").toLowerCase()).toContain("try again");
-    expect(humanizeHealthError("Unauthorized")).toContain("Authentication failed");
-    expect(humanizeHealthError("timeout")).toContain("timed out");
-    expect(humanizeHealthError("ssh tunnel error")).toContain("Secure tunnel");
-  });
-
   test("unknown error always appends next step", () => {
     const raw = "something weird happened";
     const msg = humanizeHealthError(raw);

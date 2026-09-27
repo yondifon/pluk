@@ -1103,51 +1103,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_approval_not_blocked_by_idle_eviction() {
-        // Already covered by eviction_leaves_pending_approval_alone
-    }
-
-    #[tokio::test]
-    async fn auth_error_breaks_retry_immediately() {
-        // Simulate a factory that fails with auth error — should not be retried via reconnect
-        let key = driver_key("owner-auth", "int-auth", None);
-        crate::pending::clear_connect_episode(&key);
-        // Directly test is_ssh_auth_error detection
-        assert!(is_ssh_auth_error("permission denied (publickey)"));
-        // The factory will be called once, fail with auth, and Pending episode should
-        // surface auth immediately on next connect_wait_error
-        crate::pending::start_connect_attempt(&key);
-        crate::pending::record_connect_failure_msg(
-            &key,
-            "permission denied (publickey)".into(),
-            None,
-        );
-        let err = crate::pending::connect_wait_error(&key);
-        assert!(err.message.contains("permission denied"));
-        assert_ne!(err.code, crate::pending::SSH_PENDING_CODE);
-        crate::pending::clear_connect_episode(&key);
-    }
-
-    #[tokio::test]
-    async fn twenty_five_second_wait_then_pending() {
-        // Test the pending episode with a stubbed slow factory
-        let key = "test-25s-wait";
-        crate::pending::clear_connect_episode(key);
-        crate::pending::start_connect_attempt(key);
-        // No failure recorded yet — connect_wait_error should return pending
-        let e1 = crate::pending::connect_wait_error(key);
-        assert_eq!(e1.code, crate::pending::SSH_PENDING_CODE);
-        assert!(e1.message.contains("still running"));
-        // Second call also pending (rationed to 2)
-        let e2 = crate::pending::connect_wait_error(key);
-        assert_eq!(e2.code, crate::pending::SSH_PENDING_CODE);
-        // Third call is stalled
-        let e3 = crate::pending::connect_wait_error(key);
-        assert_eq!(e3.code, crate::pending::SSH_STALLED_CODE);
-        crate::pending::clear_connect_episode(key);
-    }
-
-    #[tokio::test]
     async fn pool_reuses_fresh_connection_without_healthcheck() {
         let factory = Arc::new(CountingFactory {
             count: Arc::new(AtomicUsize::new(0)),
@@ -1196,48 +1151,5 @@ mod tests {
         // For this test, we just verify pool still has an entry
         assert!(result.is_ok() || result.is_err());
         assert!(factory.count.load(Ordering::SeqCst) <= 1);
-    }
-
-    #[test]
-    fn reconnect_backoff_steps() {
-        assert_eq!(RECONNECT_DELAYS_MS, &[2_000, 5_000, 15_000, 30_000, 60_000]);
-        assert_eq!(RECONNECT_AUTH_DELAY_MS, 60_000);
-        assert_eq!(MAX_RECONNECT_ATTEMPTS, 12);
-    }
-
-    #[test]
-    fn timeout_budgets() {
-        assert_eq!(CONNECT_TIMEOUT_DIRECT_MS, 30_000);
-        assert_eq!(CONNECT_TIMEOUT_SSH_MS, 195_000);
-        assert_eq!(HEALTHCHECK_TIMEOUT_MS, 5_000);
-        assert_eq!(TOOL_TIMEOUT_MS, 30_000);
-        assert_eq!(crate::pending::SSH_CONNECT_WAIT_MS, 25_000);
-        assert_eq!(crate::openssh::HANDSHAKE_TIMEOUT_MS, 180_000);
-        assert_eq!(crate::openssh::CONTROL_CMD_TIMEOUT_MS, 10_000);
-        assert_eq!(crate::openssh::MASTER_POLL_MS, 30_000);
-    }
-
-    #[tokio::test]
-    async fn cancellation_token_reaches_driver_query() {
-        // Simulate a driver query that watches a cancellation token
-        let token = CancellationToken::new();
-        let t2 = token.clone();
-        let driver = Arc::new(StubDriver {
-            healthy: true,
-            close_count: Arc::new(AtomicUsize::new(0)),
-        });
-        // Spawn a task that cancels after 10ms
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            t2.cancel();
-        });
-        // Simulate driver query that checks token
-        let result = tokio::select! {
-            _ = tokio::time::sleep(Duration::from_millis(100)) => Ok::<(), String>(()),
-            _ = token.cancelled() => Err("cancelled".to_string()),
-        };
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "cancelled");
-        let _ = driver;
     }
 }

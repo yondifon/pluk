@@ -68,6 +68,14 @@ impl SshError {
         }
     }
 
+    /// A failure no retry can fix. ssh always ends an agent signing failure
+    /// with "Permission denied (publickey)", so an agent error that clears on
+    /// its own (1Password locked, or its approval not shown yet) must not be
+    /// read as a wrong key.
+    fn is_final(&self) -> bool {
+        self.is_auth() && !self.is_agent_retryable()
+    }
+
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::AgentUnreachable(_) | Self::Timeout(_) => true,
@@ -112,10 +120,18 @@ fn master_target(
     args
 }
 
-static MASTER_STARTS: OnceLock<tokio::sync::Mutex<HashMap<String, ()>>> = OnceLock::new();
+type MasterLock = std::sync::Arc<tokio::sync::Mutex<()>>;
 
-fn master_starts() -> &'static tokio::sync::Mutex<HashMap<String, ()>> {
-    MASTER_STARTS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+static MASTER_STARTS: OnceLock<std::sync::Mutex<HashMap<String, MasterLock>>> = OnceLock::new();
+
+/// One lock per master, so only one `ssh` at a time asks the agent to sign for
+/// it. A second request while 1Password is showing its prompt fails outright.
+fn master_start_lock(key: &str) -> MasterLock {
+    let mut map = MASTER_STARTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    map.entry(key.to_string()).or_default().clone()
 }
 
 async fn run_ssh_command(args: &[String], timeout_ms: u64) -> (i32, String) {
@@ -176,41 +192,13 @@ async fn ensure_master(
 ) -> Result<(), SshError> {
     let key = format!("{} {}", target.join(" "), config.host);
 
-    // Simple in-flight dedup: if another task is starting the same master, wait briefly
-    {
-        let map = master_starts().lock().await;
-        if map.contains_key(&key) {
-            drop(map);
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            // Recheck
-            let (code, _) = run_ssh_command(
-                &{
-                    let mut a = vec!["-O".to_string(), "check".to_string()];
-                    a.extend_from_slice(target);
-                    a.push(config.host.clone());
-                    a
-                },
-                CONTROL_CMD_TIMEOUT_MS.min(timeout_ms),
-            )
-            .await;
-            if code == 0 {
-                return Ok(());
-            }
-        }
-    }
-
-    // Insert guard
-    master_starts().lock().await.insert(key.clone(), ());
-    struct Guard(String);
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            // Use try_lock to avoid blocking in Drop; if contended, leak entry (harmless)
-            if let Ok(mut map) = master_starts().try_lock() {
-                map.remove(&self.0);
-            }
-        }
-    }
-    let _guard = Guard(key.clone());
+    // Callers queued behind a start find its master already up at the check below.
+    let start_lock = master_start_lock(&key);
+    let _start = tokio::time::timeout(Duration::from_millis(timeout_ms), start_lock.lock())
+        .await
+        .map_err(|_| {
+            SshError::Timeout("another SSH connection to this host is still starting".into())
+        })?;
 
     // Ensure control dir exists
     let _ = tokio::fs::create_dir_all(control_dir()).await;
@@ -537,7 +525,7 @@ pub async fn open_ssh_tunnel_via_openssh(
             {
                 Ok(t) => return Ok(t),
                 Err(e) => {
-                    if e.is_auth() {
+                    if e.is_final() {
                         return Err(e);
                     }
                     if attempt < attempts && e.is_retryable() {
@@ -638,6 +626,16 @@ mod tests {
         assert!(message.contains("4 attempts"));
         assert!(message.contains("1Password is locked / not running"));
         assert!(message.contains("bounded retry window"));
+    }
+
+    #[test]
+    fn agent_signing_failure_is_retried_not_final() {
+        let error = SshError::Tunnel(
+            "sign_and_send_pubkey: signing failed for ED25519 \"\" from agent: communication with agent failed\nmalico@bastion: Permission denied (publickey).".into(),
+        );
+        assert!(!error.is_final());
+        assert!(error.is_retryable());
+        assert!(SshError::Tunnel("malico@bastion: Permission denied (publickey).".into()).is_final());
     }
 
     #[test]

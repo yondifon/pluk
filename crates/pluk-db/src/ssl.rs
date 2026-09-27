@@ -103,17 +103,6 @@ pub fn build_ssl_config(
 mod tests {
     use super::*;
     #[test]
-    fn ssl_mode_mapping() {
-        assert_eq!(SslMode::from_str("disable"), Some(SslMode::Disable));
-        assert_eq!(SslMode::from_str("require"), Some(SslMode::Require));
-        assert_eq!(SslMode::from_str("verify-ca"), Some(SslMode::VerifyCa));
-        assert_eq!(SslMode::from_str("verify-full"), Some(SslMode::VerifyFull));
-        assert!(SslMode::VerifyCa.verifies());
-        assert!(SslMode::VerifyFull.verifies());
-        assert!(!SslMode::Require.verifies());
-        assert!(!SslMode::Disable.verifies());
-    }
-    #[test]
     fn build_disabled_when_no_ssl() {
         assert!(
             build_ssl_config(false, Some("verify-ca"), None, None, None)

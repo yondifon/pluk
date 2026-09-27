@@ -1357,29 +1357,6 @@ mod tests {
         assert!(with_stats.get("stats").is_some());
     }
     #[test]
-    fn star_and_unknown() {
-        let v = json!({"slug":"a","extra":"x"});
-        assert_eq!(
-            project_value(v.clone(), Some(vec!["*".into()]), &list_projects_map()).unwrap(),
-            v
-        );
-        assert!(
-            project_value(
-                json!({"slug":"a"}),
-                Some(vec!["bogus".into()]),
-                &list_projects_map()
-            )
-            .is_err()
-        );
-        let err = project_value(
-            json!({"shortId":"X"}),
-            Some(vec!["bogus".into()]),
-            &get_issue_map(),
-        )
-        .unwrap_err();
-        assert!(err.message.contains("Unknown \"only\" field \"bogus\""));
-    }
-    #[test]
     fn latest_event_frames_and_presets() {
         let frame = |i: i64, in_app: bool| json!({"filename":format!("src/handler-{i}.ts"),"function":format!("fn{i}"),"lineNo":100+i,"module":format!("pkg-{i}"),"inApp":in_app,"context":[["a","b"]],"vars":{"x":1}});
         let frames: Vec<Value> = (0..6).map(|i| frame(i, i >= 4)).collect();

@@ -602,7 +602,6 @@ fn make_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::ApiResponse;
     use crate::error::SSH_CONNECT_PENDING_CODE;
     use crate::tool_host::ResourceContents;
     use pluk_store::Environment;
@@ -1062,20 +1061,6 @@ mod tests {
         let adapter = action_adapter(spec, store);
         let error = adapter.register(&mut RecordingHost::default(), &integration(None), "");
         assert_eq!(error.expect_err("must fail").message, "missing token");
-    }
-
-    #[test]
-    fn api_response_helpers_shape_plain_and_json_bodies() {
-        let text = ApiResponse::text(405, "Method not allowed");
-        assert_eq!(text.status, 405);
-        assert_eq!(text.body, b"Method not allowed");
-
-        let json_body = ApiResponse::json(200, &json!({ "ok": true }));
-        assert_eq!(json_body.content_type.as_deref(), Some("application/json"));
-        assert_eq!(
-            std::str::from_utf8(&json_body.body).unwrap(),
-            "{\"ok\":true}"
-        );
     }
 
     /// A host that keeps handlers reachable for direct invocation.

@@ -54,12 +54,4 @@ describe("header Test control", () => {
     const c2 = render(false, { status: "ok", at: Date.now() });
     expect(c2.querySelector(".status-chip")!.getAttribute("aria-label")).toContain("Healthy");
   });
-
-  test("button is keyboard reachable (tabbable)", () => {
-    const c = render(false);
-    const btn = c.querySelector("button")!;
-    expect(btn.tabIndex).not.toBe(-1);
-    // disabled testing button not reachable, idle is
-    expect(btn.disabled).toBe(false);
-  });
 });

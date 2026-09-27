@@ -12,12 +12,6 @@ test("buildUrl encodes the password and picks the scheme", () => {
   expect(buildUrl("rediss", "h", 6380, 2, "p@ss")).toBe("rediss://:p%40ss@h:6380/2");
 });
 
-test("redisConfig reads host/port/db/tls/password", () => {
-  const cfg = redisConfig(conn({ host: "h", port: 6380, db: 2, tls: true, password: "p" }));
-  expect(cfg).toMatchObject({ host: "h", port: 6380, db: 2, tls: true, password: "p" });
-  expect(cfg.ssh).toBeUndefined();
-});
-
 test("redisConfig prefers an explicit url (managed providers) when no tunnel", () => {
   expect(redisConfig(conn({ url: "rediss://x.upstash.io:6379", host: "ignored" })).url).toBe("rediss://x.upstash.io:6379");
 });

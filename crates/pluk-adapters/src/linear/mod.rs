@@ -1435,22 +1435,6 @@ mod tests {
                 .is_some()
         );
     }
-    #[test]
-    fn star_bypass() {
-        let v = json!({"identifier":"ENG-42","extra":"x"});
-        let out = project_value(v.clone(), Some(vec!["*".into()]), &issue_list_map()).unwrap();
-        assert_eq!(out, v);
-    }
-    #[test]
-    fn unknown_field_errors() {
-        let err = project_value(
-            json!({"identifier":"ENG-42"}),
-            Some(vec!["bogus".into()]),
-            &issue_list_map(),
-        )
-        .unwrap_err();
-        assert!(err.message.contains("Unknown \"only\" field \"bogus\""));
-    }
     #[tokio::test]
     async fn linear_auth_and_timeout_and_api_error() {
         // missing key

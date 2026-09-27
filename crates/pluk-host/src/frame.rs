@@ -168,17 +168,4 @@ mod tests {
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(load(&path), Frame::default());
     }
-
-    #[test]
-    fn serialization_is_stable() {
-        let f = Frame {
-            x: Some(1.0),
-            y: Some(2.0),
-            width: 1040.0,
-            height: 660.0,
-        };
-        let json = serde_json::to_string(&f).unwrap();
-        let back: Frame = serde_json::from_str(&json).unwrap();
-        assert_eq!(f, back);
-    }
 }

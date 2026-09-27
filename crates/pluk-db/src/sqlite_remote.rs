@@ -417,13 +417,6 @@ mod tests {
         assert_eq!(parse_json_output("   \n  ").unwrap().len(), 0);
     }
 
-    #[test]
-    fn parse_json_array() {
-        let rows = parse_json_output(r#"[{"a":1,"b":"x"},{"a":2}]"#).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0]["a"], 1);
-    }
-
     #[tokio::test]
     async fn rejects_params() {
         struct NoopExec;

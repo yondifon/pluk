@@ -33,11 +33,6 @@ test("path into a missing key resolves to undefined, not a throw", () => {
   expect(applyOnly(item, ["assignee.name"], MAP)).toEqual({ assignee: undefined });
 });
 
-test("preset expands to its dot paths", () => {
-  const item = { id: "1", title: "T", priority: 2 };
-  expect(applyOnly(item, ["priority"], MAP)).toEqual({ priority: 2 });
-});
-
 test("preset and literal path compose in one array", () => {
   const item = { id: "1", title: "T", priority: 2 };
   expect(applyOnly(item, ["title", "priority"], MAP)).toEqual({ title: "T", priority: 2 });

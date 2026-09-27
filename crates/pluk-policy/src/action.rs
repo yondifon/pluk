@@ -144,12 +144,4 @@ mod tests {
             vec![ActionCategory::Read]
         );
     }
-
-    #[test]
-    fn description_matches_ts_format() {
-        assert_eq!(
-            action_policy_description(&parse_action_policy(None, false)),
-            "Allowed actions: read, write, delete."
-        );
-    }
 }

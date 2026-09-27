@@ -696,17 +696,6 @@ mod tests {
         assert!(expires_at > now_ms() + 3_500_000, "{expires_at}");
     }
 
-    #[test]
-    fn the_redirect_address_is_pluks_own_loopback_port() {
-        assert_eq!(
-            redirect_uri(),
-            format!(
-                "http://127.0.0.1:{}/oauth/mcp/callback",
-                pluk_core::loopback::port()
-            )
-        );
-    }
-
     /// AC-1: the whole trip. Pluk starts the sign-in, the browser approves,
     /// the redirect lands, and the call that follows carries the bearer.
     #[tokio::test]

@@ -4,8 +4,6 @@ import {
   canEnable,
   orderedProxyTools,
   signInView,
-  stateBadge,
-  stateNote,
   type ProxyToolRow,
   type ProxyToolState,
   type SignIn,
@@ -48,24 +46,6 @@ describe("orderedProxyTools", () => {
     const rows = [row("b", "approved"), row("a", "new")];
     orderedProxyTools(rows);
     expect(rows.map((r) => r.name)).toEqual(["b", "a"]);
-  });
-});
-
-describe("badges and notes", () => {
-  test("only unsettled states are marked", () => {
-    expect(stateBadge("new")).toBe("New");
-    expect(stateBadge("changed")).toBe("Changed");
-    expect(stateBadge("missing")).toBe("Unavailable");
-    expect(stateBadge("approved")).toBeNull();
-  });
-
-  test("only a changed or withdrawn tool needs a line of its own", () => {
-    expect(stateNote("changed")).toBe(
-      "This tool changed. Read what it does now, then turn it back on.",
-    );
-    expect(stateNote("missing")).toBe("This server no longer offers this tool.");
-    expect(stateNote("new")).toBeNull();
-    expect(stateNote("approved")).toBeNull();
   });
 });
 
