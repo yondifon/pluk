@@ -151,6 +151,7 @@ pub struct LogEntry {
     pub source: Option<String>,
     pub result_json: Option<String>,
     pub row_count: Option<i64>,
+    pub duration_ms: Option<i64>,
     pub response_text: Option<String>,
     pub group_id: Option<String>,
     pub group_name: Option<String>,

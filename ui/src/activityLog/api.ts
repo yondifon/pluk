@@ -62,6 +62,7 @@ export interface LiveEvent {
   groupName: string | null;
   database: string | null;
   rowCount: number | null;
+  durationMs?: number | null;
   createdAt: string;
 }
 

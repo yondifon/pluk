@@ -80,6 +80,7 @@ fn to_activity(entry: LogEntry) -> LogActivity {
         group_name: entry.group_name,
         database: entry.database,
         row_count: entry.row_count,
+        duration_ms: entry.duration_ms,
         created_at: entry.created_at,
     }
 }

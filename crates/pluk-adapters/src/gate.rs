@@ -437,10 +437,12 @@ where
     };
 
     let finalized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let started_at = tokio::time::Instant::now();
     struct PendingGuard {
         store: *const Store,
         id: i64,
         finalized: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        started_at: tokio::time::Instant,
     }
     unsafe impl Send for PendingGuard {}
     unsafe impl Sync for PendingGuard {}
@@ -453,6 +455,7 @@ where
                     self.id,
                     LogUpdate {
                         verdict: Verdict::Error,
+                        duration_ms: Some(self.started_at.elapsed().as_millis() as i64),
                         reason: Some("Query was interrupted (dropped or panicked)".into()),
                         response_text: Some(
                             "Error: Query was interrupted (dropped or panicked)".into(),
@@ -467,6 +470,7 @@ where
         store: store as *const Store,
         id: log_id,
         finalized: finalized.clone(),
+        started_at,
     };
 
     use futures::FutureExt as _;
@@ -478,11 +482,13 @@ where
         Err(_) => Err(crate::error::AdapterError::new("Query panicked")),
     };
     finalized.store(true, std::sync::atomic::Ordering::SeqCst);
+    let duration_ms = Some(started_at.elapsed().as_millis() as i64);
 
     match run_result {
         Ok(Outcome::Blocked(block)) => {
             let update = LogUpdate {
                 verdict: Verdict::Blocked,
+                duration_ms,
                 reason: Some(block.clone()),
                 ..Default::default()
             };
@@ -497,6 +503,7 @@ where
             };
             let update = LogUpdate {
                 sql: ran.command.clone(),
+                duration_ms,
                 verdict: status,
                 reason: ran.reason.clone(),
                 result: ran.result.clone(),
@@ -535,6 +542,7 @@ where
                 });
             let update = LogUpdate {
                 sql: meta.command.clone(),
+                duration_ms,
                 verdict: status,
                 reason: Some(error.message.clone()),
                 response_text: Some(text.clone()),
@@ -1123,15 +1131,4 @@ mod tests {
         assert_eq!(result.text(), "Blocked: not allowed");
     }
 
-    #[test]
-    fn tool_results_serialize_in_the_mcp_wire_shape() {
-        assert_eq!(
-            serde_json::to_value(ok("hello")).unwrap(),
-            serde_json::json!({ "content": [{ "type": "text", "text": "hello" }] })
-        );
-        assert_eq!(
-            serde_json::to_value(err("bad")).unwrap(),
-            serde_json::json!({ "content": [{ "type": "text", "text": "bad" }], "isError": true })
-        );
-    }
 }

@@ -164,6 +164,26 @@ async fn a_read_only_query_recovers_when_the_connection_drops_during_the_stateme
 }
 
 
+#[tokio::test(start_paused = true)]
+async fn a_failed_call_records_how_long_it_waited_and_keeps_it_after_reopen() {
+    use super::{ConnectStep, TEST_CONNECT};
+    let (dir, store) = temp_store();
+    let conn = make_integration("duration", "postgres", json!({}), None);
+    let host = capture_for(&conn, store.clone());
+    let steps = std::sync::Mutex::new(std::collections::VecDeque::from([ConnectStep::Hang]));
+    TEST_CONNECT.scope(steps, async {
+        let result = host.tools["list_tables"](json!({})).await;
+        assert!(result.is_error);
+        let page = store.read_log_page(&LogScope::Connection("duration".into()), LogRange::All, None).unwrap();
+        assert_eq!(page.entries[0].verdict, "error");
+        assert_eq!(page.entries[0].duration_ms, Some(45_000));
+    }).await;
+    drop(host);
+    drop(store);
+    let reopened = Store::open(&dir.path().join("pluk.db")).unwrap();
+    assert_eq!(reopened.read_log_page(&LogScope::Connection("duration".into()), LogRange::All, None).unwrap().entries[0].duration_ms, Some(45_000));
+}
+
 #[tokio::test]
 async fn query_happy_path_returns_rows() {
     let (_dir, store) = temp_store();

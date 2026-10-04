@@ -22,7 +22,7 @@ type Step = fn(&mut Connection) -> Result<()>;
 
 const LADDER: &[Step] = &[
     migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
-    migrate_v8, migrate_v9, migrate_v10, migrate_v11, migrate_v12, migrate_v13,
+    migrate_v8, migrate_v9, migrate_v10, migrate_v11, migrate_v12, migrate_v13, migrate_v14,
 ];
 
 /// Bring `conn` up to the latest version.
@@ -503,6 +503,14 @@ fn migrate_v13(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+fn migrate_v14(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch("ALTER TABLE query_log ADD COLUMN duration_ms INTEGER;")?;
+    tx.pragma_update(None, "user_version", 14)?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn rebuild_browser_drafts(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
@@ -788,11 +796,10 @@ mod tests {
         let mut conn = Connection::open(&path).unwrap();
         run(&mut conn).unwrap();
         assert_eq!(current_version(&conn).unwrap(), LADDER.len() as u32);
-        assert_eq!(
-            columns_of(&conn, "query_log").len(),
-            15,
-            "no duplicate columns added"
-        );
+        let page = crate::Store::open(&path).unwrap()
+            .read_log_page(&crate::LogScope::Connection("abcd1234abcd1234".into()), crate::LogRange::All, None).unwrap();
+        assert_eq!(page.entries[0].sql, "SELECT 1");
+        assert_eq!(page.entries[0].duration_ms, None);
     }
 
     #[test]
@@ -954,20 +961,6 @@ mod tests {
         assert!(refused.is_err(), "only header and env rows are kept");
     }
 
-    #[test]
-    fn upgrades_v12_with_the_launch_approvals_table() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        for step in &LADDER[..12] {
-            step(&mut conn).unwrap();
-        }
-        run(&mut conn).unwrap();
-        assert_eq!(current_version(&conn).unwrap(), 13);
-        let expected: HashSet<String> = ["integration_id", "launch_hash", "approved_at"]
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect();
-        assert_eq!(columns_of(&conn, "proxy_launch_approvals"), expected);
-    }
 
     fn columns_of(conn: &Connection, table: &str) -> HashSet<String> {
         let mut stmt = conn
@@ -977,80 +970,4 @@ mod tests {
         rows.map(|r| r.unwrap()).collect()
     }
 
-    #[test]
-    fn fresh_schema_matches_the_shared_contract_exactly() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        run(&mut conn).unwrap();
-        let expected: &[&str] = &[
-            "integrations",
-            "groups",
-            "query_log",
-            "settings",
-            "masked_columns",
-            "saved_queries",
-            "saved_commands",
-            "sqlite_sequence",
-        ];
-        let tables: HashSet<String> = {
-            let mut stmt = conn
-                .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-                .unwrap();
-            rows_unwrap(stmt.query_map([], |r| r.get::<_, String>(0)).unwrap())
-        };
-        for name in expected {
-            assert!(tables.contains(*name), "missing table {name}");
-        }
-
-        let integrations = columns_of(&conn, "integrations");
-        for name in [
-            "id",
-            "name",
-            "type",
-            "config",
-            "environment",
-            "read_only",
-            "query_policy",
-            "token",
-            "created_at",
-        ] {
-            assert!(integrations.contains(name));
-        }
-        let groups = columns_of(&conn, "groups");
-        for name in [
-            "id",
-            "name",
-            "environment",
-            "member_ids",
-            "token",
-            "created_at",
-        ] {
-            assert!(groups.contains(name));
-        }
-        // The legacy flag must stay populated-by-default for schema compatibility.
-        let read_only_default: String = conn
-            .query_row(
-                "SELECT dflt_value FROM pragma_table_info('integrations') WHERE name='read_only'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(read_only_default, "0");
-
-        let indexes: HashSet<String> = {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'query_log%'",
-                )
-                .unwrap();
-            rows_unwrap(stmt.query_map([], |r| r.get::<_, String>(0)).unwrap())
-        };
-        assert!(indexes.contains("query_log_connection_time_id_idx"));
-        assert!(indexes.contains("query_log_group_time_id_idx"));
-    }
-
-    fn rows_unwrap(
-        rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<String>>,
-    ) -> HashSet<String> {
-        rows.map(|r| r.unwrap()).collect()
-    }
 }

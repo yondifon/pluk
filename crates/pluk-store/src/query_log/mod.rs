@@ -103,6 +103,7 @@ pub struct LogUpdate {
     pub reason: Option<String>,
     pub result: Option<QueryResult>,
     pub response_text: Option<String>,
+    pub duration_ms: Option<i64>,
 }
 
 impl LogUpdate {
@@ -194,7 +195,7 @@ impl ToSql for Param {
 }
 
 const ENTRY_COLUMNS: &str = "id, connection_id, connection_name, sql, verdict, reason, categories, source, \
-     result_json, row_count, response_text, group_id, group_name, database, created_at";
+     result_json, row_count, response_text, group_id, group_name, database, created_at, duration_ms";
 
 //
 // Subscribers learn about every new or updated log row the moment it is
@@ -220,6 +221,7 @@ pub struct LogActivity {
     pub group_name: Option<String>,
     pub database: Option<String>,
     pub row_count: Option<i64>,
+    pub duration_ms: Option<i64>,
     pub created_at: String,
 }
 
@@ -255,7 +257,7 @@ impl ActivityFeed {
 macro_rules! activity_columns {
     () => {
         "id, connection_id, connection_name, sql, verdict, reason, categories, source, \
-         group_id, group_name, database, row_count, created_at"
+         group_id, group_name, database, row_count, created_at, duration_ms"
     };
 }
 
@@ -274,6 +276,7 @@ fn map_activity(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogActivity> {
         database: row.get(10)?,
         row_count: row.get(11)?,
         created_at: row.get(12)?,
+        duration_ms: row.get(13)?,
     })
 }
 
@@ -323,7 +326,7 @@ impl Store {
         let conn = self.conn.lock().expect("store lock");
         let mut stmt = conn.prepare_cached(concat!(
             "UPDATE query_log
-             SET sql = COALESCE(?, sql), verdict = ?, reason = ?, result_json = ?, row_count = ?, response_text = ?
+             SET sql = COALESCE(?, sql), verdict = ?, reason = ?, result_json = ?, row_count = ?, response_text = ?, duration_ms = COALESCE(?, duration_ms)
              WHERE id = ? RETURNING ",
             activity_columns!(),
         ))?;
@@ -336,6 +339,7 @@ impl Store {
                     result_json,
                     row_count,
                     update.response_text.as_deref().map(cap_response),
+                    update.duration_ms,
                     id,
                 ],
                 map_activity,
@@ -506,6 +510,7 @@ fn map_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogEntry> {
         group_name: row.get(12)?,
         database: row.get(13)?,
         created_at: row.get(14)?,
+        duration_ms: row.get(15)?,
     })
 }
 

@@ -11,6 +11,7 @@ export interface LogEntry {
   source: string | null;
   resultJson: string | null;
   rowCount: number | null;
+  durationMs?: number | null;
   responseText: string | null;
   groupId: string | null;
   groupName: string | null;

@@ -178,7 +178,8 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   function rowHtml(entry: LogEntry, isExpanded: boolean): string {
     const type = entryType(entry, typeMap.get(entry.connectionId));
     const detailId = `al-detail-${entry.id}`;
-    const detail = isExpanded ? `<div id="${detailId}" class="al-expanded" role="region">${ENTRY_RENDERERS[type](entry)}</div>` : "";
+    const duration = entry.durationMs == null ? "" : `<p class="al-kind">Duration: ${entry.durationMs < 1000 ? `${entry.durationMs} ms` : `${(entry.durationMs / 1000).toFixed(1)} s`}</p>`;
+    const detail = isExpanded ? `<div id="${detailId}" class="al-expanded" role="region">${duration}${ENTRY_RENDERERS[type](entry)}</div>` : "";
     return `<div class="al-row ui-card${isExpanded ? " al-row-expanded" : ""}" data-id="${entry.id}" role="button" tabindex="0" aria-expanded="${isExpanded}" aria-controls="${detailId}">${metaLineHtml(entry, type)}<div class="al-summary" title="${escapeHtml(entry.sql)}">${escapeHtml(entry.sql)}</div>${detail}</div>`;
   }
 
