@@ -140,7 +140,7 @@ fn refusal(error: pluk_browser::BridgeError, gone: &str) -> String {
 }
 
 #[tauri::command]
-pub fn get_pluk_id(
+pub async fn get_pluk_id(
     state: State<'_, HostState>,
     integration_id: String,
 ) -> CmdResult<PlukId> {
@@ -150,7 +150,7 @@ pub fn get_pluk_id(
 }
 
 #[tauri::command]
-pub fn list_wande_posts(
+pub async fn list_wande_posts(
     state: State<'_, HostState>,
     integration_id: String,
 ) -> CmdResult<WandePosts> {
@@ -182,7 +182,7 @@ pub fn list_wande_posts(
 /// the window to reach past its own draft. Staged bytes are immutable and
 /// named by their content hash, so a cached data URL can never go stale.
 #[tauri::command]
-pub fn wande_post_image(
+pub async fn wande_post_image(
     state: State<'_, HostState>,
     integration_id: String,
     draft_id: String,
@@ -208,7 +208,7 @@ pub fn wande_post_image(
 }
 
 #[tauri::command]
-pub fn send_wande_post(
+pub async fn send_wande_post(
     state: State<'_, HostState>,
     integration_id: String,
     draft_id: String,
@@ -220,7 +220,7 @@ pub fn send_wande_post(
 }
 
 #[tauri::command]
-pub fn discard_wande_post(
+pub async fn discard_wande_post(
     state: State<'_, HostState>,
     integration_id: String,
     draft_id: String,
@@ -231,7 +231,7 @@ pub fn discard_wande_post(
 }
 
 #[tauri::command]
-pub fn cancel_queued_wande_post(
+pub async fn cancel_queued_wande_post(
     state: State<'_, HostState>,
     integration_id: String,
     draft_id: String,

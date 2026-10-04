@@ -79,12 +79,12 @@ pub fn zoom_reset(state: State<'_, HostState>) -> ZoomInfo {
 }
 
 #[tauri::command]
-pub fn get_frame() -> Frame {
+pub async fn get_frame() -> Frame {
     frame::load(&frame::default_file_path())
 }
 
 #[tauri::command]
-pub fn set_frame(frame: Frame) -> CmdResult<Frame> {
+pub async fn set_frame(frame: Frame) -> CmdResult<Frame> {
     let clamped = frame.clamped();
     frame::save(&frame::default_file_path(), &clamped).map_err(|e| e.to_string())?;
     Ok(clamped)
@@ -227,7 +227,7 @@ fn prepare_config(
 }
 
 #[tauri::command]
-pub fn list_integrations(state: State<'_, HostState>) -> CmdResult<Vec<IntegrationJson>> {
+pub async fn list_integrations(state: State<'_, HostState>) -> CmdResult<Vec<IntegrationJson>> {
     let registry = state.shared.registry.clone();
     state
         .store
@@ -241,7 +241,7 @@ pub fn list_integrations(state: State<'_, HostState>) -> CmdResult<Vec<Integrati
 }
 
 #[tauri::command]
-pub fn get_integration(
+pub async fn get_integration(
     state: State<'_, HostState>,
     id: String,
 ) -> CmdResult<Option<IntegrationJson>> {
@@ -331,7 +331,7 @@ pub struct CreateIntegrationPayload {
 }
 
 #[tauri::command]
-pub fn create_integration(
+pub async fn create_integration(
     state: State<'_, HostState>,
     payload: CreateIntegrationPayload,
 ) -> CmdResult<IntegrationJson> {
@@ -403,7 +403,7 @@ pub struct CheckConfigPayload {
 /// The first thing in a config that saving it would refuse, so the form can
 /// show it beside the field and row that hold it.
 #[tauri::command]
-pub fn check_integration_config(
+pub async fn check_integration_config(
     state: State<'_, HostState>,
     payload: CheckConfigPayload,
 ) -> CmdResult<Option<pluk_adapters::ConfigProblem>> {
@@ -435,7 +435,7 @@ fn check_integration_config_in(
 }
 
 #[tauri::command]
-pub fn parse_mcp_config(
+pub async fn parse_mcp_config(
     text: String,
 ) -> Result<pluk_core::mcp_import::ParsedImport, pluk_core::mcp_import::ImportError> {
     pluk_core::mcp_import::parse(&text)
@@ -454,11 +454,15 @@ pub struct ImportedServer {
 /// Add each reviewed server as its own MCP integration. One that cannot be
 /// added leaves the others saved.
 #[tauri::command]
-pub fn import_mcp_servers(
+pub async fn import_mcp_servers(
     state: State<'_, HostState>,
     servers: Vec<pluk_core::mcp_import::ServerDraft>,
 ) -> CmdResult<Vec<ImportedServer>> {
-    import_mcp_servers_in(&state.store, &state.shared.registry, servers)
+    let store = state.store.clone();
+    let registry = state.shared.registry.clone();
+    tokio::task::spawn_blocking(move || import_mcp_servers_in(&store, &registry, servers))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 fn import_mcp_servers_in(
@@ -717,7 +721,7 @@ pub fn mcp_server_status(
 }
 
 #[tauri::command]
-pub fn mcp_server_output(state: State<'_, HostState>, id: String) -> CmdResult<Vec<String>> {
+pub async fn mcp_server_output(state: State<'_, HostState>, id: String) -> CmdResult<Vec<String>> {
     local_mcp(&state.store, &id)?;
     Ok(pluk_adapters::mcp_proxy::client::output(&id))
 }
@@ -768,7 +772,7 @@ impl From<pluk_store::Group> for GroupJson {
 }
 
 #[tauri::command]
-pub fn list_groups(state: State<'_, HostState>) -> CmdResult<Vec<GroupJson>> {
+pub async fn list_groups(state: State<'_, HostState>) -> CmdResult<Vec<GroupJson>> {
     state
         .store
         .list_groups()
@@ -777,7 +781,7 @@ pub fn list_groups(state: State<'_, HostState>) -> CmdResult<Vec<GroupJson>> {
 }
 
 #[tauri::command]
-pub fn get_group(state: State<'_, HostState>, id: String) -> CmdResult<Option<GroupJson>> {
+pub async fn get_group(state: State<'_, HostState>, id: String) -> CmdResult<Option<GroupJson>> {
     state
         .store
         .group_by_id(&id)
@@ -793,7 +797,7 @@ pub struct CreateGroupPayload {
 }
 
 #[tauri::command]
-pub fn create_group(
+pub async fn create_group(
     state: State<'_, HostState>,
     payload: CreateGroupPayload,
 ) -> CmdResult<GroupJson> {
@@ -822,7 +826,7 @@ pub struct UpdateGroupPayload {
 }
 
 #[tauri::command]
-pub fn update_group(
+pub async fn update_group(
     state: State<'_, HostState>,
     id: String,
     payload: UpdateGroupPayload,
@@ -848,7 +852,7 @@ pub fn update_group(
 }
 
 #[tauri::command]
-pub fn delete_group(state: State<'_, HostState>, id: String) -> CmdResult<bool> {
+pub async fn delete_group(state: State<'_, HostState>, id: String) -> CmdResult<bool> {
     let did = state.store.delete_group(&id).map_err(|e| e.to_string())?;
     if did {
         let owners = state.shared.owners.clone();
@@ -1015,12 +1019,12 @@ pub struct CursorJson {
 }
 
 #[tauri::command]
-pub fn get_retention(state: State<'_, HostState>) -> CmdResult<i64> {
+pub async fn get_retention(state: State<'_, HostState>) -> CmdResult<i64> {
     state.store.retention_days().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn set_retention(state: State<'_, HostState>, days: i64) -> CmdResult<()> {
+pub async fn set_retention(state: State<'_, HostState>, days: i64) -> CmdResult<()> {
     state
         .store
         .set_retention_days(days)
@@ -1028,7 +1032,7 @@ pub fn set_retention(state: State<'_, HostState>, days: i64) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub fn clear_logs(
+pub async fn clear_logs(
     state: State<'_, HostState>,
     scope: String,
     scope_id: String,
@@ -1038,14 +1042,14 @@ pub fn clear_logs(
     } else {
         pluk_store::LogScope::Connection(scope_id)
     };
-    state
-        .store
-        .clear_logs(&log_scope)
-        .map_err(|e| e.to_string())
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.clear_logs(&log_scope).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn get_logs(
+pub async fn get_logs(
     state: State<'_, HostState>,
     scope: String,
     scope_id: String,
@@ -1069,10 +1073,14 @@ pub fn get_logs(
         (Some(t), Some(id)) => Some(pluk_store::LogCursor { created_at: t, id }),
         _ => None,
     };
-    let page = state
-        .store
-        .read_log_page(&log_scope, log_range, cursor.as_ref())
-        .map_err(|e| e.to_string())?;
+    let store = state.store.clone();
+    let page = tokio::task::spawn_blocking(move || {
+        store
+            .read_log_page(&log_scope, log_range, cursor.as_ref())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     Ok(LogPageJson {
         entries: page.entries.into_iter().map(LogEntryJson::from).collect(),
         next_cursor: page.next_cursor.map(|c| CursorJson {
@@ -1125,7 +1133,7 @@ fn display_path(path: &std::path::Path) -> String {
 }
 
 #[tauri::command]
-pub fn inject_mcp_config(
+pub async fn inject_mcp_config(
     client: String,
     scope: String,
     project_dir: Option<String>,
@@ -1169,7 +1177,7 @@ pub fn inject_mcp_config(
 }
 
 #[tauri::command]
-pub fn list_installed_mcp_clients() -> Vec<String> {
+pub async fn list_installed_mcp_clients() -> Vec<String> {
     pluk_core::platform::McpClient::ALL
         .iter()
         .filter(|c| c.is_installed())
@@ -1250,10 +1258,10 @@ pub fn steps_json() -> serde_json::Value {
 mod inject_command_tests {
     use super::*;
     use std::fs;
-    use std::sync::Mutex;
+    use tokio::sync::Mutex;
     use serde_json::Value;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
     const URL: &str = "http://localhost:4242/mcp/tok";
 
@@ -1261,8 +1269,8 @@ mod inject_command_tests {
         serde_json::from_str(&fs::read_to_string(path).expect("config written")).expect("valid json")
     }
 
-    #[test]
-    fn project_scope_writes_the_repo_file() {
+    #[tokio::test]
+    async fn project_scope_writes_the_repo_file() {
         let repo = tempfile::tempdir().unwrap();
         let res = inject_mcp_config(
             "cursor".to_string(),
@@ -1271,6 +1279,7 @@ mod inject_command_tests {
             "marketing-db-production".to_string(),
             URL.to_string(),
         )
+        .await
         .expect("install succeeds");
 
         assert_eq!(res.status, "added");
@@ -1281,8 +1290,8 @@ mod inject_command_tests {
         );
     }
 
-    #[test]
-    fn project_scope_keeps_servers_already_in_the_file() {
+    #[tokio::test]
+    async fn project_scope_keeps_servers_already_in_the_file() {
         let repo = tempfile::tempdir().unwrap();
         let path = repo.path().join("opencode.json");
         fs::write(&path, r#"{"theme":"dark","mcp":{"other":{"type":"local"}}}"#).unwrap();
@@ -1294,6 +1303,7 @@ mod inject_command_tests {
             "my-db".to_string(),
             URL.to_string(),
         )
+        .await
         .expect("install succeeds");
 
         let written = read_json(&path);
@@ -1302,9 +1312,9 @@ mod inject_command_tests {
         assert_eq!(written["mcp"]["my-db"]["url"], URL);
     }
 
-    #[test]
-    fn global_scope_writes_the_user_file_and_reports_a_tilde_path() {
-        let _lock = ENV_LOCK.lock().unwrap();
+    #[tokio::test]
+    async fn global_scope_writes_the_user_file_and_reports_a_tilde_path() {
+        let _lock = ENV_LOCK.lock().await;
         let home = tempfile::tempdir().unwrap();
         let orig = std::env::var_os("HOME");
         unsafe { std::env::set_var("HOME", home.path()) };
@@ -1316,6 +1326,7 @@ mod inject_command_tests {
             "my-db".to_string(),
             URL.to_string(),
         )
+        .await
         .expect("install succeeds");
 
         assert_eq!(res.path, "~/.mcp.json");
@@ -1333,6 +1344,7 @@ mod inject_command_tests {
             "my-db".to_string(),
             URL.to_string(),
         )
+        .await
         .expect("second install succeeds");
         assert_eq!(again.status, "skipped");
 
@@ -1342,8 +1354,8 @@ mod inject_command_tests {
         }
     }
 
-    #[test]
-    fn project_scope_without_a_folder_is_an_error_the_user_can_act_on() {
+    #[tokio::test]
+    async fn project_scope_without_a_folder_is_an_error_the_user_can_act_on() {
         let err = inject_mcp_config(
             "cursor".to_string(),
             "project".to_string(),
@@ -1351,12 +1363,13 @@ mod inject_command_tests {
             "my-db".to_string(),
             URL.to_string(),
         )
+        .await
         .unwrap_err();
         assert_eq!(err, "Choose a project folder and try again.");
     }
 
-    #[test]
-    fn a_config_that_cannot_be_parsed_is_reported_and_left_alone() {
+    #[tokio::test]
+    async fn a_config_that_cannot_be_parsed_is_reported_and_left_alone() {
         let repo = tempfile::tempdir().unwrap();
         let path = repo.path().join(".mcp.json");
         fs::write(&path, "{ not json").unwrap();
@@ -1368,6 +1381,7 @@ mod inject_command_tests {
             "my-db".to_string(),
             URL.to_string(),
         )
+        .await
         .unwrap_err();
 
         assert!(err.contains("Couldn't parse the existing config"));
@@ -1733,14 +1747,13 @@ mod secret_tests {
             "mcp",
             config(json!({"url": "https://taken.example/mcp"})),
         );
-        let parsed = parse_mcp_config(
+        let parsed = pluk_core::mcp_import::parse(
             r#"{"mcpServers":{
               "sentry-selfhosted":{"command":"node","args":["/path/to/sentry-mcp/build/index.js"],
                 "env":{"SENTRY_URL":"https://sentry.internal.domain","SENTRY_AUTH_TOKEN":"sntrys_secret","SENTRY_ORG_SLUG":"my-org"},
                 "disabledTools":["create_sentry_issue_comment","update_sentry_issue_status"]},
               "datadog":{"type":"http","url":"https://mcp.datadoghq.com/mcp","headers":{"DD-API-KEY":"dd_secret"}},
-              "clash":{"url":"https://other.example/mcp"}}}"#
-                .to_string(),
+              "clash":{"url":"https://other.example/mcp"}}}"#,
         )
         .unwrap();
         let mut servers = parsed.servers;
