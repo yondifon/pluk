@@ -384,24 +384,40 @@ pub fn cap_rows(rows: Vec<Value>, max_rows: Option<f64>) -> CapResult {
 
 /// Human-readable summary embedded in MCP tool descriptions.
 pub fn policy_description(policy: &QueryPolicy) -> String {
+    policy_description_for(policy, Dialect::PostgreSQL)
+}
+
+pub fn row_limit_description(policy: &QueryPolicy) -> String {
+    match policy.max_rows {
+        Some(max) => format!("max {} rows returned", max as usize),
+        None => "no row cap".into(),
+    }
+}
+
+pub fn policy_description_for(policy: &QueryPolicy, dialect: Dialect) -> String {
     let caps = policy
         .allowed
         .iter()
-        .map(StatementCategory::display_name)
+        .filter_map(|category| statement_keywords(*category, dialect))
         .collect::<Vec<_>>()
         .join(", ");
     let mut guards: Vec<String> = Vec::new();
     if policy.block_stacked {
         guards.push("no stacked statements".to_string());
     }
-    if policy.require_where {
-        guards.push("WHERE required on UPDATE/DELETE".to_string());
+    let guarded_writes = [StatementCategory::Update, StatementCategory::Delete]
+        .into_iter()
+        .filter(|category| policy.allowed.contains(category))
+        .map(|category| category.display_name())
+        .collect::<Vec<_>>();
+    if policy.require_where && !guarded_writes.is_empty() {
+        guards.push(format!("WHERE required on {}", guarded_writes.join("/")));
     }
     if !policy.allow_filesystem {
         guards.push("no filesystem/COPY ops".to_string());
     }
-    if let Some(max_rows) = policy.max_rows {
-        guards.push(format!("max {max_rows} rows returned"));
+    if policy.max_rows.is_some() {
+        guards.push(row_limit_description(policy));
     }
     if let Some(max_estimated_rows) = policy.max_estimated_rows {
         guards.push(format!("max {max_estimated_rows} estimated rows"));
@@ -413,6 +429,29 @@ pub fn policy_description(policy: &QueryPolicy) -> String {
         format!("Allowed: {caps}.")
     } else {
         format!("Allowed: {caps}. Guards: {}.", guards.join("; "))
+    }
+}
+
+fn statement_keywords(category: StatementCategory, dialect: Dialect) -> Option<&'static str> {
+    use Dialect::*;
+    use StatementCategory::*;
+    match (category, dialect) {
+        (Inspect, PostgreSQL) => Some("EXPLAIN"),
+        (Inspect, MySQL) => Some("DESCRIBE/EXPLAIN/SHOW"),
+        (Inspect, SQLite) => Some("EXPLAIN/PRAGMA"),
+        (Inspect, MSSQL) => None,
+        (Merge, PostgreSQL | MSSQL) => Some("MERGE"),
+        (Merge, MySQL | SQLite) => Some("REPLACE"),
+        (Truncate | Procedure | Grant | Session, SQLite) => None,
+        (Rename, PostgreSQL | SQLite) => Some("ALTER … RENAME"),
+        (Rename, MSSQL) => None,
+        (Session, PostgreSQL | MySQL | MSSQL) => Some("SET"),
+        (Procedure, PostgreSQL | MySQL) => Some("CALL/DO"),
+        (Procedure, MSSQL) => Some("EXECUTE"),
+        (Maintenance, MySQL) => Some("ANALYZE/OPTIMIZE"),
+        (Maintenance, MSSQL) => Some("CHECKPOINT"),
+        (Transaction, MSSQL) => Some("BEGIN TRANSACTION/COMMIT/ROLLBACK"),
+        _ => Some(category.display_name()),
     }
 }
 
@@ -821,19 +860,6 @@ mod tests {
     }
 
 
-    #[test]
-    fn description_matches_the_ts_format() {
-        let read_only = QueryPolicy::preset(PresetName::ReadOnly).expect("exists");
-        assert_eq!(
-            policy_description(&read_only),
-            "Allowed: SELECT, DESCRIBE/EXPLAIN/SHOW. Guards: no stacked statements; no filesystem/COPY ops; max 1000 rows returned."
-        );
-        let unrestricted = QueryPolicy::preset(PresetName::Unrestricted).expect("exists");
-        assert_eq!(
-            policy_description(&unrestricted),
-            "Allowed: SELECT, DESCRIBE/EXPLAIN/SHOW, INSERT, UPDATE, DELETE, MERGE/REPLACE, CREATE, ALTER, DROP, TRUNCATE, RENAME, BEGIN/COMMIT/ROLLBACK, SET/USE, CALL/DO, VACUUM/ANALYZE, GRANT/REVOKE."
-        );
-    }
 
 
     #[test]

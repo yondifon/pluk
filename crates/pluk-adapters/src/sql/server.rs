@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
 use chrono::Utc;
-use pluk_policy::policy::policy_description;
+use pluk_policy::policy::{policy_description_for as policy_description, row_limit_description};
 use pluk_policy::{
     dialect_for, evaluate, is_valid_database_name, sql_policy_from_settings, tool_gate,
 };
@@ -152,7 +152,7 @@ pub fn sql_instructions(conn: &Integration) -> String {
         InstructionParts {
             kind: sql_label(&conn.r#type),
             access: "Query and inspect this database. Every statement is checked against the policy below and recorded in the activity log.".to_string(),
-            policy: Some(policy_description(&policy)),
+            policy: Some(policy_description(&policy, dialect_for(&conn.r#type))),
             hint: Some(sql_agent_hint(&conn.r#type)),
             start: Some("Start with list_tables and describe_table to learn the schema, then read with SELECT … LIMIT.".to_string()),
         },
@@ -221,6 +221,13 @@ fn query_map() -> FieldMap {
         "limits",
         Preset::paths(&["truncated", "row_cap", "row_count", "returned_rows"]),
     )
+}
+
+fn result_only_schema(example: &[&str], presets: &[&str]) -> Value {
+    let mut schema = only_param_schema(presets);
+    let presets = if presets.is_empty() { String::new() } else { format!(" Presets: {}.", presets.join(", ")) };
+    schema["description"] = Value::String(format!("Return only these result fields, e.g. {}. Omit for the default result or pass [\"*\"] for all fields.{presets}", serde_json::to_string(example).unwrap()));
+    schema
 }
 
 fn relationships_map() -> FieldMap {
@@ -733,7 +740,7 @@ pub fn register_sql_server(
     let gate = tool_gate(conn.query_policy.as_deref());
     let policy = sql_policy_from_settings(&gate.settings("query"));
     let dialect = dialect_for(&conn.r#type);
-    let policy_desc = policy_description(&policy);
+    let policy_desc = policy_description(&policy, dialect);
     let tool_defaults: HashMap<String, bool> = sql_tool_specs()
         .into_iter()
         .map(|t| (t.name, t.default_enabled))
@@ -852,15 +859,6 @@ pub fn register_sql_server(
                 m
             }),
         );
-        props.insert(
-            "query".into(),
-            Value::Object({
-                let mut m = Map::new();
-                m.insert("type".into(), Value::String("string".into()));
-                m.insert("description".into(), Value::String("Alias for sql".into()));
-                m
-            }),
-        );
         if conn.r#type != "sqlite" || uses_ssh_flag {
             props.insert(
                 "timeout".into(),
@@ -888,13 +886,13 @@ pub fn register_sql_server(
                 m.insert("type".into(), Value::String("number".into()));
                 m.insert(
                     "description".into(),
-                    Value::String("Max rows to return, overriding the default cap (1000).".into()),
+                    Value::String(format!("Max rows to return. Connection limit: {}.{}", row_limit_description(&policy), if policy.max_rows.is_some() { " A higher limit cannot raise the connection cap." } else { "" })),
                 );
                 m
             }),
         );
-        props.insert("only".into(), only_param_schema(&["connection", "limits"]));
-        let schema = object_schema(props, &[]);
+        props.insert("only".into(), result_only_schema(&["rows", "fields", "truncated"], &[]));
+        let schema = object_schema(props, &["sql"]);
 
         let store_q = store.clone();
         let cancels_q = cancels.clone();
@@ -931,7 +929,7 @@ pub fn register_sql_server(
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let sql = obj.get("sql").or_else(|| obj.get("query")).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let sql = match sql { Some(s) if !s.is_empty() => s, _ => return err("Missing SQL. Pass either \"sql\" or \"query\".") };
+                    let sql = match sql { Some(s) if !s.is_empty() => s, _ => return err("Missing SQL. Pass \"sql\".") };
                     let database = obj.get("database").and_then(|v| v.as_str()).map(|s| s.to_string());
                     // pinned check
                     let db_res = resolve_database(pinned.as_ref(), database.as_deref());
@@ -1179,7 +1177,7 @@ pub fn register_sql_server(
                 }),
             );
         }
-        props.insert("only".into(), only_param_schema(&["connection", "limits"]));
+        props.insert("only".into(), result_only_schema(&["rows", "fields", "truncated"], &[]));
         let schema = object_schema(props, &["table"]);
         let store_st = store.clone();
         let conn_st = conn.clone();
@@ -1262,14 +1260,6 @@ pub fn register_sql_server(
                 m
             }),
         );
-        props.insert(
-            "query".into(),
-            Value::Object({
-                let mut m = Map::new();
-                m.insert("type".into(), Value::String("string".into()));
-                m
-            }),
-        );
         if supports_db {
             props.insert(
                 "database".into(),
@@ -1288,8 +1278,8 @@ pub fn register_sql_server(
                 m
             }),
         );
-        props.insert("only".into(), only_param_schema(&[]));
-        let schema = object_schema(props, &[]);
+        props.insert("only".into(), result_only_schema(&["rows", "fields"], &[]));
+        let schema = object_schema(props, &["sql"]);
         let conn_eq = conn.clone();
         let approvals_eq = approvals.clone();
         let conn_type_eq = conn_type.clone();
@@ -1323,7 +1313,7 @@ pub fn register_sql_server(
                         .map(|s| s.to_string());
                     let sql = match sql {
                         Some(s) if !s.is_empty() => s,
-                        _ => return err("Missing SQL. Pass either \"sql\" or \"query\"."),
+                        _ => return err("Missing SQL. Pass \"sql\"."),
                     };
                     let database = obj.get("database").and_then(|v| v.as_str());
                     let db_opt = match resolve_database(pinned.as_ref(), database) {
@@ -1472,7 +1462,7 @@ pub fn register_sql_server(
                 }),
             );
         }
-        props.insert("only".into(), only_param_schema(&["constraints"]));
+        props.insert("only".into(), result_only_schema(&["from_table", "to_table"], &["constraints"]));
         let schema = object_schema(props, &[]);
         let store_lr = store.clone();
         let conn_lr = conn.clone();
@@ -1691,7 +1681,7 @@ pub fn register_sql_server(
                 }),
             );
         }
-        props.insert("only".into(), only_param_schema(&["indexes"]));
+        props.insert("only".into(), result_only_schema(&["table", "estimatedRows"], &["indexes"]));
         let schema = object_schema(props, &["table"]);
         let store_ts = store.clone();
         let conn_ts = conn.clone();
@@ -1761,9 +1751,7 @@ pub fn register_sql_server(
                         || async move {
                             let cfg = sql_config_from(&conn, None);
                             let res = with_driver(cfg, true, |driver| async move { driver.list_schemas().await }).await?;
-                            Ok(Outcome::ran(
-                                res.join("\n"),
-                            ))
+                            Ok(Outcome::ran(serde_json::to_string_pretty(&serde_json::json!({"schemas":res})).unwrap()))
                         },
                     )
                     .await
@@ -1803,9 +1791,7 @@ pub fn register_sql_server(
                         || async move {
                             let cfg = sql_config_from(&conn, None);
                             let res = with_driver(cfg, true, |driver| async move { driver.list_databases().await }).await?;
-                            Ok(Outcome::ran(
-                                res.join("\n"),
-                            ))
+                            Ok(Outcome::ran(serde_json::to_string_pretty(&serde_json::json!({"databases":res})).unwrap()))
                         },
                     )
                     .await
@@ -1819,14 +1805,6 @@ pub fn register_sql_server(
         let mut props = Map::new();
         props.insert(
             "sql".into(),
-            Value::Object({
-                let mut m = Map::new();
-                m.insert("type".into(), Value::String("string".into()));
-                m
-            }),
-        );
-        props.insert(
-            "query".into(),
             Value::Object({
                 let mut m = Map::new();
                 m.insert("type".into(), Value::String("string".into()));
@@ -1876,7 +1854,7 @@ pub fn register_sql_server(
                 m
             }),
         );
-        let schema = object_schema(props, &[]);
+        let schema = object_schema(props, &["sql"]);
         let store_eq2 = store.clone();
         let conn_eq2 = conn.clone();
         let pinned_eq2 = pinned.clone();
@@ -1907,7 +1885,7 @@ pub fn register_sql_server(
                 Box::pin(async move {
                     let obj = args.as_object().cloned().unwrap_or_default();
                     let sql = obj.get("sql").or_else(|| obj.get("query")).and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let sql = match sql { Some(s) if !s.is_empty()=>s, _=> return err("Missing SQL. Pass either \"sql\" or \"query\".") };
+                    let sql = match sql { Some(s) if !s.is_empty()=>s, _=> return err("Missing SQL. Pass \"sql\".") };
                     let format = obj.get("format").and_then(|v| v.as_str()).unwrap_or("csv").to_string();
                     let database = obj.get("database").and_then(|v| v.as_str()).map(|s| s.to_string());
                     let db_opt = match resolve_database(pinned.as_ref(), database.as_deref()) { Ok(v)=>v, Err(e)=> return err(e) };
@@ -2047,7 +2025,7 @@ pub fn register_sql_server(
                 m
             }),
         );
-        props.insert("only".into(), only_param_schema(&["connection", "limits"]));
+        props.insert("only".into(), result_only_schema(&["rows", "fields", "truncated"], &[]));
         let schema = object_schema(props, &["name"]);
         let store_rsq = store.clone();
         let conn_rsq = conn.clone();
@@ -2180,7 +2158,7 @@ pub fn register_sql_server(
     // list_saved_queries
     if on("list_saved_queries") {
         let mut props = Map::new();
-        props.insert("only".into(), only_param_schema(&["sql", "ids"]));
+        props.insert("only".into(), result_only_schema(&["name", "created_at"], &["sql", "ids"]));
         let schema = object_schema(props, &[]);
         let store_lsq = store.clone();
         let conn_lsq = conn.clone();
