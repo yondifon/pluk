@@ -3,7 +3,7 @@
  * hidden NSWindow through `document.visibilityState`.
  */
 
-import { hasHost, listen } from "./host";
+import { hasHost, invoke, listen } from "./host";
 
 export interface Visibility {
   isVisible(): boolean;
@@ -37,8 +37,21 @@ export const windowVisibility = new WindowVisibility();
 
 // No host means a plain browser tab, which is always visible: every poll runs.
 if (typeof window !== "undefined" && hasHost()) {
-  void listen("pluk://window-shown", () => windowVisibility.setVisible(true));
-  void listen("pluk://window-hidden", () => windowVisibility.setVisible(false));
+  let heardFromHost = false;
+  void listen("pluk://window-shown", () => {
+    heardFromHost = true;
+    windowVisibility.setVisible(true);
+  });
+  void listen("pluk://window-hidden", () => {
+    heardFromHost = true;
+    windowVisibility.setVisible(false);
+  });
+  // A launch at login starts with the window hidden, and no event says so.
+  void invoke<boolean>("plugin:window|is_visible", { label: "main" })
+    .then((visible) => {
+      if (!heardFromHost) windowVisibility.setVisible(visible);
+    })
+    .catch(() => {});
 }
 
 export function isWindowVisible(): boolean {
