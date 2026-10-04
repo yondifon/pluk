@@ -1,4 +1,8 @@
 #[cfg(feature = "postgres")]
+#[path = "postgres_tls.rs"]
+mod tls;
+
+#[cfg(feature = "postgres")]
 pub mod live {
     use async_trait::async_trait;
     use deadpool_postgres::{Config, ManagerConfig, RecyclingMethod, Runtime};
@@ -346,25 +350,9 @@ pub mod live {
                     cfg.create_pool(Some(Runtime::Tokio1), NoTls)
                         .map_err(|e| DriverError::Pool(e.to_string()))?
                 } else {
-                    let mut builder = native_tls::TlsConnector::builder();
-                    if let Some(ca) = &ssl_cfg.ca {
-                        let cert = native_tls::Certificate::from_pem(ca)
-                            .map_err(|e| DriverError::Ssl(format!("ca read error: {e}")))?;
-                        builder.add_root_certificate(cert);
-                    }
-                    if let (Some(cert), Some(key)) = (&ssl_cfg.cert, &ssl_cfg.key) {
-                        let identity = native_tls::Identity::from_pkcs8(cert, key)
-                            .map_err(|e| DriverError::Ssl(format!("cert/key error: {e}")))?;
-                        builder.identity(identity);
-                    }
-                    if !ssl_cfg.reject_unauthorized {
-                        builder.danger_accept_invalid_certs(true);
-                        builder.danger_accept_invalid_hostnames(true);
-                    }
-                    let connector = builder
-                        .build()
-                        .map_err(|e| DriverError::Ssl(e.to_string()))?;
-                    let tls = postgres_native_tls::MakeTlsConnector::new(connector);
+                    let tls = tokio_postgres_rustls::MakeRustlsConnect::new(
+                        super::tls::client_config(&ssl_cfg)?,
+                    );
                     cfg.create_pool(Some(Runtime::Tokio1), tls)
                         .map_err(|e| DriverError::Pool(e.to_string()))?
                 }
