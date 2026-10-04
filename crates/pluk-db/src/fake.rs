@@ -20,9 +20,17 @@ pub struct FakeDriver {
 struct FakeState {
     closed: bool,
     queries: Vec<String>,
+    query_error: Option<DriverError>,
 }
 
 impl FakeDriver {
+    pub fn fail_next_query(&self, error: DriverError) {
+        self.inner.lock().unwrap().query_error = Some(error);
+    }
+
+    pub fn queries(&self) -> Vec<String> {
+        self.inner.lock().unwrap().queries.clone()
+    }
     pub fn new_postgres() -> Self {
         Self {
             engine: "postgres".into(),
@@ -107,6 +115,9 @@ impl Driver for FakeDriver {
             }
         }
         self.inner.lock().unwrap().queries.push(sql.to_string());
+        if let Some(error) = self.inner.lock().unwrap().query_error.take() {
+            return Err(error);
+        }
         Ok(QueryResult {
             rows: vec![serde_json::json!({"ok": 1})],
             fields: Some(vec!["ok".into()]),

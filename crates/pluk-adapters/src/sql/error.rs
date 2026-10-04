@@ -41,12 +41,20 @@ fn contains(haystack: &str, needle: &str) -> bool {
 pub fn classify_sql_error(err: &AdapterError) -> SqlErrorInfo {
     let msg = &err.message;
     let code = err.code.clone();
+    if matches!(code.as_deref(), Some("SQL_CONNECT_TIMEOUT" | "SQL_CONNECTION_FAILED" | "SQL_WRITE_OUTCOME_UNKNOWN" | "SQL_QUERY_TIMEOUT")) {
+        return SqlErrorInfo {
+            category: if code.as_deref() == Some("SQL_QUERY_TIMEOUT") { SqlErrorCategory::QueryFailed } else { SqlErrorCategory::ConnectionFailed },
+            message: msg.clone(),
+            hint: None,
+            code: code.unwrap(),
+        };
+    }
 
     if err.is_ssh_pending() {
         return SqlErrorInfo {
             category: SqlErrorCategory::PendingApproval,
             message: "SSH connection is waiting on an approval.".to_string(),
-            hint: Some("Approve the 1Password or proxy sign-in prompt, then retry. If none is visible, click Test in Pluk to start a fresh connection.".to_string()),
+            hint: Some("Approve the 1Password or proxy sign-in prompt, then retry. If none is visible, unlock your SSH agent and retry.".to_string()),
             code: code.unwrap_or_else(|| "SSH_CONNECT_PENDING".to_string()),
         };
     }
@@ -105,7 +113,7 @@ pub fn classify_sql_error(err: &AdapterError) -> SqlErrorInfo {
 
     if code.as_deref() == Some("28P01")
         || code.as_deref() == Some("28000")
-        || regex::Regex::new(r"password authentication failed|SASL authentication failed")
+        || regex::Regex::new(r"(?i)password authentication failed|SASL authentication failed|database authentication failed|Login failed for user|Access denied for user")
             .unwrap()
             .is_match(msg)
     {
@@ -202,6 +210,17 @@ pub fn classify_sql_error(err: &AdapterError) -> SqlErrorInfo {
         };
     }
 
+    if code.as_deref() == Some("DB_CONNECTION_FAILED")
+        || regex::Regex::new(r"(?i)connection (?:closed|failed|refused|lost)|broken pipe|server closed the connection|pool is closed").unwrap().is_match(msg)
+    {
+        return SqlErrorInfo {
+            category: SqlErrorCategory::ConnectionFailed,
+            message: msg.clone(),
+            hint: None,
+            code: "DB_CONNECTION_FAILED".into(),
+        };
+    }
+
     SqlErrorInfo {
         category: SqlErrorCategory::QueryFailed,
         message: msg.clone(),
@@ -242,7 +261,7 @@ pub fn format_sql_error(err: &AdapterError) -> String {
 pub fn driver_error_to_adapter(err: DriverError) -> AdapterError {
     match err {
         DriverError::Cancelled => AdapterError::new("Query cancelled"),
-        DriverError::Timeout(ms) => AdapterError::new(format!("Timed out after {}ms", ms)),
+        DriverError::Timeout(ms) => AdapterError::new(format!("The query didn't finish within {}s. Check its outcome before retrying a write.", ms as f64 / 1000.0)).with_code("SQL_QUERY_TIMEOUT"),
         DriverError::InvalidDatabaseName(n) => AdapterError::new(format!(
             "Invalid database name \"{}\". Allowed: letters, digits, _, $, -.",
             n
@@ -252,7 +271,10 @@ pub fn driver_error_to_adapter(err: DriverError) -> AdapterError {
             db
         ))
         .with_code("DB_PINNED"),
-        DriverError::Connection(m) => AdapterError::new(m),
+        DriverError::Connection(m) => {
+            let code = if m.contains(SSH_CONNECT_PENDING_CODE) { SSH_CONNECT_PENDING_CODE } else { "DB_CONNECTION_FAILED" };
+            AdapterError::new(m).with_code(code)
+        }
         DriverError::Query(m) => AdapterError::new(m),
         DriverError::Ssl(m) => AdapterError::new(m),
         DriverError::UnsupportedType(t) => AdapterError::new(format!("Unsupported DB type: {}", t)),

@@ -38,6 +38,7 @@ tiberius = { version = "0.13", default-features = false, features = ["rustls", "
 futures-util = { version = "0.3", optional = true }
 
 [features]
+test-support = []
 default = ["postgres", "mysql", "mssql"]
 postgres = ["dep:deadpool-postgres", "dep:tokio-postgres", "dep:tokio-postgres-rustls", "dep:rustls", "dep:rustls-platform-verifier", "dep:rustls-pemfile", "dep:chrono", "dep:uuid"]
 mysql = ["dep:sqlx"]

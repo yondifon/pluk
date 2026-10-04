@@ -136,7 +136,7 @@ fn master_start_lock(key: &str) -> MasterLock {
 
 async fn run_ssh_command(args: &[String], timeout_ms: u64) -> (i32, String) {
     let mut cmd = Command::new("ssh");
-    cmd.args(args)
+    cmd.kill_on_drop(true).args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -224,9 +224,9 @@ async fn ensure_master(
         "-o".to_string(),
         format!("ControlPersist={CONTROL_PERSIST}"),
         "-o".to_string(),
-        "ServerAliveInterval=30".to_string(),
+        "ServerAliveInterval=10".to_string(),
         "-o".to_string(),
-        "ServerAliveCountMax=3".to_string(),
+        "ServerAliveCountMax=2".to_string(),
     ];
     args.extend_from_slice(target);
 

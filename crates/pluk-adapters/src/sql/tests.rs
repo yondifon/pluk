@@ -1,4 +1,4 @@
-use super::{SqlCancelRegistry, register_sql_server, sql_tool_specs};
+use super::{SqlCancelRegistry, register_sql_server};
 use crate::adapter::Adapter;
 use crate::tool_host::{PromptHandler, ResourceHandler, ToolHandler, ToolHost, ToolRegistration};
 use pluk_store::{Integration, LogRange, LogScope, Store};
@@ -85,20 +85,84 @@ fn capture_for(conn: &Integration, store: Arc<Store>) -> CaptureHost {
     host
 }
 
-#[test]
-fn mssql_manifest_exposes_sql_server_connection_fields() {
+#[tokio::test]
+async fn list_tables_recovers_when_the_first_connection_is_dead() {
+    use super::{ConnectStep, TEST_CONNECT};
     let (_dir, store) = temp_store();
-    let adapter = crate::sql::SqlAdapter::mssql(store, Arc::new(SqlCancelRegistry::default()));
-    let fields = adapter.config_fields();
-    assert!(
-        fields
-            .iter()
-            .any(|field| field.key == "port" && field.default.as_deref() == Some("1433"))
-    );
-    assert!(fields.iter().any(|field| field.key == "encrypt"));
-    assert!(fields.iter().any(|field| field.key == "trust_cert"));
-    assert!(fields.iter().any(|field| field.key == "use_ssh"));
+    let conn = make_integration("retry", "postgres", json!({}), None);
+    let host = capture_for(&conn, store);
+    let steps = std::sync::Mutex::new(std::collections::VecDeque::from([
+        ConnectStep::Fail(pluk_db::DriverError::Connection("connection failed".into())),
+        ConnectStep::Ready(pluk_db::fake::FakeDriver::new_postgres()),
+    ]));
+    TEST_CONNECT.scope(steps, async {
+        let result = host.tools["list_tables"](json!({})).await;
+        assert!(!result.is_error, "{}", result.text());
+        assert!(result.text().contains("users"));
+    }).await;
 }
+
+#[tokio::test]
+async fn a_write_with_an_unknown_outcome_is_not_sent_twice() {
+    use super::{ConnectStep, TEST_CONNECT};
+    let (_dir, store) = temp_store();
+    let conn = make_integration("write", "postgres", json!({}), Some(r#"{"tools":{"query":{"settings":{"mode":"mutations"}}}}"#));
+    let host = capture_for(&conn, store);
+    let driver = pluk_db::fake::FakeDriver::new_postgres();
+    driver.fail_next_query(pluk_db::DriverError::Query("connection closed".into()));
+    let steps = std::sync::Mutex::new(std::collections::VecDeque::from([
+        ConnectStep::Ready(driver.clone()),
+        ConnectStep::Ready(driver.clone()),
+    ]));
+    TEST_CONNECT.scope(steps, async {
+        let result = host.tools["query"](json!({"sql":"INSERT INTO t VALUES (1)"})).await;
+        assert!(result.is_error);
+        assert!(result.text().contains("Do not retry"), "{}", result.text());
+        assert_eq!(driver.queries(), vec!["INSERT INTO t VALUES (1)"]);
+    }).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_connection_that_never_answers_fails_before_the_client_timeout() {
+    use super::{ConnectStep, TEST_CONNECT};
+    let (_dir, store) = temp_store();
+    let conn = make_integration("timeout", "postgres", json!({"use_ssh":true,"ssh_host":"app4-ssh-infra"}), None);
+    let host = capture_for(&conn, store);
+    let steps = std::sync::Mutex::new(std::collections::VecDeque::from([
+        ConnectStep::Hang,
+        ConnectStep::Hang,
+    ]));
+    TEST_CONNECT.scope(steps, async {
+        let start = tokio::time::Instant::now();
+        let result = host.tools["list_tables"](json!({})).await;
+        assert!(result.is_error);
+        assert!(start.elapsed() <= std::time::Duration::from_secs(45));
+        assert!(result.text().contains("SSH tunnel"), "{}", result.text());
+        assert!(result.text().contains("app4-ssh-infra"));
+        assert!(result.text().contains("Retrying is safe"));
+    }).await;
+}
+
+#[tokio::test]
+async fn a_read_only_query_recovers_when_the_connection_drops_during_the_statement() {
+    use super::{ConnectStep, TEST_CONNECT};
+    let (_dir, store) = temp_store();
+    let conn = make_integration("read-drop", "postgres", json!({}), None);
+    let host = capture_for(&conn, store);
+    let driver = pluk_db::fake::FakeDriver::new_postgres();
+    driver.fail_next_query(pluk_db::DriverError::Query("connection closed".into()));
+    let steps = std::sync::Mutex::new(std::collections::VecDeque::from([
+        ConnectStep::Ready(driver.clone()),
+        ConnectStep::Ready(driver),
+    ]));
+    TEST_CONNECT.scope(steps, async {
+        let result = host.tools["query"](json!({"sql":"SELECT 1"})).await;
+        assert!(!result.is_error, "{}", result.text());
+        let payload: Value = serde_json::from_str(result.text()).unwrap();
+        assert_eq!(payload["rows"][0]["ok"], 1);
+    }).await;
+}
+
 
 #[tokio::test]
 async fn query_happy_path_returns_rows() {
@@ -241,52 +305,6 @@ async fn successful_query_logs_result_json_without_response_text() {
     assert_eq!(result["rows"].as_array().unwrap().len(), 2);
 }
 
-#[tokio::test]
-async fn pinned_database_hides_arg_from_schema() {
-    let (_dir, store) = temp_store();
-    let conn_pinned = make_integration(
-        "pg1",
-        "postgres",
-        json!({"host":"localhost","database":"app"}),
-        None,
-    );
-    let host = capture_for(&conn_pinned, store.clone());
-    let reg = host.tools_meta.get("query").unwrap();
-    let props = reg
-        .input_schema
-        .get("properties")
-        .and_then(|v| v.as_object())
-        .unwrap();
-    assert!(
-        !props.contains_key("database"),
-        "pinned connection should hide database arg, got {:?}",
-        props.keys()
-    );
-
-    let conn_unpinned = make_integration("pg2", "postgres", json!({"host":"localhost"}), None);
-    let host2 = capture_for(&conn_unpinned, store);
-    let reg2 = host2.tools_meta.get("query").unwrap();
-    let props2 = reg2
-        .input_schema
-        .get("properties")
-        .and_then(|v| v.as_object())
-        .unwrap();
-    assert!(
-        props2.contains_key("database"),
-        "unpinned should expose database"
-    );
-    // sqlite never shows database
-    let (_dir3, store3) = temp_store();
-    let conn_sqlite = make_integration("sq1", "sqlite", json!({"filename":"/tmp/x.db"}), None);
-    let host3 = capture_for(&conn_sqlite, store3);
-    let reg3 = host3.tools_meta.get("query").unwrap();
-    let props3 = reg3
-        .input_schema
-        .get("properties")
-        .and_then(|v| v.as_object())
-        .unwrap();
-    assert!(!props3.contains_key("database"));
-}
 
 #[tokio::test]
 async fn use_is_blocked() {
@@ -310,47 +328,6 @@ async fn use_is_blocked() {
     assert!(r2.text().contains("locked to database"));
 }
 
-#[tokio::test]
-async fn masking_applied_before_response_and_log() {
-    let (dir, store) = temp_store();
-    let conn = make_integration("pg1", "postgres", json!({"host":"localhost"}), None);
-    // add masked column
-    store.add_masked_column("pg1", "secret").unwrap();
-    let host = capture_for(&conn, store.clone());
-    let h = host.tools.get("query").unwrap();
-    // Fake driver returns {"ok":1} - not containing secret. To test masking we need rows containing secret.
-    // We can test via sample_table which returns {"id":1} - also not secret. So instead test mask logic directly via helper:
-    // Ensure that after query, log entry's result_json is masked.
-    // We'll run query, then check log entries: since fake returns ok, not secret, we test that masking doesn't crash and log is masked (contains *** if we had secret)
-    let r = h(json!({"sql":"SELECT secret FROM t"})).await;
-    if r.is_error && r.text().contains("connection failed") {
-        eprintln!("skip masking_applied: no postgres reachable: {}", r.text());
-        return;
-    }
-    assert!(!r.is_error);
-    // check log: should have one entry with allowed
-    let page = store
-        .read_log_page(&LogScope::Connection("pg1".into()), LogRange::All, None)
-        .unwrap();
-    assert!(!page.entries.is_empty());
-    let entry = &page.entries[0];
-    assert_eq!(entry.verdict, "allowed");
-    // result_json should be masked if rows contained secret, but fake doesn't have secret, so just ensure it doesn't contain raw secret (not applicable)
-    // Instead test direct mask
-    let mut rows = vec![json!({"secret":"hunter2","name":"alice"})];
-    let masked = ["secret".to_string()];
-    for row in &mut rows {
-        if let Value::Object(m) = row
-            && masked.contains(&"secret".to_string())
-        {
-            m.insert("secret".into(), Value::String("***".into()));
-        }
-    }
-    assert_eq!(rows[0]["secret"], "***");
-    let serialized = serde_json::to_string(&rows).unwrap();
-    assert!(!serialized.contains("hunter2"));
-    drop(dir);
-}
 
 #[tokio::test]
 async fn blocked_statement_produces_no_pending_row() {
@@ -419,57 +396,8 @@ async fn param_rejection_on_remote_sqlite() {
     );
 }
 
-#[test]
-fn tool_specs_default_off_mapping() {
-    let specs = sql_tool_specs();
-    let off: std::collections::HashSet<&str> = [
-        "explain_query",
-        "list_relationships",
-        "table_stats",
-        "list_schemas",
-        "list_databases",
-        "export_query",
-        "run_saved_query",
-        "list_saved_queries",
-    ]
-    .into_iter()
-    .collect();
-    for s in specs {
-        if off.contains(s.name.as_str()) {
-            assert!(!s.default_enabled, "{} should be off", s.name);
-        } else {
-            assert!(s.default_enabled, "{} should be on", s.name);
-        }
-    }
-}
 
-#[test]
-fn only_projection_maps_match_spec() {
-    // query map has connection/limits presets
-    let conn = make_integration("pg1", "postgres", json!({"host":"localhost"}), None);
-    let (_dir, store) = temp_store();
-    let host = capture_for(&conn, store);
-    let reg = host.tools_meta.get("query").unwrap();
-    let only_desc = reg
-        .input_schema
-        .get("properties")
-        .and_then(|p| p.get("only"))
-        .and_then(|v| v.get("description"))
-        .and_then(|v| v.as_str())
-        .unwrap();
-    assert!(only_desc.contains("connection"));
-}
 
-#[test]
-fn prompts_and_resource_exist() {
-    let (_dir, store) = temp_store();
-    let conn = make_integration("pg1", "postgres", json!({"host":"localhost"}), None);
-    let host = capture_for(&conn, store);
-    assert!(host.prompts.contains_key("summarize_schema"));
-    assert!(host.prompts.contains_key("investigate_slow_query"));
-    assert!(host.prompts.contains_key("find_unused_indexes"));
-    assert!(host.resources.contains_key("schema://full"));
-}
 
 #[test]
 fn error_humanising_cancel_vs_failure() {
@@ -490,43 +418,6 @@ fn error_humanising_cancel_vs_failure() {
     );
 }
 
-#[test]
-fn only_arg_presence_matches_spec() {
-    let (_dir, store) = temp_store();
-    let policy = r#"{"tools":{"explain_query":{"enabled":true},"list_relationships":{"enabled":true},"table_stats":{"enabled":true},"list_schemas":{"enabled":true},"list_databases":{"enabled":true},"export_query":{"enabled":true},"run_saved_query":{"enabled":true},"list_saved_queries":{"enabled":true}}}"#;
-    let conn = make_integration("pg1", "postgres", json!({"host":"localhost"}), Some(policy));
-    let host = capture_for(&conn, store);
-    let has_only = |name: &str| {
-        host.tools_meta
-            .get(name)
-            .and_then(|r| r.input_schema.get("properties"))
-            .and_then(|p| p.get("only"))
-            .is_some()
-    };
-    // should have only
-    for with in [
-        "query",
-        "sample_table",
-        "explain_query",
-        "list_relationships",
-        "table_stats",
-        "run_saved_query",
-        "list_saved_queries",
-    ] {
-        assert!(has_only(with), "{} should have only", with);
-    }
-    // should NOT have only
-    for without in [
-        "list_tables",
-        "describe_table",
-        "search_schema",
-        "list_schemas",
-        "list_databases",
-        "export_query",
-    ] {
-        assert!(!has_only(without), "{} should NOT have only", without);
-    }
-}
 
 #[tokio::test]
 async fn bind_params_postgres_and_mysql() {

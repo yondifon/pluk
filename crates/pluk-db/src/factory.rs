@@ -114,9 +114,13 @@ pub async fn create_driver(mut opts: CreateDriverOpts) -> Result<DriverWithTunne
         let provider: Box<dyn SshTunnelProvider> = opts
             .ssh_provider
             .unwrap_or_else(|| Box::new(PlukSshTunnelProvider));
-        let t = provider
-            .open_tunnel(&opts.cfg, &effective_host, effective_port)
-            .await?;
+        let t = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            provider.open_tunnel(&opts.cfg, &effective_host, effective_port),
+        ).await.map_err(|_| DriverError::Connection(format!(
+            "The SSH tunnel to {} didn't come up within 20s. If 1Password is asking for approval, approve it, then retry. Retrying is safe.",
+            opts.cfg.ssh_host.as_deref().unwrap_or("the SSH host")
+        )))??;
         effective_host = t.local_host.clone();
         effective_port = t.local_port;
         tunnel = Some(OwnedTunnel::new(t));
@@ -177,7 +181,7 @@ pub async fn create_driver(mut opts: CreateDriverOpts) -> Result<DriverWithTunne
         "mysql" => {
             #[cfg(feature = "mysql")]
             {
-                let d = crate::mysql::live::MySqlDriver::new(
+                let d = tokio::time::timeout(std::time::Duration::from_secs(15), crate::mysql::live::MySqlDriver::new(
                     effective_host,
                     effective_port,
                     opts.cfg.user.clone(),
@@ -185,8 +189,11 @@ pub async fn create_driver(mut opts: CreateDriverOpts) -> Result<DriverWithTunne
                     opts.cfg.database.clone(),
                     ssl,
                     opts.cfg.socket_path.clone(),
-                )
-                .await?;
+                ))
+                .await.map_err(|_| DriverError::Connection(format!(
+                    "The database didn't answer within 15s{}. Check your network and connection settings, then retry. Retrying is safe.",
+                    if use_ssh { " through the SSH tunnel" } else { "" }
+                )))??;
                 Box::new(d)
             }
             #[cfg(not(feature = "mysql"))]

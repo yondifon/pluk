@@ -32,7 +32,94 @@ use pluk_db::DriverError;
 use pluk_db::config::SqlConfig;
 use pluk_db::factory::{CreateDriverOpts, DriverWithTunnel, create_driver};
 use pluk_db::resolve_statement;
-use pluk_db::types::{QueryOpts, QueryResult as DbQueryResult};
+use pluk_db::types::QueryOpts;
+
+#[cfg(test)]
+pub(super) enum ConnectStep {
+    Ready(pluk_db::fake::FakeDriver),
+    Fail(DriverError),
+    Hang,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    pub(super) static TEST_CONNECT: Mutex<std::collections::VecDeque<ConnectStep>>;
+}
+
+async fn connect_driver(cfg: SqlConfig) -> Result<DriverWithTunnel, DriverError> {
+    #[cfg(test)]
+    if let Ok(step) = TEST_CONNECT.try_with(|steps| steps.lock().unwrap().pop_front()) {
+        return match step.expect("unexpected connection attempt") {
+            ConnectStep::Ready(driver) => Ok(DriverWithTunnel { driver: Box::new(driver), tunnel: None }),
+            ConnectStep::Fail(error) => Err(error),
+            ConnectStep::Hang => std::future::pending().await,
+        };
+    }
+    let dw = create_driver(CreateDriverOpts::new(cfg.clone())).await?;
+    if cfg.r#type == "sqlite" {
+        return Ok(dw);
+    }
+    // Postgres and MSSQL connect lazily; check the path before sending a caller's statement.
+    let connected = tokio::time::timeout(std::time::Duration::from_secs(15), dw.driver.test_connection()).await;
+    let result = connected.unwrap_or_else(|_| Err(DriverError::Connection(format!(
+        "The database didn't answer within 15s{}. Check your network and connection settings, then retry. Retrying is safe.",
+        if cfg.is_use_ssh() { " through the SSH tunnel" } else { "" }
+    ))));
+    if let Err(error) = result {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), dw.close()).await;
+        return Err(error);
+    }
+    Ok(dw)
+}
+
+async fn with_driver<T, F, Fut>(cfg: SqlConfig, read_only: bool, mut op: F) -> Result<T, crate::error::AdapterError>
+where
+    F: FnMut(Arc<dyn pluk_db::Driver>) -> Fut,
+    Fut: Future<Output = Result<T, DriverError>>,
+{
+    use std::time::Duration;
+    use tokio::time::{Instant, timeout, timeout_at};
+    let deadline = Instant::now() + Duration::from_secs(45);
+    for attempt in 0..2 {
+        let connected = timeout_at(deadline, connect_driver(cfg.clone())).await;
+        let (result, before_send) = match connected {
+            Ok(Ok(dw)) => {
+                let driver: Arc<dyn pluk_db::Driver> = Arc::from(dw.driver);
+                let result = op(driver.clone()).await;
+                let _ = timeout(Duration::from_secs(1), driver.close()).await;
+                drop(dw.tunnel);
+                (result, false)
+            }
+            Ok(Err(error)) => (Err(error), true),
+            Err(_) => {
+                let layer = if cfg.is_use_ssh() {
+                    format!("The SSH tunnel to {} or the database through it didn't answer within 45s. Approve any 1Password prompt, then retry.", cfg.ssh_host.as_deref().unwrap_or("the SSH host"))
+                } else {
+                    "The database didn't answer within 45s. Check your network, then retry.".into()
+                };
+                return Err(crate::error::AdapterError::new(format!("{layer} Retrying is safe.")).with_code("SQL_CONNECT_TIMEOUT"));
+            }
+        };
+        let error = match result {
+            Ok(value) => return Ok(value),
+            Err(error) => driver_error_to_adapter(error),
+        };
+        let network_failure = matches!(classify_sql_error(&error).category, SqlErrorCategory::ConnectionFailed | SqlErrorCategory::TunnelFailed);
+        if !network_failure {
+            return Err(error);
+        }
+        if !before_send && !read_only {
+            return Err(crate::error::AdapterError::new(format!("{} The statement may have changed data. Do not retry until you check its outcome.", error.message)).with_code("SQL_WRITE_OUTCOME_UNKNOWN"));
+        }
+        if attempt == 1 {
+            return Err(crate::error::AdapterError::new(format!("{} Check your network and connection settings, then retry. Retrying is safe.", error.message)).with_code("SQL_CONNECTION_FAILED"));
+        }
+        if timeout_at(deadline, pluk_db::force_reconnect(&cfg)).await.is_err() {
+            return Err(crate::error::AdapterError::new("The connection could not be refreshed within 45s. Check your network, then retry. Retrying is safe.").with_code("SQL_CONNECT_TIMEOUT"));
+        }
+    }
+    unreachable!()
+}
 
 pub fn sql_label(type_name: &str) -> String {
     match type_name {
@@ -735,12 +822,8 @@ pub fn register_sql_server(
                         None,
                         || async move {
                             let cfg = sql_config_from(&conn, None);
-                            let dw = create_driver(CreateDriverOpts::new(cfg))
-                                .await
-                                .map_err(driver_error_to_adapter)?;
-                            let schema = dw.driver.get_full_schema(None).await;
-                            let _ = dw.close().await;
-                            Ok(Outcome::ran(schema.map_err(driver_error_to_adapter)?))
+                            let schema = with_driver(cfg, true, |driver| async move { driver.get_full_schema(None).await }).await?;
+                            Ok(Outcome::ran(schema))
                         },
                     )
                     .await;
@@ -902,67 +985,17 @@ pub fn register_sql_server(
                             let cfg = sql_config_from(&conn, db_opt.as_deref());
                             let use_read_only = policy.allowed.len()==2 && policy.allowed.contains(&pluk_policy::category::StatementCategory::Select) && policy.allowed.contains(&pluk_policy::category::StatementCategory::Inspect);
 
-                            // One attempt: connect, then run the statement. `before_send` tells
-                            // the caller whether the failure happened during connect (nothing
-                            // sent yet, always safe to retry) or while the statement was in
-                            // flight (only safe to retry when it was read-only).
-                            async fn attempt(
-                                cfg: SqlConfig,
-                                sql: &str,
-                                params: &[Value],
-                                use_read_only: bool,
-                                query_opts: Option<QueryOpts>,
-                            ) -> Result<(DriverWithTunnel, DbQueryResult), (Option<DriverWithTunnel>, DriverError, bool)>
-                            {
-                                let dw = create_driver(CreateDriverOpts::new(cfg))
-                                    .await
-                                    .map_err(|e| (None, e, true))?;
-                                let res = if use_read_only {
-                                    dw.driver.query_read_only(sql, params, query_opts).await
-                                } else {
-                                    dw.driver.query(sql, params, query_opts).await
-                                };
-                                match res {
-                                    Ok(r) => Ok((dw, r)),
-                                    Err(e) => Err((Some(dw), e, false)),
+                            let res = with_driver(cfg, use_read_only, |driver| {
+                                let sql = &sql;
+                                let params = &params;
+                                let opts = query_opts.clone();
+                                async move {
+                                    if use_read_only { driver.query_read_only(sql, params, opts).await }
+                                    else { driver.query(sql, params, opts).await }
                                 }
-                            }
-
-                            let (dw, res) = match attempt(cfg.clone(), &sql, &params, use_read_only, query_opts.clone()).await {
-                                Ok(pair) => pair,
-                                Err((dw_opt, e, before_send)) => {
-                                    if let Some(dw) = dw_opt { let _ = dw.close().await; }
-                                    let adapter_err = driver_error_to_adapter(e);
-                                    let category = classify_sql_error(&adapter_err).category;
-                                    let network_failure = matches!(category, SqlErrorCategory::ConnectionFailed | SqlErrorCategory::TunnelFailed);
-                                    // A pooled OpenSSH tunnel can outlive the network path it
-                                    // rode in on: `-O check` only confirms the local master is
-                                    // still running, not that it can still reach the remote host.
-                                    // Retrying blind on a write mid-statement risks double-running
-                                    // it, so only reads (or a failure before anything was sent)
-                                    // qualify.
-                                    if network_failure && (before_send || use_read_only) {
-                                        pluk_db::force_reconnect(&cfg).await;
-                                        match attempt(cfg.clone(), &sql, &params, use_read_only, query_opts.clone()).await {
-                                            Ok(pair) => pair,
-                                            Err((dw2_opt, e2, _)) => {
-                                                if let Some(dw2) = dw2_opt { let _ = dw2.close().await; }
-                                                cancels.clear(log_id);
-                                                let retry_msg = driver_error_to_adapter(e2).message;
-                                                return Err(crate::error::AdapterError::new(format!(
-                                                    "The database host is unreachable, even on a fresh connection. Check your network or VPN, then retry. ({})",
-                                                    retry_msg
-                                                )).with_code("HOST_UNREACHABLE"));
-                                            }
-                                        }
-                                    } else {
-                                        cancels.clear(log_id);
-                                        return Err(adapter_err);
-                                    }
-                                }
-                            };
-                            let _ = dw.close().await;
+                            }).await;
                             cancels.clear(log_id);
+                            let res = res?;
                             // cap then mask
                             let effective_cap: Option<usize> = match policy.max_rows {
                                 None => limit_c,
@@ -1087,13 +1120,12 @@ pub fn register_sql_server(
                         db_opt.as_deref(),
                         || async move {
                             let cfg = sql_config_from(&conn, db_for_driver.as_deref());
-                            let dw = create_driver(CreateDriverOpts::new(cfg))
-                                .await
-                                .map_err(driver_error_to_adapter)?;
-                            let res = dw.driver.list_tables(schema_opt.as_deref()).await;
-                            let _ = dw.close().await;
+                            let res = with_driver(cfg, true, |driver| {
+                                let schema = &schema_opt;
+                                async move { driver.list_tables(schema.as_deref()).await }
+                            }).await?;
                             Ok(Outcome::ran(
-                                res.map_err(driver_error_to_adapter)?.join("\n"),
+                                res.join("\n"),
                             ))
                         },
                     )
@@ -1185,10 +1217,11 @@ pub fn register_sql_server(
                     let db_for_meta = db_opt.clone();
                     audited(&store, &audit, "sample_table", detail, db_opt.as_deref(), || async move {
                         let cfg = sql_config_from(&conn, db_for_meta.as_deref());
-                        let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
-                        let res = dw.driver.sample_table(&table, effective_limit as i64, schema_opt.as_deref()).await;
-                        let _ = dw.close().await;
-                        let res = res.map_err(driver_error_to_adapter)?;
+                        let res = with_driver(cfg, true, |driver| {
+                            let table = &table;
+                            let schema = &schema_opt;
+                            async move { driver.sample_table(table, effective_limit as i64, schema.as_deref()).await }
+                        }).await?;
                         let total = res.rows.len();
                         let cap = policy.max_rows.map(|v| v as usize);
                         let (mut rows, truncated, cap_limit) = cap_rows_vec(res.rows.into_iter().collect(), cap);
@@ -1320,12 +1353,11 @@ pub fn register_sql_server(
                         meta,
                         move |_log_id| async move {
                             let cfg = sql_config_from(&conn, db_for_driver.as_deref());
-                            let dw = create_driver(CreateDriverOpts::new(cfg))
-                                .await
-                                .map_err(driver_error_to_adapter)?;
-                            let res = dw.driver.explain(&sql_for_driver, &params).await;
-                            let _ = dw.close().await;
-                            let res = res.map_err(driver_error_to_adapter)?;
+                            let res = with_driver(cfg, true, |driver| {
+                                let sql = &sql_for_driver;
+                                let params = &params;
+                                async move { driver.explain(sql, params).await }
+                            }).await?;
                             let val = serde_json::json!({ "rows": res.rows, "fields": res.fields });
                             let map = FieldMap::new(&["rows", "fields"], &["rows", "fields"]);
                             let text = projected_json(val, only, &map)
@@ -1396,10 +1428,11 @@ pub fn register_sql_server(
                     let db_for_driver = db_opt.clone();
                     audited(&store, &audit, "describe_table", detail, db_opt.as_deref(), || async move {
                         let cfg = sql_config_from(&conn, db_for_driver.as_deref());
-                        let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
-                        let res = dw.driver.describe_table(&table, schema_opt.as_deref()).await;
-                        let _ = dw.close().await;
-                        let cols = res.map_err(driver_error_to_adapter)?;
+                        let cols = with_driver(cfg, true, |driver| {
+                            let table = &table;
+                            let schema = &schema_opt;
+                            async move { driver.describe_table(table, schema.as_deref()).await }
+                        }).await?;
                         let vals: Vec<Value> = cols.into_iter().map(|c| serde_json::json!({"column": c.column, "type": c.r#type, "nullable": c.nullable})).collect();
                         Ok(Outcome::ran(serde_json::to_string_pretty(&vals).unwrap()))
                     }).await
@@ -1491,16 +1524,12 @@ pub fn register_sql_server(
                         db_opt.as_deref(),
                         || async move {
                             let cfg = sql_config_from(&conn, db_for_driver.as_deref());
-                            let dw = create_driver(CreateDriverOpts::new(cfg))
-                                .await
-                                .map_err(driver_error_to_adapter)?;
-                            let res = dw
-                                .driver
-                                .list_relationships(table.as_deref(), schema_opt.as_deref())
-                                .await;
-                            let _ = dw.close().await;
+                            let res = with_driver(cfg, true, |driver| {
+                                let table = &table;
+                                let schema = &schema_opt;
+                                async move { driver.list_relationships(table.as_deref(), schema.as_deref()).await }
+                            }).await?;
                             let vals: Vec<Value> = res
-                                .map_err(driver_error_to_adapter)?
                                 .into_iter()
                                 .map(|r| {
                                     let mut m = serde_json::Map::new();
@@ -1602,13 +1631,12 @@ pub fn register_sql_server(
                         db_opt.as_deref(),
                         || async move {
                             let cfg = sql_config_from(&conn, db_for_driver.as_deref());
-                            let dw = create_driver(CreateDriverOpts::new(cfg))
-                                .await
-                                .map_err(driver_error_to_adapter)?;
-                            let res = dw.driver.search_schema(&term, schema_opt.as_deref()).await;
-                            let _ = dw.close().await;
+                            let res = with_driver(cfg, true, |driver| {
+                                let term = &term;
+                                let schema = &schema_opt;
+                                async move { driver.search_schema(term, schema.as_deref()).await }
+                            }).await?;
                             let vals: Vec<Value> = res
-                                .map_err(driver_error_to_adapter)?
                                 .into_iter()
                                 .map(|r| {
                                     let mut m = serde_json::Map::new();
@@ -1688,10 +1716,11 @@ pub fn register_sql_server(
                     let db_for_driver = db_opt.clone();
                     audited(&store, &audit, "table_stats", detail, db_opt.as_deref(), || async move {
                         let cfg = sql_config_from(&conn, db_for_driver.as_deref());
-                        let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
-                        let res = dw.driver.table_stats(&table, schema_opt.as_deref()).await;
-                        let _ = dw.close().await;
-                        let res = res.map_err(driver_error_to_adapter)?;
+                        let res = with_driver(cfg, true, |driver| {
+                            let table = &table;
+                            let schema = &schema_opt;
+                            async move { driver.table_stats(table, schema.as_deref()).await }
+                        }).await?;
                         let val = serde_json::json!({
                             "table": res.table,
                             "estimatedRows": res.estimated_rows,
@@ -1731,13 +1760,9 @@ pub fn register_sql_server(
                         None,
                         || async move {
                             let cfg = sql_config_from(&conn, None);
-                            let dw = create_driver(CreateDriverOpts::new(cfg))
-                                .await
-                                .map_err(driver_error_to_adapter)?;
-                            let res = dw.driver.list_schemas().await;
-                            let _ = dw.close().await;
+                            let res = with_driver(cfg, true, |driver| async move { driver.list_schemas().await }).await?;
                             Ok(Outcome::ran(
-                                res.map_err(driver_error_to_adapter)?.join("\n"),
+                                res.join("\n"),
                             ))
                         },
                     )
@@ -1777,13 +1802,9 @@ pub fn register_sql_server(
                         None,
                         || async move {
                             let cfg = sql_config_from(&conn, None);
-                            let dw = create_driver(CreateDriverOpts::new(cfg))
-                                .await
-                                .map_err(driver_error_to_adapter)?;
-                            let res = dw.driver.list_databases().await;
-                            let _ = dw.close().await;
+                            let res = with_driver(cfg, true, |driver| async move { driver.list_databases().await }).await?;
                             Ok(Outcome::ran(
-                                res.map_err(driver_error_to_adapter)?.join("\n"),
+                                res.join("\n"),
                             ))
                         },
                     )
@@ -1926,14 +1947,18 @@ pub fn register_sql_server(
                                 cancel: Some(cancels.register(log_id)),
                             });
                             let cfg = sql_config_from(&conn, db_opt.as_deref());
-                            let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
-                            let res = {
-                                let use_ro = policy.allowed.len()==2 && policy.allowed.contains(&pluk_policy::category::StatementCategory::Select);
-                                if use_ro { dw.driver.query_read_only(&sql, &params, opts.clone()).await } else { dw.driver.query(&sql, &params, opts.clone()).await }
-                            };
-                            let res = match res { Ok(r)=>r, Err(e)=> { cancels.clear(log_id); let _ = dw.close().await; return Err(driver_error_to_adapter(e)); } };
-                            let _ = dw.close().await;
+                            let use_ro = policy.allowed.len()==2 && policy.allowed.contains(&pluk_policy::category::StatementCategory::Select);
+                            let res = with_driver(cfg, use_ro, |driver| {
+                                let sql = &sql;
+                                let params = &params;
+                                let opts = opts.clone();
+                                async move {
+                                    if use_ro { driver.query_read_only(sql, params, opts).await }
+                                    else { driver.query(sql, params, opts).await }
+                                }
+                            }).await;
                             cancels.clear(log_id);
+                            let res = res?;
                             let cap = policy.max_rows.map(|v| v as usize);
                             let total = res.rows.len();
                             let fields_tmp = res.fields.clone();
@@ -2101,12 +2126,18 @@ pub fn register_sql_server(
                                 cancel: Some(cancels.register(log_id)),
                             });
                             let cfg = sql_config_from(&conn, db_opt.as_deref());
-                            let dw = create_driver(CreateDriverOpts::new(cfg)).await.map_err(driver_error_to_adapter)?;
                             let use_ro = policy.allowed.len()==2;
-                            let res = if use_ro { dw.driver.query_read_only(&sql, &params, opts.clone()).await } else { dw.driver.query(&sql, &params, opts.clone()).await };
-                            let res = match res { Ok(r)=>r, Err(e)=> { cancels.clear(log_id); let _ = dw.close().await; return Err(driver_error_to_adapter(e)); } };
-                            let _ = dw.close().await;
+                            let res = with_driver(cfg, use_ro, |driver| {
+                                let sql = &sql;
+                                let params = &params;
+                                let opts = opts.clone();
+                                async move {
+                                    if use_ro { driver.query_read_only(sql, params, opts).await }
+                                    else { driver.query(sql, params, opts).await }
+                                }
+                            }).await;
                             cancels.clear(log_id);
+                            let res = res?;
                             let cap = policy.max_rows.map(|v| v as usize);
                             let total = res.rows.len();
                             let (mut rows, truncated, cap_limit) = cap_rows_vec(res.rows.into_iter().collect(), cap);

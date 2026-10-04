@@ -169,9 +169,8 @@ fn db_config_from(conn: &Integration) -> DbSqlConfig {
 }
 
 async fn test_sql(conn: &Integration, _store: Option<Arc<Store>>) -> Result<(), AdapterError> {
-    // Force-evict would go here: we have no global pool, so no-op
     let cfg = db_config_from(conn);
-    // Use factory to test connection (it will create fake driver for postgres/mysql)
+    pluk_db::force_reconnect(&cfg).await;
     let dw = create_driver(CreateDriverOpts::new(cfg))
         .await
         .map_err(crate::sql::error::driver_error_to_adapter)?;

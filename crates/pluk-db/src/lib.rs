@@ -3,7 +3,7 @@ pub mod config;
 pub mod driver;
 pub mod error;
 pub mod factory;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod fake;
 pub mod mysql;
 pub mod mssql;
