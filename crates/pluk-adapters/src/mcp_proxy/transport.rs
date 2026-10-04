@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use upstream_http::header::{AUTHORIZATION, HeaderName, HeaderValue};
+use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
 
 use pluk_store::{Integration, ProxySecret, SecretKind, Store};
 

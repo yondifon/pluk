@@ -19,7 +19,7 @@ use rmcp::transport::auth::{AuthorizationManager, AuthorizationMetadata};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tokio::time::timeout;
-use upstream_http::Url;
+use reqwest::Url;
 
 use super::catalog;
 use super::client;

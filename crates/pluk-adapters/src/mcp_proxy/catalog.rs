@@ -11,7 +11,7 @@ use std::sync::{Mutex, OnceLock};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use upstream_http::Url;
+use reqwest::Url;
 
 use pluk_store::{DiscoveredTool, Integration, ProxyTool, Store, StoreError, ToolState};
 

@@ -531,25 +531,25 @@ pub fn output(integration_id: &str) -> Vec<String> {
 
 /// The probe's client: it follows redirects and never carries a credential.
 /// rmcp builds on the next major of reqwest, so this is not [`crate::http_client`].
-pub(super) fn upstream_client() -> Result<upstream_http::Client, AdapterError> {
-    static CLIENT: OnceLock<Result<upstream_http::Client, String>> = OnceLock::new();
-    shared(&CLIENT, upstream_http::Client::builder())
+pub(super) fn upstream_client() -> Result<reqwest::Client, AdapterError> {
+    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    shared(&CLIENT, reqwest::Client::builder())
 }
 
 /// A session's client never follows a redirect: reqwest drops only
 /// `Authorization` and cookies on a cross-host hop, not other secret headers.
-fn session_client() -> Result<upstream_http::Client, AdapterError> {
-    static CLIENT: OnceLock<Result<upstream_http::Client, String>> = OnceLock::new();
+fn session_client() -> Result<reqwest::Client, AdapterError> {
+    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
     shared(
         &CLIENT,
-        upstream_http::Client::builder().redirect(upstream_http::redirect::Policy::none()),
+        reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()),
     )
 }
 
 fn shared(
-    cell: &'static OnceLock<Result<upstream_http::Client, String>>,
-    builder: upstream_http::ClientBuilder,
-) -> Result<upstream_http::Client, AdapterError> {
+    cell: &'static OnceLock<Result<reqwest::Client, String>>,
+    builder: reqwest::ClientBuilder,
+) -> Result<reqwest::Client, AdapterError> {
     cell.get_or_init(|| builder.build().map_err(|e| e.to_string()))
         .clone()
         .map_err(AdapterError::new)
@@ -731,7 +731,7 @@ fn failure_code(error: &(dyn std::error::Error + 'static)) -> Option<&'static st
 }
 
 fn code_of(error: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
-    if let Some(http) = error.downcast_ref::<StreamableHttpError<upstream_http::Error>>() {
+    if let Some(http) = error.downcast_ref::<StreamableHttpError<reqwest::Error>>() {
         match http {
             StreamableHttpError::AuthRequired(_) => return Some(AUTH_REJECTED_CODE),
             StreamableHttpError::InsufficientScope(_) => return Some(PERMISSION_DENIED_CODE),
@@ -743,10 +743,10 @@ fn code_of(error: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
             _ => {}
         }
     }
-    if let Some(request) = error.downcast_ref::<upstream_http::Error>() {
+    if let Some(request) = error.downcast_ref::<reqwest::Error>() {
         match request.status() {
-            Some(upstream_http::StatusCode::UNAUTHORIZED) => return Some(AUTH_REJECTED_CODE),
-            Some(upstream_http::StatusCode::FORBIDDEN) => return Some(PERMISSION_DENIED_CODE),
+            Some(reqwest::StatusCode::UNAUTHORIZED) => return Some(AUTH_REJECTED_CODE),
+            Some(reqwest::StatusCode::FORBIDDEN) => return Some(PERMISSION_DENIED_CODE),
             _ => {}
         }
         if request.is_timeout() {

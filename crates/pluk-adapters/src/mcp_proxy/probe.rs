@@ -18,8 +18,8 @@ use std::time::Duration;
 use rmcp::transport::auth::AuthorizationManager;
 use serde_json::{Value, json};
 use tokio::time::timeout;
-use upstream_http::StatusCode;
-use upstream_http::header::{ACCEPT, CONTENT_TYPE, WWW_AUTHENTICATE};
+use reqwest::StatusCode;
+use reqwest::header::{ACCEPT, CONTENT_TYPE, WWW_AUTHENTICATE};
 
 use pluk_store::Integration;
 

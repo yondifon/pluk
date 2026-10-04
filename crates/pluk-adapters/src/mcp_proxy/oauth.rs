@@ -25,8 +25,8 @@ use rmcp::transport::auth::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
-use upstream_http::Url;
-use upstream_http::header::WWW_AUTHENTICATE;
+use reqwest::Url;
+use reqwest::header::WWW_AUTHENTICATE;
 
 use pluk_store::{
     AuthStatus, Integration, ProxyAuth, ProxyAuthInput, RefreshedTokens, Store, StoreError,
@@ -1063,7 +1063,7 @@ mod tests {
         upstream: Arc<UpstreamState>,
         authority: Arc<AuthorityState>,
         adapter: Arc<McpProxyAdapter>,
-        browser: upstream_http::Client,
+        browser: reqwest::Client,
         _dir: tempfile::TempDir,
     }
 
@@ -1088,8 +1088,8 @@ mod tests {
                 conn,
                 upstream,
                 authority,
-                browser: upstream_http::Client::builder()
-                    .redirect(upstream_http::redirect::Policy::none())
+                browser: reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
                     .build()
                     .expect("browser"),
                 _dir: dir,
