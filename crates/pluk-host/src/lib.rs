@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod confirm;
 pub mod frame;
+mod login;
 pub mod server;
 #[cfg(target_os = "macos")]
 mod tray_menu;
@@ -26,6 +27,7 @@ const TRAY_ID: &str = "pluk-tray";
 const TRAY_TOGGLE_ID: &str = "tray_toggle";
 const TRAY_CHECK_UPDATES_ID: &str = "tray_updates";
 const TRAY_QUIT_ID: &str = "tray_quit";
+const TRAY_LOGIN_ID: &str = "tray_login";
 const CHECK_FOR_UPDATES_ID: &str = "check_for_updates";
 
 #[tauri::command]
@@ -34,38 +36,60 @@ fn get_version() -> serde_json::Value {
 }
 
 pub fn run() {
-    let store = Arc::new(pluk_store::Store::open_default().expect("open pluk.db"));
-    let sql_cancels = Arc::new(pluk_adapters::sql::SqlCancelRegistry::default());
-    let registry = Arc::new(
-        pluk_adapters::default_registry(store.clone(), sql_cancels.clone())
-            .expect("register adapters"),
-    );
-    let zoom = Mutex::new(crate::zoom::PersistedZoom::load_from_store(&store));
-    let server = tauri::async_runtime::block_on(async {
-        ServerHandle::start_with_cancels(store.clone(), registry.clone(), sql_cancels.clone(), None)
-            .await
-            .expect("bind 4242")
-    });
-    let shared = server.state().clone();
-    let host_state = HostState {
-        store: store.clone(),
-        server: tokio::sync::Mutex::new(server),
-        shared,
-        zoom,
-    };
-    let initial_zoom_title = {
-        let z = host_state.zoom.lock().expect("zoom lock");
-        z.state().reset_title()
-    };
-    let activity_store = store.clone();
-    let confirm_registry = registry.clone();
-    tauri::Builder::default()
+    let mut context = tauri::generate_context!();
+    if std::env::args_os().any(|arg| arg == "--autostart") {
+        for window in &mut context.config_mut().app.windows {
+            if window.label == "main" {
+                window.visible = false;
+            }
+        }
+    }
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| show_window(app)))
+        .plugin(tauri_plugin_autostart::Builder::new().app_name("Pluk").arg("--autostart").build())
         .manage(crate::confirm::ConfirmState::default())
         .manage(crate::wande::PostQuestions::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(host_state)
         .setup(move |app| {
+            let store = Arc::new(pluk_store::Store::open_default().map_err(|reason| {
+                startup_error(app.handle(), format!("Pluk can't open its data file. Check that you have permission to access it, then open Pluk again.\n\n{reason}"))
+            })?);
+            let sql_cancels = Arc::new(pluk_adapters::sql::SqlCancelRegistry::default());
+            let registry = Arc::new(
+                pluk_adapters::default_registry(store.clone(), sql_cancels.clone())
+                    .expect("register adapters"),
+            );
+            let zoom = Mutex::new(crate::zoom::PersistedZoom::load_from_store(&store));
+            let server = tauri::async_runtime::block_on(async {
+                ServerHandle::start_with_cancels(store.clone(), registry.clone(), sql_cancels.clone(), None)
+                    .await
+            }).map_err(|reason| {
+                let port = pluk_server::ServerConfig::default_port();
+                let message = if reason.kind() == std::io::ErrorKind::AddrInUse {
+                    format!("Pluk can't start because port {port} is in use by another app. Quit that app and open Pluk again.")
+                } else {
+                    format!("Pluk can't start its local server. Open Pluk again.\n\n{reason}")
+                };
+                startup_error(app.handle(), message)
+            })?;
+            let shared = server.state().clone();
+            let host_state = HostState {
+                store: store.clone(),
+                server: tokio::sync::Mutex::new(server),
+                shared,
+                zoom,
+            };
+            let initial_zoom_title = {
+                let z = host_state.zoom.lock().expect("zoom lock");
+                z.state().reset_title()
+            };
+            let activity_store = store.clone();
+            let confirm_registry = registry.clone();
+            app.manage(host_state);
+            if let Err(reason) = login::apply_default(app.handle(), &store) {
+                show_error(app.handle(), format!("Pluk couldn't turn on Open at Login. Turn it on from the menu bar to start Pluk when you log in.\n\n{reason}"));
+            }
             app.manage(Updater::new(UpdaterConfig::from_plugins(
                 &app.config().plugins,
             )));
@@ -174,6 +198,7 @@ pub fn run() {
                     tauri::async_runtime::spawn(updater::run_check(app.clone(), true));
                 }
                 TRAY_QUIT_ID => app.exit(0),
+                TRAY_LOGIN_ID => login::toggle(app),
                 _ => {}
             });
             let handle = app.handle().clone();
@@ -251,29 +276,52 @@ pub fn run() {
                 hide_window(window.app_handle());
             }
         })
-        .build(tauri::generate_context!())
-        .expect("build tauri app")
-        .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                let state: tauri::State<HostState> = app.state();
-                tauri::async_runtime::block_on(async {
-                    state.server.lock().await.stop().await;
-                });
-                if let Some(window) = app.get_webview_window("main")
-                    && let Ok(pos) = window.outer_position()
-                    && let Ok(size) = window.outer_size()
-                {
-                    let f = frame::Frame {
-                        x: Some(pos.x as f64),
-                        y: Some(pos.y as f64),
-                        width: size.width as f64,
-                        height: size.height as f64,
-                    }
-                    .clamped();
-                    let _ = frame::save(&frame::default_file_path(), &f);
+        .build(context);
+    let app = match app {
+        Ok(app) => app,
+        Err(reason) => {
+            eprintln!("Pluk couldn't start: {reason}");
+            return;
+        }
+    };
+    app.run(|app, event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { .. } = event {
+            show_window(app);
+        }
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            let state: tauri::State<HostState> = app.state();
+            tauri::async_runtime::block_on(async {
+                state.server.lock().await.stop().await;
+            });
+            if let Some(window) = app.get_webview_window("main")
+                && let Ok(pos) = window.outer_position()
+                && let Ok(size) = window.outer_size()
+            {
+                let f = frame::Frame {
+                    x: Some(pos.x as f64),
+                    y: Some(pos.y as f64),
+                    width: size.width as f64,
+                    height: size.height as f64,
                 }
+                .clamped();
+                let _ = frame::save(&frame::default_file_path(), &f);
             }
-        });
+        }
+    });
+}
+fn show_error<R: tauri::Runtime>(app: &tauri::AppHandle<R>, message: String) {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .message(message)
+        .title("Pluk")
+        .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+        .blocking_show();
+}
+
+fn startup_error<R: tauri::Runtime>(app: &tauri::AppHandle<R>, message: String) -> std::io::Error {
+    show_error(app, message.clone());
+    std::io::Error::other(message)
 }
 /// The menu bar the platform expects: submenus off the root, standard items in
 /// the standard places, so Undo/Cut/Copy/Paste and their accelerators reach the

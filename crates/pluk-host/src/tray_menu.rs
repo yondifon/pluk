@@ -8,10 +8,10 @@
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSStatusBarButton};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::{AppHandle, Manager, Runtime};
 
-use crate::{TRAY_CHECK_UPDATES_ID, TRAY_ID, TRAY_QUIT_ID, TRAY_TOGGLE_ID};
+use crate::{TRAY_CHECK_UPDATES_ID, TRAY_ID, TRAY_LOGIN_ID, TRAY_QUIT_ID, TRAY_TOGGLE_ID};
 
 /// Opens the menu under the status item. Runs on the main thread, after AppKit
 /// is done with the click: tray events reach us through the event loop.
@@ -40,6 +40,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .get_webview_window("main")
         .is_some_and(|window| window.is_visible().unwrap_or(false));
     let toggle_title = if showing { "Hide pluk" } else { "Open pluk" };
+    let login = crate::login::is_enabled(app);
     Menu::with_items(
         app,
         &[
@@ -49,6 +50,15 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 TRAY_CHECK_UPDATES_ID,
                 "Check for Updates…",
                 true,
+                None::<&str>,
+            )?,
+            &PredefinedMenuItem::separator(app)?,
+            &CheckMenuItem::with_id(
+                app,
+                TRAY_LOGIN_ID,
+                "Open at Login",
+                login.is_ok(),
+                login.unwrap_or(false),
                 None::<&str>,
             )?,
             &PredefinedMenuItem::separator(app)?,

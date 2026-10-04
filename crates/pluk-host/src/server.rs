@@ -1,7 +1,7 @@
 //! In-process MCP server lifecycle.
 //!
-//! The server binds `127.0.0.1:4242` (or `PORT` when set) before any
-//! window exists and lives as long as the app. It runs in this process, and
+//! The server binds `127.0.0.1:4242` (or `PORT` when set) during app
+//! setup and lives as long as the app. It runs in this process, and
 //! there is no `lsof` orphan killing.
 //!
 //! The handle owns the shutdown token, the shared `AppState`, and the
