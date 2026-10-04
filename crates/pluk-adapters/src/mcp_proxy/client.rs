@@ -530,7 +530,6 @@ pub fn output(integration_id: &str) -> Vec<String> {
 }
 
 /// The probe's client: it follows redirects and never carries a credential.
-/// rmcp builds on the next major of reqwest, so this is not [`crate::http_client`].
 pub(super) fn upstream_client() -> Result<reqwest::Client, AdapterError> {
     static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
     shared(&CLIENT, reqwest::Client::builder())
