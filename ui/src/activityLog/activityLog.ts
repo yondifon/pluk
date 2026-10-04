@@ -15,6 +15,7 @@ import { createIcon } from "../icon";
 import { confirmModal } from "../modal";
 import { toast } from "../toast";
 import { ENTRY_RENDERERS, entryType, responseTextForCopy } from "./renderers";
+import { pollWhileVisible } from "../windowVisibility";
 
 export interface ActivityLogOptions {
   scope: LogScope;
@@ -44,7 +45,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   const seenIds = new Set<number>();
 
   // Pending poll timer
-  let pollTimer: number | null = null;
+  let stopPendingPoll: (() => void) | null = null;
   let liveClose: (() => void) | null = null;
 
   const typeMap = opts.connectionTypes ?? new Map();
@@ -355,10 +356,11 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
 
   function updatePolling() {
     const hasPending = entries.some(e => e.verdict === "pending");
-    if (hasPending && !pollTimer) {
-      pollTimer = window.setInterval(() => reload(), 1500);
-    } else if (!hasPending && pollTimer) {
-      clearInterval(pollTimer); pollTimer = null;
+    if (hasPending && !stopPendingPoll) {
+      stopPendingPoll = pollWhileVisible(() => reload(), 1500);
+    } else if (!hasPending && stopPendingPoll) {
+      stopPendingPoll();
+      stopPendingPoll = null;
     }
   }
 
@@ -557,7 +559,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
 
   return {
     destroy() {
-      if (pollTimer) clearInterval(pollTimer);
+      stopPendingPoll?.();
       if (searchTimer) clearTimeout(searchTimer);
       liveClose?.();
       sentinelObs?.disconnect();

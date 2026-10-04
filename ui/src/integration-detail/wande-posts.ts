@@ -1,6 +1,7 @@
 import { invoke } from "../host";
 import { createButton } from "../primitives";
 import { toast } from "../toast";
+import { pollWhileVisible } from "../windowVisibility";
 
 const TITLE_ID = "wande-waiting-title";
 const QUEUE_TITLE_ID = "wande-queue-title";
@@ -538,14 +539,14 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
 
   render();
   void refresh();
-  const poll = setInterval(() => void refresh(), REFRESH_MS);
-  const ticker = setInterval(tick, TICK_MS);
+  const stopPoll = pollWhileVisible(() => void refresh(), REFRESH_MS);
+  const stopTicker = pollWhileVisible(tick, TICK_MS);
 
   return {
     destroy() {
       alive = false;
-      clearInterval(poll);
-      clearInterval(ticker);
+      stopPoll();
+      stopTicker();
       container.innerHTML = "";
     },
   };

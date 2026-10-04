@@ -417,11 +417,13 @@ fn show_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
+        let _ = window.emit("pluk://window-shown", ());
     }
 }
 fn hide_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
+        let _ = window.emit("pluk://window-hidden", ());
     }
     #[cfg(target_os = "macos")]
     {

@@ -42,6 +42,7 @@ import { mountUpdates } from "./update.ts";
 import { renderLoadingState } from "./primitives.ts";
 import { openModal } from "./modal.ts";
 import { injectMcpConfig, invoke, hasHost } from "./host.ts";
+import { pollWhileVisible } from "./windowVisibility";
 import { isMac } from "./platform.ts";
 import type { Integration, Group, Environment, Health } from "./types.ts";
 import { MCP_TYPE, WANDE_TYPE } from "./integration-detail/types.ts";
@@ -843,7 +844,7 @@ async function bootstrap(): Promise<void> {
   await Promise.all([loadAdapters(), loadHealth(), loadData()]);
   refresh();
 
-  setInterval(
+  pollWhileVisible(
     () =>
       void loadHealth().then(() => {
         refreshSidebar();

@@ -23,6 +23,7 @@ import {
 } from "./proxy-tools";
 import { canRestart, canStop, restartLabel, RUNS_WITH_FULL_ACCESS, stateLabel, stateNote, stateTone } from "./local-mcp";
 import type { Integration } from "./types";
+import { pollWhileVisible } from "../windowVisibility";
 
 const STATUS_POLL_MS = 2000;
 
@@ -128,7 +129,7 @@ export function mountLocalMcp(
   let toolsError: string | null = null;
   let busy = false;
   let discovered = false;
-  let statusTimer: ReturnType<typeof setInterval> | null = null;
+  let statusTimer: (() => void) | null = null;
 
   async function loadPreview(): Promise<void> {
     try {
@@ -181,7 +182,7 @@ export function mountLocalMcp(
 
   function startPolling(): void {
     if (statusTimer) return;
-    statusTimer = setInterval(() => {
+    statusTimer = pollWhileVisible(() => {
       void (async () => {
         await loadStatus();
         if (outputOpen) await loadOutput();
@@ -192,7 +193,7 @@ export function mountLocalMcp(
   }
 
   function stopPolling(): void {
-    if (statusTimer) clearInterval(statusTimer);
+    statusTimer?.();
     statusTimer = null;
   }
 

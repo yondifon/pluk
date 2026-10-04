@@ -16,6 +16,7 @@ import {
   type SignInStatus,
 } from "./proxy-tools";
 import type { Integration } from "./types";
+import { pollWhileVisible } from "../windowVisibility";
 
 const SIGN_IN_POLL_MS = 2000;
 const SIGN_IN_GIVE_UP_MS = 10 * 60 * 1000;
@@ -109,7 +110,7 @@ export function mountServerTools(
     stopPoll?.();
     const startedAt = Date.now();
     waitingForBrowser = true;
-    const timer = setInterval(() => {
+    const stop = pollWhileVisible(() => {
       if (Date.now() - startedAt > SIGN_IN_GIVE_UP_MS) {
         stopPoll?.();
         return render();
@@ -127,7 +128,7 @@ export function mountServerTools(
       })();
     }, SIGN_IN_POLL_MS);
     stopPoll = () => {
-      clearInterval(timer);
+      stop();
       stopPoll = null;
       waitingForBrowser = false;
     };

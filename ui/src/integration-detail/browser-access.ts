@@ -2,6 +2,7 @@ import { copyText } from "../clipboard";
 import { invoke } from "../host";
 import { createBadge, createButton, wizardStepFooter, wizardStepHeader } from "../primitives";
 import { toast } from "../toast";
+import { pollWhileVisible } from "../windowVisibility";
 
 const TITLE_ID = "browser-access-title";
 const STATUS_REFRESH_MS = 5000;
@@ -23,10 +24,10 @@ export function watchChromeConnection(
     }
   }
   void refresh();
-  const poll = setInterval(() => void refresh(), STATUS_REFRESH_MS);
+  const stop = pollWhileVisible(() => void refresh(), STATUS_REFRESH_MS);
   return () => {
     alive = false;
-    clearInterval(poll);
+    stop();
   };
 }
 
