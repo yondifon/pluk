@@ -34,7 +34,7 @@ tempfile = "3"
 sqlx = { version = "0.8", default-features = false, features = ["mysql", "runtime-tokio-rustls", "tls-rustls"], optional = true }
 
 # Microsoft SQL Server
-tiberius = { version = "0.12.3", default-features = false, features = ["rustls", "tds73", "tokio"], optional = true }
+tiberius = { version = "0.13", default-features = false, features = ["rustls", "tds73", "tokio"], optional = true }
 futures-util = { version = "0.3", optional = true }
 
 [features]
