@@ -22,6 +22,7 @@ mod projection;
 pub mod redis;
 mod registry;
 pub mod sentry;
+pub mod sentry_migration;
 pub mod slack;
 pub mod sql;
 pub mod ssh;

@@ -26,6 +26,15 @@ impl Store {
         )?;
         Ok(())
     }
+
+    pub fn clear_launch_approval(&self, integration_id: &str) -> Result<()> {
+        let conn = self.conn.lock().expect("store lock");
+        conn.execute(
+            "DELETE FROM proxy_launch_approvals WHERE integration_id = ?",
+            [integration_id],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

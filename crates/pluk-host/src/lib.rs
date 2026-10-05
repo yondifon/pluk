@@ -60,6 +60,9 @@ pub fn run() {
                 pluk_adapters::default_registry(store.clone(), sql_cancels.clone())
                     .expect("register adapters"),
             );
+            if let Err(reason) = pluk_adapters::sentry_migration::run(&store) {
+                eprintln!("Sentry conversion failed: {reason}");
+            }
             let zoom = Mutex::new(crate::zoom::PersistedZoom::load_from_store(&store));
             let server = tauri::async_runtime::block_on(async {
                 ServerHandle::start_with_cancels(store.clone(), registry.clone(), sql_cancels.clone(), None)
