@@ -19,28 +19,19 @@
 //! the response is serialised.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-/// A reducer preset computes its own slice of one item directly — for fields
-/// that can't be named in advance (e.g. Sentry's `has*` capability flags).
-pub type ReduceFn = Arc<dyn Fn(&Value) -> Map<String, Value> + Send + Sync>;
-
-/// A preset either expands to more dot paths, or reduces one item itself.
 #[derive(Clone)]
-pub enum Preset {
-    Paths(Vec<String>),
-    Reduce(ReduceFn),
+pub struct Preset {
+    paths: Vec<String>,
 }
 
 impl Preset {
     pub fn paths(paths: &[&str]) -> Self {
-        Preset::Paths(paths.iter().map(|p| (*p).to_string()).collect())
-    }
-
-    pub fn reduce(f: impl Fn(&Value) -> Map<String, Value> + Send + Sync + 'static) -> Self {
-        Preset::Reduce(Arc::new(f))
+        Preset {
+            paths: paths.iter().map(|p| (*p).to_string()).collect(),
+        }
     }
 }
 
@@ -147,11 +138,9 @@ fn unknown_field_error(entry: &str, map: &FieldMap) -> OnlyError {
 
 fn project_one(item: &Value, entries: &[String], map: &FieldMap) -> Result<Value, OnlyError> {
     let mut paths: Vec<String> = Vec::new();
-    let mut reducers: Vec<&ReduceFn> = Vec::new();
     for entry in entries {
         match map.presets.get(entry.as_str()) {
-            Some(Preset::Paths(preset_paths)) => paths.extend(preset_paths.iter().cloned()),
-            Some(Preset::Reduce(reduce)) => reducers.push(reduce),
+            Some(preset) => paths.extend(preset.paths.iter().cloned()),
             None => {
                 let top = entry.split('.').next().unwrap_or_default();
                 if !map.fields.iter().any(|field| field == top) {
@@ -162,25 +151,10 @@ fn project_one(item: &Value, entries: &[String], map: &FieldMap) -> Result<Value
         }
     }
 
-    let base = if paths.is_empty() {
-        Value::Object(Map::new())
-    } else {
-        pick_paths(item, &paths)
-    };
-    if reducers.is_empty() {
-        return Ok(base);
+    if paths.is_empty() {
+        return Ok(Value::Object(Map::new()));
     }
-    // Reducers merge over the base left-to-right; later keys win, mirroring
-    // the object-spread reduce. Spreading a non-object yields nothing, so a
-    // non-object base contributes no entries of its own.
-    let mut acc = match base {
-        Value::Object(map) => map,
-        _ => Map::new(),
-    };
-    for reduce in reducers {
-        acc.extend(reduce(item));
-    }
-    Ok(Value::Object(acc))
+    Ok(pick_paths(item, &paths))
 }
 
 /// Project a fetched payload (single object or array of objects) according to
@@ -264,18 +238,6 @@ mod tests {
         )
         .with_preset("priority", Preset::paths(&["priority"]))
         .with_preset("ids", Preset::paths(&["id"]))
-        .with_preset(
-            "flags",
-            Preset::reduce(|item| {
-                let has_labels = item
-                    .get("labels")
-                    .and_then(Value::as_array)
-                    .is_some_and(|l| !l.is_empty());
-                let mut out = Map::new();
-                out.insert("hasLabels".to_string(), Value::Bool(has_labels));
-                out
-            }),
-        )
     }
 
     fn apply(data: Value, only: Option<&[&str]>) -> Result<Value, OnlyError> {
@@ -338,24 +300,6 @@ mod tests {
     }
 
     #[test]
-    fn function_preset_computes_its_own_slice() {
-        let item = json!({ "id": "1", "title": "T", "labels": ["bug"] });
-        assert_eq!(
-            apply(item, Some(&["flags"])).unwrap(),
-            json!({ "hasLabels": true })
-        );
-    }
-
-    #[test]
-    fn reducers_merge_over_base_paths_left_to_right() {
-        let item = json!({ "id": "1", "labels": ["bug"], "extra": true });
-        assert_eq!(
-            apply(item, Some(&["flags", "ids", "flags"])).unwrap(),
-            json!({ "hasLabels": true, "id": "1" })
-        );
-    }
-
-    #[test]
     fn omitted_only_returns_the_default_set() {
         let item = json!({ "id": "1", "title": "T", "state": { "name": "Open", "type": "unstarted" }, "priority": 3 });
         assert_eq!(
@@ -396,7 +340,7 @@ mod tests {
         let error = apply(json!({ "id": "1" }), Some(&["bogus"])).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Unknown \"only\" field \"bogus\". Valid fields: id, title, state, assignee, priority, labels. Presets: flags, ids, priority."
+            "Unknown \"only\" field \"bogus\". Valid fields: id, title, state, assignee, priority, labels. Presets: ids, priority."
         );
     }
 

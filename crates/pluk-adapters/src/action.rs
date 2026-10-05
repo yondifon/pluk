@@ -1,7 +1,6 @@
 //! The action-adapter factory: declarative REST/CLI integrations.
 //!
-//! Ported from `pluk/src/adapters/kit.ts`. Linear, Sentry, Redis,
-//! Slack and friends declare their tools and client in an
+//! Linear, Redis, Slack and friends declare their tools and client in an
 //! [`ActionAdapterSpec`]; gating against the integration's per-tool config,
 //! logging through [`run_gated`](crate::gate::run_gated), instructions, and
 //! server construction are all supplied here.

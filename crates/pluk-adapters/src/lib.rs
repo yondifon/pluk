@@ -21,7 +21,6 @@ pub mod mongodb;
 mod projection;
 pub mod redis;
 mod registry;
-pub mod sentry;
 pub mod sentry_migration;
 pub mod slack;
 pub mod sql;
@@ -50,7 +49,7 @@ pub use gate::{
 pub use instructions::{InstructionParts, build_instructions};
 pub use key_value::{ConfigProblem, KeptFrom, fold_secret_rows, show_secret_rows};
 pub use projection::{
-    FieldMap, OnlyError, Preset, ReduceFn, apply_only, only_param_description, only_param_schema,
+    FieldMap, OnlyError, Preset, apply_only, only_param_description, only_param_schema,
     only_value, pick_paths,
 };
 pub use registry::{AdapterRegistry, default_registry};

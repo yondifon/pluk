@@ -1,4 +1,4 @@
-//! Action policy for non-SQL adapters (Linear, Sentry, Redis, …): coarse
+//! Action policy for non-SQL adapters (Linear, Redis, …): coarse
 //! read/write/delete/admin gating over tool calls instead of SQL statements.
 
 /// What a tool call does to the service.

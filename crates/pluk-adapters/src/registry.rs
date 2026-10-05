@@ -91,7 +91,6 @@ pub fn default_registry(
     // through the MCP server adapter.
     registry.register_not_offered(crate::slack::SlackAdapter::new(store.clone()))?;
     registry.register_not_offered(crate::linear::LinearAdapter::new(store.clone()))?;
-    registry.register_not_offered(crate::sentry::SentryAdapter::new(store.clone()))?;
     registry.register(crate::mcp_proxy::McpProxyAdapter::new(store.clone()))?;
     Ok(registry)
 }
@@ -205,7 +204,7 @@ mod tests {
         let store = Arc::new(pluk_store::Store::open(&dir.path().join("pluk.db")).expect("open"));
         let registry = default_registry(store, Arc::new(crate::sql::SqlCancelRegistry::default()))
             .expect("registry");
-        for id in ["linear", "sentry", "slack"] {
+        for id in ["linear", "slack"] {
             assert!(registry.get(id).is_some(), "{id} still resolves");
             assert!(registry.list().iter().any(|a| a.id() == id), "{id} still listed");
             assert!(!registry.offered_for_setup(id), "{id} is not offered");
@@ -214,6 +213,7 @@ mod tests {
             assert!(registry.offered_for_setup(id), "{id} is offered");
         }
         assert!(!registry.offered_for_setup("unknown"));
+        assert!(registry.get("sentry").is_none());
     }
 
     #[test]
