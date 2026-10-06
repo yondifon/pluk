@@ -12,6 +12,7 @@ import { toast, type PendingToast } from "./toast.ts";
 
 const STATE_EVENT = "pluk://update-state";
 const NO_UPDATE_EVENT = "pluk://update-none";
+const FOUND_EVENT = "pluk://update-found";
 
 export type UpdateFailureKind = "unreachable" | "download" | "signature" | "other";
 
@@ -74,13 +75,18 @@ export async function mountUpdates(): Promise<void> {
     }
 
     if (announced === notice.version) return;
-    announced = notice.version;
-    toast.info(`Pluk ${notice.version} is available`, {
-      action: { label: "Install", onClick: () => void install(notice.version) },
+    offer(notice.version);
+  }
+
+  function offer(version: string): void {
+    announced = version;
+    toast.info(`Pluk ${version} is available`, {
+      action: { label: "Install", onClick: () => void install(version) },
     });
   }
 
   await listen<UpdateState>(STATE_EVENT, apply);
   await listen(NO_UPDATE_EVENT, () => toast.info("Pluk is up to date"));
+  await listen<string>(FOUND_EVENT, offer);
   apply(await invoke<UpdateState>("get_update_state"));
 }

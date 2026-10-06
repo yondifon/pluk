@@ -31,6 +31,10 @@ pub const STATE_EVENT: &str = "pluk://update-state";
 /// already on the newest version — a background check stays silent.
 pub const NO_UPDATE_EVENT: &str = "pluk://update-none";
 
+/// Emitted only for a check the person asked for that found a newer version,
+/// so the offer shows again even if a background check already made it.
+pub const FOUND_EVENT: &str = "pluk://update-found";
+
 /// Current app version — filled from `CARGO_PKG_VERSION` via tauri.conf.json's
 /// `version` field at build time. Used only for display; the updater plugin
 /// compares against the manifest's `version` itself.
@@ -406,16 +410,20 @@ pub async fn run_check<R: Runtime>(app: AppHandle<R>, user_initiated: bool) {
 
     match fetch_update(&app).await {
         Ok(found) => {
-            let is_none = found.is_none();
+            // The answer goes out before the state, so the window's own
+            // announcement of the new state is already a duplicate it skips.
+            if user_initiated {
+                let _ = match &found {
+                    Some(update) => app.emit(FOUND_EVENT, update.version.clone()),
+                    None => app.emit(NO_UPDATE_EVENT, current_version()),
+                };
+            }
             updater.finish_check(found.map(|update| UpdateInfo {
                 version: update.version.clone(),
                 notes: update.body.clone(),
                 pub_date: update.date.map(|d| d.to_string()),
             }));
             emit_state(&app, &updater);
-            if is_none && user_initiated {
-                let _ = app.emit(NO_UPDATE_EVENT, current_version());
-            }
         }
         Err(error) => {
             updater.fail(check_failure(&error), error.to_string());
