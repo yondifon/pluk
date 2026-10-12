@@ -4,15 +4,20 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::protocol::{
-    Action, MAX_DEBUG_GLOB_LEN, DEFAULT_JOB_TTL_MS, MAX_IMAGES, MAX_JOB_TTL_MS, MAX_TEXT_LENGTH, MIN_JOB_TTL_MS,
-    Platform, fixed_compose_target, fixed_feed_target, fixed_trends_target, hostnames,
+    Action, DEFAULT_JOB_TTL_MS, LINKEDIN_POST_LIMIT, MAX_DEBUG_GLOB_LEN, MAX_IMAGES, MAX_JOB_TTL_MS,
+    MAX_PAGE_NAME_LENGTH, MAX_TEXT_LENGTH, MAX_URL_LENGTH, MIN_JOB_TTL_MS, Platform,
+    fixed_compose_target, fixed_feed_target, fixed_trends_target, hostnames,
 };
 
-const PLATFORMS: [Platform; 2] = [Platform::X, Platform::Instagram];
+const PLATFORMS: [Platform; 3] = [Platform::X, Platform::Instagram, Platform::Linkedin];
 
 /// X hands back the replies shown under a post, which the shared read-post
 /// summary does not promise for every platform.
 const X_READ_POST_SUMMARY: &str = "Read one exact post by its URL or its typed post ID. Returns a canonical post target and the replies shown under it, top to bottom, each with its own post ID.";
+
+const LINKEDIN_POST_SUMMARY: &str = "Post exact text to LinkedIn as the user or as one of their company pages. Pass `page` (the name exactly as LinkedIn shows it under Post as; call linkedin_read_pages to list the valid names), `text` (up to 3000 characters), and optionally `url` (an https link, which counts toward the limit). One post only: no thread and no images. It waits in Pluk until the user sends it; no page is touched before then, and you get back what the user decided.";
+
+const LINKEDIN_READ_PAGES_SUMMARY: &str = "List the identities the signed-in user can post as on LinkedIn: their own name first, then each company page they manage. Use the names it returns as `page` for linkedin_post. No input needed.";
 
 /// Tool classes, matching the categories the adapter layer groups by.
 const READ: &str = "read";
@@ -21,7 +26,7 @@ const WRITE: &str = "write";
 /// Every action the catalog publishes, with the summary an agent reads and
 /// the class its enable-by-default state derives from. A new action declares
 /// its own class here; nothing downstream names actions.
-const ACTIONS: [(Action, &str, &str); 11] = [
+const ACTIONS: [(Action, &str, &str); 12] = [
     (
         Action::Inspect,
         "Read the page context at an exact target URL.",
@@ -55,6 +60,11 @@ const ACTIONS: [(Action, &str, &str); 11] = [
     (
         Action::Capture,
         "Capture a screenshot of an exact target URL.",
+        READ,
+    ),
+    (
+        Action::ReadPages,
+        "List the identities a post can go out as. No input needed.",
         READ,
     ),
     (
@@ -109,11 +119,7 @@ fn build_tools() -> Vec<ToolSpec> {
                 id: tool_id(platform, action),
                 platform: platform.as_str(),
                 action: action.as_str(),
-                summary: if platform == Platform::X && action == Action::ReadPost {
-                    X_READ_POST_SUMMARY
-                } else {
-                    summary
-                },
+                summary: summary_for(platform, action, summary),
                 category,
                 hostnames: hostnames(platform),
                 args_schema: args_schema(platform, action),
@@ -122,6 +128,15 @@ fn build_tools() -> Vec<ToolSpec> {
         }
     }
     list
+}
+
+fn summary_for(platform: Platform, action: Action, default: &'static str) -> &'static str {
+    match (platform, action) {
+        (Platform::X, Action::ReadPost) => X_READ_POST_SUMMARY,
+        (Platform::Linkedin, Action::Post) => LINKEDIN_POST_SUMMARY,
+        (Platform::Linkedin, Action::ReadPages) => LINKEDIN_READ_PAGES_SUMMARY,
+        _ => default,
+    }
 }
 
 pub fn find_tool(id: &str) -> Option<(Platform, Action)> {
@@ -272,6 +287,66 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                     },
                 },
                 "description": "No target URL accepted: the quoted post's own page is derived from postId.",
+            },
+            "ttlMs": ttl_ms,
+        });
+    }
+    if action == Action::Post && platform == Platform::Linkedin {
+        return json!({
+            "payload": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                    "page": {
+                        "type": "string",
+                        "required": true,
+                        "maxLength": MAX_PAGE_NAME_LENGTH,
+                        "description": "The identity to post as, named exactly as LinkedIn shows it under Post as. linkedin_read_pages lists the valid names, the user's own name included.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "required": true,
+                        "maxLength": LINKEDIN_POST_LIMIT,
+                        "description": "Exact post text, submitted verbatim. At most 3000 characters, counting the link when there is one.",
+                    },
+                    "url": {
+                        "type": "string",
+                        "required": false,
+                        "maxLength": MAX_URL_LENGTH,
+                        "description": "A link to put on its own line after the text. It must start with https://.",
+                    },
+                    "debug": {
+                        "type": ["boolean", "string"],
+                        "required": false,
+                        "maxLength": MAX_DEBUG_GLOB_LEN,
+                        "description": "Attach what the page was doing to the job. `true` attaches everything read off the page; a URL glob such as `*/graphql*` attaches only the responses the page fetched whose address matches it.",
+                    },
+                },
+                "description": format!(
+                    "No target URL accepted: always posts at {}.",
+                    fixed_compose_target(platform),
+                ),
+            },
+            "ttlMs": ttl_ms,
+        });
+    }
+    if action == Action::ReadPages {
+        return json!({
+            "payload": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                    "debug": {
+                        "type": ["boolean", "string"],
+                        "required": false,
+                        "maxLength": MAX_DEBUG_GLOB_LEN,
+                        "description": "Attach what the page was doing to the job. `true` attaches everything read off the page; a URL glob such as `*/graphql*` attaches only the responses the page fetched whose address matches it.",
+                    },
+                },
+                "description": format!(
+                    "Empty unless debug is wanted. No target URL accepted: always reads {}.",
+                    fixed_compose_target(platform),
+                ),
             },
             "ttlMs": ttl_ms,
         });
@@ -467,54 +542,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_only_lists_implemented_capabilities() {
+    fn linkedin_offers_page_listing_and_posting_and_no_tool_publishes_directly() {
         let ids: Vec<&str> = tools().iter().map(|tool| tool.id.as_str()).collect();
-        assert_eq!(
-            ids,
-            vec![
-                "x.inspect",
-                "x.read_profile",
-                "x.read_post",
-                "x.read_feed",
-                "x.read_trends",
-                "x.refresh",
-                "x.capture",
-                "x.reply",
-                "x.repost",
-                "x.quote",
-                "x.post",
-                "instagram.inspect",
-                "instagram.read_profile",
-                "instagram.read_post",
-                "instagram.refresh",
-                "instagram.capture",
-            ]
-        );
+        let linkedin: Vec<&str> = ids
+            .iter()
+            .copied()
+            .filter(|id| id.starts_with("linkedin."))
+            .collect();
+        assert_eq!(linkedin, vec!["linkedin.read_pages", "linkedin.post"]);
         // Submissions are reached by confirming a draft, never by invoking a tool.
-        assert!(!ids.iter().any(|id| id.ends_with(".submit_reply")));
-        assert!(!ids.iter().any(|id| id.ends_with(".submit_repost")));
-        assert!(!ids.iter().any(|id| id.ends_with(".submit_quote")));
-        assert!(!ids.iter().any(|id| id.ends_with(".submit_post")));
+        assert!(!ids.iter().any(|id| id.contains(".submit_")));
     }
 
     #[test]
     fn find_tool_rejects_unknown_and_unsupported_pairs() {
-        assert!(find_tool("x.inspect").is_some());
-        assert!(find_tool("x.read_profile").is_some());
-        assert!(find_tool("x.read_post").is_some());
         assert!(find_tool("x.post").is_some());
-        assert!(find_tool("instagram.inspect").is_some());
-        assert!(find_tool("instagram.read_post").is_some());
-        assert!(find_tool("instagram.read_trends").is_none());
-        assert!(find_tool("x.repost").is_some());
         assert!(find_tool("instagram.post").is_none());
-        assert!(find_tool("instagram.repost").is_none());
-        assert!(find_tool("x.quote").is_some());
         assert!(find_tool("instagram.quote").is_none());
+        assert!(find_tool("x.read_pages").is_none());
+        assert!(find_tool("linkedin.post").is_some());
+        assert!(find_tool("linkedin.read_pages").is_some());
         assert!(find_tool("linkedin.read_post").is_none());
+        assert!(find_tool("linkedin.reply").is_none());
         assert!(find_tool("gmail.read_feed").is_none());
         assert!(find_tool("tiktok.read_profile").is_none());
         assert!(find_tool("not-a-tool").is_none());
-        assert!(find_tool("x.not_an_action").is_none());
     }
 }

@@ -101,6 +101,9 @@ pub struct Draft {
     pub kind: String,
     pub target_url: String,
     pub post_id: Option<String>,
+    pub page: Option<String>,
+    #[serde(rename = "url")]
+    pub link_url: Option<String>,
     /// The whole post as one text; the parts joined when it is a thread.
     pub text: String,
     /// The posts that go out, in order. One entry for a plain post.
@@ -233,6 +236,10 @@ pub struct DraftInput<'a> {
     pub kind: &'a str,
     pub target_url: &'a str,
     pub post_id: Option<&'a str>,
+    /// Part of what makes two asks the same: the same words for another page
+    /// are another post.
+    pub page: Option<&'a str>,
+    pub link_url: Option<&'a str>,
     pub text: &'a str,
     /// The posts of a thread, in order. Empty for a plain post.
     pub parts: &'a [String],
@@ -328,13 +335,15 @@ impl BrowserStore<'_> {
         }
         self.conn
             .query_row(
-                "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id FROM browser_drafts WHERE integration_id = ? AND status = 'pending' AND platform = ? AND kind = ? AND target_url = ? AND post_id IS ? AND text = ? AND NOT EXISTS (SELECT 1 FROM browser_draft_images WHERE browser_draft_images.integration_id = browser_drafts.integration_id AND browser_draft_images.draft_id = browser_drafts.id) ORDER BY created_at DESC LIMIT 1",
+                "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id, page, link_url FROM browser_drafts WHERE integration_id = ? AND status = 'pending' AND platform = ? AND kind = ? AND target_url = ? AND post_id IS ? AND page IS ? AND link_url IS ? AND text = ? AND NOT EXISTS (SELECT 1 FROM browser_draft_images WHERE browser_draft_images.integration_id = browser_drafts.integration_id AND browser_draft_images.draft_id = browser_drafts.id) ORDER BY created_at DESC LIMIT 1",
                 params![
                     self.integration_id.as_str(),
                     input.platform,
                     input.kind,
                     input.target_url,
                     input.post_id,
+                    input.page,
+                    input.link_url,
                     input.text
                 ],
                 read_draft_row,
@@ -419,7 +428,7 @@ impl BrowserStore<'_> {
         let parts_json = serde_json::to_string(input.parts)
             .map_err(|_| BrowserError::InvalidData("Thread parts could not be stored.".to_owned()))?;
         self.conn.execute(
-            "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, parts_json, debug, status, created_at, integration_id, ttl_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+            "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, parts_json, debug, status, created_at, integration_id, ttl_ms, page, link_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
             params![
                 id,
                 input.platform,
@@ -431,7 +440,9 @@ impl BrowserStore<'_> {
                 input.debug,
                 now,
                 self.integration_id.as_str(),
-                input.ttl_ms
+                input.ttl_ms,
+                input.page,
+                input.link_url
             ],
         )?;
         let mut next_ordinal: std::collections::HashMap<usize, i64> = std::collections::HashMap::new();
@@ -799,6 +810,12 @@ impl BrowserStore<'_> {
             if quote {
                 payload["postId"] = serde_json::json!(draft.post_id);
             }
+            if let Some(page) = &draft.page {
+                payload["page"] = serde_json::json!(page);
+            }
+            if let Some(link_url) = &draft.link_url {
+                payload["url"] = serde_json::json!(link_url);
+            }
             if has_images {
                 // Every part carries its own list, empty ones included, so
                 // the extension knows exactly which of its composers get
@@ -987,7 +1004,7 @@ impl BrowserStore<'_> {
     pub fn list_pending_drafts(&mut self, now: i64) -> Result<Vec<Draft>, BrowserError> {
         self.expire_drafts(now)?;
         let mut statement = self.conn.prepare(
-            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id FROM browser_drafts WHERE integration_id = ? AND status = 'pending' ORDER BY created_at DESC",
+            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id, page, link_url FROM browser_drafts WHERE integration_id = ? AND status = 'pending' ORDER BY created_at DESC",
         )?;
         let rows: Vec<DraftRow> = statement
             .query_map([self.integration_id.as_str()], read_draft_row)?
@@ -1341,7 +1358,7 @@ impl BrowserStore<'_> {
 
     fn get_draft_row(&self, id: &str) -> Result<Option<DraftRow>, BrowserError> {
         self.conn.query_row(
-            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id FROM browser_drafts WHERE id = ? AND integration_id = ?",
+            "SELECT id, platform, kind, target_url, post_id, text, parts_json, status, created_at, confirmed_at, submitted_at, scheduled_at, debug, integration_id, page, link_url FROM browser_drafts WHERE id = ? AND integration_id = ?",
             params![id, self.integration_id.as_str()],
             read_draft_row,
         ).optional().map_err(BrowserError::from)
@@ -1610,6 +1627,8 @@ struct DraftRow {
     scheduled_at: Option<i64>,
     debug: bool,
     integration_id: String,
+    page: Option<String>,
+    link_url: Option<String>,
 }
 
 fn read_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRow> {
@@ -1650,6 +1669,8 @@ fn read_draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
         scheduled_at: row.get(11)?,
         debug: row.get(12)?,
         integration_id: row.get(13)?,
+        page: row.get(14)?,
+        link_url: row.get(15)?,
     })
 }
 
@@ -1693,6 +1714,8 @@ fn to_draft(
         kind: row.kind,
         target_url: row.target_url,
         post_id: row.post_id,
+        page: row.page,
+        link_url: row.link_url,
         text: row.text,
         parts: serde_json::from_str(&row.parts_json).unwrap_or_default(),
         images,
@@ -1753,6 +1776,8 @@ mod tests {
                     kind: "post",
                     target_url: "https://x.com/compose/post",
                     post_id: None,
+                    page: None,
+                    link_url: None,
                     text,
                     parts: &[],
                     parts_images: &[vec![]],
@@ -1772,6 +1797,8 @@ mod tests {
                     kind: "reply",
                     target_url: "https://x.com/status/42",
                     post_id: Some("42"),
+                    page: None,
+                    link_url: None,
                     text,
                     parts: &[],
                     parts_images: &[vec![]],
@@ -1928,6 +1955,8 @@ mod tests {
             kind: "post",
             target_url: "https://x.com/compose/post",
             post_id: None,
+            page: None,
+            link_url: None,
             text: "Same words",
             parts: &[],
             parts_images: &[vec![]],
@@ -1946,6 +1975,96 @@ mod tests {
         assert!(store.find_pending_draft(&input, 103).unwrap().is_none());
     }
 
+    static NO_IMAGES: [Vec<String>; 1] = [Vec::new()];
+
+    fn linkedin_input<'a>(page: &'a str, text: &'a str, link_url: Option<&'a str>) -> DraftInput<'a> {
+        DraftInput {
+            platform: "linkedin",
+            kind: "post",
+            target_url: "https://www.linkedin.com/sharing/compose",
+            post_id: None,
+            page: Some(page),
+            link_url,
+            text,
+            parts: &[],
+            parts_images: &NO_IMAGES,
+            debug: false,
+            ttl_ms: DEFAULT_JOB_TTL_MS,
+        }
+    }
+
+    /// The same words for another page, or with another link, are another
+    /// post: folding them together would send a post out as the wrong identity.
+    #[test]
+    fn a_linkedin_post_is_the_same_ask_only_for_the_same_page_text_and_link() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        let first = store
+            .create_draft(&linkedin_input("Acme Inc", "Launch day", Some("https://acme.test/launch")), 100)
+            .unwrap();
+
+        let found = |store: &mut BrowserStore<'_>, input: DraftInput<'_>| {
+            store.find_pending_draft(&input, 101).unwrap().map(|draft| draft.id)
+        };
+        assert_eq!(
+            found(&mut store, linkedin_input("Acme Inc", "Launch day", Some("https://acme.test/launch"))),
+            Some(first.id.clone())
+        );
+        assert_eq!(found(&mut store, linkedin_input("Other Page", "Launch day", Some("https://acme.test/launch"))), None);
+        assert_eq!(found(&mut store, linkedin_input("Acme Inc", "Launch day", Some("https://acme.test/other"))), None);
+        assert_eq!(found(&mut store, linkedin_input("Acme Inc", "Launch day", None)), None);
+    }
+
+    /// A LinkedIn post carries its page and link from the waiting draft into
+    /// the one command that sends it, and never takes a queue slot.
+    #[test]
+    fn a_linkedin_post_hands_its_page_and_link_to_the_submission_and_cannot_be_queued() {
+        let directory = tempdir().unwrap();
+        let database = open(&directory);
+        let mut store = database.browser();
+        // Reading a draft back expires old ones against the real clock.
+        let now = now_millis();
+        let queued = store
+            .create_draft(&linkedin_input("Acme Inc", "Queue me", None), now)
+            .unwrap();
+        assert!(!queued.can_queue());
+        assert!(matches!(
+            store.consume_draft(&queued.id, now, true),
+            Err(BrowserError::InvalidData(_))
+        ));
+        assert_eq!(store.get_draft(&queued.id).unwrap().unwrap().status, "pending");
+        assert!(store.list_schedule_reservations(10, now).unwrap().is_empty());
+
+        let draft = store
+            .create_draft(&linkedin_input("Acme Inc", "Launch day", Some("https://acme.test/launch")), now)
+            .unwrap();
+        assert_eq!(draft.page.as_deref(), Some("Acme Inc"));
+        let shown = serde_json::to_value(&draft).unwrap();
+        assert_eq!(shown["page"], "Acme Inc");
+        assert_eq!(shown["url"], "https://acme.test/launch");
+
+        let submission = store.consume_draft(&draft.id, now, false).unwrap().unwrap();
+        assert_eq!(submission.job.platform, "linkedin");
+        assert_eq!(submission.job.action, "submit_post");
+        assert_eq!(submission.job.target_url, "https://www.linkedin.com/sharing/compose");
+        assert_eq!(
+            submission.job.payload,
+            serde_json::json!({
+                "kind": "post_submission",
+                "draftId": draft.id,
+                "text": "Launch day",
+                "parts": ["Launch day"],
+                "page": "Acme Inc",
+                "url": "https://acme.test/launch",
+            })
+        );
+
+        let plain = prepare_post_draft(&mut store, "No page here", now);
+        let shown = serde_json::to_value(&plain).unwrap();
+        assert!(shown["page"].is_null() && shown["url"].is_null());
+    }
+
     #[test]
     fn a_thread_keeps_its_parts_and_hands_them_to_the_submission() {
         let directory = tempdir().unwrap();
@@ -1959,6 +2078,8 @@ mod tests {
                     kind: "post",
                     target_url: "https://x.com/compose/post",
                     post_id: None,
+                    page: None,
+                    link_url: None,
                     text: "First post.\n\nSecond post.",
                     parts: &parts,
                     parts_images: &[vec![], vec![]],
@@ -1987,6 +2108,8 @@ mod tests {
             kind: "quote",
             target_url: "https://x.com/i/status/42",
             post_id: Some("42"),
+            page: None,
+            link_url: None,
             text: "Worth reading.",
             parts: &[],
             parts_images: &[vec![]],
@@ -2066,6 +2189,8 @@ mod tests {
                     kind: "post",
                     target_url: "https://x.com/compose/post",
                     post_id: None,
+                    page: None,
+                    link_url: None,
                     text: "First",
                     parts: &[],
                     parts_images: &[vec![path_a.clone()]],
@@ -2084,6 +2209,8 @@ mod tests {
                     kind: "post",
                     target_url: "https://x.com/compose/post",
                     post_id: None,
+                    page: None,
+                    link_url: None,
                     text: "Second",
                     parts: &[],
                     parts_images: &[vec![path_b]],
@@ -2128,6 +2255,8 @@ mod tests {
                     kind: "post",
                     target_url: "https://x.com/compose/post",
                     post_id: None,
+                    page: None,
+                    link_url: None,
                     text: "First.\n\nSecond.\n\nThird.",
                     parts: &parts,
                     parts_images: &[
@@ -2177,6 +2306,8 @@ mod tests {
                 kind: "post",
                 target_url: "https://x.com/compose/post",
                 post_id: None,
+                page: None,
+                link_url: None,
                 text: "Bad image",
                 parts: &[],
                 parts_images: &[vec![path.to_string_lossy().into_owned()]],
@@ -2203,6 +2334,8 @@ mod tests {
                     kind: "post",
                     target_url: "https://x.com/compose/post",
                     post_id: None,
+                    page: None,
+                    link_url: None,
                     text: "With an image",
                     parts: &[],
                     parts_images: &[vec![path]],

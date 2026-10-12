@@ -24,6 +24,9 @@ pub struct PostPrompt {
     pub integration_id: String,
     /// The draft this decides; the answer is applied to this one only.
     pub draft_id: String,
+    pub platform: String,
+    pub page: Option<String>,
+    pub url: Option<String>,
     /// The full text, verbatim, never an excerpt.
     pub text: String,
     /// The posts of a thread, in order. Empty for a plain post.
@@ -50,6 +53,9 @@ impl PostPrompt {
         PostPrompt {
             integration_id: draft.integration_id.clone(),
             draft_id: draft.id.clone(),
+            platform: draft.platform.clone(),
+            page: draft.page.clone(),
+            url: draft.link_url.clone(),
             text: draft.text.clone(),
             parts: draft.parts.clone(),
             images: draft.images.clone(),

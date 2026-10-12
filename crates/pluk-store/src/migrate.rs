@@ -23,6 +23,7 @@ type Step = fn(&mut Connection) -> Result<()>;
 const LADDER: &[Step] = &[
     migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
     migrate_v8, migrate_v9, migrate_v10, migrate_v11, migrate_v12, migrate_v13, migrate_v14,
+    migrate_v15,
 ];
 
 /// Bring `conn` up to the latest version.
@@ -511,6 +512,21 @@ fn migrate_v14(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 15: a draft can name the identity it posts as (a LinkedIn page) and
+/// a link that goes with it. Both are optional and existing drafts keep NULL.
+fn migrate_v15(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "
+        ALTER TABLE browser_drafts ADD COLUMN page TEXT;
+        ALTER TABLE browser_drafts ADD COLUMN link_url TEXT;
+        ",
+    )?;
+    tx.pragma_update(None, "user_version", 15)?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn rebuild_browser_drafts(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
@@ -939,6 +955,30 @@ mod tests {
                 assert_eq!(columns_of(conn, table), expected, "{table}");
             }
         }
+    }
+
+    /// Drafts written before pages existed stay readable and sendable: the new
+    /// columns are optional and nothing is backfilled.
+    #[test]
+    fn upgrades_v14_keeping_existing_drafts_without_a_page() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &LADDER[..14] {
+            step(&mut conn).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO browser_drafts (id, platform, kind, target_url, text, status, created_at) VALUES ('draft-1', 'x', 'post', 'https://x.com/compose/post', 'Saved post', 'pending', 100)",
+            [],
+        )
+        .unwrap();
+        run(&mut conn).unwrap();
+        let kept: (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT text, page, link_url FROM browser_drafts WHERE id = 'draft-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kept, ("Saved post".to_owned(), None, None));
     }
 
     #[test]

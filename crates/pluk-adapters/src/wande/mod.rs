@@ -48,7 +48,7 @@ const READ: &str = "read";
 const MAX_WAIT: Duration = Duration::from_secs(45);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. Instagram tools are read-only: profiles, posts, and screenshots, no posting or replying there. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. payload.images takes 1 to 4 absolute local PNG or JPEG file paths for a plain post or a reply, each under 5 MiB. For a thread, give each part its own images instead: pass thread as a mix of exact strings and { text, images } objects, and do not also pass the top-level images field — that combination is refused, not guessed at. The user sees exactly those images under each part before deciding, and only sends once every one has loaded. If any part's images fail to attach or upload in the browser, nothing is posted, text included; the user sees why and can try again. x_repost shares a post as it stands, adding nothing: pass the exact post ID and the user decides in Pluk, the same way. A post they have already reposted comes back as done, and nothing undoes a repost. x_quote comments on a post in the user's own feed: pass the exact post ID and the quote's own text, with images or a thread under the same rules as x_post; it waits in Pluk for the user the same way. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. Read tools and get_job wait up to 45 seconds for a browser result; if a call returns a jobId, call get_job with it to collect the outcome. x_post and x_reply wait up to 45 seconds for the user's answer, then hand back an id the same way. Pass payload.debug true on x_post or x_reply to have a screenshot and the page HTML attached to the browser job when the page refuses it.";
+const AGENT_HINT: &str = "Use this to read and post on the sites the user is signed in to, in their own Chrome window. Each read tool drives one real page and hands back what it read. Instagram tools are read-only: profiles, posts, and screenshots, no posting or replying there. x_post and x_reply touch no page: the exact text is handed to the user in Pluk, who sends it now, queues it for later, or discards it. One call covers writing and asking, and you get back what the user decided. Only their decision fills the composer and submits. X allows 280 weighted characters per post and a link counts 23; longer text is cut into a thread at sentence ends, or pass thread for exact parts. payload.images takes 1 to 4 absolute local PNG or JPEG file paths for a plain post or a reply, each under 5 MiB. For a thread, give each part its own images instead: pass thread as a mix of exact strings and { text, images } objects, and do not also pass the top-level images field — that combination is refused, not guessed at. The user sees exactly those images under each part before deciding, and only sends once every one has loaded. If any part's images fail to attach or upload in the browser, nothing is posted, text included; the user sees why and can try again. x_repost shares a post as it stands, adding nothing: pass the exact post ID and the user decides in Pluk, the same way. A post they have already reposted comes back as done, and nothing undoes a repost. x_quote comments on a post in the user's own feed: pass the exact post ID and the quote's own text, with images or a thread under the same rules as x_post; it waits in Pluk for the user the same way. linkedin_read_pages lists the identities the user can post as on LinkedIn: their own name first, then each company page. linkedin_post takes page (one of those names, exactly as listed), text up to 3000 characters, and optionally an https url that counts toward the limit; it is one post with no images and no thread, and it waits in Pluk for the user the same way as x_post. You cannot publish anything yourself and there is no tool that does; if the user says no, that is the answer. Read tools and get_job wait up to 45 seconds for a browser result; if a call returns a jobId, call get_job with it to collect the outcome. x_post, x_reply and linkedin_post wait up to 45 seconds for the user's answer, then hand back an id the same way. Pass payload.debug true on x_post, x_reply or linkedin_post to have a screenshot and the page HTML attached to the browser job when the page refuses it.";
 
 const ACCESS: &str = "Reads and posts through a Chrome window the user is signed in to, one page at a time. Every post is shown to the user in full inside Pluk and goes out only if they say so.";
 
@@ -702,6 +702,8 @@ mod tests {
                 "instagram_read_post",
                 "instagram_refresh",
                 "instagram_capture",
+                "linkedin_read_pages",
+                "linkedin_post",
                 GET_JOB,
             ]
         );
@@ -828,6 +830,33 @@ mod tests {
             json!(["text"])
         );
         assert_no_boolean_required(&Value::Object(schema));
+    }
+
+    #[test]
+    fn linkedin_posting_publishes_a_required_page_and_text_and_no_images() {
+        let post = pluk_browser::catalog_tools()
+            .into_iter()
+            .find(|tool| tool.id == "linkedin.post")
+            .expect("linkedin post is in the catalog");
+        assert!(post.summary.contains("linkedin_read_pages"));
+        assert!(!post.summary.contains('\u{2014}'));
+        let schema = input_schema(&post.args_schema);
+        assert!(schema["properties"].get("targetUrl").is_none());
+        let payload = &schema["properties"]["payload"];
+        assert_eq!(payload["required"], json!(["page", "text"]));
+        for field in ["images", "thread"] {
+            assert!(payload["properties"].get(field).is_none(), "{field} is offered");
+        }
+        assert_no_boolean_required(&Value::Object(schema));
+    }
+
+    #[test]
+    fn linkedin_pages_can_be_listed_by_default_but_posting_needs_opting_in() {
+        let fresh = registered(None);
+        assert!(fresh.contains(&"linkedin_read_pages".to_string()));
+        assert!(!fresh.contains(&"linkedin_post".to_string()));
+        let on = r#"{"tools":{"linkedin_post":{"enabled":true}}}"#;
+        assert!(registered(Some(on)).contains(&"linkedin_post".to_string()));
     }
 
     /// No property anywhere in a published schema may keep its `required` as

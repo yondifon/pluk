@@ -52,6 +52,9 @@ pub struct WandePosts {
 #[serde(rename_all = "camelCase")]
 pub struct WaitingPost {
     pub id: String,
+    pub platform: String,
+    pub page: Option<String>,
+    pub url: Option<String>,
     pub text: String,
     /// The posts of a thread, in order. Empty for a plain post.
     pub parts: Vec<String>,
@@ -90,6 +93,9 @@ impl From<Draft> for WaitingPost {
             quoting: draft.quoted,
             parts: draft.parts,
             images: draft.images,
+            platform: draft.platform,
+            page: draft.page,
+            url: draft.link_url,
             text: draft.text,
             id: draft.id,
         }

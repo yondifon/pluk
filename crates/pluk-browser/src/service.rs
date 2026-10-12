@@ -418,6 +418,8 @@ impl BrowserState {
             kind: request.action.as_str(),
             target_url: &request.target_url,
             post_id: request.payload.get("postId").and_then(Value::as_str),
+            page: request.payload.get("page").and_then(Value::as_str),
+            link_url: request.payload.get("url").and_then(Value::as_str),
             text: request
                 .payload
                 .get("text")
@@ -873,7 +875,7 @@ impl BrowserState {
             .ok()??;
         let data: Value = serde_json::from_slice(&artifact.data).ok()?;
         let data = parse_result_data(Some(&data)).ok()?;
-        if publishes_new_post(&job.action) && !is_valid_submit_post_data(&data) {
+        if publishes_new_post(&job.action) && !is_valid_submit_post_data(&data, &job.platform) {
             return None;
         }
         Some(data)
@@ -1000,7 +1002,10 @@ impl BrowserState {
             );
         }
         if publishes_new_post(&job.action)
-            && !result.data.as_ref().is_some_and(is_valid_submit_post_data)
+            && !result
+                .data
+                .as_ref()
+                .is_some_and(|data| is_valid_submit_post_data(data, &job.platform))
         {
             return ("unknown", None, Some(invalid_result()));
         }
@@ -1979,16 +1984,19 @@ fn invalid_result() -> ProtocolErrorView {
     }
 }
 
-/// Whether `data` is a submission result worth trusting as a posted X status:
-/// a numeric id and a status URL for that same platform and id, both within
-/// the protocol's own bounds.
 /// Whether a job's action sends a post of its own, which only counts as sent
 /// once the page names the post it made.
 fn publishes_new_post(action: &str) -> bool {
     action == Action::SubmitPost.as_str() || action == Action::SubmitQuote.as_str()
 }
 
-fn is_valid_submit_post_data(data: &Value) -> bool {
+/// Whether `data` is a submission result worth trusting as a post made on the
+/// job's own platform: a numeric id and a post URL for that same platform and
+/// id, both within the protocol's own bounds.
+fn is_valid_submit_post_data(data: &Value, job_platform: &str) -> bool {
+    let Some(platform) = Platform::from_str(job_platform) else {
+        return false;
+    };
     data.as_object().is_some_and(|data| {
         let Some(posted_id) = data.get("postedId").and_then(Value::as_str) else {
             return false;
@@ -2002,16 +2010,19 @@ fn is_valid_submit_post_data(data: &Value) -> bool {
         else {
             return false;
         };
+        let id_suffix = match platform {
+            Platform::X => format!("/status/{posted_id}"),
+            Platform::Linkedin => format!("/urn:li:activity:{posted_id}"),
+            Platform::Instagram => return false,
+        };
         data.get("kind").and_then(Value::as_str) == Some("submission")
-            && data.get("platform").and_then(Value::as_str) == Some("x")
+            && data.get("platform").and_then(Value::as_str) == Some(platform.as_str())
             && !posted_id.is_empty()
             && posted_id.len() <= MAX_ID_LENGTH
             && posted_id.chars().all(|value| value.is_ascii_digit())
             && posted_url.len() <= MAX_URL_LENGTH
-            && canonicalize_target_url(posted_url, Platform::X).is_ok()
-            && path
-                .rsplit_once("/status/")
-                .is_some_and(|(_, value)| value == posted_id)
+            && canonicalize_target_url(posted_url, platform).is_ok()
+            && path.ends_with(&id_suffix)
     })
 }
 
@@ -2288,6 +2299,16 @@ mod tests {
         token: &str,
         capabilities: &[&str],
     ) -> TestSocket {
+        pair_platform_for(fixture, integration_id, token, "x", capabilities).await
+    }
+
+    async fn pair_platform_for(
+        fixture: &Fixture,
+        integration_id: &str,
+        token: &str,
+        platform: &str,
+        capabilities: &[&str],
+    ) -> TestSocket {
         let (mut socket, _) = connect_async(fixture.socket_url(token)).await.unwrap();
         let ready = socket.next().await.unwrap().unwrap();
         assert!(ready.to_text().unwrap().contains("\"type\":\"ready\""));
@@ -2298,7 +2319,7 @@ mod tests {
                 "version": 1,
                 "type": "hello",
                 "extensionVersion": "fixture",
-                "capabilities": [{ "platform": "x", "capabilities": capabilities }],
+                "capabilities": [{ "platform": platform, "capabilities": capabilities }],
                 "issuedAt": now,
                 "expiresAt": now + 60_000
             }),
@@ -2918,6 +2939,140 @@ mod tests {
         );
     }
 
+    fn linkedin_job(draft_id: &str) -> Job {
+        Job {
+            integration_id: LEGACY.to_owned(),
+            id: "job-1".to_owned(),
+            command_id: "command-1".to_owned(),
+            platform: "linkedin".to_owned(),
+            action: "submit_post".to_owned(),
+            target_url: "https://www.linkedin.com/sharing/compose".to_owned(),
+            payload: json!({ "kind": "post_submission", "draftId": draft_id }),
+            status: "running".to_owned(),
+            created_at: 1_000,
+            expires_at: 2_000,
+            started_at: Some(1_000),
+            finished_at: None,
+            error: None,
+            result: None,
+            dispatch_count: 1,
+            draft_id: Some(draft_id.to_owned()),
+            artifacts: Vec::new(),
+        }
+    }
+
+    fn submission_result(job: &Job, data: Value) -> ResultMessage {
+        ResultMessage {
+            job_id: job.id.clone(),
+            command_id: job.command_id.clone(),
+            issued_at: 1_000,
+            expires_at: 2_000,
+            succeeded: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_linkedin_post_counts_as_sent_only_with_its_own_activity_link() {
+        let fixture = Fixture::start().await;
+        let job = linkedin_job("draft-1");
+        let outcome = |data: Value| {
+            fixture
+                .state
+                .validate_result(&job, &submission_result(&job, data))
+                .0
+        };
+        let activity = "https://www.linkedin.com/feed/update/urn:li:activity:7515370849936355329/";
+        let valid = json!({
+            "kind": "submission", "platform": "linkedin",
+            "postedId": "7515370849936355329", "postedUrl": activity, "linkPreview": true
+        });
+        assert_eq!(outcome(valid.clone()), "succeeded");
+
+        let mut no_preview = valid.clone();
+        no_preview["linkPreview"] = json!(false);
+        assert_eq!(outcome(no_preview), "succeeded");
+
+        let changed = |key: &str, value: Value| {
+            let mut data = valid.clone();
+            data[key] = value;
+            data
+        };
+        for (name, data) in [
+            ("x-style url", changed("postedUrl", json!("https://x.com/owner/status/7515370849936355329"))),
+            ("x platform", changed("platform", json!("x"))),
+            ("other id", changed("postedId", json!("42"))),
+            ("non-numeric id", changed("postedId", json!("abc"))),
+            ("other host", changed("postedUrl", json!("https://evil.test/feed/update/urn:li:activity:7515370849936355329/"))),
+            ("other kind", changed("kind", json!("page"))),
+        ] {
+            assert_eq!(outcome(data), "unknown", "{name} was trusted");
+        }
+
+        // An X job does not take a LinkedIn answer either.
+        let mut x_job = linkedin_job("draft-2");
+        x_job.platform = "x".to_owned();
+        let (status, _, _) = fixture.state.validate_result(&x_job, &submission_result(&x_job, valid));
+        assert_eq!(status, "unknown");
+    }
+
+    /// A LinkedIn post asked for, confirmed, and sent: the page and link reach
+    /// the one command the extension gets, and the same ask twice is one post.
+    #[tokio::test]
+    async fn a_requested_linkedin_post_reaches_the_extension_with_its_page_and_link() {
+        let fixture = Fixture::start().await;
+        let state = &fixture.state;
+        let mut socket =
+            pair_platform_for(&fixture, LEGACY, TOKEN, "linkedin", &["read_pages", "submit_post"]).await;
+        let request = |page: &str| {
+            job_request(json!({
+                "platform": "linkedin", "action": "post",
+                "payload": { "page": page, "text": "Launch day", "url": "https://acme.test/launch" }
+            }))
+        };
+
+        let first = state.start(LEGACY, &request("Acme Inc")).unwrap();
+        let again = state.start(LEGACY, &request("Acme Inc")).unwrap();
+        let other = state.start(LEGACY, &request("Acme Labs")).unwrap();
+        assert_eq!(first["draft"]["id"], again["draft"]["id"]);
+        assert_ne!(first["draft"]["id"], other["draft"]["id"]);
+        assert_eq!(first["draft"]["page"], "Acme Inc");
+        assert_eq!(first["draft"]["url"], "https://acme.test/launch");
+
+        let draft_id = first["draft"]["id"].as_str().unwrap().to_owned();
+        assert!(state.confirm_draft(LEGACY, &draft_id, true).is_err());
+        assert_eq!(state.pending_drafts(LEGACY).unwrap().len(), 2, "a refused queue leaves both waiting");
+        assert!(state.store.browser().list_schedule_reservations(10, state.now()).unwrap().is_empty());
+
+        state.confirm_draft(LEGACY, &draft_id, false).unwrap();
+        let command = next_command(&mut socket).await;
+        assert_eq!(command["platform"], "linkedin");
+        assert_eq!(command["action"], "submit_post");
+        assert_eq!(command["targetUrl"], "https://www.linkedin.com/sharing/compose");
+        assert_eq!(command["payload"]["page"], "Acme Inc");
+        assert_eq!(command["payload"]["url"], "https://acme.test/launch");
+        assert_eq!(command["payload"]["parts"], json!(["Launch day"]));
+    }
+
+    #[tokio::test]
+    async fn listing_linkedin_pages_dispatches_a_read_command() {
+        let fixture = Fixture::start().await;
+        let state = &fixture.state;
+        let mut socket =
+            pair_platform_for(&fixture, LEGACY, TOKEN, "linkedin", &["read_pages", "submit_post"]).await;
+        let started = state
+            .start(LEGACY, &job_request(json!({
+                "platform": "linkedin", "action": "read_pages", "payload": {}
+            })))
+            .unwrap();
+        assert!(started.get("draft").is_none());
+        let command = next_command(&mut socket).await;
+        assert_eq!(command["action"], "read_pages");
+        assert_eq!(command["platform"], "linkedin");
+        assert_eq!(command["payload"], json!({ "kind": "empty" }));
+    }
+
     // Slow, real-transport reproduction: drives the production TypeScript
     // BrowserBridge (extension/transport-repro.ts) against this real Axum
     // WebSocket server over a real loopback socket, so any drift between the
@@ -3044,11 +3199,7 @@ mod tests {
         assert!(tools.iter().any(|tool| tool["id"] == "x.read_profile"));
         assert!(tools.iter().any(|tool| tool["id"] == "x.read_post"));
         assert!(tools.iter().any(|tool| tool["id"] == "instagram.inspect"));
-        assert!(
-            tools
-                .iter()
-                .all(|tool| tool["platform"] == "x" || tool["platform"] == "instagram")
-        );
+        assert!(tools.iter().any(|tool| tool["id"] == "linkedin.post"));
 
         // An unauthenticated call is rejected before the catalog is even read.
         let missing_auth = client.get(&tools_url).send().await.unwrap();

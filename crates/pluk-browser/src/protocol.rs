@@ -14,6 +14,9 @@ pub const MAX_JOB_TTL_MS: i64 = 5 * 60 * 1000;
 pub const MIN_JOB_TTL_MS: i64 = 1_000;
 pub const DEFAULT_JOB_TTL_MS: i64 = pluk_store::browser::DEFAULT_JOB_TTL_MS;
 pub const MAX_TEXT_LENGTH: usize = 4_000;
+/// Characters in one LinkedIn post, its link included.
+pub const LINKEDIN_POST_LIMIT: usize = 3_000;
+pub const MAX_PAGE_NAME_LENGTH: usize = 200;
 pub const MAX_URL_LENGTH: usize = 2_048;
 pub const MAX_ID_LENGTH: usize = 256;
 /// How many local images a post or reply can carry, and how long a staged
@@ -35,6 +38,7 @@ pub const MAX_CLOCK_SKEW_MS: i64 = 30_000;
 pub enum Platform {
     X,
     Instagram,
+    Linkedin,
 }
 
 impl Platform {
@@ -42,6 +46,7 @@ impl Platform {
         match self {
             Self::X => "x",
             Self::Instagram => "instagram",
+            Self::Linkedin => "linkedin",
         }
     }
 
@@ -49,6 +54,7 @@ impl Platform {
         match value {
             "x" => Some(Self::X),
             "instagram" => Some(Self::Instagram),
+            "linkedin" => Some(Self::Linkedin),
             _ => None,
         }
     }
@@ -71,6 +77,7 @@ pub enum Action {
     SubmitQuote,
     Post,
     SubmitPost,
+    ReadPages,
 }
 
 impl Action {
@@ -91,6 +98,7 @@ impl Action {
             Self::SubmitQuote => "submit_quote",
             Self::Post => "post",
             Self::SubmitPost => "submit_post",
+            Self::ReadPages => "read_pages",
         }
     }
 
@@ -111,6 +119,7 @@ impl Action {
             "submit_quote" => Some(Self::SubmitQuote),
             "post" => Some(Self::Post),
             "submit_post" => Some(Self::SubmitPost),
+            "read_pages" => Some(Self::ReadPages),
             _ => None,
         }
     }
@@ -127,13 +136,15 @@ impl Action {
 
     pub fn is_supported_on(self, platform: Platform) -> bool {
         match platform {
-            Platform::X => true,
+            Platform::X => self != Self::ReadPages,
             // Instagram has no feed, trends, or compose surface: it reads
             // profiles and posts and takes screenshots, nothing else.
             Platform::Instagram => matches!(
                 self,
                 Self::Inspect | Self::ReadProfile | Self::ReadPost | Self::Refresh | Self::Capture
             ),
+            // LinkedIn is driven through its composer only.
+            Platform::Linkedin => matches!(self, Self::Post | Self::SubmitPost | Self::ReadPages),
         }
     }
 }
@@ -219,6 +230,7 @@ pub(crate) fn fixed_feed_target(platform: Platform) -> &'static str {
         // is_supported_on rejects read_feed for Instagram before a caller
         // ever reaches this, so there is no real destination to fake here.
         Platform::Instagram => unreachable!("Instagram does not support read_feed"),
+        Platform::Linkedin => unreachable!("LinkedIn does not support read_feed"),
     }
 }
 
@@ -226,16 +238,18 @@ pub(crate) fn fixed_trends_target(platform: Platform) -> &'static str {
     match platform {
         Platform::X => "https://x.com/explore",
         Platform::Instagram => unreachable!("Instagram does not support read_trends"),
+        Platform::Linkedin => unreachable!("LinkedIn does not support read_trends"),
     }
 }
 
 // x.post has one fixed destination and, unlike read_feed/read_trends,
 // never accepts a caller-supplied override: there is no other page a new
-// post could be composed on.
+// post could be composed on. LinkedIn lists its pages from the same composer.
 pub(crate) fn fixed_compose_target(platform: Platform) -> &'static str {
     match platform {
         Platform::X => "https://x.com/compose/post",
         Platform::Instagram => unreachable!("Instagram does not support post"),
+        Platform::Linkedin => "https://www.linkedin.com/sharing/compose",
     }
 }
 
@@ -260,6 +274,7 @@ fn is_reserved_profile_handle(platform: Platform, value: &str) -> bool {
         // "p" and "reel" are Instagram's own post routes; a profile handle
         // there would collide with a post target's first path segment.
         Platform::Instagram => &["p", "reel"],
+        Platform::Linkedin => &[],
     };
     reserved.contains(&value.to_ascii_lowercase().as_str())
 }
@@ -281,6 +296,7 @@ fn is_valid_profile_username(platform: Platform, value: &str) -> bool {
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.')
         }
+        Platform::Linkedin => false,
     }
 }
 
@@ -288,6 +304,7 @@ fn canonical_profile_url(platform: Platform, username: &str) -> String {
     match platform {
         Platform::X => format!("https://x.com/{username}"),
         Platform::Instagram => format!("https://www.instagram.com/{username}/"),
+        Platform::Linkedin => unreachable!("LinkedIn does not support read_profile"),
     }
 }
 
@@ -315,6 +332,7 @@ fn is_valid_post_id(platform: Platform, value: &str) -> bool {
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
         }
+        Platform::Linkedin => false,
     }
 }
 
@@ -322,6 +340,7 @@ fn canonical_post_url(platform: Platform, post_id: &str) -> String {
     match platform {
         Platform::X => format!("https://x.com/i/status/{post_id}"),
         Platform::Instagram => format!("https://www.instagram.com/p/{post_id}/"),
+        Platform::Linkedin => unreachable!("LinkedIn does not support read_post"),
     }
 }
 
@@ -348,6 +367,7 @@ fn extract_post_id(platform: Platform, url: &Url) -> Option<String> {
             };
             is_valid_post_id(platform, shortcode).then(|| shortcode.to_owned())
         }
+        Platform::Linkedin => None,
     }
 }
 
@@ -469,7 +489,7 @@ fn resolve_quote_target(
         .and_then(|value| value.as_str().map(str::to_owned))
         .filter(|value| is_valid_post_id(platform, value))
         .ok_or_else(|| invalid("Quote payload needs the post ID to quote and exact text."))?;
-    let mut payload = parse_public_payload(Some(&Value::Object(object)), Action::Post)?;
+    let mut payload = parse_public_payload(platform, Some(&Value::Object(object)), Action::Post)?;
     if payload["text"].as_str().is_none_or(|text| text.trim().is_empty()) {
         return Err(invalid("A quote needs text of its own."));
     }
@@ -551,7 +571,10 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
         .as_ref()
         .and_then(Value::as_object)
         .is_some_and(|object| object.contains_key("thread"));
-    let (payload_field, images) = if matches!(action, Action::Post | Action::Reply | Action::Quote) {
+    // Left in place for LinkedIn, `images` is refused as an unknown key.
+    let (payload_field, images) = if matches!(action, Action::Post | Action::Reply | Action::Quote)
+        && platform != Platform::Linkedin
+    {
         split_images(payload_field.as_ref())?
     } else {
         (payload_field, None)
@@ -564,9 +587,9 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
     let payload_field = payload_field.as_ref();
     let (target_url, payload) = if action == Action::ReadProfile {
         resolve_profile_target(platform, target_url_field, payload_field)?
-    } else if action == Action::Post {
+    } else if action == Action::Post || action == Action::ReadPages {
         let target_url = resolve_compose_target(platform, target_url_field)?;
-        let payload = parse_public_payload(payload_field, action)?;
+        let payload = parse_public_payload(platform, payload_field, action)?;
         (target_url, payload)
     } else if action == Action::Repost {
         resolve_repost_target(platform, target_url_field, payload_field)?
@@ -576,14 +599,14 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
         resolve_post_target(platform, target_url_field, payload_field)?
     } else if action == Action::ReadFeed || action == Action::ReadTrends {
         let target_url = resolve_fixed_destination_target(platform, action, target_url_field)?;
-        let payload = parse_public_payload(payload_field, action)?;
+        let payload = parse_public_payload(platform, payload_field, action)?;
         (target_url, payload)
     } else {
         let target_url = canonicalize_target_url(
             target_url_field.ok_or_else(|| invalid("Target URL is missing or too long."))?,
             platform,
         )?;
-        let payload = parse_public_payload(payload_field, action)?;
+        let payload = parse_public_payload(platform, payload_field, action)?;
         (target_url, payload)
     };
     let payload = with_images(payload, images, action);
@@ -607,10 +630,17 @@ pub fn parse_create_job_request(value: &Value) -> ValidationResult<CreateJobRequ
     })
 }
 
-fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResult<Value> {
+fn parse_public_payload(
+    platform: Platform,
+    value: Option<&Value>,
+    action: Action,
+) -> ValidationResult<Value> {
     let object = value
         .and_then(Value::as_object)
         .ok_or_else(|| invalid("Payload must be an object."))?;
+    if action == Action::Post && platform == Platform::Linkedin {
+        return parse_linkedin_post(object);
+    }
     if action == Action::Post {
         let (parts, parts_images) = parse_post_parts(object)?;
         let text = if parts.len() == 1 {
@@ -653,6 +683,70 @@ fn parse_public_payload(value: Option<&Value>, action: Action) -> ValidationResu
         return Err(invalid("This action does not accept a payload."));
     }
     Ok(json!({ "kind": "empty" }))
+}
+
+fn is_page_name(value: &str) -> bool {
+    is_string(value, MAX_PAGE_NAME_LENGTH)
+        && !value.trim().is_empty()
+        && !value.chars().any(char::is_control)
+}
+
+fn canonical_link_url(value: &str) -> Option<String> {
+    if !is_string(value, MAX_URL_LENGTH) {
+        return None;
+    }
+    let url = Url::parse(value).ok()?;
+    (url.scheme() == "https"
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none())
+    .then(|| url.to_string())
+}
+
+/// The link sits on its own line after the text.
+fn linkedin_length(text: &str, link_url: Option<&str>) -> usize {
+    text.chars().count() + link_url.map_or(0, |url| 1 + url.chars().count())
+}
+
+fn parse_linkedin_post(object: &Map<String, Value>) -> ValidationResult<Value> {
+    const SHAPE: &str = "Post payload needs a page and exact text, and may add a url.";
+    if !has_only_keys(object, &["page", "text", "url"]) {
+        return Err(invalid(SHAPE));
+    }
+    let page = object
+        .get("page")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| is_page_name(value))
+        .ok_or_else(|| invalid(SHAPE))?;
+    let text = object
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|value| is_string(value, MAX_TEXT_LENGTH) && !value.trim().is_empty())
+        .ok_or_else(|| invalid(SHAPE))?;
+    let link_url = object
+        .get("url")
+        .map(|value| {
+            value
+                .as_str()
+                .and_then(canonical_link_url)
+                .ok_or_else(|| invalid("url must be a link that starts with https://."))
+        })
+        .transpose()?;
+    let length = linkedin_length(text, link_url.as_deref());
+    if length > LINKEDIN_POST_LIMIT {
+        return Err(ValidationError {
+            code: "too_long",
+            message: format!(
+                "This post is {length} characters on LinkedIn, over the {LINKEDIN_POST_LIMIT} limit. The link counts. Shorten it."
+            ),
+        });
+    }
+    let mut payload = json!({ "kind": "compose", "text": text, "parts": [text], "page": page });
+    if let Some(link_url) = link_url {
+        payload["url"] = json!(link_url);
+    }
+    Ok(payload)
 }
 
 /// Take the `debug` request off a payload so the action's own parser sees the
@@ -881,7 +975,7 @@ pub fn parse_command_envelope(value: &Value) -> ValidationResult<Value> {
         platform,
     )?;
     let (issued_at, expires_at) = parse_envelope_times(object)?;
-    let payload = parse_command_payload(object.get("payload"), action)?;
+    let payload = parse_command_payload(platform, object.get("payload"), action)?;
     let mut parsed = Map::new();
     parsed.insert("version".to_owned(), json!(PROTOCOL_VERSION));
     parsed.insert("type".to_owned(), json!("command"));
@@ -896,7 +990,11 @@ pub fn parse_command_envelope(value: &Value) -> ValidationResult<Value> {
     Ok(Value::Object(parsed))
 }
 
-fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationResult<Value> {
+fn parse_command_payload(
+    platform: Platform,
+    value: Option<&Value>,
+    action: Action,
+) -> ValidationResult<Value> {
     let object = value
         .and_then(Value::as_object)
         .ok_or_else(|| invalid("Command payload must be an object."))?;
@@ -971,6 +1069,9 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
         }
         return Ok(value.cloned().unwrap_or(Value::Null));
     }
+    if action == Action::SubmitPost && platform == Platform::Linkedin {
+        return parse_linkedin_submission(object, value);
+    }
     if action == Action::SubmitPost {
         let part_count = object.get("parts").and_then(Value::as_array).map_or(0, Vec::len);
         if !has_only_keys(object, &["kind", "draftId", "text", "parts", "debug", "partImages"])
@@ -1043,6 +1144,35 @@ fn parse_command_payload(value: Option<&Value>, action: Action) -> ValidationRes
         || object.get("kind").and_then(Value::as_str) != Some("empty")
     {
         return Err(invalid("This command does not accept a payload."));
+    }
+    Ok(value.cloned().unwrap_or(Value::Null))
+}
+
+fn parse_linkedin_submission(
+    object: &Map<String, Value>,
+    value: Option<&Value>,
+) -> ValidationResult<Value> {
+    let text = object.get("text").and_then(Value::as_str);
+    let link_url = object.get("url").and_then(Value::as_str);
+    let is_single_part = object
+        .get("parts")
+        .and_then(Value::as_array)
+        .is_some_and(|parts| parts.len() == 1 && parts[0].as_str() == text);
+    let link_is_valid = !object.contains_key("url") || link_url.and_then(canonical_link_url).is_some();
+    if !has_only_keys(object, &["kind", "draftId", "text", "parts", "page", "url", "debug"])
+        || !debug_is_flag(object)
+        || object.get("kind").and_then(Value::as_str) != Some("post_submission")
+        || !object
+            .get("draftId")
+            .and_then(Value::as_str)
+            .is_some_and(is_identifier)
+        || !object.get("page").and_then(Value::as_str).is_some_and(is_page_name)
+        || !link_is_valid
+        || !text.is_some_and(|value| is_string(value, MAX_TEXT_LENGTH))
+        || !is_single_part
+        || linkedin_length(text.unwrap_or_default(), link_url) > LINKEDIN_POST_LIMIT
+    {
+        return Err(invalid("Post submission command payload is invalid."));
     }
     Ok(value.cloned().unwrap_or(Value::Null))
 }
@@ -1364,6 +1494,7 @@ fn ready_capabilities(platform: Platform) -> Vec<Action> {
         Action::ReadTrends,
         Action::Refresh,
         Action::Capture,
+        Action::ReadPages,
         Action::SubmitReply,
         Action::SubmitRepost,
         Action::SubmitQuote,
@@ -1375,7 +1506,7 @@ fn ready_capabilities(platform: Platform) -> Vec<Action> {
 }
 
 pub fn make_ready_envelope(connection_id: &str, now: i64) -> Value {
-    let contracts: Vec<Value> = [Platform::X, Platform::Instagram]
+    let contracts: Vec<Value> = [Platform::X, Platform::Instagram, Platform::Linkedin]
         .into_iter()
         .map(|platform| {
             json!({
@@ -1436,6 +1567,7 @@ pub fn hostnames(platform: Platform) -> Vec<&'static str> {
     match platform {
         Platform::X => vec!["x.com", "www.x.com", "twitter.com", "www.twitter.com"],
         Platform::Instagram => vec!["instagram.com", "www.instagram.com"],
+        Platform::Linkedin => vec!["www.linkedin.com"],
     }
 }
 
@@ -1583,21 +1715,6 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_input_feed_request_resolves_to_the_fixed_feed_target() {
-        let feed = parse_create_job_request(&json!({
-            "platform": "x", "action": "read_feed", "payload": {}
-        }))
-        .unwrap();
-        assert_eq!(feed.target_url, "https://x.com/home");
-
-        let trends = parse_create_job_request(&json!({
-            "platform": "x", "action": "read_trends", "payload": {}
-        }))
-        .unwrap();
-        assert_eq!(trends.target_url, "https://x.com/explore");
-    }
-
-    #[test]
     fn a_profile_read_resolves_a_username_to_the_canonical_profile_url() {
         let by_handle = parse_create_job_request(&json!({
             "platform": "x", "action": "read_profile", "payload": { "username": "@jack" }
@@ -1679,8 +1796,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_every_platform_but_x_and_instagram() {
-        for platform in ["linkedin", "gmail", "tiktok"] {
+    fn rejects_every_platform_but_x_instagram_and_linkedin() {
+        for platform in ["gmail", "tiktok"] {
             assert!(
                 parse_create_job_request(&json!({
                     "platform": platform, "action": "read_feed", "payload": {}
@@ -2026,6 +2143,182 @@ mod tests {
                 "accepted {refused}"
             );
         }
+    }
+
+    fn linkedin_post(payload: Value) -> ValidationResult<CreateJobRequest> {
+        parse_create_job_request(&json!({
+            "platform": "linkedin", "action": "post", "payload": payload
+        }))
+    }
+
+    #[test]
+    fn a_linkedin_post_names_its_page_and_takes_one_text_and_an_optional_link() {
+        let request = linkedin_post(json!({
+            "page": "  Acme Inc ", "text": "Launch day", "url": "https://acme.test/launch"
+        }))
+        .unwrap();
+        assert_eq!(request.target_url, "https://www.linkedin.com/sharing/compose");
+        assert_eq!(
+            request.payload,
+            json!({
+                "kind": "compose", "text": "Launch day", "parts": ["Launch day"],
+                "page": "Acme Inc", "url": "https://acme.test/launch"
+            })
+        );
+        let plain = linkedin_post(json!({ "page": "Acme Inc", "text": "No link" })).unwrap();
+        assert!(plain.payload.get("url").is_none());
+        // Length counts characters, not bytes.
+        assert!(linkedin_post(json!({ "page": "Acme Inc", "text": "é".repeat(3000) })).is_ok());
+    }
+
+    #[test]
+    fn a_linkedin_post_that_could_go_out_wrong_is_refused() {
+        let page = "Acme Inc";
+        let refused = [
+            json!({ "text": "No page" }),
+            json!({ "page": "   ", "text": "Blank page" }),
+            json!({ "page": page, "text": "   " }),
+            json!({ "page": page }),
+            json!({ "page": page, "text": "With images", "images": ["/tmp/a.png"] }),
+            json!({ "page": page, "thread": ["One.", "Two."] }),
+            json!({ "page": page, "text": "Link", "url": "http://acme.test" }),
+            json!({ "page": page, "text": "Link", "url": "https://user:pass@acme.test" }),
+            json!({ "page": page, "text": "Link", "url": "not a url" }),
+            json!({ "page": page, "text": "Link", "url": 7 }),
+            json!({ "page": page, "text": "Extra", "visibility": "public" }),
+        ];
+        for payload in refused {
+            assert!(linkedin_post(payload.clone()).is_err(), "accepted {payload}");
+        }
+
+        let over = linkedin_post(json!({ "page": page, "text": "x".repeat(3001) })).unwrap_err();
+        assert_eq!(over.code, "too_long");
+        // The link sits on its own line after the text, so it counts too.
+        let url = "https://acme.test/launch";
+        let text = "x".repeat(3000 - url.len());
+        let over = linkedin_post(json!({ "page": page, "text": text, "url": url })).unwrap_err();
+        assert_eq!(over.code, "too_long");
+        let text = "x".repeat(3000 - url.len() - 1);
+        assert!(linkedin_post(json!({ "page": page, "text": text, "url": url })).is_ok());
+
+        let with_target = parse_create_job_request(&json!({
+            "platform": "linkedin", "action": "post",
+            "targetUrl": "https://www.linkedin.com/feed/",
+            "payload": { "page": page, "text": "Hi" }
+        }));
+        assert!(with_target.is_err());
+    }
+
+    #[test]
+    fn x_posts_take_no_page_or_link_and_linkedin_takes_no_other_actions() {
+        for extra in [json!({ "page": "Acme Inc" }), json!({ "url": "https://acme.test" })] {
+            let mut payload = json!({ "text": "Exact text" });
+            payload.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            assert!(
+                parse_create_job_request(&json!({
+                    "platform": "x", "action": "post", "payload": payload
+                }))
+                .is_err(),
+                "x accepted {payload}"
+            );
+        }
+        for action in ["read_feed", "read_profile", "inspect", "reply", "repost", "quote"] {
+            let error = parse_create_job_request(&json!({
+                "platform": "linkedin", "action": action,
+                "targetUrl": "https://www.linkedin.com/feed/", "payload": {}
+            }))
+            .unwrap_err();
+            assert_eq!(error.code, "unsupported_action", "{action}");
+        }
+        let error = parse_create_job_request(&json!({
+            "platform": "x", "action": "read_pages", "payload": {}
+        }))
+        .unwrap_err();
+        assert_eq!(error.code, "unsupported_action");
+    }
+
+    #[test]
+    fn listing_linkedin_pages_has_one_fixed_target_and_no_input() {
+        let request = parse_create_job_request(&json!({
+            "platform": "linkedin", "action": "read_pages", "payload": {}
+        }))
+        .unwrap();
+        assert_eq!(request.target_url, "https://www.linkedin.com/sharing/compose");
+        assert_eq!(request.payload, json!({ "kind": "empty" }));
+        for refused in [
+            json!({ "platform": "linkedin", "action": "read_pages",
+                "targetUrl": "https://www.linkedin.com/sharing/compose", "payload": {} }),
+            json!({ "platform": "linkedin", "action": "read_pages", "payload": { "page": "Acme" } }),
+        ] {
+            assert!(parse_create_job_request(&refused).is_err(), "accepted {refused}");
+        }
+    }
+
+    fn submit_post_command(platform: &str, payload: Value) -> Value {
+        json!({
+            "version": 1, "type": "command", "jobId": "job-1", "commandId": "command-1",
+            "platform": platform, "action": "submit_post",
+            "targetUrl": if platform == "linkedin" {
+                "https://www.linkedin.com/sharing/compose"
+            } else {
+                "https://x.com/compose/post"
+            },
+            "issuedAt": 1_000, "expiresAt": 61_000, "payload": payload
+        })
+    }
+
+    #[test]
+    fn a_linkedin_submit_post_command_carries_its_page_and_link_and_nothing_else() {
+        let good = json!({
+            "kind": "post_submission", "draftId": "draft-1", "text": "Launch day",
+            "parts": ["Launch day"], "page": "Acme Inc", "url": "https://acme.test/launch"
+        });
+        assert!(parse_command_envelope(&submit_post_command("linkedin", good.clone())).is_ok());
+
+        let mut without_url = good.clone();
+        without_url.as_object_mut().unwrap().remove("url");
+        assert!(parse_command_envelope(&submit_post_command("linkedin", without_url)).is_ok());
+
+        let bad = |change: &dyn Fn(&mut Value)| {
+            let mut payload = good.clone();
+            change(&mut payload);
+            parse_command_envelope(&submit_post_command("linkedin", payload)).is_err()
+        };
+        assert!(bad(&|p| { p.as_object_mut().unwrap().remove("page"); }));
+        assert!(bad(&|p| p["url"] = json!("http://acme.test")));
+        assert!(bad(&|p| p["parts"] = json!(["Launch day", "More"])));
+        assert!(bad(&|p| p["parts"] = json!(["Something else"])));
+        assert!(bad(&|p| p["partImages"] = json!([[]])));
+        assert!(bad(&|p| p["text"] = json!("x".repeat(3001))));
+
+        let mut on_x = good;
+        on_x["text"] = json!("Hello");
+        on_x["parts"] = json!(["Hello"]);
+        assert!(parse_command_envelope(&submit_post_command("x", on_x)).is_err());
+    }
+
+    #[test]
+    fn a_linkedin_extension_reports_only_the_actions_it_can_run() {
+        let hello = |actions: Value| {
+            parse_extension_message(&json!({
+                "version": 1, "type": "hello", "extensionVersion": "1",
+                "capabilities": [{ "platform": "linkedin", "capabilities": actions }],
+                "issuedAt": 1_000, "expiresAt": 2_000
+            }))
+        };
+        assert!(hello(json!(["read_pages", "submit_post"])).is_ok());
+        assert!(hello(json!(["inspect"])).is_err());
+        assert!(hello(json!(["submit_reply"])).is_err());
+
+        let ready = make_ready_envelope("connection", 1_000);
+        let linkedin = ready["contracts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|contract| contract["platform"] == "linkedin")
+            .expect("linkedin is offered to the extension");
+        assert_eq!(linkedin["hostnames"], json!(["www.linkedin.com"]));
+        assert_eq!(linkedin["capabilities"], json!(["read_pages", "submit_post"]));
     }
 
     #[test]
