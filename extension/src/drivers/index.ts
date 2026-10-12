@@ -1,6 +1,7 @@
 import { DRIVER_CONTRACTS, PLATFORMS, type Platform } from "../protocol";
 import type { SiteDriver } from "./types";
 import { runInstagramPage } from "./instagram";
+import { runLinkedInPage } from "./linkedin";
 import { runXPage } from "./x";
 
 const xDriver: SiteDriver = {
@@ -20,9 +21,17 @@ const instagramDriver: SiteDriver = {
   pageScript: runInstagramPage,
 };
 
+const linkedinDriver: SiteDriver = {
+  platform: "linkedin",
+  capabilities: DRIVER_CONTRACTS.linkedin.capabilities,
+  navigationTarget: (command) => command.targetUrl,
+  pageScript: runLinkedInPage,
+};
+
 export const SITE_DRIVERS: Readonly<Record<Platform, SiteDriver>> = {
   x: xDriver,
   instagram: instagramDriver,
+  linkedin: linkedinDriver,
 };
 
 export const DRIVER_CAPABILITIES = PLATFORMS.map((platform) => ({

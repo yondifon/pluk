@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { runInstagramPage } from "./drivers/instagram";
+import { runLinkedInPage } from "./drivers/linkedin";
 import { runXPage } from "./drivers/x";
 
 interface FixtureNode {
@@ -3081,4 +3082,540 @@ test("marks an Instagram comment read truncated when the post has more comments 
   restore();
   expect(result).toMatchObject({ state: "ready", truncated: true });
   expect((result as unknown as { comments: unknown[] }).comments).toHaveLength(1);
+});
+
+// LinkedIn is driven by roles, text and ancestry, so the fixture is a small
+// element tree. Time is virtual: each wait advances the clock at once, and the
+// link preview and toast are functions of it.
+
+const LINKEDIN_COMPOSE = "https://www.linkedin.com/sharing/compose";
+const LINKEDIN_ACTIVITY = "7515370849936355329";
+
+class LiElement {
+  parentElement: LiElement | null = null;
+  readonly children: LiElement[] = [];
+  onClick: (() => void) | null = null;
+  text: (() => string) | null = null;
+  readAttr: ((name: string) => string | null | undefined) | null = null;
+
+  constructor(
+    readonly tag: string,
+    readonly attrs: Record<string, string> = {},
+    private readonly ownText = "",
+  ) {}
+
+  append(...kids: LiElement[]): this {
+    for (const kid of kids) {
+      kid.parentElement = this;
+      this.children.push(kid);
+    }
+    return this;
+  }
+
+  remove(): void {
+    const siblings = this.parentElement?.children;
+    siblings?.splice(siblings.indexOf(this), 1);
+    this.parentElement = null;
+  }
+
+  get isConnected(): boolean {
+    let top: LiElement = this;
+    while (top.parentElement) {
+      top = top.parentElement;
+    }
+    return top.tag === "body";
+  }
+
+  get innerText(): string {
+    liSync?.();
+    if (this.text) {
+      return this.text();
+    }
+    return this.children.length > 0
+      ? this.children.map((child) => child.innerText).join("\n")
+      : this.ownText;
+  }
+
+  get textContent(): string {
+    return this.innerText;
+  }
+
+  getAttribute(name: string): string | null {
+    liSync?.();
+    return this.readAttr?.(name) ?? this.attrs[name] ?? null;
+  }
+
+  click(): void {
+    this.onClick?.();
+  }
+
+  focus(): void {}
+
+  dispatchEvent(event: { readonly key?: string }): boolean {
+    this.onEvent?.(event);
+    return true;
+  }
+
+  onEvent: ((event: { readonly key?: string }) => void) | null = null;
+
+  querySelectorAll(selector: string): LiElement[] {
+    liSync?.();
+    const found: LiElement[] = [];
+    const visit = (parent: LiElement): void => {
+      for (const child of parent.children) {
+        if (liMatches(child, selector)) {
+          found.push(child);
+        }
+        visit(child);
+      }
+    };
+    visit(this);
+    return found;
+  }
+
+  querySelector(selector: string): LiElement | null {
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
+}
+
+let liSync: (() => void) | null = null;
+
+function liMatches(element: LiElement, selector: string): boolean {
+  const parsed = /^([a-z]*)((?:\[[^\]]+\])*)$/u.exec(selector);
+  if (!parsed) {
+    throw new Error(`The LinkedIn fixture does not understand "${selector}".`);
+  }
+  if (parsed[1] && parsed[1] !== element.tag) {
+    return false;
+  }
+  for (const attribute of (parsed[2] ?? "").matchAll(
+    /\[([\w-]+)(?:(\*?=)"([^"]*)")?\]/gu,
+  )) {
+    const [, name, operator, expected] = attribute;
+    const actual = element.getAttribute(name as string);
+    if (actual === null) {
+      return false;
+    }
+    if (operator === "=" && actual !== expected) {
+      return false;
+    }
+    if (operator === "*=" && !actual.includes(expected as string)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+interface LinkedInOptions {
+  /** Names in the "Post as" list, the personal profile first. */
+  readonly identities?: readonly string[];
+  /** Virtual ms after the link is typed until LinkedIn fills the preview
+   * card; null means it never does. */
+  readonly previewDelayMs?: number | null;
+  /** Virtual ms after Post until the toast appears; null means never. */
+  readonly toastDelayMs?: number | null;
+  /** Choosing a page in the list does nothing. */
+  readonly ignoreIdentityClick?: boolean;
+  /** Typing makes LinkedIn fall back to the personal profile. */
+  readonly revertIdentityOnType?: boolean;
+  /** Once the preview fills, LinkedIn rewrites the editor text. */
+  readonly editorDriftsWithPreview?: boolean;
+  /** A toast from an earlier post is still on the page. */
+  readonly staleToast?: boolean;
+  readonly path?: string;
+  readonly passwordForm?: boolean;
+}
+
+function installLinkedIn(options: LinkedInOptions = {}) {
+  const identities = options.identities ?? ["Jane Doe", "Acme Co", "Beta Labs"];
+  const previewDelayMs =
+    options.previewDelayMs === undefined ? 6_000 : options.previewDelayMs;
+  const toastDelayMs =
+    options.toastDelayMs === undefined ? 4_000 : options.toastDelayMs;
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const saved = {
+    document: globals.document,
+    window: globals.window,
+    sessionStorage: globals.sessionStorage,
+    KeyboardEvent: globals.KeyboardEvent,
+    setTimeout: globals.setTimeout,
+    now: Date.now,
+  };
+
+  let now = 1_000_000;
+  const realSetTimeout = saved.setTimeout as typeof setTimeout;
+  globals.setTimeout = (callback: () => void, delay = 0) =>
+    realSetTimeout(() => {
+      now += delay;
+      callback();
+    }, 0);
+  Date.now = () => now;
+
+  const state = {
+    currentIndex: 0,
+    value: "",
+    selected: false,
+    typedAt: null as number | null,
+    pressedAt: null as number | null,
+    previewShown: false,
+    drifted: false,
+    popoverOpen: false,
+    presses: [] as { at: number; identity: string; text: string; previewShown: boolean }[],
+  };
+
+  const body = new LiElement("body");
+  const dialog = new LiElement("div", { role: "dialog" });
+  const header = new LiElement("div");
+  const visibility = new LiElement(
+    "div",
+    { role: "button", "aria-expanded": "false" },
+    "Post to Anyone",
+  );
+  const comments = new LiElement(
+    "div",
+    { role: "button", "aria-expanded": "false" },
+    "Comments: Anyone",
+  );
+  const switcher = new LiElement("div", { role: "button" });
+  switcher.text = () => identities[state.currentIndex] ?? "";
+  switcher.readAttr = (name) =>
+    name === "aria-expanded" ? String(state.popoverOpen) : undefined;
+  header.append(visibility, switcher, comments);
+
+  const box = new LiElement("div");
+  const holder = new LiElement("div", { componentkey: "ShareBox_textEditor" });
+  const editable = new LiElement("div", { contenteditable: "true", role: "textbox" });
+  editable.text = () => state.value.split("\n").join("\n\n");
+  holder.append(editable);
+  const previewCard = new LiElement("div", { componentkey: "ShareBoxpreviewCard" });
+  previewCard.text = () => (state.previewShown ? "Example Domain example.com" : "");
+  const footer = new LiElement("div");
+  const post = new LiElement("button", {}, "Post");
+  post.readAttr = (name) =>
+    name === "disabled" && state.value === "" ? "" : undefined;
+  footer.append(new LiElement("button", {}, "Add media"), post);
+  box.append(holder, previewCard, footer);
+  dialog.append(header, box);
+
+  const alertRegion = new LiElement("div", { role: "alert" });
+  if (options.staleToast) {
+    alertRegion.append(
+      new LiElement(
+        "a",
+        { href: "https://www.linkedin.com/feed/update/urn:li:activity:111/" },
+        "View post",
+      ),
+    );
+  }
+  body.append(dialog, alertRegion);
+  if (options.passwordForm) {
+    body.append(new LiElement("input", { type: "password" }));
+  }
+
+  const popover = new LiElement("div");
+  const list = new LiElement("div");
+  popover.append(new LiElement("p", {}, "Post as"), list);
+  identities.forEach((name, index) => {
+    const radio = new LiElement("div", { role: "radio" }, name);
+    radio.readAttr = (attribute) =>
+      attribute === "aria-checked" ? String(state.currentIndex === index) : undefined;
+    radio.onClick = () => {
+      if (!options.ignoreIdentityClick) {
+        state.currentIndex = index;
+      }
+      closePopover();
+    };
+    list.append(radio);
+  });
+  const closePopover = (): void => {
+    state.popoverOpen = false;
+    popover.remove();
+  };
+  switcher.onClick = () => {
+    if (state.popoverOpen) {
+      closePopover();
+    } else {
+      state.popoverOpen = true;
+      body.append(popover);
+    }
+  };
+  body.onEvent = (event) => {
+    if (event.key === "Escape") {
+      closePopover();
+    }
+  };
+
+  post.onClick = () => {
+    if (state.value === "") {
+      return;
+    }
+    state.pressedAt = now;
+    state.presses.push({
+      at: now,
+      identity: identities[state.currentIndex] ?? "",
+      text: state.value,
+      previewShown: state.previewShown,
+    });
+  };
+
+  liSync = () => {
+    state.previewShown =
+      state.value !== "" &&
+      state.typedAt !== null &&
+      previewDelayMs !== null &&
+      now >= state.typedAt + previewDelayMs;
+    if (state.previewShown && options.editorDriftsWithPreview && !state.drifted) {
+      state.drifted = true;
+      state.value += " (edited)";
+    }
+    if (
+      state.pressedAt !== null &&
+      toastDelayMs !== null &&
+      now >= state.pressedAt + toastDelayMs &&
+      alertRegion.children.every((child) => !child.attrs.href?.includes(LINKEDIN_ACTIVITY))
+    ) {
+      alertRegion.append(
+        new LiElement(
+          "a",
+          { href: `https://www.linkedin.com/feed/update/urn:li:activity:${LINKEDIN_ACTIVITY}/` },
+          "View post",
+        ),
+      );
+    }
+  };
+
+  const storage = new Map<string, string>();
+  const path = options.path ?? "/sharing/compose";
+  Object.defineProperty(globals, "document", {
+    configurable: true,
+    value: {
+      body,
+      title: "LinkedIn",
+      activeElement: null,
+      querySelector: (selector: string) => body.querySelector(selector),
+      querySelectorAll: (selector: string) => body.querySelectorAll(selector),
+      execCommand: (command: string, _showUi?: boolean, value?: string) => {
+        if (command === "selectAll") {
+          state.selected = true;
+        } else if (command === "delete") {
+          if (state.selected) {
+            state.value = "";
+          }
+          state.selected = false;
+        } else if (command === "insertText") {
+          if (state.selected) {
+            state.value = "";
+            state.selected = false;
+          }
+          state.value += value ?? "";
+          if (value?.includes("http")) {
+            state.typedAt = now;
+          }
+          if (options.revertIdentityOnType) {
+            state.currentIndex = 0;
+          }
+        }
+        return true;
+      },
+    },
+  });
+  Object.defineProperty(globals, "window", {
+    configurable: true,
+    value: { location: { href: `https://www.linkedin.com${path}`, pathname: path } },
+  });
+  Object.defineProperty(globals, "sessionStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => void storage.set(key, value),
+      removeItem: (key: string) => void storage.delete(key),
+    },
+  });
+  Object.defineProperty(globals, "KeyboardEvent", {
+    configurable: true,
+    value: HarnessKeyboardEvent,
+  });
+
+  const restore = (): void => {
+    liSync = null;
+    globals.setTimeout = saved.setTimeout;
+    Date.now = saved.now;
+    for (const key of ["document", "window", "sessionStorage", "KeyboardEvent"] as const) {
+      if (saved[key] === undefined) {
+        delete globals[key];
+      } else {
+        Object.defineProperty(globals, key, { configurable: true, value: saved[key] });
+      }
+    }
+  };
+
+  const run = async (
+    overrides: Partial<Parameters<typeof runLinkedInPage>[0]>,
+  ): Promise<{ state: string; message?: string; [key: string]: unknown }> =>
+    (await runLinkedInPage({
+      action: "submit_post",
+      targetUrl: LINKEDIN_COMPOSE,
+      draftId: "draft-1",
+      ...overrides,
+    })) as { state: string; message?: string };
+
+  return { state, run, restore, popoverOpen: () => state.popoverOpen };
+}
+
+async function withLinkedIn<T>(
+  options: LinkedInOptions,
+  body: (fixture: ReturnType<typeof installLinkedIn>) => Promise<T>,
+): Promise<T> {
+  const fixture = installLinkedIn(options);
+  try {
+    return await body(fixture);
+  } finally {
+    fixture.restore();
+  }
+}
+
+test("lists the pages with the personal profile first, then closes the list without typing or posting", async () => {
+  await withLinkedIn({}, async (linkedin) => {
+    const result = await linkedin.run({ action: "read_pages" });
+    expect(result).toMatchObject({
+      state: "ready",
+      kind: "pages",
+      platform: "linkedin",
+      pages: [
+        { name: "Jane Doe", personal: true, selected: true },
+        { name: "Acme Co", personal: false, selected: false },
+        { name: "Beta Labs", personal: false, selected: false },
+      ],
+    });
+    expect(linkedin.popoverOpen()).toBe(false);
+    expect(linkedin.state.value).toBe("");
+    expect(linkedin.state.presses).toEqual([]);
+  });
+});
+
+test("a page LinkedIn does not list fails with the available names and types nothing", async () => {
+  await withLinkedIn({}, async (linkedin) => {
+    const result = await linkedin.run({ page: "Acme Corp", text: "Hello" });
+    expect(result.state).toBe("target_not_found");
+    for (const name of ["Jane Doe", "Acme Co", "Beta Labs"]) {
+      expect(result.message).toContain(name);
+    }
+    expect(linkedin.state.value).toBe("");
+    expect(linkedin.state.currentIndex).toBe(0);
+    expect(linkedin.state.presses).toEqual([]);
+    expect(linkedin.popoverOpen()).toBe(false);
+  });
+});
+
+test("a page name that matches two identities fails with the names and types nothing", async () => {
+  await withLinkedIn({ identities: ["Jane Doe", "Acme Co", "ACME  co"] }, async (linkedin) => {
+    const result = await linkedin.run({ page: "acme co", text: "Hello" });
+    expect(result.state).toBe("target_mismatch");
+    expect(result.message).toContain("Acme Co, ACME co");
+    expect(linkedin.state.value).toBe("");
+    expect(linkedin.state.presses).toEqual([]);
+  });
+});
+
+test("posts a multi-line text as the matched page, ignoring case and spacing, and reads the new post's id from its own toast", async () => {
+  await withLinkedIn({ staleToast: true }, async (linkedin) => {
+    const result = await linkedin.run({ page: "  acme   CO ", text: "Line one\nLine two" });
+    expect(result).toMatchObject({
+      state: "submission_succeeded",
+      kind: "submission",
+      platform: "linkedin",
+      postedId: LINKEDIN_ACTIVITY,
+      postedUrl: `https://www.linkedin.com/feed/update/urn:li:activity:${LINKEDIN_ACTIVITY}/`,
+      url: LINKEDIN_COMPOSE,
+    });
+    expect(result).not.toHaveProperty("linkPreview");
+    expect(linkedin.state.presses).toMatchObject([
+      { identity: "Acme Co", text: "Line one\nLine two" },
+    ]);
+  });
+});
+
+test("a post with a link waits for the preview card before pressing Post", async () => {
+  await withLinkedIn({ previewDelayMs: 6_000 }, async (linkedin) => {
+    const result = await linkedin.run({
+      page: "Acme Co",
+      text: "Read this",
+      url: "https://example.com/a",
+    });
+    expect(result).toMatchObject({ state: "submission_succeeded", linkPreview: true });
+    expect(linkedin.state.presses).toMatchObject([
+      { identity: "Acme Co", text: "Read this\nhttps://example.com/a", previewShown: true },
+    ]);
+  });
+});
+
+test("a link whose preview never fills is still posted, and the result says there was no preview", async () => {
+  await withLinkedIn({ previewDelayMs: null }, async (linkedin) => {
+    const result = await linkedin.run({
+      page: "Acme Co",
+      text: "Read this",
+      url: "https://example.com/a",
+    });
+    expect(result).toMatchObject({ state: "submission_succeeded", linkPreview: false });
+    expect(linkedin.state.presses).toMatchObject([
+      { text: "Read this\nhttps://example.com/a", previewShown: false },
+    ]);
+  });
+});
+
+test("refuses to type when choosing the page does not make LinkedIn post as it", async () => {
+  await withLinkedIn({ ignoreIdentityClick: true }, async (linkedin) => {
+    const result = await linkedin.run({ page: "Acme Co", text: "Hello" });
+    expect(result.state).toBe("target_mismatch");
+    expect(linkedin.state.value).toBe("");
+    expect(linkedin.state.presses).toEqual([]);
+  });
+});
+
+test("does not press Post when LinkedIn falls back to another identity after the text is typed", async () => {
+  await withLinkedIn({ revertIdentityOnType: true }, async (linkedin) => {
+    const result = await linkedin.run({ page: "Acme Co", text: "Hello" });
+    expect(result.state).toBe("target_mismatch");
+    expect(linkedin.state.presses).toEqual([]);
+  });
+});
+
+test("does not press Post when the editor no longer holds the approved text and link", async () => {
+  await withLinkedIn({ editorDriftsWithPreview: true }, async (linkedin) => {
+    const result = await linkedin.run({
+      page: "Acme Co",
+      text: "Read this",
+      url: "https://example.com/a",
+    });
+    expect(result.state).toBe("unsupported");
+    expect(linkedin.state.presses).toEqual([]);
+  });
+});
+
+test("a post that shows no link to itself is unknown, and a later pass for the same draft reads the outcome without typing or pressing again", async () => {
+  // The toast arrives after the window the first pass waits for.
+  await withLinkedIn({ toastDelayMs: 25_000 }, async (linkedin) => {
+    const first = await linkedin.run({ page: "Acme Co", text: "Hello" });
+    expect(first.state).toBe("submission_unknown");
+    expect(linkedin.state.presses).toHaveLength(1);
+
+    const second = await linkedin.run({ page: "Acme Co", text: "Hello" });
+    expect(second).toMatchObject({
+      state: "submission_succeeded",
+      postedId: LINKEDIN_ACTIVITY,
+    });
+    expect(linkedin.state.presses).toHaveLength(1);
+    expect(linkedin.state.value).toBe("Hello");
+  });
+});
+
+test("a signed-out LinkedIn is reported as needing sign-in before anything is touched", async () => {
+  for (const signedOut of [{ path: "/authwall" }, { passwordForm: true }]) {
+    await withLinkedIn(signedOut, async (linkedin) => {
+      const result = await linkedin.run({ page: "Acme Co", text: "Hello" });
+      expect(result.state).toBe("login_required");
+      expect(linkedin.state.value).toBe("");
+      expect(linkedin.popoverOpen()).toBe(false);
+    });
+  }
 });

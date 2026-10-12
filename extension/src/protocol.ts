@@ -35,7 +35,7 @@ export const MAX_IMAGES = 4;
  * matches it. */
 export type DebugRequest = true | string;
 
-export const PLATFORMS = ["x", "instagram"] as const;
+export const PLATFORMS = ["x", "instagram", "linkedin"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 export const ACTIONS = [
@@ -44,6 +44,7 @@ export const ACTIONS = [
   "read_post",
   "read_feed",
   "read_trends",
+  "read_pages",
   "refresh",
   "capture",
   "reply",
@@ -93,6 +94,11 @@ export const DRIVER_CONTRACTS: Record<
     // takes screenshots, nothing else.
     capabilities: ["inspect", "read_profile", "read_post", "refresh", "capture"],
   },
+  linkedin: {
+    platform: "linkedin",
+    hostnames: ["www.linkedin.com"],
+    capabilities: ["read_pages", "submit_post"],
+  },
 };
 
 // Actions with one fixed destination: the caller supplies no target URL and
@@ -105,6 +111,11 @@ export const FIXED_TRENDS_TARGET = "https://x.com/explore";
 // it never accepts a caller-supplied override: there is no other page a new
 // post could be composed on.
 export const FIXED_COMPOSE_TARGET = "https://x.com/compose/post";
+
+export const FIXED_LINKEDIN_COMPOSE_TARGET =
+  "https://www.linkedin.com/sharing/compose";
+// LinkedIn's limit for a post, link included.
+export const MAX_LINKEDIN_POST_LENGTH = 3_000;
 
 const X_PROFILE_USERNAME_PATTERN = /^[A-Za-z0-9_]{1,50}$/u;
 const INSTAGRAM_PROFILE_USERNAME_PATTERN = /^[A-Za-z0-9_.]{1,30}$/u;
@@ -128,6 +139,7 @@ const RESERVED_PROFILE_HANDLES: Record<Platform, ReadonlySet<string>> = {
   // "p" and "reel" are Instagram's own post routes; a profile handle there
   // would collide with a post target's first path segment.
   instagram: new Set(["p", "reel"]),
+  linkedin: new Set(),
 };
 
 export function isValidProfileUsername(
@@ -272,6 +284,11 @@ export interface ComposePayload {
 export interface PostSubmissionPayload {
   readonly kind: "post_submission";
   readonly draftId: string;
+  /** LinkedIn only: the identity the post goes out as, as the composer's
+   * "Post as" list names it. */
+  readonly page?: string;
+  /** LinkedIn only: a link placed on its own line after the text. */
+  readonly url?: string;
   readonly text: string;
   /** The posts to send, in order. More than one makes a thread. */
   readonly parts: readonly string[];
@@ -772,6 +789,23 @@ export function parseCreateJobRequest(
     }
     targetUrl = resolved.value.targetUrl;
     payload = resolved.value.payload;
+  } else if (value.action === "read_pages") {
+    if (value.targetUrl !== undefined) {
+      return invalid("This action does not accept a target URL.");
+    }
+    const resolvedTarget = canonicalizeTargetUrl(
+      FIXED_LINKEDIN_COMPOSE_TARGET,
+      value.platform,
+    );
+    if (!resolvedTarget.ok) {
+      return resolvedTarget;
+    }
+    const parsedPayload = parsePayload(value.payload, value.action);
+    if (!parsedPayload.ok) {
+      return parsedPayload;
+    }
+    targetUrl = resolvedTarget.value;
+    payload = parsedPayload.value;
   } else {
     const resolvedTarget =
       value.action === "read_feed" || value.action === "read_trends"
@@ -858,7 +892,11 @@ export function parseCommandEnvelope(
   if (!times) {
     return invalid("Command envelope has an unsupported expiry.");
   }
-  const payload = parseCommandPayload(value.payload, value.action);
+  const payload = parseCommandPayload(
+    value.payload,
+    value.action,
+    value.platform,
+  );
   if (!payload.ok) {
     return payload;
   }
@@ -882,12 +920,16 @@ export function parseCommandEnvelope(
 function parseCommandPayload(
   value: unknown,
   action: Action,
+  platform: Platform,
 ): ValidationResult<CommandPayload> {
   if (!isRecord(value)) {
     return invalid("Command payload must be an object.");
   }
   if (action === "post" || action === "reply" || action === "quote") {
     return invalid("Posts and replies are dispatched only as submissions.");
+  }
+  if (action === "submit_post" && platform === "linkedin") {
+    return parseLinkedInPostSubmission(value);
   }
   if (action === "submit_post") {
     if (
@@ -1015,6 +1057,59 @@ function parseCommandPayload(
       ...debugField(value.debug),
     },
   };
+}
+
+/** One text with its page and optional link: a single part, no images. */
+function parseLinkedInPostSubmission(
+  value: Record<string, unknown>,
+): ValidationResult<PostSubmissionPayload> {
+  const { draftId, page, text, url, parts } = value;
+  if (
+    !hasOnlyKeys(value, ["kind", "draftId", "page", "text", "parts"], ["url", "debug"]) ||
+    !isDebugRequest(value.debug) ||
+    value.kind !== "post_submission" ||
+    !isIdentifier(draftId) ||
+    !isString(page, MAX_ID_LENGTH) ||
+    page.trim().length === 0 ||
+    !isString(text, MAX_LINKEDIN_POST_LENGTH) ||
+    (url !== undefined && !isHttpsUrl(url)) ||
+    (typeof url === "string" &&
+      text.length + 1 + url.length > MAX_LINKEDIN_POST_LENGTH) ||
+    !Array.isArray(parts) ||
+    parts.length !== 1 ||
+    parts[0] !== text
+  ) {
+    return invalid("LinkedIn post submission command payload is invalid.");
+  }
+  return {
+    ok: true,
+    value: {
+      kind: "post_submission",
+      draftId,
+      page,
+      text,
+      parts: [text],
+      ...(typeof url === "string" ? { url } : {}),
+      ...debugField(value.debug),
+    },
+  };
+}
+
+function isHttpsUrl(value: unknown): value is string {
+  if (!isString(value, MAX_URL_LENGTH)) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.hostname !== "" &&
+      url.username === "" &&
+      url.password === ""
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isDebugGlob(value: string): boolean {

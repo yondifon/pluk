@@ -307,6 +307,12 @@ export class BrowserExecutor {
       );
     }
     if (!sameDestination(command.platform, targetUrl, ready.url)) {
+      if (isSignInRedirect(command.platform, ready.url)) {
+        throw new BrowserExecutionError(
+          "login_required",
+          "LinkedIn needs an active sign-in. Sign in to the Chrome window Pluk opened, then try again.",
+        );
+      }
       throw new BrowserExecutionError(
         "page_changed",
         "The page changed while it was being prepared. Try again.",
@@ -958,7 +964,10 @@ async function makeDriverScriptOptions(
       draftId,
       ...(command.payload.kind === "quote_submission"
         ? { postId: command.payload.postId }
-        : {}),
+        : {
+            ...(command.payload.page === undefined ? {} : { page: command.payload.page }),
+            ...(command.payload.url === undefined ? {} : { url: command.payload.url }),
+          }),
       text,
       parts,
       partImages,
@@ -1205,6 +1214,17 @@ function clickLinkTo(target: string): boolean {
     return true;
   }
   return false;
+}
+
+/** LinkedIn sends a signed-out visitor to a sign-in or checkpoint page, so
+ * landing there instead of the composer means the sign-in has lapsed. */
+function isSignInRedirect(platform: Platform, url: string): boolean {
+  return (
+    platform === "linkedin" &&
+    /^\/(?:login|checkpoint|authwall|uas\/login)(?:\/|$)/iu.test(
+      new URL(url).pathname,
+    )
+  );
 }
 
 /** The same page, allowing for X moving a post from /i/status/<id> to the

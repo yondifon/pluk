@@ -35,6 +35,8 @@ let executeScriptImpl: (targetUrl: string) => DriverPageResult = (
 });
 let lastDriverDebug: unknown;
 let lastDriverDraftId: unknown;
+let lastDriverOptions: Record<string, unknown> = {};
+let redirectNavigationTo: string | null = null;
 
 const storage = new Map<string, unknown>();
 
@@ -108,7 +110,7 @@ const mockChrome = {
       tab = {
         ...tab,
         id,
-        url: properties.url ?? tab.url,
+        url: redirectNavigationTo ?? properties.url ?? tab.url,
         pendingUrl: undefined,
         status: "complete",
         active: properties.active ?? tab.active,
@@ -131,6 +133,7 @@ const mockChrome = {
       const [options] = details.args;
       lastDriverDebug = options.debug;
       lastDriverDraftId = options.draftId;
+      lastDriverOptions = options as unknown as Record<string, unknown>;
       return [{ frameId: 0, result: executeScriptImpl(options.targetUrl) }];
     },
   },
@@ -150,6 +153,8 @@ beforeEach(() => {
   debuggerDetachCalls = 0;
   lastDriverDebug = undefined;
   lastDriverDraftId = undefined;
+  lastDriverOptions = {};
+  redirectNavigationTo = null;
   captureVisibleTabImpl = () => Promise.resolve("data:image/png;base64,AA==");
   executeScriptImpl = (targetUrl) => ({
     state: "ready",
@@ -417,4 +422,50 @@ test("a pre-submit failure stays a failure instead of becoming uncertain", async
     code: "site_markup_changed",
   });
   expect(sink.uploads).toEqual([]);
+});
+
+test("a LinkedIn post reaches the page script with its page and link, and counts as posted though the tab has moved on to the feed", async () => {
+  executeScriptImpl = (targetUrl) => ({
+    state: "submission_succeeded",
+    kind: "submission",
+    url: targetUrl,
+    title: "Feed | LinkedIn",
+    platform: "linkedin",
+    postedId: "42",
+    postedUrl: "https://www.linkedin.com/feed/update/urn:li:activity:42/",
+  });
+  const result = await new BrowserExecutor().run(
+    {
+      ...makeCommand("submit_post", "https://www.linkedin.com/sharing/compose"),
+      platform: "linkedin",
+      payload: {
+        kind: "post_submission",
+        draftId: "draft-1",
+        page: "Acme Co",
+        url: "https://example.com/a",
+        text: "Hello",
+        parts: ["Hello"],
+      },
+    },
+    makeSink(),
+  );
+  expect(lastDriverOptions).toMatchObject({
+    page: "Acme Co",
+    url: "https://example.com/a",
+    text: "Hello",
+  });
+  expect(result).toMatchObject({ postedId: "42", kind: "submission" });
+});
+
+test("a LinkedIn job sent to the sign-in page is reported as needing sign-in, not as a changed page", async () => {
+  redirectNavigationTo = "https://www.linkedin.com/uas/login?session_redirect=x";
+  await expect(
+    new BrowserExecutor().run(
+      {
+        ...makeCommand("read_pages", "https://www.linkedin.com/sharing/compose"),
+        platform: "linkedin",
+      },
+      makeSink(),
+    ),
+  ).rejects.toMatchObject({ code: "login_required" });
 });

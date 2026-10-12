@@ -298,7 +298,7 @@ test("rejects invalid profile usernames, mixed inputs, and unknown platforms", (
     }),
   ).toMatchObject({ ok: false, error: { code: "invalid_schema" } });
 
-  for (const platform of ["linkedin", "gmail", "tiktok"]) {
+  for (const platform of ["gmail", "tiktok"]) {
     expect(
       parseCreateJobRequest({
         platform,
@@ -307,6 +307,115 @@ test("rejects invalid profile usernames, mixed inputs, and unknown platforms", (
       }),
     ).toMatchObject({ ok: false, error: { code: "invalid_schema" } });
   }
+});
+
+test("LinkedIn supports listing pages and posting only, always on the share composer", () => {
+  expect(
+    parseCreateJobRequest({
+      platform: "linkedin",
+      action: "read_profile",
+      payload: { username: "someone" },
+    }),
+  ).toMatchObject({ ok: false, error: { code: "unsupported_action" } });
+
+  expect(
+    parseCreateJobRequest({ platform: "linkedin", action: "read_pages", payload: {} }),
+  ).toMatchObject({
+    ok: true,
+    value: {
+      targetUrl: "https://www.linkedin.com/sharing/compose",
+      payload: { kind: "empty" },
+    },
+  });
+  expect(
+    parseCreateJobRequest({
+      platform: "linkedin",
+      action: "read_pages",
+      targetUrl: "https://www.linkedin.com/feed/",
+      payload: {},
+    }),
+  ).toMatchObject({ ok: false, error: { code: "invalid_schema" } });
+
+  const now = Date.now();
+  const command = (action: string, payload: unknown) => ({
+    version: 1,
+    type: "command",
+    jobId: "job-1",
+    commandId: "command-1",
+    platform: "linkedin",
+    action,
+    targetUrl: "https://www.linkedin.com/sharing/compose",
+    issuedAt: now,
+    expiresAt: now + 60_000,
+    payload,
+  });
+  expect(parseCommandEnvelope(command("read_feed", { kind: "empty" }))).toMatchObject({
+    ok: false,
+    error: { code: "unsupported_action" },
+  });
+  expect(parseCommandEnvelope(command("read_pages", { kind: "empty" }))).toMatchObject({
+    ok: true,
+  });
+});
+
+test("a LinkedIn post command carries its page and link, and refuses images or anything over the limit", () => {
+  const now = Date.now();
+  const command = (platform: string, payload: Record<string, unknown>) => ({
+    version: 1,
+    type: "command",
+    jobId: "job-1",
+    commandId: "command-1",
+    platform,
+    action: "submit_post",
+    targetUrl:
+      platform === "x"
+        ? "https://x.com/compose/post"
+        : "https://www.linkedin.com/sharing/compose",
+    issuedAt: now,
+    expiresAt: now + 60_000,
+    payload: {
+      kind: "post_submission",
+      draftId: "draft-1",
+      text: "Hello",
+      parts: ["Hello"],
+      ...payload,
+    },
+  });
+
+  expect(
+    parseCommandEnvelope(
+      command("linkedin", { page: "Acme Co", url: "https://example.com/a" }),
+    ),
+  ).toMatchObject({
+    ok: true,
+    value: {
+      payload: { page: "Acme Co", url: "https://example.com/a", parts: ["Hello"] },
+    },
+  });
+
+  const refused: Record<string, unknown>[] = [
+    {},
+    { page: "   " },
+    { page: "Acme Co", url: "http://example.com/a" },
+    { page: "Acme Co", url: "https://user:pw@example.com/a" },
+    { page: "Acme Co", partImages: [[]] },
+    { page: "Acme Co", parts: ["Hello", "Second"] },
+    { page: "Acme Co", text: "x".repeat(3_000), parts: ["x".repeat(3_000)], url: "https://e.com" },
+  ];
+  for (const payload of refused) {
+    expect(parseCommandEnvelope(command("linkedin", payload))).toMatchObject({
+      ok: false,
+      error: { code: "invalid_schema" },
+    });
+  }
+
+  // X posts carry neither a page nor a link.
+  expect(parseCommandEnvelope(command("x", { page: "Acme Co" }))).toMatchObject({
+    ok: false,
+  });
+  expect(
+    parseCommandEnvelope(command("x", { url: "https://example.com/a" })),
+  ).toMatchObject({ ok: false });
 });
 
 test("decodes only bounded PNG screenshots", () => {

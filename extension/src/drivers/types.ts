@@ -17,6 +17,10 @@ export interface DriverScriptOptions {
   /** Stable identity for one submission across the driver's multiple passes. */
   readonly draftId?: string;
   readonly postId?: string;
+  /** LinkedIn: the identity a post goes out as, as the composer names it. */
+  readonly page?: string;
+  /** LinkedIn: a link placed on its own line after the text. */
+  readonly url?: string;
   readonly text?: string;
   /** The posts of a thread, in order. Absent or one entry for a plain post. */
   readonly parts?: readonly string[];
