@@ -134,7 +134,25 @@ export function runLinkedInPage(
     return Array.from(document.querySelectorAll('[role="radio"]'));
   };
 
-  const closeIdentityList = async (switcher: Element): Promise<void> => {
+  const identityListClosed = (): Promise<boolean> =>
+    waitFor(() => identityRadios().length === 0, 1_500).then(Boolean);
+
+  // Closes the list by pressing the switcher again. Escape is never used in a
+  // post, because on the composer it closes the whole composer.
+  const closeIdentityListWithSwitcher = async (
+    switcher: Element,
+  ): Promise<void> => {
+    if (identityRadios().length > 0) {
+      (switcher as HTMLElement).click();
+      await identityListClosed();
+    }
+  };
+
+  // Escape closes the list but also the composer, so this is only for a read
+  // that is done with the page.
+  const closeIdentityListWithEscape = async (
+    switcher: Element,
+  ): Promise<void> => {
     if (identityRadios().length === 0) {
       return;
     }
@@ -149,12 +167,26 @@ export function runLinkedInPage(
         }),
       );
     }
-    const closed = await waitFor(() => identityRadios().length === 0, 1_500);
-    if (!closed && switcher.getAttribute("aria-expanded") === "true") {
-      (switcher as HTMLElement).click();
-      await waitFor(() => identityRadios().length === 0, 1_500);
+    if (
+      !(await identityListClosed()) &&
+      switcher.getAttribute("aria-expanded") === "true"
+    ) {
+      await closeIdentityListWithSwitcher(switcher);
     }
   };
+
+  // Pages the account administers, from the left rail's `/company/<id>/admin/`
+  // links. Sibling links such as `.../admin/analytics/` are not pages.
+  const ADMIN_PATH = /^\/company\/(\d+)\/admin\/?$/u;
+  const adminLinks = (): { readonly id: string; readonly name: string }[] =>
+    Array.from(document.querySelectorAll('a[href*="/company/"]')).flatMap(
+      (link) => {
+        const href = link.getAttribute("href") ?? "";
+        const id = ADMIN_PATH.exec(new URL(href, window.location.href).pathname)?.[1];
+        const name = textOf(link);
+        return id && name ? [{ id, name }] : [];
+      },
+    );
 
   interface Identity {
     readonly element: Element;
@@ -214,12 +246,22 @@ export function runLinkedInPage(
         "LinkedIn did not list the pages you can post as.",
       );
     }
-    const pages = identities.map((identity, index) => ({
-      name: identity.name,
-      personal: index === 0,
-      selected: identity.selected,
-    }));
-    await closeIdentityList(composer.switcher);
+    const links = adminLinks();
+    const pages = identities.map((identity, index) => {
+      const ids = new Set(
+        links
+          .filter((link) => nameKey(link.name) === nameKey(identity.name))
+          .map((link) => link.id),
+      );
+      const [id] = ids;
+      return {
+        name: identity.name,
+        personal: index === 0,
+        selected: identity.selected,
+        ...(index > 0 && ids.size === 1 ? { id } : {}),
+      };
+    });
+    await closeIdentityListWithEscape(composer.switcher);
     return {
       state: "ready",
       kind: "pages",
@@ -341,7 +383,7 @@ export function runLinkedInPage(
     );
     const [chosen] = matches;
     if (!chosen || matches.length > 1) {
-      await closeIdentityList(switcher);
+      await closeIdentityListWithSwitcher(switcher);
       return failure(
         chosen ? "target_mismatch" : "target_not_found",
         chosen
@@ -349,20 +391,44 @@ export function runLinkedInPage(
           : `LinkedIn does not list a page called "${pageName}". Pages you can post as: ${available}. Nothing was submitted.`,
       );
     }
-    if (!chosen.selected) {
-      (chosen.element as HTMLElement).click();
-    }
+    // Choosing a radio, even the checked one, also closes the list.
+    (chosen.element as HTMLElement).click();
     const switched = await waitFor(
       () => nameKey(textOf(switcher)) === nameKey(chosen.name),
       5_000,
     );
-    await closeIdentityList(switcher);
+    await closeIdentityListWithSwitcher(switcher);
     return switched
       ? chosen
       : failure(
           "target_mismatch",
           `LinkedIn did not switch to "${chosen.name}". Nothing was submitted.`,
         );
+  };
+
+  // `page` is a LinkedIn organization ID or a page name. An ID is turned into
+  // the name its admin link shows in the left rail.
+  const resolvePageName = async (
+    switcher: Element,
+    requested: string,
+  ): Promise<string | DriverPageResult> => {
+    if (!/^\d+$/u.test(requested)) {
+      return requested;
+    }
+    const link = await waitFor(
+      () => adminLinks().find((candidate) => candidate.id === requested),
+      10_000,
+    );
+    if (link) {
+      return link.name;
+    }
+    const identities = await openIdentityList(switcher);
+    await closeIdentityListWithSwitcher(switcher);
+    const names = (identities ?? adminLinks()).map((entry) => entry.name);
+    return failure(
+      "target_not_found",
+      `LinkedIn does not show a page with ID ${requested}. Pages you can post as: ${names.join(", ")}. Nothing was submitted.`,
+    );
   };
 
   const awaitLinkPreview = async (): Promise<boolean> => {
@@ -402,10 +468,10 @@ export function runLinkedInPage(
       trace("post already pressed for this draft; reading the outcome");
       return outcomeAfterPress(alreadyPressed);
     }
-    const pageName = clean(options.page);
+    const requestedPage = clean(options.page);
     const text = options.text ?? "";
     const link = options.url ?? null;
-    if (pageName === "" || text === "") {
+    if (requestedPage === "" || text === "") {
       return failure(
         "unsupported",
         "The confirmed LinkedIn post has no page or text. Nothing was submitted.",
@@ -423,6 +489,10 @@ export function runLinkedInPage(
     }
     const { editor, box, switcher } = composer;
 
+    const pageName = await resolvePageName(switcher, requestedPage);
+    if (typeof pageName !== "string") {
+      return pageName;
+    }
     const chosen = await chooseIdentity(switcher, pageName);
     if ("state" in chosen) {
       return chosen;

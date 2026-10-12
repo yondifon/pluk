@@ -3222,6 +3222,9 @@ interface LinkedInOptions {
   readonly editorDriftsWithPreview?: boolean;
   /** A toast from an earlier post is still on the page. */
   readonly staleToast?: boolean;
+  /** Links in the feed's left rail; by default each page gets its admin link
+   * plus its notifications and analytics links. */
+  readonly rail?: readonly { readonly href: string; readonly text: string }[];
   readonly path?: string;
   readonly passwordForm?: boolean;
 }
@@ -3260,6 +3263,7 @@ function installLinkedIn(options: LinkedInOptions = {}) {
     previewShown: false,
     drifted: false,
     popoverOpen: false,
+    keys: [] as string[],
     presses: [] as { at: number; identity: string; text: string; previewShown: boolean }[],
   };
 
@@ -3297,6 +3301,25 @@ function installLinkedIn(options: LinkedInOptions = {}) {
   box.append(holder, previewCard, footer);
   dialog.append(header, box);
 
+  const rail = new LiElement("div");
+  const pageIds: Record<string, string> = { "Acme Co": "1001", "Beta Labs": "1002" };
+  const railLinks =
+    options.rail ??
+    identities.flatMap((name) => {
+      const id = pageIds[name];
+      const base = `https://www.linkedin.com/company/${id}/admin/`;
+      return id
+        ? [
+            { href: base, text: name },
+            { href: `${base}notifications/`, text: "Notifications" },
+            { href: `${base}analytics/`, text: "Analytics" },
+          ]
+        : [];
+    });
+  for (const link of railLinks) {
+    rail.append(new LiElement("a", { href: link.href }, link.text));
+  }
+
   const alertRegion = new LiElement("div", { role: "alert" });
   if (options.staleToast) {
     alertRegion.append(
@@ -3307,7 +3330,7 @@ function installLinkedIn(options: LinkedInOptions = {}) {
       ),
     );
   }
-  body.append(dialog, alertRegion);
+  body.append(dialog, rail, alertRegion);
   if (options.passwordForm) {
     body.append(new LiElement("input", { type: "password" }));
   }
@@ -3339,9 +3362,14 @@ function installLinkedIn(options: LinkedInOptions = {}) {
       body.append(popover);
     }
   };
+  // Escape on the open list closes the whole composer, as LinkedIn does.
   body.onEvent = (event) => {
+    state.keys.push(event.key ?? "");
     if (event.key === "Escape") {
       closePopover();
+      dialog.remove();
+      rail.remove();
+      state.value = "";
     }
   };
 
@@ -3483,10 +3511,11 @@ test("lists the pages with the personal profile first, then closes the list with
       platform: "linkedin",
       pages: [
         { name: "Jane Doe", personal: true, selected: true },
-        { name: "Acme Co", personal: false, selected: false },
-        { name: "Beta Labs", personal: false, selected: false },
+        { name: "Acme Co", personal: false, selected: false, id: "1001" },
+        { name: "Beta Labs", personal: false, selected: false, id: "1002" },
       ],
     });
+    expect(result.pages).not.toContainEqual(expect.objectContaining({ personal: true, id: expect.anything() }));
     expect(linkedin.popoverOpen()).toBe(false);
     expect(linkedin.state.value).toBe("");
     expect(linkedin.state.presses).toEqual([]);
@@ -3529,6 +3558,7 @@ test("posts a multi-line text as the matched page, ignoring case and spacing, an
       url: LINKEDIN_COMPOSE,
     });
     expect(result).not.toHaveProperty("linkPreview");
+    expect(linkedin.state.keys).not.toContain("Escape");
     expect(linkedin.state.presses).toMatchObject([
       { identity: "Acme Co", text: "Line one\nLine two" },
     ]);
@@ -3618,4 +3648,61 @@ test("a signed-out LinkedIn is reported as needing sign-in before anything is to
       expect(linkedin.popoverOpen()).toBe(false);
     });
   }
+});
+
+test("a page ID is turned into its page name from the rail and posted as that page, without Escape", async () => {
+  await withLinkedIn({}, async (linkedin) => {
+    const result = await linkedin.run({ page: " 1001 ", text: "Hello" });
+    expect(result).toMatchObject({ state: "submission_succeeded", postedId: LINKEDIN_ACTIVITY });
+    expect(linkedin.state.presses).toMatchObject([{ identity: "Acme Co", text: "Hello" }]);
+    expect(linkedin.state.keys).not.toContain("Escape");
+  });
+});
+
+test("a page ID with no admin link fails with the page names before anything is typed, without Escape", async () => {
+  await withLinkedIn({}, async (linkedin) => {
+    const result = await linkedin.run({ page: "9999", text: "Hello" });
+    expect(result.state).toBe("target_not_found");
+    for (const name of ["Jane Doe", "Acme Co", "Beta Labs"]) {
+      expect(result.message).toContain(name);
+    }
+    expect(linkedin.state.value).toBe("");
+    expect(linkedin.state.presses).toEqual([]);
+    expect(linkedin.state.keys).not.toContain("Escape");
+    expect(linkedin.popoverOpen()).toBe(false);
+  });
+});
+
+test("a rail that only has other links for the ID, such as analytics, does not count as the page", async () => {
+  const rail = [
+    { href: "https://www.linkedin.com/company/1001/admin/analytics/", text: "Acme Co" },
+    { href: "https://www.linkedin.com/company/1001/admin/notifications/", text: "Acme Co" },
+    { href: "https://www.linkedin.com/company/1001/", text: "Acme Co" },
+  ];
+  await withLinkedIn({ rail }, async (linkedin) => {
+    const result = await linkedin.run({ page: "1001", text: "Hello" });
+    expect(result.state).toBe("target_not_found");
+    expect(linkedin.state.value).toBe("");
+    expect(linkedin.state.presses).toEqual([]);
+  });
+});
+
+test("listing pages leaves a page without an ID when its name is on two different admin links", async () => {
+  const rail = [
+    { href: "https://www.linkedin.com/company/1001/admin/", text: "Acme Co" },
+    { href: "/company/2002/admin", text: "Acme Co" },
+    { href: "https://www.linkedin.com/company/1002/admin/", text: "Beta Labs" },
+  ];
+  await withLinkedIn({ rail }, async (linkedin) => {
+    const result = await linkedin.run({ action: "read_pages" });
+    expect(result.pages).toMatchObject([
+      { name: "Jane Doe" },
+      { name: "Acme Co" },
+      { name: "Beta Labs", id: "1002" },
+    ]);
+    expect((result.pages as { id?: string }[])[1]).not.toHaveProperty("id");
+    // The list is closed with Escape, which also closes the composer.
+    expect(linkedin.state.value).toBe("");
+    expect(linkedin.state.presses).toEqual([]);
+  });
 });

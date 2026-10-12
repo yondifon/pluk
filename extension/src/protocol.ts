@@ -284,8 +284,8 @@ export interface ComposePayload {
 export interface PostSubmissionPayload {
   readonly kind: "post_submission";
   readonly draftId: string;
-  /** LinkedIn only: the identity the post goes out as, as the composer's
-   * "Post as" list names it. */
+  /** LinkedIn only: the page the post goes out as, by organization ID (all
+   * digits) or by the name the composer's "Post as" list shows. */
   readonly page?: string;
   /** LinkedIn only: a link placed on its own line after the text. */
   readonly url?: string;
