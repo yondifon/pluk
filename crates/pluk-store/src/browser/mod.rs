@@ -2014,6 +2014,7 @@ mod tests {
         assert_eq!(found(&mut store, linkedin_input("Other Page", "Launch day", Some("https://acme.test/launch"))), None);
         assert_eq!(found(&mut store, linkedin_input("Acme Inc", "Launch day", Some("https://acme.test/other"))), None);
         assert_eq!(found(&mut store, linkedin_input("Acme Inc", "Launch day", None)), None);
+        assert_eq!(found(&mut store, linkedin_input("122454567", "Launch day", Some("https://acme.test/launch"))), None);
     }
 
     /// A LinkedIn post carries its page and link from the waiting draft into
@@ -2037,11 +2038,11 @@ mod tests {
         assert!(store.list_schedule_reservations(10, now).unwrap().is_empty());
 
         let draft = store
-            .create_draft(&linkedin_input("Acme Inc", "Launch day", Some("https://acme.test/launch")), now)
+            .create_draft(&linkedin_input("122454567", "Launch day", Some("https://acme.test/launch")), now)
             .unwrap();
-        assert_eq!(draft.page.as_deref(), Some("Acme Inc"));
+        assert_eq!(draft.page.as_deref(), Some("122454567"));
         let shown = serde_json::to_value(&draft).unwrap();
-        assert_eq!(shown["page"], "Acme Inc");
+        assert_eq!(shown["page"], "122454567");
         assert_eq!(shown["url"], "https://acme.test/launch");
 
         let submission = store.consume_draft(&draft.id, now, false).unwrap().unwrap();
@@ -2055,7 +2056,7 @@ mod tests {
                 "draftId": draft.id,
                 "text": "Launch day",
                 "parts": ["Launch day"],
-                "page": "Acme Inc",
+                "page": "122454567",
                 "url": "https://acme.test/launch",
             })
         );

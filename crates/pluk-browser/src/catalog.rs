@@ -15,9 +15,9 @@ const PLATFORMS: [Platform; 3] = [Platform::X, Platform::Instagram, Platform::Li
 /// summary does not promise for every platform.
 const X_READ_POST_SUMMARY: &str = "Read one exact post by its URL or its typed post ID. Returns a canonical post target and the replies shown under it, top to bottom, each with its own post ID.";
 
-const LINKEDIN_POST_SUMMARY: &str = "Post exact text to LinkedIn as the user or as one of their company pages. Pass `page` (the name exactly as LinkedIn shows it under Post as; call linkedin_read_pages to list the valid names), `text` (up to 3000 characters), and optionally `url` (an https link, which counts toward the limit). One post only: no thread and no images. It waits in Pluk until the user sends it; no page is touched before then, and you get back what the user decided.";
+const LINKEDIN_POST_SUMMARY: &str = "Post exact text to LinkedIn as the user or as one of their company pages. Pass `page`: the company page's organization ID (digits only, preferred when you have it) or its name exactly as linkedin_read_pages lists it, the user's own name included, `text` (up to 3000 characters), and optionally `url` (an https link, which counts toward the limit). One post only: no thread and no images. It waits in Pluk until the user sends it; no page is touched before then, and you get back what the user decided.";
 
-const LINKEDIN_READ_PAGES_SUMMARY: &str = "List the identities the signed-in user can post as on LinkedIn: their own name first, then each company page they manage. Use the names it returns as `page` for linkedin_post. No input needed.";
+const LINKEDIN_READ_PAGES_SUMMARY: &str = "List the identities the signed-in user can post as on LinkedIn: their own name first, then each company page they manage. Each entry has a name, whether it is the user's own profile, whether it is selected, and the organization ID (digits) when it could be read. Use an ID or a name from this list as `page` for linkedin_post. No input needed.";
 
 /// Tool classes, matching the categories the adapter layer groups by.
 const READ: &str = "read";
@@ -301,7 +301,7 @@ fn args_schema(platform: Platform, action: Action) -> Value {
                         "type": "string",
                         "required": true,
                         "maxLength": MAX_PAGE_NAME_LENGTH,
-                        "description": "The identity to post as, named exactly as LinkedIn shows it under Post as. linkedin_read_pages lists the valid names, the user's own name included.",
+                        "description": "The identity to post as: a company page's organization ID (digits only, preferred when you have it), or a name exactly as linkedin_read_pages lists it, the user's own name included.",
                     },
                     "text": {
                         "type": "string",

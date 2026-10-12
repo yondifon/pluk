@@ -2165,6 +2165,8 @@ mod tests {
                 "page": "Acme Inc", "url": "https://acme.test/launch"
             })
         );
+        let by_id = linkedin_post(json!({ "page": " 122454567 ", "text": "By ID" })).unwrap();
+        assert_eq!(by_id.payload["page"], "122454567");
         let plain = linkedin_post(json!({ "page": "Acme Inc", "text": "No link" })).unwrap();
         assert!(plain.payload.get("url").is_none());
         // Length counts characters, not bytes.
