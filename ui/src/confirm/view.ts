@@ -1,3 +1,4 @@
+import { postingAsText } from "../postIdentity";
 import { createButton } from "../primitives";
 
 export type ConfirmChoice = "once" | "session" | "always" | "deny";
@@ -42,7 +43,7 @@ export interface PostQuestion {
   /** Where the post goes out: `x`, `linkedin`. */
   platform: string;
   /** The identity the post goes out as, when the platform has several (a
-   * LinkedIn page). */
+   * LinkedIn page): its name, or its number when the name is not known yet. */
   page: string | null;
   /** A link sent with the words, when there is one. */
   url: string | null;
@@ -188,7 +189,7 @@ export function renderPost(
     galleries[index] = gallery;
   }
 
-  const identity = question.page ? line(`Posting as ${question.page}`, "confirm-identity") : null;
+  const identity = question.page ? line(postingAsText(question.page), "confirm-identity") : null;
   const link = question.url ? line(`Link: ${question.url}`, "confirm-link") : null;
 
   const imagesStatus = document.createElement("p");

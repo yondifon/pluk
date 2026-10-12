@@ -1,4 +1,5 @@
 import { invoke } from "../host";
+import { postingAsText } from "../postIdentity";
 import { createButton } from "../primitives";
 import { toast } from "../toast";
 import { pollWhileVisible } from "../windowVisibility";
@@ -45,7 +46,7 @@ export interface WaitingPost {
   expiresAt: number;
   canQueue: boolean;
   /** The identity this post goes out as, when the platform has several (a
-   * LinkedIn page). */
+   * LinkedIn page): its name, or its number when the name is not known yet. */
   page: string | null;
   /** A link sent with the words, when there is one. */
   url: string | null;
@@ -357,7 +358,7 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
       body.appendChild(line(post.reposting, "wande-post-text"));
       return body;
     }
-    if (post.page) body.appendChild(line(`Posting as ${post.page}`, "wande-post-identity"));
+    if (post.page) body.appendChild(line(postingAsText(post.page), "wande-post-identity"));
     if (post.replyingTo) body.appendChild(line(`Replying to ${post.replyingTo}`, "hint"));
     if (post.quoting) {
       body.appendChild(line(post.quoting.author ? `Quoting ${post.quoting.author}` : "Quoting", "hint"));

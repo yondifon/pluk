@@ -157,6 +157,12 @@ describe("the post window", () => {
     ]);
   });
 
+  test("a page given only as a number is labelled as a page, never shown as a bare number", () => {
+    const root = document.createElement("div");
+    renderPost(root, postQuestion({ platform: "linkedin", page: "122454567", canQueue: false }), () => {}, neverLoads);
+    expect(root.querySelector(".confirm-identity")?.textContent).toBe("Posting as LinkedIn page 122454567");
+  });
+
   test("a post with no page or link shows no identity or link line", () => {
     for (const overrides of [{}, { platform: "linkedin", page: "", url: "" }]) {
       const root = document.createElement("div");

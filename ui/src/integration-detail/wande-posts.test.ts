@@ -70,6 +70,7 @@ describe("the posts waiting on a person", () => {
     posts.waiting = [
       waitingPost({ id: "li", text: "We shipped it.", page: hostilePage, url: "https://example.com/a", canQueue: false }),
       waitingPost({ id: "x" }),
+      waitingPost({ id: "li-number", page: "122454567", canQueue: false }),
     ];
     const { root, destroy } = await mount();
     const items = [...root.querySelectorAll(".wande-post")];
@@ -78,6 +79,7 @@ describe("the posts waiting on a person", () => {
     expect(items[0].querySelector("img")).toBeNull();
     expect([...items[0].querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Post now", "Discard"]);
     expect(items[1].querySelector(".wande-post-identity, .wande-post-link")).toBeNull();
+    expect(items[2].querySelector(".wande-post-identity")?.textContent).toBe("Posting as LinkedIn page 122454567");
     destroy();
   });
 
