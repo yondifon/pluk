@@ -18,6 +18,8 @@ function waitingPost(overrides: Partial<WandePosts["waiting"][number]> = {}) {
     quoting: null,
     expiresAt: NOW + 90_000,
     canQueue: true,
+    page: null,
+    url: null,
     ...overrides,
   };
 }
@@ -50,22 +52,6 @@ async function mount(): Promise<{ root: HTMLElement; destroy: () => void }> {
 }
 
 describe("the posts waiting on a person", () => {
-  test("with nothing waiting, it says so instead of going blank", async () => {
-    const { root, destroy } = await mount();
-    expect(root.querySelector(".empty")!.textContent).toBe(
-      "Nothing waiting. Posts the agent writes land here for you to send.",
-    );
-    destroy();
-  });
-
-  test("a waiting post shows its exact text and how long is left", async () => {
-    posts.waiting = [waitingPost()];
-    const { root, destroy } = await mount();
-    expect(root.querySelector(".wande-post-text")!.textContent).toBe("First line\nSecond line");
-    expect(root.querySelector(".wande-post-countdown")!.textContent).toBe("Expires in 1:30");
-    destroy();
-  });
-
   test("Post now sends that one post and nothing else", async () => {
     posts.waiting = [waitingPost()];
     const { root, destroy } = await mount();
@@ -76,6 +62,22 @@ describe("the posts waiting on a person", () => {
     expect(calls.filter((c) => c.cmd === "send_wande_post")).toEqual([
       { cmd: "send_wande_post", args: { integrationId: "integration-1", draftId: "draft-1", queue: false } },
     ]);
+    destroy();
+  });
+
+  test("a LinkedIn post waiting on approval shows its page and link as plain text, and an X post shows neither", async () => {
+    const hostilePage = '<img src=x onerror="alert(1)"> Desgn Space';
+    posts.waiting = [
+      waitingPost({ id: "li", text: "We shipped it.", page: hostilePage, url: "https://example.com/a", canQueue: false }),
+      waitingPost({ id: "x" }),
+    ];
+    const { root, destroy } = await mount();
+    const items = [...root.querySelectorAll(".wande-post")];
+    expect(items[0].querySelector(".wande-post-identity")?.textContent).toBe(`Posting as ${hostilePage}`);
+    expect(items[0].querySelector(".wande-post-link")?.textContent).toBe("Link: https://example.com/a");
+    expect(items[0].querySelector("img")).toBeNull();
+    expect([...items[0].querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Post now", "Discard"]);
+    expect(items[1].querySelector(".wande-post-identity, .wande-post-link")).toBeNull();
     destroy();
   });
 

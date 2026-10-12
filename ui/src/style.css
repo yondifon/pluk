@@ -99,6 +99,8 @@ input, textarea, .mono, .snippet, .al-code, .al-output, .al-raw pre, .al-console
 .wande-post-part + .wande-post-part, .wande-post-images + .wande-post-part { padding-top: var(--space-xs); border-top: var(--border-width) solid var(--border-subtle); }
 .wande-post-part + .wande-post-images { padding-top: var(--space-xs); }
 .wande-post-text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; font-size: calc(var(--type-body) * var(--zoom-scale)); line-height: 1.5; -webkit-user-select: text; user-select: text; }
+.wande-post-identity { margin: 0; color: var(--surface-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); font-weight: 600; }
+.wande-post-link { margin: 0; overflow-wrap: anywhere; color: var(--surface-secondary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); -webkit-user-select: text; user-select: text; }
 .wande-post-footer { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: var(--space-sm); }
 .wande-post-footer > .hint, .wande-post-note { margin: 0; }
 .wande-post-countdown { color: var(--surface-tertiary-label); font-size: calc(var(--type-caption) * var(--zoom-scale)); font-variant-numeric: tabular-nums; }

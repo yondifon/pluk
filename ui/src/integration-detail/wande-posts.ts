@@ -44,6 +44,11 @@ export interface WaitingPost {
   quoting: QuotedPost | null;
   expiresAt: number;
   canQueue: boolean;
+  /** The identity this post goes out as, when the platform has several (a
+   * LinkedIn page). */
+  page: string | null;
+  /** A link sent with the words, when there is one. */
+  url: string | null;
 }
 
 export interface QueuedPost {
@@ -340,6 +345,8 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
     replyingTo?: string | null;
     reposting?: string | null;
     quoting?: QuotedPost | null;
+    page?: string | null;
+    url?: string | null;
   }): HTMLElement {
     const body = document.createElement("div");
     body.className = "wande-post-body";
@@ -350,6 +357,7 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
       body.appendChild(line(post.reposting, "wande-post-text"));
       return body;
     }
+    if (post.page) body.appendChild(line(`Posting as ${post.page}`, "wande-post-identity"));
     if (post.replyingTo) body.appendChild(line(`Replying to ${post.replyingTo}`, "hint"));
     if (post.quoting) {
       body.appendChild(line(post.quoting.author ? `Quoting ${post.quoting.author}` : "Quoting", "hint"));
@@ -369,6 +377,7 @@ export function mountWandePosts(container: HTMLElement, integrationId: string): 
       const strip = imageStrip(images.filter((image) => image.partIndex === 0));
       if (strip) body.appendChild(strip);
     }
+    if (post.url) body.appendChild(line(`Link: ${post.url}`, "wande-post-link"));
     return body;
   }
 

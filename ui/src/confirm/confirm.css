@@ -80,6 +80,25 @@ body {
   line-height: 1.45;
 }
 
+/* Who a post goes out as, and the link it carries, kept beside its words. */
+.confirm-identity,
+.confirm-link {
+  margin: 0;
+  font-size: calc(var(--type-caption) * var(--zoom-scale));
+}
+
+.confirm-identity {
+  color: var(--surface-label);
+  font-weight: 600;
+}
+
+.confirm-link {
+  color: var(--surface-secondary-label);
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* The post a quote quotes, set apart from the words that quote it. */
 .confirm-quoted {
   display: flex;

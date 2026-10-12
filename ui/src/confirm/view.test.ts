@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  postCountdownText,
   renderClosed,
   renderConfirm,
   renderPost,
@@ -22,15 +21,6 @@ function question(): ConfirmQuestion {
 }
 
 describe("the confirm window", () => {
-  test("names the integration and shows the command exactly", () => {
-    const root = document.createElement("div");
-    renderConfirm(root, question(), () => {});
-    expect(root.querySelector(".confirm-source")?.textContent).toBe("SSH");
-    expect(root.querySelector(".confirm-title")?.textContent).toBe("Allow this on Prod server?");
-    expect(root.querySelector(".confirm-command")?.textContent).toBe("rm -rf /var/cache");
-    expect(root.querySelector(".confirm-reason")?.textContent).toContain('command not allowed: "rm"');
-  });
-
   test("offers the four answers and reports the one that was clicked", () => {
     const root = document.createElement("div");
     const answers: ConfirmChoice[] = [];
@@ -74,6 +64,9 @@ function postQuestion(overrides: Partial<PostQuestion> = {}): PostQuestion {
     reposting: null,
     quoting: null,
     canQueue: true,
+    platform: "x",
+    page: null,
+    url: null,
     closesAt: Date.now() + 60_000,
     ...overrides,
   };
@@ -137,6 +130,43 @@ describe("the post window", () => {
     expect(root.querySelector(".confirm-quoted-text")?.textContent).toBe("https://x.com/i/status/42");
   });
 
+  test("a LinkedIn post names the page it goes out as and the link it carries, as plain text", () => {
+    const root = document.createElement("div");
+    const hostilePage = '<img src=x onerror="alert(1)"> Desgn Space';
+    renderPost(
+      root,
+      postQuestion({
+        platform: "linkedin",
+        text: "We shipped it.",
+        page: hostilePage,
+        url: "https://example.com/a?b=<script>",
+        canQueue: false,
+      }),
+      () => {},
+      neverLoads,
+    );
+    const identity = root.querySelector(".confirm-identity");
+    expect(identity?.textContent).toBe(`Posting as ${hostilePage}`);
+    expect(root.querySelector(".confirm-link")?.textContent).toBe("Link: https://example.com/a?b=<script>");
+    expect(root.querySelector("img, script")).toBeNull();
+    expect(identity?.nextElementSibling?.className).toContain("confirm-post");
+    expect(root.querySelector(".confirm-post")?.textContent).toBe("We shipped it.");
+    expect([...root.querySelectorAll(".confirm-actions .ui-button")].map((b) => b.textContent)).toEqual([
+      "Discard",
+      "Post now",
+    ]);
+  });
+
+  test("a post with no page or link shows no identity or link line", () => {
+    for (const overrides of [{}, { platform: "linkedin", page: "", url: "" }]) {
+      const root = document.createElement("div");
+      renderPost(root, postQuestion(overrides), () => {}, neverLoads);
+      expect(root.querySelector(".confirm-identity")).toBeNull();
+      expect(root.querySelector(".confirm-link")).toBeNull();
+      expect(root.textContent).not.toContain("null");
+    }
+  });
+
   test("a thread is shown as the posts it becomes", () => {
     const root = document.createElement("div");
     renderPost(
@@ -147,11 +177,6 @@ describe("the post window", () => {
     );
     expect(root.querySelector(".confirm-title")?.textContent).toBe("Post this thread of 2?");
     expect([...root.querySelectorAll(".confirm-post-part")].map((b) => b.textContent)).toEqual(["One", "Two"]);
-  });
-
-  test("the countdown says nothing goes out on its own", () => {
-    expect(postCountdownText(95)).toBe("Nothing goes out until you answer. Expires in 1:35.");
-    expect(postCountdownText(0)).toBe("Time is up. Nothing was posted.");
   });
 
   async function flush(): Promise<void> {

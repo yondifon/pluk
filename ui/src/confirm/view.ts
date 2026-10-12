@@ -39,6 +39,13 @@ export interface PostQuestion {
   /** The post this quotes, when it is a quote. */
   quoting: QuotedPost | null;
   canQueue: boolean;
+  /** Where the post goes out: `x`, `linkedin`. */
+  platform: string;
+  /** The identity the post goes out as, when the platform has several (a
+   * LinkedIn page). */
+  page: string | null;
+  /** A link sent with the words, when there is one. */
+  url: string | null;
   /** When the post stops being sendable, in epoch milliseconds. */
   closesAt: number;
 }
@@ -108,6 +115,13 @@ export function renderConfirm(
   };
 }
 
+function line(text: string, className: string): HTMLParagraphElement {
+  const element = document.createElement("p");
+  element.className = className;
+  element.textContent = text;
+  return element;
+}
+
 /** The line under a post's images while at least one preview is still
  * loading, or once one has failed to. */
 function imagesStatusText(pending: number, failed: boolean): string {
@@ -174,6 +188,9 @@ export function renderPost(
     galleries[index] = gallery;
   }
 
+  const identity = question.page ? line(`Posting as ${question.page}`, "confirm-identity") : null;
+  const link = question.url ? line(`Link: ${question.url}`, "confirm-link") : null;
+
   const imagesStatus = document.createElement("p");
   imagesStatus.className = "confirm-images-status";
   imagesStatus.setAttribute("role", "status");
@@ -211,7 +228,9 @@ export function renderPost(
     source,
     title,
     ...(question.quoting ? [quotedPost(question.quoting)] : []),
+    ...(identity ? [identity] : []),
     text,
+    ...(link ? [link] : []),
     imagesStatus,
     context,
     countdown,
