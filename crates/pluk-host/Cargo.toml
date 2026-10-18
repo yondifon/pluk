@@ -13,6 +13,7 @@ async-trait = "0.1"
 base64 = "0.22"
 tauri = { version = "2.11", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2.3"
 tauri-plugin-autostart = "2.7"
 tauri-plugin-single-instance = "2.5"
 tauri-plugin-updater = { version = "2.10", optional = true }
