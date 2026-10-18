@@ -233,6 +233,7 @@ async fn open_resource(cfg: RedisConfig) -> Result<Arc<RedisResource>, AdapterEr
             remote_host: cfg.host.clone(),
             remote_port: cfg.port,
             local_port: None,
+            label: None,
         };
         let tunnel = pluk_ssh::open_ssh_tunnel(tunnel_cfg, None)
             .await

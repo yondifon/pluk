@@ -504,6 +504,7 @@ pub async fn open_forward(
             remote_host: rh.clone(),
             remote_port,
             local_port: requested_local_port,
+            label: None,
         })
         .await?;
 

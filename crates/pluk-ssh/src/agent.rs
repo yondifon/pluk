@@ -98,6 +98,29 @@ async fn probe_inner(path: &str) -> AgentProbe {
     }
 }
 
+/// Key agents Pluk can name for the user.
+const KNOWN_AGENTS: [&str; 4] = ["1Password", "Secretive", "Bitwarden", "GnuPG"];
+
+/// Which key agent owns a socket, judged by where it lives.
+pub fn agent_name(socket: &str) -> Option<&'static str> {
+    if socket.contains("com.1password") || socket.contains(".1password") {
+        Some("1Password")
+    } else if socket.contains("Secretive") {
+        Some("Secretive")
+    } else if socket.contains(".bitwarden-ssh-agent.sock") {
+        Some("Bitwarden")
+    } else if socket.contains("S.gpg-agent.ssh") {
+        Some("GnuPG")
+    } else {
+        None
+    }
+}
+
+/// The agent a message names, if it names one of the agents above.
+pub fn agent_named_in(text: &str) -> Option<&'static str> {
+    KNOWN_AGENTS.into_iter().find(|name| text.contains(name))
+}
+
 fn well_known_agent_sockets() -> Vec<String> {
     let home = match pluk_core::platform::home_dir() {
         Some(h) => h,
@@ -190,6 +213,21 @@ impl AgentUnreachableError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sockets_are_attributed_to_their_agent() {
+        let home = "/Users/a";
+        for (socket, agent) in [
+            ("Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock", Some("1Password")),
+            (".1password/agent.sock", Some("1Password")),
+            ("Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh", Some("Secretive")),
+            (".bitwarden-ssh-agent.sock", Some("Bitwarden")),
+            (".gnupg/S.gpg-agent.ssh", Some("GnuPG")),
+            ("/tmp/com.apple.launchd.x/Listeners", None),
+        ] {
+            assert_eq!(agent_name(&format!("{home}/{socket}")), agent, "{socket}");
+        }
+    }
 
     #[test]
     fn pick_prefers_mute_over_empty() {

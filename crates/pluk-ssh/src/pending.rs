@@ -9,8 +9,9 @@ pub const SSH_PENDING_MAX_REPORTS: u32 = 2;
 pub const APPROVAL_NOTICE_AFTER_MS: u64 = 3_000;
 
 /// Receives the integration name of a connect that is waiting for a person to
-/// approve the SSH key. Fires at most once per connect.
-pub type ApprovalHook = Arc<dyn Fn(&str) + Send + Sync>;
+/// approve the sign-in, and the name of the key agent when it is known. Fires
+/// at most once per connect.
+pub type ApprovalHook = Arc<dyn Fn(&str, Option<&str>) + Send + Sync>;
 
 static APPROVAL_HOOK: Mutex<Option<ApprovalHook>> = Mutex::new(None);
 
@@ -19,11 +20,32 @@ pub fn set_approval_hook(hook: ApprovalHook) {
     *APPROVAL_HOOK.lock().unwrap() = Some(hook);
 }
 
-pub(crate) fn announce_approval_wait(label: &str) {
+pub(crate) fn announce_approval_wait(label: &str, agent: Option<&str>) {
     let hook = APPROVAL_HOOK.lock().unwrap().clone();
     if let Some(hook) = hook {
-        hook(label);
+        hook(label, agent);
     }
+}
+
+static CONNECT_AGENTS: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+
+/// Remember which key agent the latest connect to `host` used, so a caller
+/// that stops waiting can say where to look.
+pub(crate) fn note_connect_agent(host: &str, agent: Option<&'static str>) {
+    let mut agents = CONNECT_AGENTS.get_or_init(Default::default).lock().unwrap();
+    match agent {
+        Some(name) => agents.insert(host.to_string(), name),
+        None => agents.remove(host),
+    };
+}
+
+pub fn connect_agent(host: &str) -> Option<&'static str> {
+    CONNECT_AGENTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .get(host)
+        .copied()
 }
 
 #[derive(Debug, Clone)]
@@ -170,10 +192,14 @@ fn coded(code: &'static str, message: String) -> CodedError {
     CodedError { message, code }
 }
 
-pub fn ssh_pending_error() -> CodedError {
+pub fn ssh_pending_error(agent: Option<&str>) -> CodedError {
+    let waiting_on = match agent {
+        Some(name) => format!("for you to approve the sign-in in {name}"),
+        None => "for you to approve the sign-in in your key agent, security key, or browser".into(),
+    };
     coded(
         SSH_PENDING_CODE,
-        "SSH connect is still running — authenticating, or waiting on an SSH agent or proxy approval. It continues in the background; retry in a moment. If it keeps repeating, check for a pending agent (e.g. 1Password) prompt.".into(),
+        format!("SSH connect is still running. It may be waiting {waiting_on}. It continues in the background; retry in a moment."),
     )
 }
 
@@ -204,11 +230,11 @@ pub fn is_transient_ssh_error(err_code: Option<&str>) -> bool {
 /// Error for a caller whose bounded wait on an in-flight connect ran out.
 /// This attempt dying on auth is the real story — report it, not the pending guess.
 /// Otherwise: the guess while it's still plausible, then the last real failure.
-pub fn connect_wait_error(key: &str) -> CodedError {
+pub fn connect_wait_error(key: &str, agent: Option<&str>) -> CodedError {
     let mut map = episodes().lock().unwrap();
     let ep = match map.get_mut(key) {
         Some(e) => e,
-        None => return ssh_pending_error(),
+        None => return ssh_pending_error(agent),
     };
     let from_this_attempt = ep.last_error_seq >= ep.attempt_seq;
     if let Some(ref msg) = ep.last_error.clone()
@@ -223,9 +249,7 @@ pub fn connect_wait_error(key: &str) -> CodedError {
     }
     ep.pending_reports += 1;
     if ep.pending_reports <= SSH_PENDING_MAX_REPORTS {
-        let msg = ssh_pending_error().message.clone();
-        let code = ssh_pending_error().code;
-        return coded(code, msg);
+        return ssh_pending_error(agent);
     }
     let last = ep.last_error.clone();
     drop(map);
@@ -250,15 +274,15 @@ mod tests {
         let key = "test-rationing";
         start_connect_attempt(key);
         // First two calls return pending
-        let e1 = connect_wait_error(key);
+        let e1 = connect_wait_error(key, None);
         assert_eq!(e1.code, SSH_PENDING_CODE);
-        let e2 = connect_wait_error(key);
+        let e2 = connect_wait_error(key, None);
         assert_eq!(e2.code, SSH_PENDING_CODE);
         // Third returns stalled
-        let e3 = connect_wait_error(key);
+        let e3 = connect_wait_error(key, None);
         assert_eq!(e3.code, SSH_STALLED_CODE);
         // After stalled, episode is cleared — next call is fresh pending
-        let e4 = connect_wait_error(key);
+        let e4 = connect_wait_error(key, None);
         assert_eq!(e4.code, SSH_PENDING_CODE);
         reset_for_test();
     }
@@ -269,7 +293,7 @@ mod tests {
         let key = "test-auth-break";
         start_connect_attempt(key);
         record_connect_failure_msg(key, "permission denied (publickey)".into(), None);
-        let e = connect_wait_error(key);
+        let e = connect_wait_error(key, None);
         // Auth error from this attempt should be returned directly, not pending
         assert!(e.message.contains("permission denied"));
         assert_ne!(e.code, SSH_PENDING_CODE);
@@ -284,7 +308,7 @@ mod tests {
         record_connect_failure_msg(key, "permission denied".into(), None);
         start_connect_attempt(key);
         // Now pending should be returned, not the stale auth
-        let e = connect_wait_error(key);
+        let e = connect_wait_error(key, None);
         assert_eq!(e.code, SSH_PENDING_CODE);
         reset_for_test();
     }
@@ -332,7 +356,7 @@ mod tests {
         record_connect_failure_msg(key, "old error".into(), None);
         start_connect_attempt(key);
         // old error is before attempt, so pending
-        let e = connect_wait_error(key);
+        let e = connect_wait_error(key, None);
         assert_eq!(e.code, SSH_PENDING_CODE);
         // Now record a new failure after attempt started
         record_connect_failure_msg(key, "permission denied".into(), None);
@@ -340,7 +364,7 @@ mod tests {
         // But pending_reports is now 1, need second pending then auth?
         // Actually auth check happens first: fromThisAttempt && isAuth -> return auth
         // So even with pending_reports=1, auth takes priority
-        let e2 = connect_wait_error(key);
+        let e2 = connect_wait_error(key, None);
         assert!(e2.message.contains("permission denied"));
         reset_for_test();
     }
