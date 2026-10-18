@@ -1,10 +1,30 @@
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub const SSH_PENDING_CODE: &str = "SSH_CONNECT_PENDING";
 pub const SSH_STALLED_CODE: &str = "SSH_CONNECT_STALLED";
 pub const SSH_CONNECT_WAIT_MS: u64 = 25_000;
 pub const SSH_PENDING_MAX_REPORTS: u32 = 2;
+/// How long a connect waits on the agent before someone is told to act.
+pub const APPROVAL_NOTICE_AFTER_MS: u64 = 3_000;
+
+/// Receives the integration name of a connect that is waiting for a person to
+/// approve the SSH key. Fires at most once per connect.
+pub type ApprovalHook = Arc<dyn Fn(&str) + Send + Sync>;
+
+static APPROVAL_HOOK: Mutex<Option<ApprovalHook>> = Mutex::new(None);
+
+/// Attach whatever tells the user. The desktop host calls this once at startup.
+pub fn set_approval_hook(hook: ApprovalHook) {
+    *APPROVAL_HOOK.lock().unwrap() = Some(hook);
+}
+
+pub(crate) fn announce_approval_wait(label: &str) {
+    let hook = APPROVAL_HOOK.lock().unwrap().clone();
+    if let Some(hook) = hook {
+        hook(label);
+    }
+}
 
 #[derive(Debug, Clone)]
 struct Episode {
