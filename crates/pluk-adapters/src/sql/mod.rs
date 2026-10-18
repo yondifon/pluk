@@ -8,8 +8,8 @@ pub use error::{
 };
 pub use fields::{mssql_fields, network_sql_fields, sqlite_fields};
 pub use server::{
-    SqlCancelRegistry, register_sql_server, sql_agent_hint, sql_instructions, sql_label,
-    sql_tool_specs,
+    SqlCancelRegistry, evict_connections, register_sql_server, sql_agent_hint, sql_instructions,
+    sql_label, sql_tool_specs,
 };
 
 use std::sync::Arc;
@@ -23,160 +23,14 @@ use crate::error::AdapterError;
 use crate::tool_host::ToolHost;
 use crate::tool_spec::ToolSpec;
 
-use pluk_db::config::SqlConfig as DbSqlConfig;
-use pluk_db::factory::{CreateDriverOpts, create_driver};
 use pluk_store::Store;
 
-#[allow(clippy::field_reassign_with_default)]
-fn db_config_from(conn: &Integration) -> DbSqlConfig {
-    let mut cfg = DbSqlConfig::default();
-    cfg.r#type = conn.r#type.clone();
-    cfg.host = conn
-        .config
-        .get("host")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.port = conn
-        .config
-        .get("port")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as u16)
-        .or_else(|| {
-            conn.config
-                .get("port")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
-        });
-    cfg.user = conn
-        .config
-        .get("user")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.password = conn
-        .config
-        .get("password")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.database = conn
-        .config
-        .get("database")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.filename = conn
-        .config
-        .get("filename")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.socket_path = conn
-        .config
-        .get("socket_path")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.use_ssl = conn
-        .config
-        .get("use_ssl")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-        || conn.config.get("use_ssl").and_then(|v| v.as_str()) == Some("true");
-    cfg.ssl_mode = conn
-        .config
-        .get("ssl_mode")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.ssl_ca_path = conn
-        .config
-        .get("ssl_ca_path")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.ssl_cert_path = conn
-        .config
-        .get("ssl_cert_path")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.ssl_key_path = conn
-        .config
-        .get("ssl_key_path")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.encrypt = conn
-        .config
-        .get("encrypt")
-        .and_then(|v| v.as_bool())
-        .or_else(|| {
-            conn.config
-                .get("encrypt")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
-        });
-    cfg.trust_cert = conn
-        .config
-        .get("trust_cert")
-        .and_then(|v| v.as_bool())
-        .or_else(|| {
-            conn.config
-                .get("trust_cert")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
-        });
-    cfg.use_ssh = conn.config.get("use_ssh").map(|v| match v {
-        serde_json::Value::Bool(b) => {
-            if *b {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            }
-        }
-        serde_json::Value::String(s) => s.clone(),
-        _ => "".to_string(),
-    });
-    cfg.ssh_host = conn
-        .config
-        .get("ssh_host")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.ssh_port = conn
-        .config
-        .get("ssh_port")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as u16)
-        .or_else(|| {
-            conn.config
-                .get("ssh_port")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
-        });
-    cfg.ssh_user = conn
-        .config
-        .get("ssh_user")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.ssh_auth_type = conn
-        .config
-        .get("ssh_auth_type")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.ssh_key_path = conn
-        .config
-        .get("ssh_key_path")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg.ssh_password = conn
-        .config
-        .get("ssh_password")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    cfg
-}
-
 async fn test_sql(conn: &Integration, _store: Option<Arc<Store>>) -> Result<(), AdapterError> {
-    let cfg = db_config_from(conn);
-    pluk_db::force_reconnect(&cfg).await;
-    let dw = create_driver(CreateDriverOpts::new(cfg))
-        .await
-        .map_err(crate::sql::error::driver_error_to_adapter)?;
-    let res = dw.driver.test_connection().await;
-    let _ = dw.close().await;
-    res.map_err(crate::sql::error::driver_error_to_adapter)
+    let cfg = server::sql_config_from(conn, None);
+    server::with_driver_waiting(cfg, true, server::Patience::WATCHED, |driver| async move {
+        driver.test_connection().await
+    })
+    .await
 }
 
 pub struct SqlAdapter {
@@ -352,7 +206,7 @@ mod tests {
             environment: None, read_only: 0, query_policy: None, token: "token".into(),
             created_at: String::new(), via_group: None,
         };
-        let cfg = db_config_from(&conn);
+        let cfg = server::sql_config_from(&conn, None);
         assert_eq!(cfg.host.as_deref(), Some("db.internal"));
         assert_eq!(cfg.port, Some(5432));
         assert_eq!(cfg.ssh_port, Some(2222));
@@ -383,7 +237,7 @@ mod tests {
             created_at: String::new(),
             via_group: None,
         };
-        let cfg = db_config_from(&conn);
+        let cfg = server::sql_config_from(&conn, None);
         assert_eq!(cfg.encrypt, Some(false));
         assert_eq!(cfg.trust_cert, Some(true));
     }

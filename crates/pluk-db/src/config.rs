@@ -25,6 +25,12 @@ pub struct SqlConfig {
     pub ssh_auth_type: Option<String>,
     pub ssh_key_path: Option<String>,
     pub ssh_password: Option<String>,
+    /// The integration this connection belongs to, and the group it was
+    /// reached through. They decide which pooled connections an edit evicts.
+    pub integration_id: Option<String>,
+    pub via_group: Option<String>,
+    /// Integration name shown when a connect waits on the user.
+    pub label: Option<String>,
 }
 
 impl SqlConfig {

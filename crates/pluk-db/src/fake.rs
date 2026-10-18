@@ -21,11 +21,27 @@ struct FakeState {
     closed: bool,
     queries: Vec<String>,
     query_error: Option<DriverError>,
+    test_error: Option<DriverError>,
+    slow_sql: Option<(String, std::time::Duration)>,
 }
 
 impl FakeDriver {
     pub fn fail_next_query(&self, error: DriverError) {
         self.inner.lock().unwrap().query_error = Some(error);
+    }
+
+    /// The next health check fails with this error.
+    pub fn fail_next_test_connection(&self, error: DriverError) {
+        self.inner.lock().unwrap().test_error = Some(error);
+    }
+
+    /// Statements containing `needle` take `delay` to answer.
+    pub fn delay_queries_containing(&self, needle: &str, delay: std::time::Duration) {
+        self.inner.lock().unwrap().slow_sql = Some((needle.to_string(), delay));
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.inner.lock().unwrap().closed
     }
 
     pub fn queries(&self) -> Vec<String> {
@@ -113,6 +129,17 @@ impl Driver for FakeDriver {
                     _ = token.cancelled() => return Err(DriverError::Cancelled),
                 }
             }
+        }
+        let delay = self
+            .inner
+            .lock()
+            .unwrap()
+            .slow_sql
+            .as_ref()
+            .filter(|(needle, _)| sql.contains(needle.as_str()))
+            .map(|(_, delay)| *delay);
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
         }
         self.inner.lock().unwrap().queries.push(sql.to_string());
         if let Some(error) = self.inner.lock().unwrap().query_error.take() {
@@ -213,7 +240,10 @@ impl Driver for FakeDriver {
         Ok("TABLE users (id int NOT NULL)".into())
     }
     async fn test_connection(&self) -> Result<(), DriverError> {
-        Ok(())
+        match self.inner.lock().unwrap().test_error.take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
     async fn close(&self) -> Result<(), DriverError> {
         self.inner.lock().unwrap().closed = true;

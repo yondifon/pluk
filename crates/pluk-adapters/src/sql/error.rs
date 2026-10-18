@@ -54,7 +54,10 @@ pub fn classify_sql_error(err: &AdapterError) -> SqlErrorInfo {
         return SqlErrorInfo {
             category: SqlErrorCategory::PendingApproval,
             message: "SSH connection is waiting on an approval.".to_string(),
-            hint: Some("Approve the 1Password or proxy sign-in prompt, then retry. If none is visible, unlock your SSH agent and retry.".to_string()),
+            hint: Some(match pluk_ssh::agent_named_in(msg) {
+                Some(agent) => format!("Approve the sign-in in {agent}, then retry. Pluk keeps connecting meanwhile. If no prompt is visible, unlock {agent} and retry."),
+                None => "Approve the SSH sign-in in your key agent, security key, or browser, then retry. Pluk keeps connecting meanwhile. If no prompt is visible, unlock your key agent and retry.".to_string(),
+            }),
             code: code.unwrap_or_else(|| "SSH_CONNECT_PENDING".to_string()),
         };
     }
@@ -64,7 +67,7 @@ pub fn classify_sql_error(err: &AdapterError) -> SqlErrorInfo {
         return SqlErrorInfo {
             category: SqlErrorCategory::TunnelFailed,
             message: msg.clone(),
-            hint: Some("The stuck attempt was dropped — retry to open a brand-new SSH connection. If it keeps failing, check the host/proxy is reachable and your SSH agent is unlocked.".to_string()),
+            hint: Some("The stuck attempt was dropped. Retry to open a brand-new SSH connection. If it keeps failing, check the host/proxy is reachable and your SSH agent is unlocked.".to_string()),
             code: code.unwrap_or_else(|| "SSH_CONNECT_STALLED".to_string()),
         };
     }
