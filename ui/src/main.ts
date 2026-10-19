@@ -304,7 +304,7 @@ function renderForm(): void {
   renderedScreen = screen;
 
   host.innerHTML = "";
-  host.appendChild(buildForm(form).el);
+  host.appendChild(buildForm(form));
 
   restoreFocus(host, keep);
 }
@@ -317,7 +317,7 @@ function goToStep(delta: number): void {
   renderForm();
 }
 
-function buildForm(current: FormState): { el: HTMLElement } {
+function buildForm(current: FormState): HTMLElement {
   switch (current.kind) {
     case "new-integration":
     case "edit-integration": {
@@ -327,19 +327,17 @@ function buildForm(current: FormState): { el: HTMLElement } {
       const stepKind = steps[current.step];
 
       if (stepKind === "type") {
-        return {
-          el: renderTypeChooser(manifests, chooseIntegrationType, {
-            onCancel: closeForm,
-            adaptersLoadFailed: state.adaptersLoadFailed,
-            onRetry: () => void loadAdapters().then(renderForm),
-            onPickServer: (template) =>
-              addServer(template, serverHost()).catch((error) => report(error, "Server not added")),
-            serverUrls: addedServerUrls(),
-            onPasteConfig: () => openForm({ kind: "import-mcp" }),
-          }),
-        };
+        return renderTypeChooser(manifests, chooseIntegrationType, {
+          onCancel: closeForm,
+          adaptersLoadFailed: state.adaptersLoadFailed,
+          onRetry: () => void loadAdapters().then(renderForm),
+          onPickServer: (template) =>
+            addServer(template, serverHost()).catch((error) => report(error, "Server not added")),
+          serverUrls: addedServerUrls(),
+          onPasteConfig: () => openForm({ kind: "import-mcp" }),
+        });
       }
-      if (!draft || !manifest) return { el: document.createElement("div") };
+      if (!draft || !manifest) return document.createElement("div");
 
       const pending = draft;
       const stepIndex = current.step + 1;
@@ -352,7 +350,7 @@ function buildForm(current: FormState): { el: HTMLElement } {
 
       switch (stepKind) {
         case "name":
-          return { el: renderNameStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => goToStep(1)) };
+          return renderNameStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => goToStep(1));
         case "connect": {
           const landOn = tokenServer?.tokenHint
             ? { field: "url" in tokenServer ? "token" : "env", text: tokenServer.tokenHint }
@@ -365,75 +363,67 @@ function buildForm(current: FormState): { el: HTMLElement } {
               report(error, "Settings not checked");
               return null;
             });
-          return { el: renderConnectFieldsStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => goToStep(1), landOn, check) };
+          return renderConnectFieldsStep(pending, manifest, stepIndex, totalSteps, onDraftChange, onBack, closeForm, () => goToStep(1), landOn, check);
         }
         case "tools": {
           const isLastContentStep = current.step === steps.length - 2;
-          return {
-            el: renderToolsStep(
-              pending,
-              stepIndex,
-              totalSteps,
-              isLastContentStep,
-              onDraftChange,
-              onBack,
-              closeForm,
-              isLastContentStep ? (d) => void saveIntegration(d) : () => goToStep(1),
-            ),
-          };
+          return renderToolsStep(
+            pending,
+            stepIndex,
+            totalSteps,
+            isLastContentStep,
+            onDraftChange,
+            onBack,
+            closeForm,
+            isLastContentStep ? (d) => void saveIntegration(d) : () => goToStep(1),
+          );
         }
         case "commands":
-          return {
-            el: renderCommandsStep(
-              pending,
-              stepIndex,
-              totalSteps,
-              onDraftChange,
-              onBack,
-              closeForm,
-              (d) => void saveIntegration(d),
-              ruleProblem,
-            ),
-          };
+          return renderCommandsStep(
+            pending,
+            stepIndex,
+            totalSteps,
+            onDraftChange,
+            onBack,
+            closeForm,
+            (d) => void saveIntegration(d),
+            ruleProblem,
+          );
         case "install": {
           const targetId = current.kind === "edit-integration" ? current.id : current.savedId;
           const row = targetId ? hostIntegrations.find((r) => r.id === targetId) : null;
-          if (!row) return { el: document.createElement("div") };
-          return {
-            el: renderInstallStep(row, manifest, injectMcpConfig, stepIndex, totalSteps, { onBack, onDone: closeForm }),
-          };
+          if (!row) return document.createElement("div");
+          return renderInstallStep(row, manifest, injectMcpConfig, stepIndex, totalSteps, { onBack, onDone: closeForm });
         }
       }
     }
     case "import-mcp":
       importFlow ??= renderImportFlow(importHost());
-      return { el: importFlow };
+      return importFlow;
     case "new-group":
     case "edit-group": {
-      if (!groupDraft) return { el: document.createElement("div") };
-      return {
-        el: renderGroupForm(
-          groupDraft,
-          hostIntegrations.map((c) => ({
-            id: c.id,
-            name: c.name,
-            type: c.type,
-            environment: c.environment,
-            config: Object.fromEntries(
-              Object.entries(c.config).map(([k, v]) => [k, v == null ? "" : String(v)]),
-            ),
-            tools: c.tools ?? manifestFor(c.type)?.tools ?? [],
-            toolConfig: c.toolConfig,
-          })),
-          manifests,
-          (next) => {
-            groupDraft = next;
-            renderForm();
-          },
-          (saved) => void saveGroup(saved),
-          closeForm,
-        ),
-      };
+      if (!groupDraft) return document.createElement("div");
+      return renderGroupForm(
+        groupDraft,
+        hostIntegrations.map((c) => ({
+          id: c.id,
+          name: c.name,
+          type: c.type,
+          environment: c.environment,
+          config: Object.fromEntries(
+            Object.entries(c.config).map(([k, v]) => [k, v == null ? "" : String(v)]),
+          ),
+          tools: c.tools ?? manifestFor(c.type)?.tools ?? [],
+          toolConfig: c.toolConfig,
+        })),
+        manifests,
+        (next) => {
+          groupDraft = next;
+          renderForm();
+        },
+        (saved) => void saveGroup(saved),
+        closeForm,
+      );
     }
   }
 }

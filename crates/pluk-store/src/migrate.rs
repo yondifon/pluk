@@ -182,9 +182,8 @@ fn migrate_v2(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-/// Versions 3 to 10 built the Wande browser tables. Wande no longer lives in
-/// Pluk, so a new database steps past them and version 15 drops whatever an
-/// older one built.
+/// Versions 3 to 10 built the Wande browser tables. A new database steps past
+/// them; version 15 drops what an older one built.
 fn retired<const VERSION: u32>(conn: &mut Connection) -> Result<()> {
     conn.pragma_update(None, "user_version", VERSION)?;
     Ok(())
@@ -281,9 +280,8 @@ fn migrate_v14(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-/// Version 15: Wande moved out of Pluk. Its integrations go, along with the
-/// browser tables and the pairing setting it kept. Their old activity stays
-/// in the query log, as it does for any deleted integration.
+/// Version 15: drop saved Wande integrations, the browser tables and the
+/// pairing setting. Their query-log rows stay, as for any deleted integration.
 fn migrate_v15(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
@@ -595,10 +593,8 @@ mod tests {
         assert!(refused.is_err(), "only header and env rows are kept");
     }
 
-    /// A version-14 database from a Pluk that still carried Wande: a Wande
-    /// integration beside an SSH one, its pairing token and setting, and
-    /// browser rows linked by foreign key. The browser tables keep only the
-    /// columns those links need.
+    /// A version-14 database as Wande left it. The browser tables keep only the
+    /// columns their foreign keys need.
     fn wande_era_database(path: &std::path::Path) {
         let mut conn = Connection::open(path).unwrap();
         for step in &LADDER[..14] {
