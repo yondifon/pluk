@@ -1,8 +1,8 @@
 //! The loopback port Pluk serves on.
 //!
 //! One number, read the same way everywhere: the HTTP server binds it, and
-//! the adapter that tests the browser surface dials it. `PORT` overrides it;
-//! the interface is always `127.0.0.1`.
+//! the OAuth sign-in sends the browser back to it. `PORT` overrides it; the
+//! interface is always `127.0.0.1`.
 
 const DEFAULT_PORT: u16 = 4242;
 

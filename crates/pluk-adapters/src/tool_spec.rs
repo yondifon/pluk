@@ -63,11 +63,6 @@ impl ToolSpec {
         }
     }
 
-    pub fn with_label(mut self, label: impl Into<String>) -> Self {
-        self.label = label.into();
-        self
-    }
-
     /// Override the derived default-on state — set `false` on a niche or heavy
     /// read tool that should ship off; never `true` on a state-changing tool.
     pub fn with_default_enabled(mut self, default_enabled: bool) -> Self {
