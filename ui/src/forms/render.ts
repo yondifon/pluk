@@ -997,7 +997,7 @@ export function renderToolsStep(
     stepIndex,
     totalSteps,
     "Choose what the agent can do",
-    "Turn off anything you don’t want an agent to use.",
+    "Turn off any tool you don’t want an agent to use.",
   );
   const body = document.createElement("div");
   body.className = "wizard-body";
