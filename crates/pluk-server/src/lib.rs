@@ -34,7 +34,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use pluk_adapters::AdapterRegistry;
-use pluk_browser::BrowserState;
 use pluk_store::Store;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, session::local::LocalSessionManager,
@@ -58,9 +57,6 @@ pub struct AppState {
     pub health: Arc<HealthMap>,
     /// Per-query abort handles (`POST /api/log/:id/cancel`).
     pub cancels: Arc<CancelRegistry>,
-    /// The `/wande` browser surface. `None` until [`AppState::attach_browser`]
-    /// runs, which is what mints the extension's pairing key.
-    pub browser: Option<Arc<BrowserState>>,
     pub(crate) events: Arc<EventHub>,
     pub(crate) sessions: Arc<LocalSessionManager>,
 }
@@ -91,18 +87,9 @@ impl AppState {
             owners,
             health,
             cancels: Arc::new(CancelRegistry::default()),
-            browser: None,
             events,
             sessions: Arc::new(LocalSessionManager::default()),
         }
-    }
-
-    /// Bring up browser control against this state's store, serving it at
-    /// `/wande`. `port` is the loopback port the surface is reached on, which
-    /// its Host and Origin checks pin requests to.
-    pub fn attach_browser(&mut self, port: u16) -> Result<(), String> {
-        self.browser = Some(Arc::new(BrowserState::new(self.store.clone(), port)?));
-        Ok(())
     }
 }
 
@@ -140,8 +127,7 @@ impl ServerConfig {
         pluk_core::loopback::port()
     }
 
-    fn into_state(self) -> Result<AppState, String> {
-        let port = self.bind_addr().port();
+    fn into_state(self) -> AppState {
         let ServerConfig {
             store,
             registry,
@@ -152,8 +138,7 @@ impl ServerConfig {
         } = self;
         let mut state = AppState::new(store, registry, owners, health);
         state.cancels = cancels;
-        state.attach_browser(port)?;
-        Ok(state)
+        state
     }
 
     /// The streamable-HTTP transport config every MCP endpoint shares:
@@ -176,7 +161,7 @@ pub async fn serve(
     shutdown: tokio_util::sync::CancellationToken,
 ) -> std::io::Result<()> {
     let addr = config.bind_addr();
-    let state = config.into_state().map_err(std::io::Error::other)?;
+    let state = config.into_state();
     let app = http::router(state.clone());
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

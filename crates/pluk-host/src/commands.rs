@@ -642,11 +642,6 @@ fn update_integration_in(
 /// Async for the same reason as [`update_integration`].
 #[tauri::command]
 pub async fn delete_integration(state: State<'_, HostState>, id: String) -> CmdResult<bool> {
-    if let Some(browser) = state.shared.browser.as_deref() {
-        browser
-            .disconnect_integration(&id)
-            .map_err(|error| error.message)?;
-    }
     let did = delete_integration_in(&state.store, &id)?;
     if did {
         // Drop owner's pooled resources so stale creds/tunnels are gone.

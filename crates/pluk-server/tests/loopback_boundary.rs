@@ -2,12 +2,9 @@
 
 mod common;
 
-use common::{TestApp, spawn_app, spawn_app_with_browser};
+use common::{TestApp, spawn_app};
 use reqwest::{Client, Method, Response};
 use serde_json::json;
-
-/// A Chrome extension origin: 32 letters in a–p, as Chrome mints them.
-const EXTENSION_ORIGIN: &str = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
 
 /// The headers a browser attaches when it follows a redirect into a new page.
 const TOP_LEVEL_NAVIGATION: [(&str, &str); 3] = [
@@ -139,36 +136,4 @@ async fn the_sign_in_redirect_lands_while_a_cross_site_post_to_it_does_not() {
     )
     .await;
     assert_eq!(submitted.status(), 403);
-}
-
-#[tokio::test]
-async fn the_extension_reaches_wande_from_its_own_origin_and_nothing_else() {
-    let app = spawn_app_with_browser().await;
-
-    let paired = send(
-        &app,
-        Method::GET,
-        "/wande/healthz",
-        &[("origin", EXTENSION_ORIGIN)],
-    )
-    .await;
-    assert_eq!(paired.status(), 200);
-
-    let elsewhere = send(
-        &app,
-        Method::GET,
-        "/api/adapters",
-        &[("origin", EXTENSION_ORIGIN)],
-    )
-    .await;
-    assert_eq!(elsewhere.status(), 403);
-
-    let page = send(
-        &app,
-        Method::GET,
-        "/wande/healthz",
-        &[("origin", "https://evil.example")],
-    )
-    .await;
-    assert_eq!(page.status(), 403);
 }
