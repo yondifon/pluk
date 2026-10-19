@@ -879,7 +879,7 @@ export function renderNameStep(
   return wrap;
 }
 
-/** Step 3 for an adapter with connection fields: the fields grouped as they already are, instead of a pairing card. */
+/** Step 3: the adapter's connection fields, grouped as they already are. */
 export function renderConnectFieldsStep(
   draft: ConnectionDraft,
   manifest: AdapterManifest,
@@ -997,7 +997,7 @@ export function renderToolsStep(
     stepIndex,
     totalSteps,
     "Choose what the agent can do",
-    "Turn off anything you don’t want an agent posting or reading.",
+    "Turn off anything you don’t want an agent to use.",
   );
   const body = document.createElement("div");
   body.className = "wizard-body";

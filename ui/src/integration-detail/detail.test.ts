@@ -36,49 +36,6 @@ const integration: Integration = {
   createdAt: "",
 };
 
-const wande: Integration = {
-  id: "w1",
-  name: "Wande",
-  type: "wande",
-  config: {},
-  toolConfig: {},
-  token: "wandetok",
-  createdAt: "",
-};
-
-const wandeManifest = {
-  id: "wande",
-  label: "Wande",
-  category: "browser",
-  agentHint: "The agent can write posts for your review.",
-  tools: [],
-  configFields: [],
-};
-
-async function mountWande(connected: boolean): Promise<{ root: HTMLElement; destroy: () => void }> {
-  (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
-    core: {
-      invoke: async (cmd: string) => {
-        if (cmd === "get_pluk_id") return { id: "pluk-test" };
-        if (cmd === "list_wande_posts") return { chromeConnected: connected, sending: false, waiting: [], queued: [] };
-        if (cmd === "list_installed_mcp_clients") return [];
-        return undefined;
-      },
-    },
-    event: { listen: async () => () => {} },
-  } as never;
-  const root = document.createElement("div");
-  const handle = mountIntegrationDetail(root, wande, wandeManifest, null, {
-    onEdit: () => {},
-    onDuplicate: () => {},
-    onDelete: () => {},
-    onTest: async () => ({ ok: true }),
-    inject: async () => ({ status: "added", path: "" }),
-  }, "overview");
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  return { root, destroy: handle.destroy };
-}
-
 describe("mountIntegrationDetail health update", () => {
   test("updateHealth refreshes chip without recreating detail", () => {
     const root = document.createElement("div");
@@ -229,42 +186,6 @@ describe("mountIntegrationDetail health update", () => {
     expect(root.querySelector('button[aria-label="Install into selected clients"]')).not.toBeNull();
     root.querySelector<HTMLButtonElement>("#tab-overview")!.click();
     expect(root.querySelector(".endpoint-url")).toBeNull();
-  });
-
-  test("Wande Overview contains Chrome and posts only", async () => {
-    const { root, destroy } = await mountWande(true);
-    const cards = [...root.querySelectorAll(".ui-card:not([hidden])")];
-
-    expect(cards.map((card) => card.querySelector(".ui-card-title")!.textContent)).toEqual([
-      "Chrome",
-      "Waiting for you",
-    ]);
-    expect(root.querySelector('button[aria-label="Copy Pluk ID"]')).not.toBeNull();
-    expect(root.querySelector(".agent-setup-tab")).toBeNull();
-    root.querySelector<HTMLButtonElement>("#tab-agentSetup")!.click();
-    expect(root.querySelector(".agent-setup-tab .endpoint-url")).not.toBeNull();
-    expect((root.querySelector(".agent-hint-disclosure") as HTMLDetailsElement).open).toBe(false);
-    destroy();
-  });
-
-  test("Chrome card shows a Connected badge and hides the steps", async () => {
-    const { root, destroy } = await mountWande(true);
-
-    expect(root.querySelector(".browser-status")!.textContent).toBe("Connected");
-    expect((root.querySelector(".browser-steps") as HTMLOListElement).hidden).toBe(true);
-    destroy();
-  });
-
-  test("Chrome card shows a Not connected badge and the steps", async () => {
-    const { root, destroy } = await mountWande(false);
-
-    expect(root.querySelector(".browser-status")!.textContent).toBe("Not connected");
-    expect((root.querySelector(".browser-steps") as HTMLOListElement).hidden).toBe(false);
-    expect([...root.querySelectorAll(".browser-steps li")].map((step) => step.textContent)).toEqual([
-      "Open Wande in Chrome.",
-      "Paste the Pluk ID into Wande.",
-    ]);
-    destroy();
   });
 
   test("a failed test resolves its own toast and marks the connection failing", async () => {
