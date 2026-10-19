@@ -63,8 +63,6 @@ macro_rules! select_all {
 const SELECT_ORDERED: &str = concat!(select_all!(), " ORDER BY created_at DESC");
 const SELECT_BY_TOKEN: &str = concat!(select_all!(), " WHERE token = ?");
 const SELECT_BY_ID: &str = concat!(select_all!(), " WHERE id = ?");
-const SELECT_BY_TYPE: &str = concat!(select_all!(), " WHERE type = ? ORDER BY created_at LIMIT 1");
-const BROWSER_TYPE: &str = "wande";
 
 fn hydrate(row: &Row<'_>) -> rusqlite::Result<Integration> {
     let raw_config: String = row.get(3)?;
@@ -103,15 +101,6 @@ impl Store {
         Ok(stmt.query_row([id], hydrate).optional()?)
     }
 
-    /// The oldest integration of a given type, for the surfaces that own one
-    /// row rather than many (browser control is reached through a single
-    /// integration, whatever the user named it).
-    pub fn integration_by_type(&self, r#type: &str) -> Result<Option<Integration>> {
-        let conn = self.conn.lock().expect("store lock");
-        let mut stmt = conn.prepare_cached(SELECT_BY_TYPE)?;
-        Ok(stmt.query_row([r#type], hydrate).optional()?)
-    }
-
     pub fn create_integration(&self, input: &IntegrationInput) -> Result<Integration> {
         let id = ids::new_id();
         let token = ids::new_token();
@@ -131,9 +120,6 @@ impl Store {
             ],
         )?;
         drop(conn);
-        if input.r#type == BROWSER_TYPE {
-            self.browser_pairing_token_for(&id)?;
-        }
         // Read back so `created_at` carries the database's own stamp.
         Ok(self.integration_by_id(&id)?.expect("row just inserted"))
     }
@@ -167,10 +153,7 @@ impl Store {
              WHERE id = ?",
             params![
                 update.name.clone().unwrap_or_else(|| current.name.clone()),
-                update
-                    .r#type
-                    .clone()
-                    .unwrap_or_else(|| current.r#type.clone()),
+                next_type,
                 serialize_config(update.config.as_ref().unwrap_or(&current.config)),
                 next_environment.map(Environment::as_str),
                 update.read_only.unwrap_or(current.read_only),
@@ -179,13 +162,6 @@ impl Store {
             ],
         )?;
         drop(conn);
-        if current.r#type != next_type {
-            if next_type == BROWSER_TYPE {
-                self.browser_pairing_token_for(id)?;
-            } else if current.r#type == BROWSER_TYPE {
-                self.delete_browser_pairing_token(id)?;
-            }
-        }
         self.integration_by_id(id)
     }
 
@@ -218,10 +194,6 @@ impl Store {
         let conn = self.conn.lock().expect("store lock");
         let deleted = conn.execute("DELETE FROM integrations WHERE id = ?", [id])? > 0;
         if deleted {
-            conn.execute(
-                "DELETE FROM browser_pairing_tokens WHERE integration_id = ?",
-                [id],
-            )?;
             conn.execute("DELETE FROM proxy_tools WHERE integration_id = ?", [id])?;
             conn.execute("DELETE FROM proxy_auth WHERE integration_id = ?", [id])?;
             conn.execute("DELETE FROM proxy_secrets WHERE integration_id = ?", [id])?;

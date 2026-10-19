@@ -8,7 +8,6 @@
 //! (honors `PLUK_DATA_DIR`), or against any path with [`Store::open`] — tests
 //! isolate themselves that way.
 
-pub mod browser;
 mod codec;
 mod error;
 mod groups;
@@ -28,7 +27,7 @@ mod settings;
 pub mod timestamp;
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use pluk_core::platform;
@@ -54,7 +53,7 @@ pub use query_log::{
 };
 pub use saved_commands::SavedCommandInput;
 pub use saved_queries::SavedQueryInput;
-pub use settings::{BROWSER_PAIRING_TOKEN_KEY, LOG_CURSOR_KEY, LOG_RETENTION_DAYS_KEY};
+pub use settings::{LOG_CURSOR_KEY, LOG_RETENTION_DAYS_KEY};
 
 /// How often the automatic retention purge may run on the insert path. The
 /// TypeScript server purged on every insert; the guarantee that matters — rows
@@ -67,37 +66,27 @@ const PURGE_MIN_INTERVAL: Duration = Duration::from_secs(15 * 60);
 /// Access is serialized behind a mutex: one writer thread at a time within
 /// this codebase. WAL journaling plus a busy timeout handle any concurrent access.
 pub struct Store {
-    conn: Arc<Mutex<rusqlite::Connection>>,
-    _maintenance: ArtifactMaintenance,
+    conn: Mutex<rusqlite::Connection>,
     last_purge: Mutex<Option<Instant>>,
     activity: Mutex<query_log::ActivityFeed>,
-    /// Where staged post images are kept. Always beside the database's own
-    /// file, so a copy of one carries the other.
-    images_dir: PathBuf,
 }
 
 impl Store {
     /// Open (creating and migrating if needed) the database at `path`.
     pub fn open(path: &Path) -> Result<Store> {
-        let files_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        std::fs::create_dir_all(&files_dir)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let mut conn = rusqlite::Connection::open(path)?;
         configure(&mut conn)?;
         migrate::run(&mut conn)?;
         // `last_purge` starts unset, so retention runs on the first log write.
         // Opening the database sits on the app's startup path, and a purge is
         // not worth delaying the window for.
-        let conn = Arc::new(Mutex::new(conn));
-        let maintenance = ArtifactMaintenance::start(&conn, Duration::from_secs(60))?;
         Ok(Store {
-            conn,
-            _maintenance: maintenance,
+            conn: Mutex::new(conn),
             last_purge: Mutex::new(None),
             activity: Mutex::new(query_log::ActivityFeed::default()),
-            images_dir: files_dir.join("wande-images"),
         })
     }
 
@@ -126,61 +115,6 @@ impl Store {
         }
         Ok(())
     }
-}
-
-const ARTIFACT_PURGE_BATCH: i64 = 8;
-
-struct ArtifactMaintenance {
-    stop: mpsc::Sender<()>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl ArtifactMaintenance {
-    fn start(conn: &Arc<Mutex<rusqlite::Connection>>, interval: Duration) -> std::io::Result<Self> {
-        let conn = Arc::downgrade(conn);
-        let (stop, receiver) = mpsc::channel();
-        let thread = std::thread::Builder::new()
-            .name("pluk-artifact-retention".to_owned())
-            .spawn(move || {
-                while let Err(mpsc::RecvTimeoutError::Timeout) = receiver.recv_timeout(interval) {
-                    let Some(conn) = conn.upgrade() else {
-                        break;
-                    };
-                    match conn.try_lock() {
-                        Ok(conn) => {
-                            let now = browser::now_millis();
-                            if let Err(error) = purge_expired_artifacts(&conn, now) {
-                                eprintln!("Artifact retention failed: {error}");
-                            }
-                        }
-                        Err(std::sync::TryLockError::WouldBlock) => {}
-                        Err(std::sync::TryLockError::Poisoned(error)) => {
-                            eprintln!("Artifact retention stopped: {error}");
-                            break;
-                        }
-                    }
-                }
-            })?;
-        Ok(Self { stop, thread: Some(thread) })
-    }
-}
-
-impl Drop for ArtifactMaintenance {
-    fn drop(&mut self) {
-        let _ = self.stop.send(());
-        if let Some(thread) = self.thread.take()
-            && thread.join().is_err()
-        {
-            eprintln!("Artifact retention thread panicked");
-        }
-    }
-}
-
-fn purge_expired_artifacts(conn: &rusqlite::Connection, now: i64) -> rusqlite::Result<usize> {
-    conn.execute(
-        "DELETE FROM browser_artifacts WHERE id IN (SELECT id FROM browser_artifacts WHERE expires_at <= ? ORDER BY expires_at LIMIT ?)",
-        rusqlite::params![now, ARTIFACT_PURGE_BATCH],
-    )
 }
 
 /// Connection-level settings applied to every open.
@@ -212,56 +146,6 @@ pub(crate) mod testing {
 mod tests {
     use super::*;
     use crate::testing::temp_store;
-
-    fn seed_artifacts(conn: &rusqlite::Connection, count: i64) {
-        for i in 0..count {
-            let id = i.to_string();
-            conn.execute(
-                "INSERT INTO browser_jobs (id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, integration_id) VALUES (?, ?, 'x', 'inspect', '', '{}', 'succeeded', 0, 1, ?)",
-                rusqlite::params![id, id, if i % 2 == 0 { "idle" } else { "deleted-owner" }],
-            ).unwrap();
-            conn.execute(
-                "INSERT INTO browser_artifacts (id, job_id, kind, content_type, bytes, data, created_at, expires_at) VALUES (?, ?, 'screenshot', 'image/png', 1, X'00', 0, 1)",
-                rusqlite::params![id, id],
-            ).unwrap();
-        }
-    }
-
-    #[test]
-    fn artifact_maintenance_is_bounded_and_covers_idle_and_deleted_owners() {
-        let (_dir, store) = temp_store();
-        let conn = store.conn.lock().unwrap();
-        seed_artifacts(&conn, ARTIFACT_PURGE_BATCH + 2);
-        conn.execute("UPDATE browser_artifacts SET expires_at = 101 WHERE id = '0'", []).unwrap();
-        assert_eq!(purge_expired_artifacts(&conn, 100).unwrap(), ARTIFACT_PURGE_BATCH as usize);
-        assert_eq!(purge_expired_artifacts(&conn, 100).unwrap(), 1);
-        assert_eq!(conn.query_row("SELECT id FROM browser_artifacts", [], |row| row.get::<_, String>(0)).unwrap(), "0");
-        assert_eq!(purge_expired_artifacts(&conn, 101).unwrap(), 1);
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM browser_jobs", [], |row| row.get::<_, i64>(0)).unwrap(), ARTIFACT_PURGE_BATCH + 2);
-    }
-
-    #[test]
-    fn artifact_timer_reaps_without_inserts_and_stops_on_drop() {
-        let (_dir, store) = temp_store();
-        seed_artifacts(&store.conn.lock().unwrap(), 1);
-        let worker = ArtifactMaintenance::start(&store.conn, Duration::from_millis(10)).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let remaining: i64 = store.conn.lock().unwrap().query_row(
-                "SELECT COUNT(*) FROM browser_artifacts", [], |row| row.get(0),
-            ).unwrap();
-            if remaining == 0 {
-                break;
-            }
-            assert!(Instant::now() < deadline, "maintenance did not run");
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        drop(worker);
-        let worker = ArtifactMaintenance::start(&store.conn, Duration::from_secs(3600)).unwrap();
-        let start = Instant::now();
-        drop(worker);
-        assert!(start.elapsed() < Duration::from_secs(1));
-    }
 
     #[test]
     fn opens_in_wal_mode_with_a_busy_timeout() {
