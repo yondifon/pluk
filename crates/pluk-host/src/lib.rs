@@ -7,7 +7,6 @@ pub mod server;
 mod tray_menu;
 pub mod updater;
 pub mod version;
-pub mod wande;
 pub mod zoom;
 
 use std::sync::{Arc, Mutex};
@@ -48,7 +47,6 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show_window(app)))
         .plugin(tauri_plugin_autostart::Builder::new().app_name("Pluk").arg("--autostart").build())
         .manage(crate::confirm::ConfirmState::default())
-        .manage(crate::wande::PostQuestions::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
@@ -102,10 +100,6 @@ pub fn run() {
                     app.handle().clone(),
                     confirm_registry.clone(),
                 ),
-            ));
-            // A post an agent asks for is put to the user the moment it lands.
-            pluk_browser::set_post_prompter(std::sync::Arc::new(
-                crate::wande::WindowPostPrompter::new(app.handle().clone()),
             ));
             // Every written log row reaches the window as it happens, so the
             // activity log needs no polling.
@@ -244,14 +238,6 @@ pub fn run() {
             commands::update_group,
             commands::delete_group,
             commands::list_adapters,
-            wande::get_pluk_id,
-            wande::list_wande_posts,
-            wande::wande_post_image,
-            wande::send_wande_post,
-            wande::discard_wande_post,
-            wande::cancel_queued_wande_post,
-            wande::wande_question,
-            wande::wande_answer,
             commands::get_health,
             commands::test_connection,
             commands::get_logs,

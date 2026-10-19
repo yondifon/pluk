@@ -21,8 +21,21 @@ use crate::error::{Result, StoreError};
 type Step = fn(&mut Connection) -> Result<()>;
 
 const LADDER: &[Step] = &[
-    migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
-    migrate_v8, migrate_v9, migrate_v10, migrate_v11, migrate_v12, migrate_v13, migrate_v14,
+    migrate_v1,
+    migrate_v2,
+    retired::<3>,
+    retired::<4>,
+    retired::<5>,
+    retired::<6>,
+    retired::<7>,
+    retired::<8>,
+    retired::<9>,
+    retired::<10>,
+    migrate_v11,
+    migrate_v12,
+    migrate_v13,
+    migrate_v14,
+    migrate_v15,
 ];
 
 /// Bring `conn` up to the latest version.
@@ -169,254 +182,10 @@ fn migrate_v2(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-/// Version 3: the browser control tables.
-///
-/// Names carry a `browser_` prefix because `jobs`, `drafts` and `artifacts`
-/// are too generic to own unprefixed in a database this one shares.
-fn migrate_v3(conn: &mut Connection) -> Result<()> {
-    let tx = conn.transaction()?;
-    tx.execute_batch(
-        "
-        CREATE TABLE IF NOT EXISTS browser_jobs (
-            id TEXT PRIMARY KEY,
-            command_id TEXT NOT NULL UNIQUE,
-            platform TEXT NOT NULL,
-            action TEXT NOT NULL,
-            target_url TEXT NOT NULL,
-            payload_json TEXT NOT NULL,
-            status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'expired', 'unknown')),
-            created_at INTEGER NOT NULL,
-            expires_at INTEGER NOT NULL,
-            started_at INTEGER,
-            finished_at INTEGER,
-            error_code TEXT,
-            error_message TEXT,
-            result_json TEXT,
-            dispatch_count INTEGER NOT NULL DEFAULT 0,
-            draft_id TEXT
-        );
-        CREATE INDEX IF NOT EXISTS browser_jobs_status_created_idx ON browser_jobs (status, created_at);
-        CREATE INDEX IF NOT EXISTS browser_jobs_recovery_idx ON browser_jobs (action, status, draft_id);
-
-        CREATE TABLE IF NOT EXISTS browser_drafts (
-            id TEXT PRIMARY KEY,
-            platform TEXT NOT NULL,
-            kind TEXT NOT NULL CHECK (kind IN ('reply', 'post')),
-            target_url TEXT NOT NULL,
-            post_id TEXT,
-            text TEXT NOT NULL,
-            parts_json TEXT NOT NULL DEFAULT '[]',
-            debug INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'submitted', 'failed', 'unknown', 'cancelled', 'expired')),
-            created_at INTEGER NOT NULL,
-            confirmed_at INTEGER,
-            submitted_at INTEGER,
-            scheduled_at INTEGER
-        );
-        CREATE INDEX IF NOT EXISTS browser_drafts_status_idx ON browser_drafts (status, created_at);
-
-        CREATE TABLE IF NOT EXISTS browser_schedule_settings (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            window_start TEXT NOT NULL,
-            window_end TEXT NOT NULL,
-            min_gap_minutes INTEGER NOT NULL,
-            max_gap_minutes INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS browser_schedule_reservations (
-            id TEXT PRIMARY KEY,
-            draft_id TEXT NOT NULL UNIQUE REFERENCES browser_drafts(id) ON DELETE CASCADE,
-            platform TEXT NOT NULL,
-            scheduled_at INTEGER NOT NULL,
-            status TEXT NOT NULL CHECK (status IN ('reserved', 'committed', 'released', 'unknown')),
-            created_at INTEGER NOT NULL,
-            committed_at INTEGER,
-            released_at INTEGER
-        );
-        CREATE INDEX IF NOT EXISTS browser_schedule_reservations_platform_idx ON browser_schedule_reservations (platform, status, scheduled_at);
-
-        CREATE TABLE IF NOT EXISTS browser_artifacts (
-            id TEXT PRIMARY KEY,
-            job_id TEXT NOT NULL REFERENCES browser_jobs(id) ON DELETE CASCADE,
-            kind TEXT NOT NULL CHECK (kind IN ('screenshot', 'extract')),
-            content_type TEXT NOT NULL,
-            bytes INTEGER NOT NULL,
-            data BLOB NOT NULL,
-            created_at INTEGER NOT NULL,
-            expires_at INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS browser_artifacts_job_created_idx ON browser_artifacts (job_id, created_at);
-        CREATE INDEX IF NOT EXISTS browser_artifacts_expires_idx ON browser_artifacts (expires_at);
-        ",
-    )?;
-
-    let defaults = crate::browser::schedule::ScheduleSettings::defaults();
-    tx.execute(
-        "INSERT OR IGNORE INTO browser_schedule_settings (id, window_start, window_end, min_gap_minutes, max_gap_minutes) VALUES (1, ?, ?, ?, ?)",
-        rusqlite::params![
-            defaults.window_start,
-            defaults.window_end,
-            defaults.min_gap_minutes,
-            defaults.max_gap_minutes,
-        ],
-    )?;
-
-    tx.pragma_update(None, "user_version", 3)?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Version 4: give each browser integration its own pairing token and queue
-/// ownership. Existing rows move to the only Wande integration when there is
-/// exactly one, otherwise they keep the standalone `browser` owner.
-fn migrate_v4(conn: &mut Connection) -> Result<()> {
-    let tx = conn.transaction()?;
-    tx.execute_batch(
-        "
-        ALTER TABLE browser_jobs ADD COLUMN integration_id TEXT NOT NULL DEFAULT 'browser';
-        ALTER TABLE browser_drafts ADD COLUMN integration_id TEXT NOT NULL DEFAULT 'browser';
-
-        CREATE INDEX IF NOT EXISTS browser_jobs_integration_status_created_idx
-            ON browser_jobs (integration_id, status, created_at);
-        CREATE INDEX IF NOT EXISTS browser_drafts_integration_status_idx
-            ON browser_drafts (integration_id, status, created_at);
-
-        CREATE TABLE IF NOT EXISTS browser_pairing_tokens (
-            integration_id TEXT PRIMARY KEY,
-            token TEXT NOT NULL UNIQUE
-        );
-        ",
-    )?;
-
-    tx.execute(
-        "UPDATE browser_jobs
-         SET integration_id = (SELECT id FROM integrations WHERE type = 'wande' LIMIT 1)
-         WHERE integration_id = 'browser'
-           AND (SELECT COUNT(*) FROM integrations WHERE type = 'wande') = 1",
-        [],
-    )?;
-    tx.execute(
-        "UPDATE browser_drafts
-         SET integration_id = (SELECT id FROM integrations WHERE type = 'wande' LIMIT 1)
-         WHERE integration_id = 'browser'
-           AND (SELECT COUNT(*) FROM integrations WHERE type = 'wande') = 1",
-        [],
-    )?;
-    tx.execute(
-        "INSERT OR IGNORE INTO browser_pairing_tokens (integration_id, token)
-         SELECT integrations.id, settings.value
-         FROM integrations
-         JOIN settings ON settings.key = 'browser_pairing_token'
-         WHERE integrations.type = 'wande'
-           AND (SELECT COUNT(*) FROM integrations WHERE type = 'wande') = 1",
-        [],
-    )?;
-
-    tx.pragma_update(None, "user_version", 4)?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Version 5: retain the integration owner when a settled draft is pruned.
-/// Orphaned reservations from a single Wande installation follow that
-/// installation; ambiguous rows keep the standalone browser owner.
-fn migrate_v5(conn: &mut Connection) -> Result<()> {
-    let tx = conn.transaction()?;
-    tx.execute_batch(
-        "
-        ALTER TABLE browser_schedule_reservations ADD COLUMN integration_id TEXT NOT NULL DEFAULT 'browser';
-        CREATE INDEX IF NOT EXISTS browser_schedule_reservations_integration_status_idx
-            ON browser_schedule_reservations (integration_id, status, scheduled_at);
-        ",
-    )?;
-    tx.execute(
-        "UPDATE browser_schedule_reservations
-         SET integration_id = COALESCE(
-             (SELECT browser_drafts.integration_id
-              FROM browser_drafts
-              WHERE browser_drafts.id = browser_schedule_reservations.draft_id),
-             CASE
-                 WHEN (SELECT COUNT(*) FROM integrations WHERE type = 'wande') = 1
-                 THEN (SELECT id FROM integrations WHERE type = 'wande' LIMIT 1)
-                 ELSE 'browser'
-             END
-         )
-         WHERE integration_id = 'browser'",
-        [],
-    )?;
-    tx.pragma_update(None, "user_version", 5)?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Version 6: a draft keeps the expiry its caller asked for, so the job its
-/// confirmation starts gets the same window rather than the default.
-fn migrate_v6(conn: &mut Connection) -> Result<()> {
-    let tx = conn.transaction()?;
-    tx.execute_batch("ALTER TABLE browser_drafts ADD COLUMN ttl_ms INTEGER;")?;
-    tx.pragma_update(None, "user_version", 6)?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Version 7: the images a draft was approved with. Each row names a file
-/// already staged on disk, in the order it attaches; deleting the row is not
-/// enough on its own to remove the file — [`crate::browser::BrowserStore`]
-/// only does that once nothing else references its content hash.
-fn migrate_v7(conn: &mut Connection) -> Result<()> {
-    let tx = conn.transaction()?;
-    tx.execute_batch(
-        "
-        CREATE TABLE IF NOT EXISTS browser_draft_images (
-            id TEXT PRIMARY KEY,
-            integration_id TEXT NOT NULL,
-            draft_id TEXT NOT NULL REFERENCES browser_drafts(id) ON DELETE CASCADE,
-            part_index INTEGER NOT NULL,
-            ordinal INTEGER NOT NULL,
-            content_type TEXT NOT NULL,
-            bytes INTEGER NOT NULL,
-            sha256 TEXT NOT NULL,
-            staged_path TEXT NOT NULL,
-            created_at INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS browser_draft_images_draft_idx
-            ON browser_draft_images (integration_id, draft_id, ordinal);
-        CREATE INDEX IF NOT EXISTS browser_draft_images_hash_idx
-            ON browser_draft_images (integration_id, staged_path);
-        ",
-    )?;
-    tx.pragma_update(None, "user_version", 7)?;
-    tx.commit()?;
-    Ok(())
-}
-
-/// Version 8: a draft can also be a repost or a quote. SQLite cannot change a
-/// `CHECK` in place, so the table is rebuilt with every row and index it had.
-/// Foreign keys are held off across the swap so dropping the old table
-/// cascades into nothing that references it.
-fn migrate_v8(conn: &mut Connection) -> Result<()> {
-    let foreign_keys: bool = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
-    conn.pragma_update(None, "foreign_keys", false)?;
-    let rebuilt = rebuild_browser_drafts(conn);
-    conn.pragma_update(None, "foreign_keys", foreign_keys)?;
-    rebuilt
-}
-
-fn migrate_v9(conn: &mut Connection) -> Result<()> {
-    let tx = conn.transaction()?;
-    tx.execute_batch("CREATE INDEX browser_jobs_draft_idx ON browser_jobs(draft_id);")?;
-    tx.pragma_update(None, "user_version", 9)?;
-    tx.commit()?;
-    Ok(())
-}
-
-fn migrate_v10(conn: &mut Connection) -> Result<()> {
-    let tx = conn.transaction()?;
-    tx.execute_batch(
-        "CREATE INDEX browser_jobs_integration_status_expires_idx ON browser_jobs(integration_id, status, expires_at);",
-    )?;
-    tx.pragma_update(None, "user_version", 10)?;
-    tx.commit()?;
+/// Versions 3 to 10 built the Wande browser tables. A new database steps past
+/// them; version 15 drops what an older one built.
+fn retired<const VERSION: u32>(conn: &mut Connection) -> Result<()> {
+    conn.pragma_update(None, "user_version", VERSION)?;
     Ok(())
 }
 
@@ -511,37 +280,25 @@ fn migrate_v14(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-fn rebuild_browser_drafts(conn: &mut Connection) -> Result<()> {
+/// Version 15: drop saved Wande integrations, the browser tables and the
+/// pairing setting. Their query-log rows stay, as for any deleted integration.
+fn migrate_v15(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
         "
-        CREATE TABLE browser_drafts_v8 (
-            id TEXT PRIMARY KEY,
-            platform TEXT NOT NULL,
-            kind TEXT NOT NULL CHECK (kind IN ('reply', 'post', 'repost', 'quote')),
-            target_url TEXT NOT NULL,
-            post_id TEXT,
-            text TEXT NOT NULL,
-            parts_json TEXT NOT NULL DEFAULT '[]',
-            debug INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'submitted', 'failed', 'unknown', 'cancelled', 'expired')),
-            created_at INTEGER NOT NULL,
-            confirmed_at INTEGER,
-            submitted_at INTEGER,
-            scheduled_at INTEGER,
-            integration_id TEXT NOT NULL DEFAULT 'browser',
-            ttl_ms INTEGER
-        );
-        INSERT INTO browser_drafts_v8 (id, platform, kind, target_url, post_id, text, parts_json, debug, status, created_at, confirmed_at, submitted_at, scheduled_at, integration_id, ttl_ms)
-            SELECT id, platform, kind, target_url, post_id, text, parts_json, debug, status, created_at, confirmed_at, submitted_at, scheduled_at, integration_id, ttl_ms FROM browser_drafts;
-        DROP TABLE browser_drafts;
-        ALTER TABLE browser_drafts_v8 RENAME TO browser_drafts;
-        CREATE INDEX IF NOT EXISTS browser_drafts_status_idx ON browser_drafts (status, created_at);
-        CREATE INDEX IF NOT EXISTS browser_drafts_integration_status_idx
-            ON browser_drafts (integration_id, status, created_at);
+        DELETE FROM integrations WHERE type = 'wande';
+        DELETE FROM settings WHERE key = 'browser_pairing_token';
+
+        DROP TABLE IF EXISTS browser_artifacts;
+        DROP TABLE IF EXISTS browser_draft_images;
+        DROP TABLE IF EXISTS browser_schedule_reservations;
+        DROP TABLE IF EXISTS browser_schedule_settings;
+        DROP TABLE IF EXISTS browser_jobs;
+        DROP TABLE IF EXISTS browser_drafts;
+        DROP TABLE IF EXISTS browser_pairing_tokens;
         ",
     )?;
-    tx.pragma_update(None, "user_version", 8)?;
+    tx.pragma_update(None, "user_version", 15)?;
     tx.commit()?;
     Ok(())
 }
@@ -584,45 +341,6 @@ fn ensure_query_log_columns(tx: &Transaction<'_>) -> Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
-
-    #[test]
-    fn upgrades_v8_with_job_indexes_and_preserves_rows() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        for step in &LADDER[..8] {
-            step(&mut conn).unwrap();
-        }
-        conn.execute_batch(
-            "INSERT INTO browser_jobs (id, command_id, platform, action, target_url, payload_json, status, created_at, expires_at, integration_id, draft_id)
-             VALUES ('expired', 'c1', 'x', 'inspect', '', '{}', 'queued', 1, 100, 'a', 'd1'),
-                    ('future', 'c2', 'x', 'inspect', '', '{}', 'queued', 1, 101, 'a', NULL),
-                    ('other', 'c3', 'x', 'inspect', '', '{}', 'queued', 1, 100, 'b', NULL);",
-        ).unwrap();
-        run(&mut conn).unwrap();
-        run(&mut conn).unwrap();
-        assert_eq!(current_version(&conn).unwrap(), LADDER.len() as u32);
-        for (name, columns) in [
-            ("browser_jobs_draft_idx", vec!["draft_id"]),
-            ("browser_jobs_integration_status_expires_idx", vec!["integration_id", "status", "expires_at"]),
-        ] {
-            let mut stmt = conn.prepare("SELECT name FROM pragma_index_info(?) ORDER BY seqno").unwrap();
-            let actual = stmt.query_map([name], |row| row.get::<_, String>(0)).unwrap()
-                .collect::<std::result::Result<Vec<_>, _>>().unwrap();
-            assert_eq!(actual, columns);
-        }
-        let mut stmt = conn.prepare(
-            "SELECT id FROM browser_jobs WHERE integration_id = ? AND status = 'queued' AND expires_at <= ?",
-        ).unwrap();
-        let expired = stmt.query_map(rusqlite::params!["a", 100], |row| row.get::<_, String>(0)).unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>().unwrap();
-        assert_eq!(expired, vec!["expired"]);
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM browser_jobs", [], |row| row.get::<_, i64>(0)).unwrap(), 3);
-        let plan: String = conn.query_row(
-            "EXPLAIN QUERY PLAN SELECT id FROM browser_jobs WHERE integration_id = ? AND status = 'queued' AND expires_at <= ?",
-            rusqlite::params!["a", 100], |row| row.get(3),
-        ).unwrap();
-        assert!(plan.contains("browser_jobs_integration_status_expires_idx"), "{plan}");
-        assert!(plan.contains("expires_at<?"), "{plan}");
-    }
 
     #[test]
     fn ladder_runs_each_step_once_and_reports_the_version() {
@@ -803,92 +521,6 @@ mod tests {
     }
 
     #[test]
-    fn reservation_migration_keeps_orphaned_rows_with_the_only_wande() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        migrate_v1(&mut conn).unwrap();
-        migrate_v2(&mut conn).unwrap();
-        migrate_v3(&mut conn).unwrap();
-        migrate_v4(&mut conn).unwrap();
-        conn.execute(
-            "INSERT INTO integrations (id, name, type, token) VALUES ('wande-1', 'Wande', 'wande', 'token-1')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO browser_drafts (id, platform, kind, target_url, text, status, created_at, integration_id) VALUES ('draft-1', 'x', 'post', 'https://x.com/compose/post', 'Saved post', 'submitted', 100, 'wande-1')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO browser_schedule_reservations (id, draft_id, platform, scheduled_at, status, created_at) VALUES ('reservation-1', 'draft-1', 'x', 200, 'committed', 100)",
-            [],
-        )
-        .unwrap();
-        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
-        conn.execute(
-            "INSERT INTO browser_schedule_reservations (id, draft_id, platform, scheduled_at, status, created_at) VALUES ('reservation-2', 'missing-draft', 'x', 300, 'released', 100)",
-            [],
-        )
-        .unwrap();
-
-        migrate_v5(&mut conn).unwrap();
-
-        let owners: Vec<(String, String)> = {
-            let mut statement = conn
-                .prepare("SELECT id, integration_id FROM browser_schedule_reservations ORDER BY id")
-                .unwrap();
-            statement
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-                .unwrap()
-                .map(|row| row.unwrap())
-                .collect()
-        };
-        assert_eq!(
-            owners,
-            vec![
-                ("reservation-1".to_owned(), "wande-1".to_owned()),
-                ("reservation-2".to_owned(), "wande-1".to_owned()),
-            ]
-        );
-        assert_eq!(current_version(&conn).unwrap(), 5);
-    }
-
-    #[test]
-    fn drafts_migration_admits_reposts_and_quotes_and_keeps_what_hangs_off_a_draft() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        for step in &LADDER[..7] {
-            step(&mut conn).unwrap();
-        }
-        conn.execute_batch(
-            "PRAGMA foreign_keys = ON;
-             INSERT INTO browser_drafts (id, platform, kind, target_url, text, status, created_at, integration_id, ttl_ms) VALUES ('draft-1', 'x', 'post', 'https://x.com/compose/post', 'Saved post', 'pending', 100, 'wande-1', 5000);
-             INSERT INTO browser_draft_images (id, integration_id, draft_id, part_index, ordinal, content_type, bytes, sha256, staged_path, created_at) VALUES ('image-1', 'wande-1', 'draft-1', 0, 0, 'image/png', 10, 'hash', '/staged', 100);",
-        )
-        .unwrap();
-
-        migrate_v8(&mut conn).unwrap();
-
-        let kept: (String, i64, i64) = conn
-            .query_row(
-                "SELECT text, ttl_ms, (SELECT COUNT(*) FROM browser_draft_images WHERE draft_id = 'draft-1') FROM browser_drafts WHERE id = 'draft-1'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(kept, ("Saved post".to_owned(), 5000, 1));
-        for kind in ["repost", "quote"] {
-            conn.execute(
-                "INSERT INTO browser_drafts (id, platform, kind, target_url, post_id, text, status, created_at) VALUES (?, 'x', ?, 'https://x.com/i/status/42', '42', '', 'pending', 100)",
-                [kind, kind],
-            )
-            .unwrap();
-        }
-        let foreign_keys: bool = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0)).unwrap();
-        assert!(foreign_keys);
-        assert_eq!(current_version(&conn).unwrap(), 8);
-    }
-
-    #[test]
     fn upgrades_v10_with_the_proxy_tables_and_opens_a_fresh_database_on_them() {
         let mut upgraded = Connection::open_in_memory().unwrap();
         for step in &LADDER[..10] {
@@ -961,6 +593,77 @@ mod tests {
         assert!(refused.is_err(), "only header and env rows are kept");
     }
 
+    /// A version-14 database as Wande left it. The browser tables keep only the
+    /// columns their foreign keys need.
+    fn wande_era_database(path: &std::path::Path) {
+        let mut conn = Connection::open(path).unwrap();
+        for step in &LADDER[..14] {
+            step(&mut conn).unwrap();
+        }
+        conn.execute_batch(
+            "
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE browser_jobs (id TEXT PRIMARY KEY, integration_id TEXT NOT NULL);
+            CREATE TABLE browser_artifacts (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES browser_jobs(id) ON DELETE CASCADE);
+            CREATE TABLE browser_drafts (id TEXT PRIMARY KEY, integration_id TEXT NOT NULL);
+            CREATE TABLE browser_draft_images (id TEXT PRIMARY KEY, draft_id TEXT NOT NULL REFERENCES browser_drafts(id) ON DELETE CASCADE);
+            CREATE TABLE browser_schedule_reservations (id TEXT PRIMARY KEY, draft_id TEXT NOT NULL UNIQUE REFERENCES browser_drafts(id) ON DELETE CASCADE);
+            CREATE TABLE browser_schedule_settings (id INTEGER PRIMARY KEY CHECK (id = 1));
+            CREATE TABLE browser_pairing_tokens (integration_id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE);
+
+            INSERT INTO integrations (id, name, type, config, token)
+                VALUES ('ssh-1', 'Prod box', 'ssh', '{\"host\":\"prod.local\"}', 'pluk_ssh_token');
+            INSERT INTO integrations (id, name, type, token)
+                VALUES ('wande-1', 'Socials', 'wande', 'pluk_wande_token');
+            INSERT INTO settings (key, value) VALUES ('browser_pairing_token', 'pairing');
+            INSERT INTO settings (key, value) VALUES ('log_retention_days', '7');
+            INSERT INTO browser_pairing_tokens VALUES ('wande-1', 'pairing');
+            INSERT INTO browser_jobs VALUES ('job-1', 'wande-1');
+            INSERT INTO browser_artifacts VALUES ('artifact-1', 'job-1');
+            INSERT INTO browser_drafts VALUES ('draft-1', 'wande-1');
+            INSERT INTO browser_draft_images VALUES ('image-1', 'draft-1');
+            INSERT INTO browser_schedule_reservations VALUES ('reservation-1', 'draft-1');
+            INSERT INTO browser_schedule_settings VALUES (1);
+            ",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_store_saved_with_wande_opens_and_lists_the_other_integrations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pluk.db");
+        wande_era_database(&path);
+
+        let store = crate::Store::open(&path).unwrap();
+        let listed: Vec<(String, String)> = store
+            .list_integrations()
+            .unwrap()
+            .into_iter()
+            .map(|integration| (integration.name, integration.r#type))
+            .collect();
+        assert_eq!(listed, [("Prod box".to_owned(), "ssh".to_owned())]);
+        let ssh = store.integration_by_token("pluk_ssh_token").unwrap().unwrap();
+        assert_eq!(ssh.config["host"], serde_json::json!("prod.local"));
+        assert!(store.integration_by_token("pluk_wande_token").unwrap().is_none());
+        assert_eq!(store.get_setting("browser_pairing_token").unwrap(), None);
+        assert_eq!(store.retention_days().unwrap(), 7);
+        drop(store);
+
+        let conn = Connection::open(&path).unwrap();
+        let browser_tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'browser\\_%' ESCAPE '\\'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(browser_tables, 0);
+        drop(conn);
+
+        let reopened = crate::Store::open(&path).unwrap();
+        assert_eq!(reopened.list_integrations().unwrap().len(), 1);
+    }
 
     fn columns_of(conn: &Connection, table: &str) -> HashSet<String> {
         let mut stmt = conn

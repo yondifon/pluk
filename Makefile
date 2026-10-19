@@ -4,7 +4,7 @@ DIST      := dist
 VERSION   := $(shell cat VERSION 2>/dev/null | tr -d ' \n')
 COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: dev deps build build-ui extension bundle bundle-unsigned bundle-signed publish _publish major minor fix check-publish-tools install test lint clean prune sync-version check-tauri deploy-landing help
+.PHONY: dev deps build build-ui bundle bundle-unsigned bundle-signed publish _publish major minor fix check-publish-tools install test lint clean prune sync-version check-tauri deploy-landing help
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help:
@@ -16,10 +16,9 @@ help:
 	@printf "  make bundle-unsigned  Force ad-hoc signing (no identity)\n"
 	@printf "  make publish [major|minor|fix]  Bump version, then universal build, sign, notarize, staple, verify, GitHub release\n"
 	@printf "  make install          Build bundles and install Pluk.app to /Applications (macOS)\n"
-	@printf "  make extension        Build the Chrome extension into extension/dist\n"
 	@printf "  make deploy-landing   Deploy the landing page to Cloudflare\n"
-	@printf "  make test             cargo test --workspace + extension tests\n"
-	@printf "  make lint             cargo clippy + frontend and extension typecheck\n"
+	@printf "  make test             cargo test --workspace\n"
+	@printf "  make lint             cargo clippy + frontend typecheck\n"
 	@printf "  make clean            Remove dist/ and build artefacts\n"
 	@printf "  make prune            Remove stale target/ artefacts (needs cargo-sweep)\n"
 
@@ -38,13 +37,6 @@ build-ui:
 	@printf "→ building frontend (ui/dist)\n"
 	bun install --cwd ui --silent
 	bun run --cwd ui build
-
-# The Chrome extension Pluk drives X through. Load extension/dist unpacked via
-# chrome://extensions; it is not bundled into the app.
-extension:
-	@printf "→ building the Chrome extension (extension/dist)\n"
-	bun install --cwd extension --silent
-	bun run --cwd extension build
 
 sync-version:
 	@printf "→ syncing version $(VERSION) into Cargo.toml and tauri.conf.json\n"
@@ -188,21 +180,16 @@ deploy-landing:
 # ── Test / Lint ─────────────────────────────────────────────────────────────
 test:
 	cargo test --workspace
-	bun install --cwd extension --silent
-	bun test --cwd extension
 
 lint:
 	cargo clippy --workspace -- -D warnings
 	bun run --silent --cwd ui build 2>&1 | head -20
-	bun install --cwd extension --silent
-	bun run --cwd extension typecheck
 
 # ── Clean ───────────────────────────────────────────────────────────────────
 clean:
 	rm -rf $(DIST)
 	rm -rf target
 	rm -rf ui/dist
-	rm -rf extension/dist
 	rm -rf ui/node_modules/.vite
 
 # Prunes target/ artefacts cargo no longer needs for the current build (stale

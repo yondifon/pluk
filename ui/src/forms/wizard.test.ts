@@ -2,20 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { wizardSteps } from "./wizard";
 import { adopt, emptyDraft } from "./connectionDraft";
 import { renderTypeChooser, renderNameStep, renderConnectFieldsStep, renderToolsStep, renderCommandsStep } from "./render";
-import { renderConnectChromeStep } from "../integration-detail/browser-access";
-import { renderInstallStep } from "../integration-detail/agent-setup";
 import type { AdapterManifest } from "./catalog";
 
-const wande: AdapterManifest = {
-  id: "wande",
-  label: "Wande",
-  category: "social",
-  policyKind: "none",
+const postgres: AdapterManifest = {
+  id: "postgres",
+  label: "PostgreSQL",
+  category: "database",
+  policyKind: "sql",
   agentHint: "",
   runsCommands: false,
   offeredForSetup: true,
-  tools: [{ name: "x_post", label: "Post", description: "Post exact text.", category: "write", defaultEnabled: true }],
-  configFields: [],
+  tools: [{ name: "query", label: "Query", description: "Run a query.", category: "read", defaultEnabled: true }],
+  configFields: [{ key: "host", label: "Host", type: "text", required: true, group: "Connection" }],
 };
 
 const ssh: AdapterManifest = {
@@ -39,7 +37,7 @@ function primary(el: HTMLElement): HTMLButtonElement {
 
 describe("wizardSteps", () => {
   test("a plain adapter walks type, name, connect, tools, install", () => {
-    expect(wizardSteps(wande, "create")).toEqual(["type", "name", "connect", "tools", "install"]);
+    expect(wizardSteps(postgres, "create")).toEqual(["type", "name", "connect", "tools", "install"]);
   });
 
   test("an adapter that runs commands gets an extra screen after tools", () => {
@@ -47,26 +45,19 @@ describe("wizardSteps", () => {
   });
 
   test("editing skips the type step entirely, it does not just hide it", () => {
-    expect(wizardSteps(wande, "edit")).toEqual(["name", "connect", "tools", "install"]);
+    expect(wizardSteps(postgres, "edit")).toEqual(["name", "connect", "tools", "install"]);
     expect(wizardSteps(ssh, "edit")).toEqual(["name", "connect", "tools", "commands", "install"]);
   });
 });
 
-describe("Wande flow, step by step", () => {
-  const steps = wizardSteps(wande, "create");
-
-  test("step 1 groups Wande under its own category and picking it advances", () => {
-    let chosen: AdapterManifest | null = null;
-    const el = renderTypeChooser([wande], (m) => (chosen = m));
-    el.querySelector<HTMLButtonElement>(".chooser-row")!.click();
-    expect(chosen!.id).toBe("wande");
-  });
+describe("PostgreSQL flow, step by step", () => {
+  const steps = wizardSteps(postgres, "create");
 
   test("step 2, Name it: blocks on an empty name, continues once filled", () => {
     let continued = false;
-    let draft = adopt(emptyDraft(), wande, true);
+    let draft = adopt(emptyDraft(), postgres, true);
     const onContinue = () => (continued = true);
-    let el = renderNameStep(draft, wande, 2, steps.length, (next) => (draft = next), null, () => {}, onContinue);
+    let el = renderNameStep(draft, postgres, 2, steps.length, (next) => (draft = next), null, () => {}, onContinue);
     expect(el.querySelector("h2")!.textContent).toBe("Name it");
     expect(el.textContent).toContain("Agents will see this name when they use it.");
 
@@ -76,45 +67,15 @@ describe("Wande flow, step by step", () => {
 
     // Real usage re-renders the step on every keystroke; a fresh element
     // with the updated draft stands in for that here.
-    draft = { ...draft, name: "My Wande" };
-    el = renderNameStep(draft, wande, 2, steps.length, (next) => (draft = next), null, () => {}, onContinue);
+    draft = { ...draft, name: "Analytics" };
+    el = renderNameStep(draft, postgres, 2, steps.length, (next) => (draft = next), null, () => {}, onContinue);
     primary(el).click();
     expect(continued).toBe(true);
   });
 
-  test("step 3, Connect Chrome: Continue stays off until the poll reports connected", () => {
-    let onChange: ((connected: boolean) => void) | null = null;
-    let continued = false;
-    const { el } = renderConnectChromeStep(
-      "integration-1",
-      3,
-      steps.length,
-      { onBack: null, onCancel: () => {}, onContinue: () => (continued = true), onSkip: () => {} },
-      {
-        fetchPlukId: async () => ({ id: "pluk-123" }),
-        watch: (cb) => {
-          onChange = cb;
-          return () => {};
-        },
-      },
-    );
-    expect(el.querySelector("h2")!.textContent).toBe("Connect Chrome");
-    expect(primary(el).disabled).toBe(true);
-
-    onChange!(false);
-    expect(primary(el).disabled).toBe(true);
-    primary(el).click();
-    expect(continued).toBe(false);
-
-    onChange!(true);
-    expect(primary(el).disabled).toBe(false);
-    primary(el).click();
-    expect(continued).toBe(true);
-  });
-
-  test("step 4, tools: saves directly since Wande has no commands step", () => {
+  test("step 4, tools: saves directly since a database has no commands step", () => {
     let saved: unknown = null;
-    const draft = adopt(emptyDraft(), wande, true);
+    const draft = adopt(emptyDraft(), postgres, true);
     const toolsIndex = steps.indexOf("tools");
     const el = renderToolsStep(draft, toolsIndex + 1, steps.length, toolsIndex === steps.length - 2, () => {}, null, () => {}, (d) => (saved = d));
     expect(primary(el).textContent).toBe("Save integration");
@@ -122,29 +83,12 @@ describe("Wande flow, step by step", () => {
     expect(saved).toBe(draft);
   });
 
-  test("step 5, install: reaches the agent's own name in the helper, Done closes the flow", () => {
-    let done = false;
-    const el = renderInstallStep(
-      { name: "My Wande", environment: "development", token: "tok" },
-      wande,
-      async () => ({ status: "added", path: "" }),
-      5,
-      steps.length,
-      { onBack: null, onDone: () => (done = true) },
-      { installed: [] },
-    );
-    expect(el.querySelector("h2")!.textContent).toBe("Install into your agent");
-    expect(el.textContent).toContain("so it can reach Wande.");
-    expect(primary(el).textContent).toBe("Done");
-    primary(el).click();
-    expect(done).toBe(true);
-  });
 });
 
 describe("SSH flow, step by step", () => {
   const steps = wizardSteps(ssh, "create");
 
-  test("step 3, Connect: shows the adapter's own fields instead of a pairing card", () => {
+  test("step 3, Connect: blocks on a missing required field, continues once filled", () => {
     let continued = false;
     let draft = adopt(emptyDraft(), ssh, true);
     const onContinue = () => (continued = true);
@@ -184,26 +128,5 @@ describe("SSH flow, step by step", () => {
     expect(primary(el).textContent).toBe("Save integration");
     primary(el).click();
     expect(saved).toBe(draft);
-  });
-});
-
-describe("Skip for now", () => {
-  test("advances past pairing even while still not connected", () => {
-    let continued = false;
-    let skipped = false;
-    const { el } = renderConnectChromeStep(
-      "integration-1",
-      3,
-      5,
-      { onBack: null, onCancel: () => {}, onContinue: () => (continued = true), onSkip: () => (skipped = true) },
-      { fetchPlukId: async () => ({ id: "pluk-123" }), watch: () => () => {} },
-    );
-    const skip = [...el.querySelectorAll("button")].find((b) => b.textContent === "Skip for now")!;
-    expect(skip.classList.contains("wizard-skip")).toBe(true);
-    expect(primary(el).disabled).toBe(true);
-
-    skip.click();
-    expect(skipped).toBe(true);
-    expect(continued).toBe(false);
   });
 });

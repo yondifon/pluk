@@ -18,7 +18,7 @@ describe("MCP servers borrow the logo of the brand hosting them", () => {
   });
 
   test("only MCP integrations borrow a brand", () => {
-    expect(logoType("wande", "https://mcp.linear.app/sse")).toBe("wande");
+    expect(logoType("ssh", "https://mcp.linear.app/sse")).toBe("ssh");
     expect(logoType("postgres")).toBe("postgres");
   });
 

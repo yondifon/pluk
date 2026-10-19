@@ -4,8 +4,7 @@
   "description": "Default capability for every Pluk window",
   "windows": [
     "main",
-    "confirm",
-    "wande-post"
+    "confirm"
   ],
   "permissions": [
     "core:default",

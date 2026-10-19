@@ -28,11 +28,7 @@ use crate::logging;
 use crate::mcp::{build_owner_surface, resolve_owner};
 
 pub fn router(state: AppState) -> Router {
-    let browser = state
-        .browser
-        .as_ref()
-        .map(|browser| pluk_browser::router((**browser).clone()));
-    let router = Router::new()
+    Router::new()
         .route("/api/adapters", get(adapters_catalog))
         .route("/api/reload", post(reload))
         .route("/api/events", get(events))
@@ -43,12 +39,8 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(|| async { "ok" }))
         .route("/api/health", get(health_report))
         .fallback(adapter_apis_or_not_found)
-        .with_state(state);
-    let router = match browser {
-        Some(browser) => router.nest("/wande", browser),
-        None => router,
-    };
-    router.layer(middleware::from_fn(crate::boundary::guard))
+        .with_state(state)
+        .layer(middleware::from_fn(crate::boundary::guard))
 }
 
 fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
