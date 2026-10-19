@@ -1,7 +1,6 @@
 import { mcpKey, mcpUrl } from "./logic";
 import { renderMcpSection, type InjectFn } from "./mcp-section";
-import { renderPlukIdCard } from "./browser-access";
-import { WANDE_TYPE, type AdapterManifest, type Integration, type McpClientId } from "./types";
+import type { AdapterManifest, Integration, McpClientId } from "./types";
 import { wizardStepFooter, wizardStepHeader } from "../primitives";
 
 export function renderAgentSetup(
@@ -13,13 +12,6 @@ export function renderAgentSetup(
   container.innerHTML = "";
   container.className = "agent-setup-tab";
 
-  let browserAccess: { destroy: () => void } | null = null;
-  if (integration.type === WANDE_TYPE) {
-    const browser = document.createElement("section");
-    browserAccess = renderPlukIdCard(browser, integration.id);
-    container.appendChild(browser);
-  }
-
   const endpoint = document.createElement("section");
   renderMcpSection(
     endpoint,
@@ -27,7 +19,6 @@ export function renderAgentSetup(
       key: mcpKey(integration.name, integration.environment),
       url: mcpUrl(integration.token),
       agentHint: manifest?.agentHint,
-      title: integration.type === WANDE_TYPE ? "Agent setup" : undefined,
     },
     inject,
   );
@@ -35,7 +26,6 @@ export function renderAgentSetup(
 
   return {
     destroy() {
-      browserAccess?.destroy();
       container.innerHTML = "";
     },
   };

@@ -5,18 +5,15 @@ import { wizardSteps } from "./wizard";
 import type { AdapterManifest } from "./catalog";
 
 function manifest(id: string, label: string, runsCommands: boolean): AdapterManifest {
-  const tool = id === "ssh"
-    ? { name: "run_command", label: "Run command", description: "Run a shell command.", category: "read", defaultEnabled: true }
-    : { name: "x_post", label: "Post", description: "Post exact text.", category: "write", defaultEnabled: true };
   return {
     id,
     label,
-    category: id === "ssh" ? "infrastructure" : "social",
+    category: "infrastructure",
     policyKind: "none",
     agentHint: "",
     runsCommands,
     tools: [
-      tool,
+      { name: "run_command", label: "Run command", description: "Run a shell command.", category: "read", defaultEnabled: true },
       { name: "optional_tool", label: "Optional tool", description: "Use another tool.", category: "read", defaultEnabled: false },
     ],
     configFields: [],
@@ -97,17 +94,6 @@ describe("approval rules", () => {
     ask.checked = false;
     ask.dispatchEvent(new Event("change"));
     expect(seen.ask).toBe(false);
-  });
-
-  test("Wande has no commands step and its tools step saves directly", () => {
-    const wande = manifest("wande", "Wande", false);
-    const steps = wizardSteps(wande, "create");
-    expect(steps).not.toContain("commands");
-    const draft = adopt(emptyDraft(), wande, true);
-    const toolsIndex = steps.indexOf("tools");
-    const form = renderToolsStep(draft, toolsIndex + 1, steps.length, toolsIndex === steps.length - 2, () => {}, null, () => {}, () => {});
-    expect(form.textContent).not.toContain("What the agent may run");
-    expect(form.querySelector(".ui-button-primary")?.textContent).toBe("Save integration");
   });
 
   test("SSH gets a commands step after tools, which is what saves", () => {

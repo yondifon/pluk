@@ -7,10 +7,9 @@
 //! browser labelled as coming from a page is refused.
 //!
 //! Agents, the CLI and the desktop window send neither `Origin` nor
-//! `Sec-Fetch-Site`, and pass untouched. Two callers do speak like a browser
-//! and have to keep working: the Chrome extension on `/wande`, which carries
-//! its own extension origin and a pairing token, and the redirect landing on
-//! the OAuth callback once the user has signed in on an upstream site.
+//! `Sec-Fetch-Site`, and pass untouched. One caller does speak like a browser
+//! and has to keep working: the redirect landing on the OAuth callback once
+//! the user has signed in on an upstream site.
 //!
 //! Nothing here answers with CORS headers. A refusal is one plain line, and
 //! an allowed request is served exactly as it was before.
@@ -77,26 +76,13 @@ fn redact_token_path(path: &str) -> &str {
 /// agent, every CLI and the desktop app itself.
 fn caller_allowed(request: &Request) -> bool {
     let headers = request.headers();
-    let origin = header(headers, "origin");
-    if is_extension_surface(request.uri().path()) {
-        return origin.is_none_or(|origin| {
-            origin.starts_with("chrome-extension://") || is_own_origin(origin, headers)
-        });
-    }
-    match origin {
+    match header(headers, "origin") {
         Some(origin) => is_own_origin(origin, headers),
         None => match header(headers, "sec-fetch-site") {
             Some("cross-site" | "same-site") => is_oauth_return(request),
             _ => true,
         },
     }
-}
-
-/// `/wande` is the extension's surface. It pins the loopback port and the
-/// extension origin itself and takes a pairing token on everything but its
-/// health probe, so the origin refused here is only a web page's.
-fn is_extension_surface(path: &str) -> bool {
-    path == "/wande" || path.starts_with("/wande/")
 }
 
 /// The browser returning from an upstream sign-in page: a top-level `GET`

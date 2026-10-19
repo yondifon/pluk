@@ -316,18 +316,6 @@ pub async fn spawn_app_with_events(keepalive: Duration, capacity: usize) -> Test
     .await
 }
 
-/// Spawn with the `/wande` surface attached, pinned to the port it answers on.
-pub async fn spawn_app_with_browser() -> TestApp {
-    let listener = loopback().await;
-    let port = listener.local_addr().unwrap().port();
-    spawn_with_listener(listener, move |store, registry, owners, health| {
-        let mut state = AppState::new(store, registry, owners, health);
-        state.attach_browser(port).expect("attach browser");
-        state
-    })
-    .await
-}
-
 /// Spawn with a caller-built state (full control over every shared handle).
 pub async fn spawn_app_with(
     build: impl Fn(Arc<Store>, Arc<AdapterRegistry>, Arc<OwnerPool>, Arc<HealthMap>) -> AppState,

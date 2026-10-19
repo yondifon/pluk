@@ -5,10 +5,8 @@ export type WizardStepKind = "type" | "name" | "connect" | "tools" | "commands" 
 export type WizardMode = "create" | "edit";
 
 /**
- * The screens a create or edit flow walks through, in order. "connect" swaps
- * between the pairing card and an adapter's own fields at render time; this
- * only decides whether "type" opens the flow and whether "commands" sits
- * between tools and install.
+ * The screens a create or edit flow walks through, in order: whether "type"
+ * opens the flow and whether "commands" sits between tools and install.
  */
 export function wizardSteps(manifest: AdapterManifest | undefined, mode: WizardMode): WizardStepKind[] {
   const steps: WizardStepKind[] = [];
