@@ -584,7 +584,11 @@ pub async fn update_integration(
     id: String,
     payload: UpdateIntegrationPayload,
 ) -> CmdResult<Option<IntegrationJson>> {
-    update_integration_in(&state.store, &state.shared.registry, &id, payload)
+    let updated = update_integration_in(&state.store, &state.shared.registry, &id, payload)?;
+    if updated.is_some() {
+        pluk_adapters::sql::evict_connections(&id);
+    }
+    Ok(updated)
 }
 
 fn update_integration_in(
@@ -647,6 +651,7 @@ pub async fn delete_integration(state: State<'_, HostState>, id: String) -> CmdR
         // Drop owner's pooled resources so stale creds/tunnels are gone.
         let owners = state.shared.owners.clone();
         owners.reset_owners(Some(&id));
+        pluk_adapters::sql::evict_connections(&id);
     }
     Ok(did)
 }

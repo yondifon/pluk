@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Duration;
 
 use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
@@ -31,12 +32,16 @@ use super::error::{
 use pluk_db::DriverError;
 use pluk_db::config::SqlConfig;
 use pluk_db::factory::{CreateDriverOpts, DriverWithTunnel, create_driver};
+use pluk_db::pool::{CheckoutError, DriverPool, SSH_CONNECT_BUDGET, Target};
+use pluk_ssh::SSH_CONNECT_WAIT_MS;
 use pluk_db::resolve_statement;
 use pluk_db::types::QueryOpts;
 
 #[cfg(test)]
 pub(super) enum ConnectStep {
     Ready(pluk_db::fake::FakeDriver),
+    /// Connects after `delay`, like a person taking time to approve a prompt.
+    After(std::time::Duration, pluk_db::fake::FakeDriver),
     Fail(DriverError),
     Hang,
 }
@@ -46,56 +51,118 @@ tokio::task_local! {
     pub(super) static TEST_CONNECT: Mutex<std::collections::VecDeque<ConnectStep>>;
 }
 
-async fn connect_driver(cfg: SqlConfig) -> Result<DriverWithTunnel, DriverError> {
-    #[cfg(test)]
-    if let Ok(step) = TEST_CONNECT.try_with(|steps| steps.lock().unwrap().pop_front()) {
-        return match step.expect("unexpected connection attempt") {
-            ConnectStep::Ready(driver) => Ok(DriverWithTunnel { driver: Box::new(driver), tunnel: None }),
-            ConnectStep::Fail(error) => Err(error),
-            ConnectStep::Hang => std::future::pending().await,
-        };
-    }
-    let dw = create_driver(CreateDriverOpts::new(cfg.clone())).await?;
-    if cfg.r#type == "sqlite" {
-        return Ok(dw);
-    }
-    // Postgres and MSSQL connect lazily; check the path before sending a caller's statement.
-    let connected = tokio::time::timeout(std::time::Duration::from_secs(15), dw.driver.test_connection()).await;
-    let result = connected.unwrap_or_else(|_| Err(DriverError::Connection(format!(
-        "The database didn't answer within 15s{}. Check your network and connection settings, then retry. Retrying is safe.",
-        if cfg.is_use_ssh() { " through the SSH tunnel" } else { "" }
-    ))));
-    if let Err(error) = result {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), dw.close()).await;
-        return Err(error);
-    }
-    Ok(dw)
+static POOL: LazyLock<DriverPool> = LazyLock::new(DriverPool::default);
+
+/// Close the warm connections of an integration, or of every integration
+/// reached through a group.
+pub fn evict_connections(id: &str) {
+    POOL.evict(id);
 }
 
-async fn with_driver<T, F, Fut>(cfg: SqlConfig, read_only: bool, mut op: F) -> Result<T, crate::error::AdapterError>
+/// How long a call waits for a connection before it answers.
+#[derive(Clone, Copy)]
+pub(super) struct Patience {
+    /// The whole call, connecting included.
+    deadline: Duration,
+    /// How long it waits on an SSH connect that may need an approval.
+    ssh_wait: Duration,
+}
+
+impl Patience {
+    /// An agent's call: it answers "still connecting" and the agent retries.
+    pub(super) const AGENT: Self = Self {
+        deadline: Duration::from_secs(45),
+        ssh_wait: Duration::from_millis(SSH_CONNECT_WAIT_MS),
+    };
+    /// A person is watching the screen, so wait for the approval itself.
+    pub(super) const WATCHED: Self = Self {
+        deadline: SSH_CONNECT_BUDGET.saturating_add(Duration::from_secs(15)),
+        ssh_wait: SSH_CONNECT_BUDGET,
+    };
+}
+
+type Connecting = std::pin::Pin<Box<dyn Future<Output = Result<DriverWithTunnel, DriverError>> + Send>>;
+
+/// Pulling a test step happens here, not inside the future, so it runs in the
+/// caller's task where the test's steps are in scope.
+fn connect_driver(cfg: SqlConfig) -> Connecting {
+    #[cfg(test)]
+    if let Ok(step) = TEST_CONNECT.try_with(|steps| steps.lock().unwrap().pop_front()) {
+        let step = step.expect("unexpected connection attempt");
+        return Box::pin(async move {
+            let ready = |driver| Ok(DriverWithTunnel { driver: Box::new(driver), tunnel: None });
+            match step {
+                ConnectStep::Ready(driver) => ready(driver),
+                ConnectStep::After(delay, driver) => {
+                    tokio::time::sleep(delay).await;
+                    ready(driver)
+                }
+                ConnectStep::Fail(error) => Err(error),
+                ConnectStep::Hang => std::future::pending().await,
+            }
+        });
+    }
+    Box::pin(async move {
+        let dw = create_driver(CreateDriverOpts::new(cfg.clone())).await?;
+        if cfg.r#type == "sqlite" {
+            return Ok(dw);
+        }
+        // Postgres and MSSQL connect lazily; check the path before sending a caller's statement.
+        let connected = tokio::time::timeout(Duration::from_secs(15), dw.driver.test_connection()).await;
+        let result = connected.unwrap_or_else(|_| Err(DriverError::Connection(format!(
+            "The database didn't answer within 15s{}. Check your network and connection settings, then retry. Retrying is safe.",
+            if cfg.is_use_ssh() { " through the SSH tunnel" } else { "" }
+        ))));
+        if let Err(error) = result {
+            let _ = tokio::time::timeout(Duration::from_secs(1), dw.close()).await;
+            return Err(error);
+        }
+        Ok(dw)
+    })
+}
+
+async fn with_driver<T, F, Fut>(cfg: SqlConfig, read_only: bool, op: F) -> Result<T, crate::error::AdapterError>
 where
     F: FnMut(Arc<dyn pluk_db::Driver>) -> Fut,
     Fut: Future<Output = Result<T, DriverError>>,
 {
-    use std::time::Duration;
-    use tokio::time::{Instant, timeout, timeout_at};
-    let deadline = Instant::now() + Duration::from_secs(45);
+    with_driver_waiting(cfg, read_only, Patience::AGENT, op).await
+}
+
+pub(super) async fn with_driver_waiting<T, F, Fut>(
+    cfg: SqlConfig,
+    read_only: bool,
+    patience: Patience,
+    mut op: F,
+) -> Result<T, crate::error::AdapterError>
+where
+    F: FnMut(Arc<dyn pluk_db::Driver>) -> Fut,
+    Fut: Future<Output = Result<T, DriverError>>,
+{
+    use tokio::time::{Instant, timeout_at};
+    let target = Target::new(&cfg);
+    let deadline = Instant::now() + patience.deadline;
     for attempt in 0..2 {
-        let connected = timeout_at(deadline, connect_driver(cfg.clone())).await;
-        let (result, before_send) = match connected {
-            Ok(Ok(dw)) => {
-                let driver: Arc<dyn pluk_db::Driver> = Arc::from(dw.driver);
-                let result = op(driver.clone()).await;
-                let _ = timeout(Duration::from_secs(1), driver.close()).await;
-                drop(dw.tunnel);
-                (result, false)
+        let checked_out = timeout_at(
+            deadline,
+            POOL.checkout(&target, patience.ssh_wait, || connect_driver(cfg.clone())),
+        )
+        .await;
+        let (result, before_send, used) = match checked_out {
+            Ok(Ok(pooled)) => {
+                let result = op(pooled.driver()).await;
+                (result, false, Some(pooled))
             }
-            Ok(Err(error)) => (Err(error), true),
+            Ok(Err(CheckoutError::Failed(error))) => (Err(error), true, None),
+            Ok(Err(CheckoutError::Waiting(waiting))) => {
+                return Err(crate::error::AdapterError::new(waiting.message).with_code(waiting.code));
+            }
             Err(_) => {
+                let seconds = patience.deadline.as_secs();
                 let layer = if cfg.is_use_ssh() {
-                    format!("The SSH tunnel to {} or the database through it didn't answer within 45s. Approve any 1Password prompt, then retry.", cfg.ssh_host.as_deref().unwrap_or("the SSH host"))
+                    format!("The SSH tunnel to {} or the database through it didn't answer within {seconds}s. Approve any sign-in prompt, then retry.", cfg.ssh_host.as_deref().unwrap_or("the SSH host"))
                 } else {
-                    "The database didn't answer within 45s. Check your network, then retry.".into()
+                    format!("The database didn't answer within {seconds}s. Check your network, then retry.")
                 };
                 return Err(crate::error::AdapterError::new(format!("{layer} Retrying is safe.")).with_code("SQL_CONNECT_TIMEOUT"));
             }
@@ -108,14 +175,23 @@ where
         if !network_failure {
             return Err(error);
         }
+        if let Some(pooled) = &used {
+            POOL.discard(pooled);
+        }
         if !before_send && !read_only {
             return Err(crate::error::AdapterError::new(format!("{} The statement may have changed data. Do not retry until you check its outcome.", error.message)).with_code("SQL_WRITE_OUTCOME_UNKNOWN"));
         }
         if attempt == 1 {
             return Err(crate::error::AdapterError::new(format!("{} Check your network and connection settings, then retry. Retrying is safe.", error.message)).with_code("SQL_CONNECTION_FAILED"));
         }
-        if timeout_at(deadline, pluk_db::force_reconnect(&cfg)).await.is_err() {
-            return Err(crate::error::AdapterError::new("The connection could not be refreshed within 45s. Check your network, then retry. Retrying is safe.").with_code("SQL_CONNECT_TIMEOUT"));
+        let refresh = async {
+            match &used {
+                Some(pooled) => POOL.drop_broken(pooled, &cfg).await,
+                None => pluk_db::force_reconnect(&cfg).await,
+            }
+        };
+        if timeout_at(deadline, refresh).await.is_err() {
+            return Err(crate::error::AdapterError::new(format!("The connection could not be refreshed within {}s. Check your network, then retry. Retrying is safe.", patience.deadline.as_secs())).with_code("SQL_CONNECT_TIMEOUT"));
         }
     }
     unreachable!()
@@ -456,8 +532,11 @@ fn switch_block(sql: &str, pinned: Option<&String>) -> Option<String> {
 }
 
 #[allow(clippy::field_reassign_with_default)]
-fn sql_config_from(conn: &Integration, database_override: Option<&str>) -> SqlConfig {
+pub(super) fn sql_config_from(conn: &Integration, database_override: Option<&str>) -> SqlConfig {
     let mut cfg = SqlConfig::default();
+    cfg.integration_id = Some(conn.id.clone());
+    cfg.via_group = conn.via_group.as_ref().map(|group| group.id.clone());
+    cfg.label = Some(conn.name.clone());
     cfg.r#type = conn.r#type.clone();
     cfg.host = conn
         .config

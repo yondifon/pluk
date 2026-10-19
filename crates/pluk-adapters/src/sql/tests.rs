@@ -122,24 +122,204 @@ async fn a_write_with_an_unknown_outcome_is_not_sent_twice() {
     }).await;
 }
 
+fn ssh_integration(id: &str) -> Integration {
+    make_integration(id, "postgres", json!({"use_ssh": true, "ssh_host": format!("bastion-{id}")}), None)
+}
+
+fn connect_steps(steps: Vec<super::ConnectStep>) -> std::sync::Mutex<std::collections::VecDeque<super::ConnectStep>> {
+    std::sync::Mutex::new(steps.into())
+}
+
+fn connects_left() -> usize {
+    super::TEST_CONNECT.with(|steps| steps.lock().unwrap().len())
+}
+
+#[test]
+fn the_pending_hint_names_the_agent_the_connect_used_and_stays_generic_otherwise() {
+    for (agent, expected) in [
+        (Some("Secretive"), "sign-in in Secretive"),
+        (None, "key agent, security key, or browser"),
+    ] {
+        let waiting = pluk_ssh::ssh_pending_error(agent);
+        let error = crate::error::AdapterError::new(waiting.message).with_code(waiting.code);
+        let info = super::classify_sql_error(&error);
+        assert_eq!(info.category, super::SqlErrorCategory::PendingApproval);
+        assert!(info.hint.unwrap().contains(expected));
+    }
+}
+
 #[tokio::test(start_paused = true)]
-async fn a_connection_that_never_answers_fails_before_the_client_timeout() {
-    use super::{ConnectStep, TEST_CONNECT};
+async fn a_connect_that_never_finishes_answers_still_connecting_before_the_client_gives_up() {
+    use super::ConnectStep;
     let (_dir, store) = temp_store();
-    let conn = make_integration("timeout", "postgres", json!({"use_ssh":true,"ssh_host":"app4-ssh-infra"}), None);
-    let host = capture_for(&conn, store);
-    let steps = std::sync::Mutex::new(std::collections::VecDeque::from([
-        ConnectStep::Hang,
-        ConnectStep::Hang,
-    ]));
-    TEST_CONNECT.scope(steps, async {
+    let host = capture_for(&ssh_integration("hang"), store);
+    super::TEST_CONNECT.scope(connect_steps(vec![ConnectStep::Hang]), async {
         let start = tokio::time::Instant::now();
         let result = host.tools["list_tables"](json!({})).await;
         assert!(result.is_error);
         assert!(start.elapsed() <= std::time::Duration::from_secs(45));
-        assert!(result.text().contains("SSH tunnel"), "{}", result.text());
-        assert!(result.text().contains("app4-ssh-infra"));
-        assert!(result.text().contains("Retrying is safe"));
+        assert!(result.text().contains("SSH_CONNECT_PENDING"), "{}", result.text());
+    }).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_connect_still_pending_is_joined_by_the_retry_instead_of_restarted() {
+    use super::ConnectStep;
+    use std::time::Duration;
+    let (_dir, store) = temp_store();
+    let host = capture_for(&ssh_integration("retry-join"), store);
+    let driver = pluk_db::fake::FakeDriver::new_postgres();
+    let steps = connect_steps(vec![ConnectStep::After(Duration::from_secs(40), driver)]);
+    super::TEST_CONNECT.scope(steps, async {
+        let first = host.tools["list_tables"](json!({})).await;
+        assert!(first.is_error);
+        assert!(first.text().contains("SSH_CONNECT_PENDING"), "{}", first.text());
+        let second = host.tools["list_tables"](json!({})).await;
+        assert!(!second.is_error, "{}", second.text());
+        assert_eq!(connects_left(), 0);
+    }).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn parallel_calls_during_one_connect_share_it() {
+    use super::ConnectStep;
+    use std::time::Duration;
+    let (_dir, store) = temp_store();
+    let host = capture_for(&ssh_integration("share"), store);
+    let driver = pluk_db::fake::FakeDriver::new_postgres();
+    let steps = connect_steps(vec![ConnectStep::After(Duration::from_secs(10), driver)]);
+    super::TEST_CONNECT.scope(steps, async {
+        let calls = [(); 3].map(|_| host.tools["list_tables"](json!({})));
+        for result in futures::future::join_all(calls).await {
+            assert!(!result.is_error, "{}", result.text());
+        }
+        assert_eq!(connects_left(), 0);
+    }).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_burst_of_calls_on_a_pending_connect_does_not_drop_it() {
+    use super::ConnectStep;
+    use std::time::Duration;
+    let (_dir, store) = temp_store();
+    let host = capture_for(&ssh_integration("burst"), store);
+    let driver = pluk_db::fake::FakeDriver::new_postgres();
+    let steps = connect_steps(vec![ConnectStep::After(Duration::from_secs(60), driver)]);
+    super::TEST_CONNECT.scope(steps, async {
+        let calls = [(); 4].map(|_| host.tools["list_tables"](json!({})));
+        for result in futures::future::join_all(calls).await {
+            assert!(result.text().contains("SSH_CONNECT_PENDING"), "{}", result.text());
+        }
+        tokio::time::sleep(Duration::from_secs(40)).await;
+        let after = host.tools["list_tables"](json!({})).await;
+        assert!(!after.is_error, "{}", after.text());
+    }).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_slow_query_does_not_block_a_second_one_on_the_same_database() {
+    use super::ConnectStep;
+    use std::time::Duration;
+    let (_dir, store) = temp_store();
+    let conn = make_integration("parallel", "postgres", json!({}), None);
+    let host = capture_for(&conn, store);
+    let driver = pluk_db::fake::FakeDriver::new_postgres();
+    driver.delay_queries_containing("slow", Duration::from_secs(10));
+    super::TEST_CONNECT.scope(connect_steps(vec![ConnectStep::Ready(driver)]), async {
+        assert!(!host.tools["list_tables"](json!({})).await.is_error);
+        let start = tokio::time::Instant::now();
+        let slow = async {
+            host.tools["query"](json!({"sql": "SELECT 'slow'"})).await;
+            start.elapsed()
+        };
+        let fast = async {
+            host.tools["query"](json!({"sql": "SELECT 1"})).await;
+            start.elapsed()
+        };
+        let (slow, fast) = tokio::join!(slow, fast);
+        assert!(fast < Duration::from_secs(1), "{fast:?}");
+        assert!(slow >= Duration::from_secs(10), "{slow:?}");
+    }).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_idle_connection_that_fails_its_check_is_rebuilt_before_the_read() {
+    use super::ConnectStep;
+    let (_dir, store) = temp_store();
+    let host = capture_for(&make_integration("stale", "postgres", json!({}), None), store);
+    let old = pluk_db::fake::FakeDriver::new_postgres();
+    let steps = connect_steps(vec![
+        ConnectStep::Ready(old.clone()),
+        ConnectStep::Ready(pluk_db::fake::FakeDriver::new_postgres()),
+    ]);
+    super::TEST_CONNECT.scope(steps, async {
+        assert!(!host.tools["list_tables"](json!({})).await.is_error);
+        old.fail_next_test_connection(pluk_db::DriverError::Connection("connection closed".into()));
+        tokio::time::sleep(std::time::Duration::from_secs(31)).await;
+        let result = host.tools["list_tables"](json!({})).await;
+        assert!(!result.is_error, "{}", result.text());
+        assert_eq!(connects_left(), 0);
+        tokio::task::yield_now().await;
+        assert!(old.is_closed());
+    }).await;
+}
+
+#[tokio::test]
+async fn a_connection_that_broke_under_a_write_is_replaced_for_the_next_call() {
+    use super::ConnectStep;
+    let (_dir, store) = temp_store();
+    let policy = r#"{"tools":{"query":{"settings":{"mode":"mutations"}}}}"#;
+    let host = capture_for(&make_integration("write-broke", "postgres", json!({}), Some(policy)), store);
+    let broken = pluk_db::fake::FakeDriver::new_postgres();
+    broken.fail_next_query(pluk_db::DriverError::Query("connection closed".into()));
+    let steps = connect_steps(vec![
+        ConnectStep::Ready(broken.clone()),
+        ConnectStep::Ready(pluk_db::fake::FakeDriver::new_postgres()),
+    ]);
+    super::TEST_CONNECT.scope(steps, async {
+        let write = host.tools["query"](json!({"sql": "INSERT INTO t VALUES (1)"})).await;
+        assert!(write.text().contains("Do not retry"), "{}", write.text());
+        assert_eq!(connects_left(), 1);
+        let next = host.tools["list_tables"](json!({})).await;
+        assert!(!next.is_error, "{}", next.text());
+        assert_eq!(connects_left(), 0);
+    }).await;
+}
+
+#[tokio::test]
+async fn testing_a_healthy_connection_leaves_it_in_place() {
+    use super::ConnectStep;
+    let (_dir, store) = temp_store();
+    let conn = make_integration("test-healthy", "postgres", json!({}), None);
+    let host = capture_for(&conn, store.clone());
+    let adapter = crate::sql::SqlAdapter::postgres(store, Arc::new(SqlCancelRegistry::default()));
+    let driver = pluk_db::fake::FakeDriver::new_postgres();
+    super::TEST_CONNECT.scope(connect_steps(vec![ConnectStep::Ready(driver.clone())]), async {
+        assert!(!host.tools["list_tables"](json!({})).await.is_error);
+        adapter.test_connection(&conn).await.unwrap();
+        assert!(!driver.is_closed());
+        assert!(!host.tools["list_tables"](json!({})).await.is_error);
+        assert_eq!(connects_left(), 0);
+    }).await;
+}
+
+#[tokio::test]
+async fn testing_rebuilds_a_connection_that_fails_its_check() {
+    use super::ConnectStep;
+    let (_dir, store) = temp_store();
+    let conn = make_integration("test-broken", "postgres", json!({}), None);
+    let host = capture_for(&conn, store.clone());
+    let adapter = crate::sql::SqlAdapter::postgres(store, Arc::new(SqlCancelRegistry::default()));
+    let old = pluk_db::fake::FakeDriver::new_postgres();
+    let steps = connect_steps(vec![
+        ConnectStep::Ready(old.clone()),
+        ConnectStep::Ready(pluk_db::fake::FakeDriver::new_postgres()),
+    ]);
+    super::TEST_CONNECT.scope(steps, async {
+        assert!(!host.tools["list_tables"](json!({})).await.is_error);
+        old.fail_next_test_connection(pluk_db::DriverError::Connection("connection closed".into()));
+        adapter.test_connection(&conn).await.unwrap();
+        assert_eq!(connects_left(), 0);
     }).await;
 }
 

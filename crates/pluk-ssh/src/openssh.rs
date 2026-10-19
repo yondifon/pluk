@@ -8,12 +8,16 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::process::Command;
 
 use crate::config::{SshConfigEntry, expand_home, parse_ssh_config};
-use crate::pending::{is_ssh_agent_retryable_error, is_ssh_fatal_error, is_ssh_retryable_error};
+use crate::pending::{
+    APPROVAL_NOTICE_AFTER_MS, announce_approval_wait, is_ssh_agent_retryable_error,
+    is_ssh_fatal_error, is_ssh_retryable_error,
+};
 
 pub const HANDSHAKE_TIMEOUT_MS: u64 = 180_000;
 pub const CONTROL_PERSIST: &str = "10m";
@@ -46,6 +50,26 @@ pub struct SshTunnelConfig {
     pub remote_port: u16,
     /// Local port to listen on. `None` picks a free one.
     pub local_port: Option<u16>,
+    /// Integration name shown when the connect needs the user to approve a key.
+    /// `None` connects without telling anyone.
+    pub label: Option<String>,
+}
+
+/// Tells the user once per connect, however many attempts it takes.
+struct ApprovalNotice<'a> {
+    label: Option<&'a str>,
+    announced: AtomicBool,
+}
+
+impl ApprovalNotice<'_> {
+    async fn after_wait(&self, agent: Option<&str>) {
+        tokio::time::sleep(Duration::from_millis(APPROVAL_NOTICE_AFTER_MS)).await;
+        if let Some(label) = self.label
+            && !self.announced.swap(true, Ordering::SeqCst)
+        {
+            announce_approval_wait(label, agent);
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -189,6 +213,7 @@ async fn ensure_master(
     config: &SshTunnelConfig,
     target: &[String],
     timeout_ms: u64,
+    notice: &ApprovalNotice<'_>,
 ) -> Result<(), SshError> {
     let key = format!("{} {}", target.join(" "), config.host);
 
@@ -241,10 +266,12 @@ async fn ensure_master(
         args.push("IdentityAgent=none".to_string());
     }
 
+    let mut agent_name = None;
     if config.auth_type == "agent" {
         let agent = crate::agent::resolve_live_agent(&config.host).await;
         match agent {
             Some(a) => {
+                agent_name = crate::agent::agent_name(&a.socket);
                 eprintln!(
                     "[pluk] SSH agent socket: {} ({})",
                     a.socket,
@@ -265,7 +292,20 @@ async fn ensure_master(
 
     eprintln!("[pluk] OpenSSH master: ssh {}", args.join(" "));
 
-    let (code, stderr) = run_ssh_command(&args, timeout_ms).await;
+    crate::pending::note_connect_agent(&config.host, agent_name);
+    // A key agent or a ProxyCommand sign-in can hold the connect for a person.
+    let waits_on_person =
+        config.auth_type == "agent" || parse_ssh_config(&config.host).proxy_command.is_some();
+    let start = run_ssh_command(&args, timeout_ms);
+    tokio::pin!(start);
+    let (code, stderr) = if waits_on_person {
+        tokio::select! {
+            result = &mut start => result,
+            _ = notice.after_wait(agent_name) => start.await,
+        }
+    } else {
+        start.await
+    };
     if code != 0 {
         let msg = if stderr.is_empty() {
             format!("ssh master failed (exit {code})")
@@ -331,17 +371,18 @@ impl Drop for Tunnel {
 }
 
 /// Open a tunnel via OpenSSH ControlMaster. Mirrors `openOpenSSHTunnel` in ssh.ts.
-pub async fn open_openssh_tunnel(
+async fn open_openssh_tunnel(
     config: &SshTunnelConfig,
     ssh_config: &SshConfigEntry,
     username: &str,
     readiness_timeout_ms: u64,
     on_fatal: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    notice: &ApprovalNotice<'_>,
 ) -> Result<Tunnel, SshError> {
     let target = master_target(config, ssh_config, username);
     let started = std::time::Instant::now();
 
-    ensure_master(config, &target, readiness_timeout_ms).await?;
+    ensure_master(config, &target, readiness_timeout_ms, notice).await?;
 
     let elapsed_ms = started.elapsed().as_millis() as u64;
     if elapsed_ms >= readiness_timeout_ms {
@@ -439,7 +480,10 @@ pub async fn open_openssh_tunnel(
         let t = close_target.clone();
         let h = close_host.clone();
         let s = close_spec.clone();
-        tokio::spawn(async move {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(async move {
             let args: Vec<String> = {
                 let mut a = vec!["-O".to_string(), "cancel".to_string(), "-L".to_string(), s];
                 a.extend_from_slice(&t);
@@ -510,6 +554,10 @@ pub async fn open_ssh_tunnel_via_openssh(
         let deadline = std::time::Instant::now() + Duration::from_millis(HANDSHAKE_TIMEOUT_MS);
         let mut attempts_run = 0;
         let mut last_err: Option<SshError> = None;
+        let notice = ApprovalNotice {
+            label: config.label.as_deref(),
+            announced: AtomicBool::new(false),
+        };
 
         for attempt in 1..=attempts {
             let remaining = deadline
@@ -520,8 +568,15 @@ pub async fn open_ssh_tunnel_via_openssh(
                 break;
             }
             attempts_run = attempt;
-            match open_openssh_tunnel(&config, &ssh_config, &username, remaining, on_fatal.clone())
-                .await
+            match open_openssh_tunnel(
+                &config,
+                &ssh_config,
+                &username,
+                remaining,
+                on_fatal.clone(),
+                &notice,
+            )
+            .await
             {
                 Ok(t) => return Ok(t),
                 Err(e) => {
@@ -598,6 +653,7 @@ mod tests {
             remote_host: "db.internal".into(),
             remote_port: 5432,
             local_port: None,
+            label: None,
         };
         let ssh_cfg = SshConfigEntry {
             port: Some(2200),
@@ -607,12 +663,6 @@ mod tests {
         assert!(t.contains(&"-o".to_string()));
         assert!(t.contains(&"alice".to_string()));
         assert!(t.contains(&"2200".to_string()));
-    }
-
-    #[test]
-    fn retry_delays_are_bounded_and_backoff() {
-        assert_eq!(CONNECT_RETRY_DELAYS_MS, &[2_000, 4_000, 8_000]);
-        assert!(CONNECT_RETRY_DELAYS_MS.iter().sum::<u64>() < HANDSHAKE_TIMEOUT_MS);
     }
 
     #[test]

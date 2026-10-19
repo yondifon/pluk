@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum DriverError {
     #[error("connection failed: {0}")]
     Connection(String),

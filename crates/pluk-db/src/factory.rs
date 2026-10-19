@@ -114,13 +114,9 @@ pub async fn create_driver(mut opts: CreateDriverOpts) -> Result<DriverWithTunne
         let provider: Box<dyn SshTunnelProvider> = opts
             .ssh_provider
             .unwrap_or_else(|| Box::new(PlukSshTunnelProvider));
-        let t = tokio::time::timeout(
-            std::time::Duration::from_secs(20),
-            provider.open_tunnel(&opts.cfg, &effective_host, effective_port),
-        ).await.map_err(|_| DriverError::Connection(format!(
-            "The SSH tunnel to {} didn't come up within 20s. If 1Password is asking for approval, approve it, then retry. Retrying is safe.",
-            opts.cfg.ssh_host.as_deref().unwrap_or("the SSH host")
-        )))??;
+        let t = provider
+            .open_tunnel(&opts.cfg, &effective_host, effective_port)
+            .await?;
         effective_host = t.local_host.clone();
         effective_port = t.local_port;
         tunnel = Some(OwnedTunnel::new(t));

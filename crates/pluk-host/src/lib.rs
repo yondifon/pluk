@@ -1,3 +1,4 @@
+mod approval_notice;
 pub mod commands;
 pub mod confirm;
 pub mod frame;
@@ -48,6 +49,7 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::Builder::new().app_name("Pluk").arg("--autostart").build())
         .manage(crate::confirm::ConfirmState::default())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let store = Arc::new(pluk_store::Store::open_default().map_err(|reason| {
@@ -101,6 +103,11 @@ pub fn run() {
                     confirm_registry.clone(),
                 ),
             ));
+            // A connect held up by a key approval is easy to miss behind other windows.
+            let approval_app = app.handle().clone();
+            pluk_adapters::set_ssh_approval_hook(Arc::new(move |name, agent| {
+                crate::approval_notice::show(&approval_app, name, agent);
+            }));
             // Every written log row reaches the window as it happens, so the
             // activity log needs no polling.
             let activity_app = app.handle().clone();

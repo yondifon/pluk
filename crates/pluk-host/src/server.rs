@@ -48,6 +48,7 @@ impl ServerHandle {
     ) -> std::io::Result<Self> {
         let shutdown = CancellationToken::new();
         let owners = Arc::new(pluk_server::OwnerPool::default());
+        owners.on_owner_close(Arc::new(pluk_adapters::sql::evict_connections));
         let health = Arc::new(pluk_server::HealthMap::default());
         let rate_state =
             pluk_server::AppState::new(store.clone(), registry.clone(), owners, health);

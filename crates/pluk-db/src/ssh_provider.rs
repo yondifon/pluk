@@ -32,6 +32,7 @@ fn tunnel_config(
         remote_host: remote_host.to_string(),
         remote_port,
         local_port: None,
+        label: cfg.label.clone(),
     }
 }
 
