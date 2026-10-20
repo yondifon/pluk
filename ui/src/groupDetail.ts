@@ -35,7 +35,7 @@ function envLabel(env: string): string {
   return env.charAt(0).toUpperCase() + env.slice(1);
 }
 
-export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps): void {
+export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps): { destroy: () => void } {
   const { group, integrations, onEdit, onDelete, onEditIntegration, inject } = deps;
   container.innerHTML = "";
   container.className = "group-detail";
@@ -92,10 +92,17 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
 
   const content = document.createElement("div");
   content.className = "group-content";
+  let logs: { destroy: () => void } | null = null;
+
+  function disposeLogs(): void {
+    logs?.destroy();
+    logs = null;
+  }
 
   function showLogs(): void {
     selectedTab = "logs";
     renderTabs();
+    disposeLogs();
     content.innerHTML = "";
     // Reuse R21's activity log view scoped to group
     const logMount = document.createElement("div");
@@ -103,7 +110,7 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
     logMount.setAttribute("aria-labelledby", "tab-logs");
     content.appendChild(logMount);
     try {
-      mountActivityLog(logMount, { scope: { groupId: group.id } });
+      logs = mountActivityLog(logMount, { scope: { groupId: group.id } });
     } catch {
       logMount.textContent = "Logs unavailable.";
       logMount.setAttribute("role", "status");
@@ -113,6 +120,7 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
   function showOverview(): void {
     selectedTab = "overview";
     renderTabs();
+    disposeLogs();
     content.innerHTML = "";
     const wrap = document.createElement("div");
     wrap.className = "stack-lg";
@@ -233,6 +241,12 @@ export function renderGroupDetail(container: HTMLElement, deps: GroupDetailDeps)
 
   // Keep the active tab in the keyboard tab order.
   title.tabIndex = 0;
+
+  return {
+    destroy() {
+      disposeLogs();
+    },
+  };
 }
 
 function memberIntegrations(group: Group, integrations: DetailIntegration[]): DetailIntegration[] {

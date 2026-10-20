@@ -1,5 +1,6 @@
-import { describe, test, expect, beforeEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, vi } from "bun:test";
 import { renderGroupDetail } from "./groupDetail";
+import type { LogEntry } from "./activityLog/types";
 
 // The group screen opens on Logs, which talks to the host before Overview shows.
 beforeEach(() => {
@@ -30,6 +31,88 @@ function mountOverview(): HTMLElement {
   root.querySelector<HTMLButtonElement>("#tab-overview")!.click();
   return root;
 }
+
+const pendingEntry: LogEntry = {
+  id: 1,
+  connectionId: "c1",
+  connectionName: "Pg",
+  sql: "SELECT 1",
+  verdict: "pending",
+  reason: null,
+  categories: null,
+  source: null,
+  resultJson: null,
+  rowCount: null,
+  responseText: null,
+  groupId: "g1",
+  groupName: "Marketing",
+  createdAt: "2026-08-26 12:00:00",
+};
+
+function installHost(): { liveSubscriptions: () => number } {
+  let live = 0;
+  (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+    core: {
+      invoke: async (cmd: string) => {
+        if (cmd === "get_logs") return { entries: [pendingEntry], nextCursor: null, hasMore: false };
+        return 30;
+      },
+    },
+    event: {
+      listen: async (event: string) => {
+        if (event !== "pluk://log-activity") return () => {};
+        live += 1;
+        return () => {
+          live -= 1;
+        };
+      },
+    },
+  } as never;
+  return { liveSubscriptions: () => live };
+}
+
+function flush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("group activity log lifecycle", () => {
+  afterEach(() => vi.useRealTimers());
+
+  test("repeated Logs and Overview switches keep one live subscription and timer, and teardown releases both", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const host = installHost();
+    const root = document.createElement("div");
+    const handle = renderGroupDetail(root, {
+      group,
+      integrations: [],
+      onEdit: () => {},
+      onDelete: () => {},
+      onEditIntegration: () => {},
+      inject: async () => ({ status: "added", path: "" }),
+    });
+    await flush();
+
+    expect(host.liveSubscriptions()).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    for (let i = 0; i < 3; i += 1) {
+      root.querySelector<HTMLButtonElement>("#tab-overview")!.click();
+      await flush();
+      expect(host.liveSubscriptions()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+
+      root.querySelector<HTMLButtonElement>("#tab-logs")!.click();
+      await flush();
+      expect(host.liveSubscriptions()).toBe(1);
+      expect(vi.getTimerCount()).toBe(1);
+    }
+
+    handle.destroy();
+    await flush();
+    expect(host.liveSubscriptions()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
 
 describe("group overview", () => {
   test("shows one MCP section holding the endpoint and Install", () => {

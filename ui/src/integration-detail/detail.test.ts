@@ -1,7 +1,8 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, vi } from "bun:test";
 import { mountIntegrationDetail } from "./index";
 import { toast, mountToaster } from "../toast";
 import type { Integration } from "./types";
+import type { LogEntry } from "../activityLog/types";
 
 let toaster: HTMLElement;
 let unmountToaster: () => void;
@@ -17,6 +18,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   toast.clear();
   unmountToaster();
   toaster.remove();
@@ -229,5 +231,86 @@ describe("mountIntegrationDetail health update", () => {
     expect(currentToast().dataset.variant).toBe("success");
     expect(currentToast().querySelector(".toast-title")!.textContent).toBe("Prod DB");
     expect(root.querySelector(".status-ok")).not.toBeNull();
+  });
+});
+
+const pendingEntry: LogEntry = {
+  id: 1,
+  connectionId: "1",
+  connectionName: "Prod DB",
+  sql: "SELECT 1",
+  verdict: "pending",
+  reason: null,
+  categories: null,
+  source: null,
+  resultJson: null,
+  rowCount: null,
+  responseText: null,
+  groupId: null,
+  groupName: null,
+  createdAt: "2026-08-26 12:00:00",
+};
+
+function installHost(): { liveSubscriptions: () => number } {
+  let live = 0;
+  (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+    core: {
+      invoke: async (cmd: string) => {
+        if (cmd === "get_logs") return { entries: [pendingEntry], nextCursor: null, hasMore: false };
+        return 30;
+      },
+    },
+    event: {
+      listen: async (event: string) => {
+        if (event !== "pluk://log-activity") return () => {};
+        live += 1;
+        return () => {
+          live -= 1;
+        };
+      },
+    },
+  } as never;
+  return { liveSubscriptions: () => live };
+}
+
+function flush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("integration activity log lifecycle", () => {
+  test("repeated Logs and Overview switches keep one live subscription and timer, and teardown releases both", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const host = installHost();
+    const actions = {
+      onEdit: () => {},
+      onDuplicate: () => {},
+      onDelete: () => {},
+      onTest: async () => ({ ok: true }),
+      inject: async () => ({ status: "added" as const, path: "" }),
+    };
+
+    const root = document.createElement("div");
+    const handle = mountIntegrationDetail(root, integration, null, null, actions);
+    await flush();
+
+    expect(host.liveSubscriptions()).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    for (let i = 0; i < 3; i += 1) {
+      root.querySelector<HTMLButtonElement>("#tab-overview")!.click();
+      await flush();
+      expect(host.liveSubscriptions()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+
+      root.querySelector<HTMLButtonElement>("#tab-logs")!.click();
+      await flush();
+      expect(host.liveSubscriptions()).toBe(1);
+      expect(vi.getTimerCount()).toBe(1);
+    }
+
+    handle.destroy();
+    await flush();
+    expect(host.liveSubscriptions()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

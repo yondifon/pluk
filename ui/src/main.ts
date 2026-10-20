@@ -221,7 +221,7 @@ function renderDetail(mount: HTMLElement): void {
       const row = hostGroups.find((g) => g.id === id);
       if (!row) return renderEmptyState(wrap, emptyState("nothing-selected"));
       wrap.setAttribute("data-key", row.id);
-      renderGroupDetail(wrap, {
+      const groupHandle = renderGroupDetail(wrap, {
         group: {
           id: row.id,
           name: row.name,
@@ -236,6 +236,7 @@ function renderDetail(mount: HTMLElement): void {
         onEditIntegration: (id) => select({ kind: "integration", id }),
         inject: injectMcpConfig,
       });
+      detachDetail = groupHandle.destroy;
       return;
     }
   }

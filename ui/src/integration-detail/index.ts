@@ -82,6 +82,12 @@ export function mountIntegrationDetail(
     render();
   }
 
+  function disposeLogs(): void {
+    logs?.destroy();
+    logs = null;
+    logsMount.innerHTML = "";
+  }
+
   function render() {
     renderHeader(headerEl, integration, manifest ?? null, currentHealth ?? null, testing, {
       onTest: () => void runTest(),
@@ -100,6 +106,7 @@ export function mountIntegrationDetail(
     agentSetup = null;
     serverTools?.destroy();
     serverTools = null;
+    if (selectedTab !== "logs") disposeLogs();
     contentEl.innerHTML = "";
     if (selectedTab === "logs") {
       const panel = document.createElement("div");
@@ -163,8 +170,7 @@ export function mountIntegrationDetail(
       agentSetup = null;
       serverTools?.destroy();
       serverTools = null;
-      logs?.destroy();
-      logs = null;
+      disposeLogs();
       root.innerHTML = "";
     },
   };

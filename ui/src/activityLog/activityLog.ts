@@ -47,6 +47,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   // Pending poll timer
   let stopPendingPoll: (() => void) | null = null;
   let liveClose: (() => void) | null = null;
+  let destroyed = false;
 
   const typeMap = opts.connectionTypes ?? new Map();
 
@@ -322,7 +323,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     loadError = null;
     renderLoadMore();
     fetchLogPage(opts.scope, range, null).then(page => {
-      if (gen !== requestGeneration) return;
+      if (destroyed || gen !== requestGeneration) return;
       entries = mergeEntries(entries, page.entries);
       for (const e of entries) { seenIds.add(e.id); if (e.id > liveCursor) liveCursor = e.id; }
       if (reset || !loadedOlderPage) { nextCursor = page.nextCursor; hasMore = page.hasMore; }
@@ -331,7 +332,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
       updateStats();
       renderList();
       updatePolling();
-    }).catch(() => { if (gen !== requestGeneration) return; isLoading = false; loadError = "Couldn’t load activity."; renderLoadMore(); });
+    }).catch(() => { if (destroyed || gen !== requestGeneration) return; isLoading = false; loadError = "Couldn’t load activity."; renderLoadMore(); });
   }
 
   function loadMore() {
@@ -342,7 +343,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
     loadError = null;
     renderLoadMore();
     fetchLogPage(opts.scope, range, nextCursor).then(page => {
-      if (gen !== requestGeneration) return;
+      if (destroyed || gen !== requestGeneration) return;
       entries = mergeEntries(entries, page.entries);
       for (const e of page.entries) { seenIds.add(e.id); if (e.id > liveCursor) liveCursor = e.id; }
       nextCursor = page.nextCursor;
@@ -352,10 +353,11 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
       if (refreshAfterLoad) { refreshAfterLoad = false; reload(); return; }
       updateStats();
       renderList();
-    }).catch(() => { if (gen !== requestGeneration) return; isLoading = false; loadError = "Couldn’t load older activity."; renderLoadMore(); });
+    }).catch(() => { if (destroyed || gen !== requestGeneration) return; isLoading = false; loadError = "Couldn’t load older activity."; renderLoadMore(); });
   }
 
   function updatePolling() {
+    if (destroyed) return;
     const hasPending = entries.some(e => e.verdict === "pending");
     if (hasPending && !stopPendingPoll) {
       stopPendingPoll = pollWhileVisible(() => reload(), 1500);
@@ -368,6 +370,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
   // Live rows pushed by the host
   function startLive() {
     const conn = connectEvents((ev: LiveEvent) => {
+      if (destroyed) return;
       if (ev.id > liveCursor) liveCursor = ev.id;
       const existing = entries.find(e => e.id === ev.id);
       if (existing) {
@@ -560,6 +563,7 @@ export function mountActivityLog(container: HTMLElement, opts: ActivityLogOption
 
   return {
     destroy() {
+      destroyed = true;
       stopPendingPoll?.();
       if (searchTimer) clearTimeout(searchTimer);
       liveClose?.();
