@@ -164,7 +164,7 @@ async fn run_ssh_command(args: &[String], timeout_ms: u64) -> (i32, String) {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
-        .envs(std::env::vars());
+        .envs(pluk_core::proxy::system_proxy_env());
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,

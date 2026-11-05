@@ -129,6 +129,7 @@ impl SshExecProvider for PlukSshExecProvider {
         let output = tokio::time::timeout(std::time::Duration::from_millis(timeout), async {
             let out = tokio::process::Command::new("ssh")
                 .args(&args)
+                .envs(pluk_core::proxy::system_proxy_env())
                 .output()
                 .await
                 .map_err(|e| DriverError::Connection(format!("ssh exec spawn failed: {e}")))?;

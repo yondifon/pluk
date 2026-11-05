@@ -149,6 +149,20 @@ pub fn ssh_control_dir() -> PathBuf {
     imp::ssh_control_dir()
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SystemProxy {
+    /// `host:port`, set only when that proxy is turned on.
+    pub https: Option<String>,
+    pub socks: Option<String>,
+    /// Hosts that skip the proxy, such as `*.local`.
+    pub exceptions: Vec<String>,
+}
+
+/// `None` when no HTTPS or SOCKS proxy is turned on.
+pub fn system_proxy() -> Option<SystemProxy> {
+    imp::system_proxy()
+}
+
 /// Kill `leader_pid` and every process still in its group.
 ///
 /// Both supported platforms are POSIX and answer to the same call, so this is

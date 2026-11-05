@@ -3,7 +3,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use super::McpClient;
+use super::{McpClient, SystemProxy};
 
 pub fn home_dir() -> Option<PathBuf> {
     env::home_dir()
@@ -72,4 +72,10 @@ fn expand_tilde(raw: &str) -> PathBuf {
         Some(rest) => home().join(Path::new(rest)),
         None => PathBuf::from(raw),
     }
+}
+
+/// Linux desktops hand their proxy to apps as `HTTPS_PROXY` and friends, which
+/// every child already inherits, so there is nothing more to read.
+pub fn system_proxy() -> Option<SystemProxy> {
+    None
 }

@@ -106,7 +106,7 @@ async fn run_ssh_attempt(
     args.push(command.to_string());
 
     let mut cmd = TokioCommand::new("ssh");
-    cmd.args(&args);
+    cmd.args(&args).envs(pluk_core::proxy::system_proxy_env());
     let timeout = Duration::from_millis(timeout_ms);
     match pluk_core::process::run_capture(&mut cmd, timeout).await {
         Ok(output) => {

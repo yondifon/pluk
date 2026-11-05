@@ -232,6 +232,7 @@ pub fn spawn_proxy_command(command: &str) -> std::io::Result<tokio::process::Chi
     }
     let mut cmd = tokio::process::Command::new(&parts[0]);
     cmd.args(&parts[1..])
+        .envs(pluk_core::proxy::system_proxy_env())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit());
