@@ -3,7 +3,19 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use super::McpClient;
+use system_configuration::core_foundation::array::CFArray;
+use system_configuration::core_foundation::base::{CFType, TCFType};
+use system_configuration::core_foundation::dictionary::CFDictionary;
+use system_configuration::core_foundation::number::CFNumber;
+use system_configuration::core_foundation::string::{CFString, CFStringRef};
+use system_configuration::dynamic_store::SCDynamicStoreBuilder;
+use system_configuration::sys::schema_definitions::{
+    kSCPropNetProxiesExceptionsList, kSCPropNetProxiesHTTPSEnable, kSCPropNetProxiesHTTPSPort,
+    kSCPropNetProxiesHTTPSProxy, kSCPropNetProxiesSOCKSEnable, kSCPropNetProxiesSOCKSPort,
+    kSCPropNetProxiesSOCKSProxy,
+};
+
+use super::{McpClient, SystemProxy};
 
 pub fn home_dir() -> Option<PathBuf> {
     env::home_dir()
@@ -73,4 +85,83 @@ fn expand_tilde(raw: &str) -> PathBuf {
         Some(rest) => home().join(Path::new(rest)),
         None => PathBuf::from(raw),
     }
+}
+
+/// Reads the HTTPS and SOCKS proxies set in System Settings.
+pub fn system_proxy() -> Option<SystemProxy> {
+    let settings = SCDynamicStoreBuilder::new("pluk").build()?.get_proxies()?;
+
+    // SAFETY: the `kSCPropNetProxies*` keys are constant strings the framework
+    // exports; reading them has no side effects.
+    let (https, socks, exceptions_key) = unsafe {
+        (
+            proxy_address(
+                &settings,
+                kSCPropNetProxiesHTTPSEnable,
+                kSCPropNetProxiesHTTPSProxy,
+                kSCPropNetProxiesHTTPSPort,
+            ),
+            proxy_address(
+                &settings,
+                kSCPropNetProxiesSOCKSEnable,
+                kSCPropNetProxiesSOCKSProxy,
+                kSCPropNetProxiesSOCKSPort,
+            ),
+            kSCPropNetProxiesExceptionsList,
+        )
+    };
+    if https.is_none() && socks.is_none() {
+        return None;
+    }
+
+    let exceptions = settings
+        .find(exceptions_key)
+        .and_then(|list| list.downcast::<CFArray>())
+        .map(|list| {
+            list.iter()
+                .filter_map(|item| {
+                    // SAFETY: the array owns the item; wrapping under the get
+                    // rule takes a new reference instead of stealing it.
+                    unsafe { CFType::wrap_under_get_rule(*item) }.downcast::<CFString>()
+                })
+                .map(|host| host.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(SystemProxy {
+        https,
+        socks,
+        exceptions,
+    })
+}
+
+/// `host:port` for one proxy kind, or `None` when it is off or has no host.
+fn proxy_address(
+    settings: &CFDictionary<CFString, CFType>,
+    enabled_key: CFStringRef,
+    host_key: CFStringRef,
+    port_key: CFStringRef,
+) -> Option<String> {
+    let enabled = settings
+        .find(enabled_key)
+        .and_then(|flag| flag.downcast::<CFNumber>())
+        .and_then(|flag| flag.to_i32())
+        == Some(1);
+    if !enabled {
+        return None;
+    }
+    let host = settings
+        .find(host_key)
+        .and_then(|host| host.downcast::<CFString>())
+        .map(|host| host.to_string())
+        .filter(|host| !host.is_empty())?;
+    let port = settings
+        .find(port_key)
+        .and_then(|port| port.downcast::<CFNumber>())
+        .and_then(|port| port.to_i32());
+    Some(match port {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    })
 }
