@@ -4,6 +4,7 @@ pub mod confirm;
 pub mod frame;
 mod login;
 pub mod server;
+mod signin_window;
 #[cfg(target_os = "macos")]
 mod tray_menu;
 pub mod updater;
@@ -107,6 +108,11 @@ pub fn run() {
             let approval_app = app.handle().clone();
             pluk_adapters::set_ssh_approval_hook(Arc::new(move |name, agent| {
                 crate::approval_notice::show(&approval_app, name, agent);
+            }));
+            // 1Password only shows its prompt for the app in front.
+            let signin_app = app.handle().clone();
+            pluk_adapters::set_ssh_sign_in_hook(Arc::new(move |name, agent| {
+                Box::new(crate::signin_window::open(&signin_app, name, agent))
             }));
             // Every written log row reaches the window as it happens, so the
             // activity log needs no polling.

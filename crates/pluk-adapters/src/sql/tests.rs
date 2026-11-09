@@ -286,6 +286,28 @@ async fn a_connection_that_broke_under_a_write_is_replaced_for_the_next_call() {
     }).await;
 }
 
+#[tokio::test(start_paused = true)]
+async fn testing_from_the_app_joins_a_connect_started_through_a_group() {
+    use super::ConnectStep;
+    use std::time::Duration;
+    let (_dir, store) = temp_store();
+    let bare = ssh_integration("group-join");
+    let mut via_group = bare.clone();
+    via_group.via_group = Some(pluk_store::LogGroup { id: "grp".into(), name: "team".into() });
+    let host = capture_for(&via_group, store.clone());
+    let adapter = crate::sql::SqlAdapter::postgres(store, Arc::new(SqlCancelRegistry::default()));
+    let driver = pluk_db::fake::FakeDriver::new_postgres();
+    let steps = connect_steps(vec![ConnectStep::After(Duration::from_secs(40), driver)]);
+    super::TEST_CONNECT.scope(steps, async {
+        let first = host.tools["list_tables"](json!({})).await;
+        assert!(first.text().contains("SSH_CONNECT_PENDING"), "{}", first.text());
+        adapter.test_connection(&bare).await.unwrap();
+        let after = host.tools["list_tables"](json!({})).await;
+        assert!(!after.is_error, "{}", after.text());
+        assert_eq!(connects_left(), 0);
+    }).await;
+}
+
 #[tokio::test]
 async fn testing_a_healthy_connection_leaves_it_in_place() {
     use super::ConnectStep;

@@ -51,8 +51,15 @@ pub struct Target {
 impl Target {
     pub fn new(cfg: &SqlConfig) -> Self {
         let integration = cfg.integration_id.clone().unwrap_or_default();
+        // The group and display name don't change the connection, so a call
+        // through a group and a test from the app share one connect.
+        let connection = SqlConfig {
+            via_group: None,
+            label: None,
+            ..cfg.clone()
+        };
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        format!("{cfg:?}").hash(&mut hasher);
+        format!("{connection:?}").hash(&mut hasher);
         let master = (cfg.r#type != "sqlite" && cfg.is_use_ssh())
             .then_some(cfg.ssh_host.as_deref())
             .flatten()

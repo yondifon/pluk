@@ -25,6 +25,7 @@ pub const CONTROL_CMD_TIMEOUT_MS: u64 = 10_000;
 pub const MASTER_POLL_MS: u64 = 30_000;
 pub const READINESS_TIMEOUT_MS: u64 = 15_000;
 pub const CONNECT_RETRY_DELAYS_MS: &[u64] = &[2_000, 4_000, 8_000];
+const FOREGROUND_SETTLE_MS: u64 = 300;
 
 /// Template uses `%C` hash token so the full path stays under the 104-byte
 /// `sun_path` limit (see `pluk_core::platform::ssh_control_dir`).
@@ -296,6 +297,17 @@ async fn ensure_master(
     // A key agent or a ProxyCommand sign-in can hold the connect for a person.
     let waits_on_person =
         config.auth_type == "agent" || parse_ssh_config(&config.host).proxy_command.is_some();
+    let _foreground = if config.auth_type == "agent" {
+        let label = config.label.as_deref().unwrap_or(&config.host);
+        let held = crate::pending::hold_foreground(label, agent_name);
+        if held.is_some() {
+            // Lets the window come forward before ssh asks the agent to sign.
+            tokio::time::sleep(Duration::from_millis(FOREGROUND_SETTLE_MS)).await;
+        }
+        held
+    } else {
+        None
+    };
     let start = run_ssh_command(&args, timeout_ms);
     tokio::pin!(start);
     let (code, stderr) = if waits_on_person {
@@ -534,6 +546,20 @@ pub async fn kill_master(config: &SshTunnelConfig) -> Result<(), SshError> {
     args.push(config.host.clone());
     run_ssh_command(&args, CONTROL_CMD_TIMEOUT_MS).await;
     Ok(())
+}
+
+/// Start the shared connection to the host in `config` unless one is already
+/// up, so commands sent after it reuse it without asking the key agent again.
+/// Only the host, port, user and label in `config` are used.
+pub async fn connect_master(config: &SshTunnelConfig, timeout_ms: u64) -> Result<(), SshError> {
+    let ssh_config = parse_ssh_config(&config.host);
+    let username = resolve_username(config, &ssh_config);
+    let target = master_target(config, &ssh_config, &username);
+    let notice = ApprovalNotice {
+        label: config.label.as_deref(),
+        announced: AtomicBool::new(false),
+    };
+    ensure_master(config, &target, timeout_ms, &notice).await
 }
 
 /// High-level entry mirroring `openSSHTunnel` routing: agent/key via OpenSSH,
