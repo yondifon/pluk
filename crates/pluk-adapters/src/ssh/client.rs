@@ -33,16 +33,53 @@ fn retry_exhausted_error(
     .with_code(last.code.clone().unwrap_or_else(|| "SSH_RETRY_EXHAUSTED".into()))
 }
 
+fn sign_in_error(error: pluk_ssh::SshError) -> AdapterError {
+    match error {
+        pluk_ssh::SshError::AgentUnreachable(message) => {
+            AdapterError::new(message).with_code(pluk_ssh::SSH_AGENT_UNREACHABLE_CODE)
+        }
+        pluk_ssh::SshError::Io(e) => AdapterError::new(e.to_string()).with_code("SSH_IO_ERROR"),
+        other => AdapterError::new(other.to_string()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_ssh_attempt(
     host: &str,
     port: u16,
     user: &str,
     auth_type: &str,
     key_path: Option<String>,
+    label: &str,
     command: &str,
     timeout_ms: u64,
 ) -> Result<ExecResult, AdapterError> {
     use tokio::process::Command as TokioCommand;
+
+    // Signing in on its own first keeps the sign-in window up only for the
+    // sign-in, not for the whole command. The command then reuses the connection.
+    let started = Instant::now();
+    if auth_type == "agent" {
+        let master = SshTunnelConfig {
+            host: host.to_string(),
+            port,
+            user: user.to_string(),
+            auth_type: auth_type.to_string(),
+            key_path: None,
+            passphrase: None,
+            remote_host: String::new(),
+            remote_port: 0,
+            local_port: None,
+            label: Some(label.to_string()),
+        };
+        pluk_ssh::connect_master(&master, timeout_ms)
+            .await
+            .map_err(sign_in_error)?;
+    }
+    let timeout_ms = timeout_ms.saturating_sub(started.elapsed().as_millis() as u64);
+    if timeout_ms == 0 {
+        return Err(AdapterError::new("SSH sign-in used up the whole timeout"));
+    }
 
     let control_path = pluk_ssh::openssh::control_path();
     let ssh_config = pluk_ssh::config::parse_ssh_config(host);
@@ -172,6 +209,7 @@ pub trait SshExecutor: Send + Sync {
         auth_type: &str,
         key_path: Option<String>,
         password: Option<String>,
+        label: &str,
         command: &str,
         timeout_ms: u64,
     ) -> Result<ExecResult, AdapterError>;
@@ -189,6 +227,7 @@ impl SshExecutor for RealSshExecutor {
         auth_type: &str,
         key_path: Option<String>,
         _password: Option<String>,
+        label: &str,
         command: &str,
         timeout_ms: u64,
     ) -> Result<ExecResult, AdapterError> {
@@ -213,6 +252,7 @@ impl SshExecutor for RealSshExecutor {
                 user,
                 auth_type,
                 key_path.clone(),
+                label,
                 command,
                 remaining,
             )
@@ -359,7 +399,7 @@ pub async fn run_command(
     let exec = executor();
     // Check for pending simulation via global stub? executor may return pending error with code
     exec.exec(
-        &host, port, &user, &auth_type, key_path, password, command, clamped,
+        &host, port, &user, &auth_type, key_path, password, &conn.name, command, clamped,
     )
     .await
 }
@@ -580,6 +620,7 @@ impl SshExecutor for StubExecutor {
         _auth_type: &str,
         _key_path: Option<String>,
         _password: Option<String>,
+        _label: &str,
         command: &str,
         timeout_ms: u64,
     ) -> Result<ExecResult, AdapterError> {

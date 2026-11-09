@@ -51,7 +51,10 @@ pub use projection::{
     FieldMap, OnlyError, Preset, apply_only, only_param_description, only_param_schema,
     only_value, pick_paths,
 };
-pub use pluk_ssh::{ApprovalHook, set_approval_hook as set_ssh_approval_hook};
+pub use pluk_ssh::{
+    ApprovalHook, SignInHook, set_approval_hook as set_ssh_approval_hook,
+    set_sign_in_hook as set_ssh_sign_in_hook,
+};
 pub use registry::{AdapterRegistry, default_registry};
 pub use ssh_fields::ssh_auth_fields;
 pub use tool_host::{
