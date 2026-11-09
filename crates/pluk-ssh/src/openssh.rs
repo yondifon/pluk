@@ -298,10 +298,9 @@ async fn ensure_master(
     let waits_on_person =
         config.auth_type == "agent" || parse_ssh_config(&config.host).proxy_command.is_some();
     let _foreground = if config.auth_type == "agent" {
-        let label = config.label.as_deref().unwrap_or(&config.host);
-        let held = crate::pending::hold_foreground(label, agent_name);
+        let held = crate::pending::hold_foreground();
         if held.is_some() {
-            // Lets the window come forward before ssh asks the agent to sign.
+            // Lets Pluk come forward before ssh asks the agent to sign.
             tokio::time::sleep(Duration::from_millis(FOREGROUND_SETTLE_MS)).await;
         }
         held

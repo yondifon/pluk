@@ -1,13 +1,14 @@
 //! 1Password shows its SSH approval only for the app in front, so a connect
-//! waiting on the agent brings Pluk forward with this window until it ends.
+//! waiting on the agent brings Pluk forward until it ends. It does that with a
+//! window too small and far off screen to see, so the only thing the person
+//! notices is 1Password's own prompt.
 
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const WINDOW_LABEL: &str = "signin";
-const WIDTH: f64 = 380.0;
-const HEIGHT: f64 = 180.0;
+const OFF_SCREEN: f64 = -10_000.0;
 
 /// Connects running at the same time share one window.
 static HOLDERS: Mutex<usize> = Mutex::new(0);
@@ -30,49 +31,30 @@ impl Drop for SignInWindow {
     }
 }
 
-pub fn open(app: &AppHandle, name: &str, agent: Option<&str>) -> SignInWindow {
+pub fn open(app: &AppHandle) -> SignInWindow {
     *HOLDERS.lock().unwrap_or_else(|p| p.into_inner()) += 1;
-    let url = signin_url(name, agent);
     let handle = app.clone();
-    let _ = app.run_on_main_thread(move || show(&handle, &url));
+    let _ = app.run_on_main_thread(move || show(&handle));
     SignInWindow { app: app.clone() }
 }
 
-fn signin_url(name: &str, agent: Option<&str>) -> String {
-    let mut url = format!("signin.html?name={}", encode(name));
-    if let Some(agent) = agent {
-        url.push_str(&format!("&agent={}", encode(agent)));
-    }
-    url
-}
-
-fn encode(value: &str) -> String {
-    value
-        .bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
-}
-
-fn show(app: &AppHandle, url: &str) {
+fn show(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
-        let _ = window.show();
         let _ = window.set_focus();
         return;
     }
-    let _ = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::App(url.into()))
+    let Ok(blank) = "about:blank".parse() else {
+        return;
+    };
+    let _ = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::External(blank))
         .title("Pluk")
-        .inner_size(WIDTH, HEIGHT)
+        .inner_size(1.0, 1.0)
+        .position(OFF_SCREEN, OFF_SCREEN)
+        .decorations(false)
+        .shadow(false)
         .resizable(false)
-        .maximizable(false)
-        .minimizable(false)
-        .closable(false)
-        .always_on_top(true)
-        .center()
+        .skip_taskbar(true)
+        .visible_on_all_workspaces(true)
         .focused(true)
         .build();
 }

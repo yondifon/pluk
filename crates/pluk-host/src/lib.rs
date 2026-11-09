@@ -111,8 +111,8 @@ pub fn run() {
             }));
             // 1Password only shows its prompt for the app in front.
             let signin_app = app.handle().clone();
-            pluk_adapters::set_ssh_sign_in_hook(Arc::new(move |name, agent| {
-                Box::new(crate::signin_window::open(&signin_app, name, agent))
+            pluk_adapters::set_ssh_sign_in_hook(Arc::new(move || {
+                Box::new(crate::signin_window::open(&signin_app))
             }));
             // Every written log row reaches the window as it happens, so the
             // activity log needs no polling.
