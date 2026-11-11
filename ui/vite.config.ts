@@ -18,7 +18,6 @@ export default defineConfig({
         // The confirm window is its own document: it opens on its own, and
         // must not wait for the app shell to boot.
         confirm: path.resolve(__dirname, "confirm.html"),
-        signin: path.resolve(__dirname, "signin.html"),
       },
     },
   },

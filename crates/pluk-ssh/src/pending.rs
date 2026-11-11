@@ -29,7 +29,7 @@ pub(crate) fn announce_approval_wait(label: &str, agent: Option<&str>) {
 
 /// Brings the app to the front until the returned value is dropped. 1Password
 /// shows its approval prompt only for the app in front.
-pub type SignInHook = Arc<dyn Fn(&str, Option<&str>) -> Box<dyn Send> + Send + Sync>;
+pub type SignInHook = Arc<dyn Fn() -> Box<dyn Send> + Send + Sync>;
 
 static SIGN_IN_HOOK: Mutex<Option<SignInHook>> = Mutex::new(None);
 
@@ -37,9 +37,9 @@ pub fn set_sign_in_hook(hook: SignInHook) {
     *SIGN_IN_HOOK.lock().unwrap() = Some(hook);
 }
 
-pub(crate) fn hold_foreground(label: &str, agent: Option<&str>) -> Option<Box<dyn Send>> {
+pub(crate) fn hold_foreground() -> Option<Box<dyn Send>> {
     let hook = SIGN_IN_HOOK.lock().unwrap().clone();
-    hook.map(|hook| hook(label, agent))
+    hook.map(|hook| hook())
 }
 
 static CONNECT_AGENTS: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
