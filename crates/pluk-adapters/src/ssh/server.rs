@@ -17,7 +17,7 @@ use super::client::{
 use super::error::humanize_ssh_error;
 use super::policy::{evaluate_command, policy_summary, sanitize_working_dir};
 
-pub const SSH_AGENT_HINT: &str = "Use this for SSH access to the remote host — run shell commands to inspect logs, processes, disk and memory, and Docker/systemd services for debugging and ops, and open local port forwards (ssh -L) so a remote service like a database or web UI is reachable at localhost on this machine. Every command runs as the SSH user and must be confirmed before it runs.";
+pub const SSH_AGENT_HINT: &str = "Use this to debug the remote host: read logs, processes, disk and memory, and Docker or systemd status. Open a local port forward (ssh -L) to reach a remote service, such as a database, at localhost on this machine. Commands run as the SSH user, and Pluk blocks any command the policy does not allow before it reaches the host.";
 
 const DEBUG_SNAPSHOT: &[(&str, &str)] = &[
     ("Host", "uname -a"),
@@ -50,7 +50,7 @@ pub fn ssh_instructions(conn: &Integration) -> String {
         conn.environment,
         InstructionParts {
             kind: "SSH".to_string(),
-            access: "Run inspection commands on the remote host as the connecting SSH user. Every command is checked against the policy below, must be confirmed in your client, and is recorded in the activity log.".to_string(),
+            access: "The owner set up this access in Pluk for debugging. Pluk checks every command against the policy below before it reaches the host, and records it in the activity log.".to_string(),
             policy: Some(policy_summary()),
             hint: Some(SSH_AGENT_HINT.to_string()),
             start: Some("Start with debug_snapshot for a host overview, or list_saved_commands for curated commands. Use open_forward to reach a remote service (e.g. a database) at localhost on this machine.".to_string()),
@@ -181,7 +181,7 @@ pub fn register_ssh_server(
         let owner_c = owner_id.to_string();
         let store_c = store.clone();
         host.register_tool(
-            ToolRegistration { name: "run_command".into(), description: "Run a shell command on the remote host over SSH, as the connecting user. Read-only commands only — anything else comes back as `Blocked:` with the reason. Commands time out after 60 seconds by default; pass `timeout` (up to 600 seconds) for long-running commands.".into(), input_schema: schema, annotations: {
+            ToolRegistration { name: "run_command".into(), description: "Run an inspection command on the remote host over SSH, as the connecting user, such as reading a log or listing containers. Pluk checks it against this integration's policy before it reaches the host and records it in the activity log. A command the policy does not allow comes back as `Blocked:` with the reason. Commands time out after 60 seconds by default; pass `timeout` (up to 600 seconds) for long-running commands.".into(), input_schema: schema, annotations: {
                 let mut m=Map::new(); m.insert("readOnlyHint".into(), Value::Bool(false)); m.insert("destructiveHint".into(), Value::Bool(true)); m.insert("openWorldHint".into(), Value::Bool(true)); m
             } },
             Arc::new(move |args: Value| -> BoxFuture<ToolResult> {
@@ -306,7 +306,7 @@ pub fn register_ssh_server(
         let owner_c = owner_id.to_string();
         let store_c = store.clone();
         host.register_tool(
-            ToolRegistration { name: "debug_snapshot".into(), description: "Capture a quick health snapshot of the remote host (kernel, load, disk, memory, processes, logins, containers). Useful as a first step when debugging.".into(), input_schema: Map::new(), annotations: { let mut m=Map::new(); m.insert("readOnlyHint".into(), Value::Bool(false)); m.insert("destructiveHint".into(), Value::Bool(true)); m.insert("openWorldHint".into(), Value::Bool(true)); m } },
+            ToolRegistration { name: "debug_snapshot".into(), description: "Capture a quick health snapshot of the remote host (kernel, load, disk, memory, processes, logins, containers). Useful as a first step when debugging. Runs a fixed set of read-only commands.".into(), input_schema: Map::new(), annotations: { let mut m=Map::new(); m.insert("readOnlyHint".into(), Value::Bool(true)); m.insert("destructiveHint".into(), Value::Bool(false)); m.insert("openWorldHint".into(), Value::Bool(true)); m } },
             Arc::new(move |_args: Value| -> BoxFuture<ToolResult> {
                 let conn = conn_c.clone();
                 let owner = owner_c.clone();
