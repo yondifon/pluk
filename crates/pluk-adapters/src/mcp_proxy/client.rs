@@ -54,6 +54,8 @@ pub const UPSTREAM_TIMEOUT_CODE: &str = "MCP_PROXY_TIMEOUT";
 pub const SERVER_CRASHED_CODE: &str = "MCP_PROXY_SERVER_CRASHED";
 /// The user stopped the local server, and it waits for them to start it.
 pub const SERVER_STOPPED_CODE: &str = "MCP_PROXY_SERVER_STOPPED";
+/// Upstream does not know the tool that was called.
+pub const TOOL_NOT_FOUND_CODE: &str = "MCP_PROXY_TOOL_NOT_FOUND";
 
 const SERVER_CRASHED: &str =
     "This server keeps stopping. Check its output in Pluk, then restart it.";
@@ -236,8 +238,14 @@ impl McpProxyClient {
         Ok(shape_result(result))
     }
 
-    /// Whether upstream announced a changed tool list since this was last
-    /// asked. Reading it clears it.
+    /// Open the session now, so [`Self::take_tools_changed`] knows whether
+    /// this is a new one.
+    pub async fn open(&self) -> Result<(), AdapterError> {
+        self.session().await.map(|_| ())
+    }
+
+    /// Whether upstream announced a changed tool list, or a new session
+    /// started, since this was last asked. Reading it clears it.
     pub fn take_tools_changed(&self) -> bool {
         slot(&self.integration_id)
             .tools_changed
@@ -275,6 +283,9 @@ impl McpProxyClient {
             slot.lost_server();
         }
         let upstream = Arc::new(self.connect(&slot).await?);
+        // A new session may be a restarted or upgraded server, and a restart
+        // sends no list-changed notice. Treat its tool list as changed.
+        slot.tools_changed.store(true, Ordering::SeqCst);
         *held = Some(upstream.clone());
         Ok(upstream)
     }
@@ -758,8 +769,20 @@ fn code_of(error: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
     match error.downcast_ref::<ServiceError>() {
         Some(ServiceError::Timeout { .. }) => Some(UPSTREAM_TIMEOUT_CODE),
         Some(ServiceError::TransportClosed) => Some(UPSTREAM_UNREACHABLE_CODE),
+        Some(ServiceError::McpError(data)) if is_unknown_tool(data) => Some(TOOL_NOT_FOUND_CODE),
         _ => None,
     }
+}
+
+/// Servers answer a call to a tool they dropped with a protocol error, such
+/// as `-32602: Tool search_events not found`.
+fn is_unknown_tool(data: &rmcp::ErrorData) -> bool {
+    let unknown_code = matches!(
+        data.code,
+        rmcp::model::ErrorCode::INVALID_PARAMS | rmcp::model::ErrorCode::METHOD_NOT_FOUND
+    );
+    let message = data.message.to_ascii_lowercase();
+    unknown_code && message.contains("tool") && (message.contains("not found") || message.contains("unknown"))
 }
 
 /// The next error down. Both error types that wrap a transport failure hold it
@@ -1067,6 +1090,9 @@ pub(super) mod tests {
     async fn reports_a_changed_tool_list_once() {
         let (endpoint, _) = upstream().await;
         let client = McpProxyClient::new("tools-changed", endpoint, UpstreamAuth::None);
+        client.open().await.expect("open");
+        assert!(client.take_tools_changed(), "a new session counts as a change");
+        assert!(!client.take_tools_changed());
 
         client.call_tool("announce", None).await.expect("announce");
         assert!(client.take_tools_changed());

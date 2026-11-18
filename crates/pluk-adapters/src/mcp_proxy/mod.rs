@@ -47,6 +47,8 @@ pub const ADAPTER_ID: &str = "mcp";
 
 /// The tool upstream now describes is not the one that was approved.
 pub const TOOL_CHANGED_CODE: &str = "MCP_PROXY_TOOL_CHANGED";
+/// Upstream no longer offers the tool that was called.
+pub const TOOL_GONE_CODE: &str = "MCP_PROXY_TOOL_GONE";
 /// The stored token no longer signs in to the upstream server.
 pub const TOKEN_REJECTED_CODE: &str = "MCP_PROXY_TOKEN_REJECTED";
 /// The server only answers people who signed in, and nobody has.
@@ -54,7 +56,8 @@ pub const SIGN_IN_NEEDED_CODE: &str = "MCP_PROXY_SIGN_IN_NEEDED";
 /// The server only answers a token, and none is saved.
 pub const TOKEN_NEEDED_CODE: &str = "MCP_PROXY_TOKEN_NEEDED";
 
-const TOOL_CHANGED: &str = "This tool changed. Turn it on again in Pluk.";
+const TOOL_CHANGED: &str =
+    "This tool changed on the MCP server since the owner turned it on. Ask the owner to turn it on again in Pluk.";
 const TOKEN_REJECTED: &str = "Pluk could not sign in to this MCP server. Check the token in Pluk.";
 const HEADERS_REJECTED: &str =
     "Pluk could not sign in to this MCP server. Check the headers in Pluk.";
@@ -409,18 +412,27 @@ async fn proxy_call(
     args: Value,
 ) -> Result<Outcome, AdapterError> {
     let client = catalog::client_for(store, conn).await?;
-    if client.take_tools_changed() {
-        catalog::discover(store, conn).await?;
-    }
-    if !catalog::is_approved(store, &conn.id, name) {
-        return Err(AdapterError::new(TOOL_CHANGED).with_code(TOOL_CHANGED_CODE));
-    }
     let arguments = match args {
         Value::Object(arguments) => Some(arguments),
         _ => None,
     };
-    match client.call_tool(name, arguments.clone()).await {
+    let called = async {
+        client.open().await?;
+        if client.take_tools_changed() {
+            catalog::discover(store, conn).await?;
+        }
+        refuse_unless_approved(store, conn, name)?;
+        client.call_tool(name, arguments.clone()).await
+    };
+    match called.await {
         Ok(call) => Ok(outcome_of(call)),
+        // The snapshot was stale. Refresh it, so the answer names what is
+        // offered now, and so the tool list and policy match upstream.
+        Err(error) if error.has_code(client::TOOL_NOT_FOUND_CODE) => {
+            catalog::discover(store, conn).await?;
+            refuse_unless_approved(store, conn, name)?;
+            Err(error)
+        }
         // Upstream took the credentials and refused anyway. Renewing them
         // answers a question nobody asked.
         Err(error) if error.has_code(client::PERMISSION_DENIED_CODE) => {
@@ -431,6 +443,45 @@ async fn proxy_call(
         }
         Err(error) => Err(error),
     }
+}
+
+fn refuse_unless_approved(store: &Store, conn: &Integration, name: &str) -> Result<(), AdapterError> {
+    match catalog::state_of(store, &conn.id, name) {
+        ToolState::Approved => Ok(()),
+        ToolState::Missing => Err(tool_gone(store, conn, name)),
+        ToolState::Changed | ToolState::New => {
+            Err(AdapterError::new(TOOL_CHANGED).with_code(TOOL_CHANGED_CODE))
+        }
+    }
+}
+
+/// Names what the agent can use instead: the tools it can call now, and the
+/// ones only the owner can turn on.
+fn tool_gone(store: &Store, conn: &Integration, name: &str) -> AdapterError {
+    let gate = tool_gate(conn.query_policy.as_deref());
+    let mut callable = Vec::new();
+    let mut waiting = Vec::new();
+    for tool in catalog::snapshot(store, &conn.id).unwrap_or_default() {
+        match tool.state() {
+            ToolState::Approved if gate.enabled(&tool.name, false) => callable.push(tool.name),
+            ToolState::New | ToolState::Changed => waiting.push(tool.name),
+            _ => {}
+        }
+    }
+    let mut message = format!("This MCP server no longer offers `{name}`. Pluk refreshed its tool list.");
+    if callable.is_empty() {
+        message.push_str(" No tools from this server are turned on.");
+    } else {
+        message.push_str(&format!(" Tools you can call now: {}.", callable.join(", ")));
+    }
+    if !waiting.is_empty() {
+        message.push_str(&format!(
+            " Not turned on yet: {}. Ask the owner to turn one on in Pluk if you need it.",
+            waiting.join(", ")
+        ));
+    }
+    message.push_str(" List your tools again to see the change.");
+    AdapterError::new(message).with_code(TOOL_GONE_CODE)
 }
 
 /// Upstream would not take the credentials Pluk presented.
@@ -497,6 +548,7 @@ fn reason_of(logged: &str) -> String {
 /// runner's prefix so the agent can tell the two apart.
 fn agent_text(error: &AdapterError, verdict: Verdict) -> String {
     if error.has_code(TOOL_CHANGED_CODE)
+        || error.has_code(TOOL_GONE_CODE)
         || error.has_code(TOKEN_REJECTED_CODE)
         || error.has_code(client::PERMISSION_DENIED_CODE)
         || error.has_code(oauth::RECONNECT_NEEDED_CODE)
@@ -643,6 +695,10 @@ mod tests {
                 .and_then(|arguments| arguments.get("q"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            let offered = self.tools.lock().expect("tools").iter().any(|tool| tool.name == request.name);
+            if !offered {
+                return Err(McpError::invalid_params(format!("Tool {} not found", request.name), None));
+            }
             let result = match &*request.name {
                 "flood" => CallToolResult::success(vec![ContentBlock::text(
                     "y".repeat(LOG_RESPONSE_LIMIT + 50),
@@ -1339,6 +1395,73 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["publish".to_string()]
         );
+
+        client::shutdown(&conn.id);
+    }
+
+    #[tokio::test]
+    async fn a_tool_upstream_dropped_answers_with_what_is_offered_now() {
+        let (endpoint, tools) = upstream().await;
+        *tools.lock().expect("tools") = vec![
+            tool("search_events", "Search events"),
+            tool("get_resource", "Get one resource"),
+        ];
+        let (_dir, store) = store();
+        let adapter = McpProxyAdapter::new(store.clone());
+        let mut conn = integration("dropped-tool", json!({ "url": endpoint }));
+        conn.query_policy = Some(
+            json!({ "tools": {
+                "search_events": { "enabled": true },
+                "get_resource": { "enabled": true },
+            }})
+            .to_string(),
+        );
+        adapter.test_connection(&conn).await.expect("discover");
+        store
+            .approve_proxy_tools(&conn.id, &["search_events".to_string(), "get_resource".to_string()])
+            .expect("approve");
+        let host = registered(&adapter, &conn);
+
+        // The server upgrades in place and sends no list-changed notice.
+        *tools.lock().expect("tools") = vec![
+            tool("get_resource", "Get one resource"),
+            tool("search_events_v2", "Search events and logs"),
+        ];
+        let result = host.handlers["search_events"](json!({ "q": "farmer" })).await;
+
+        assert!(result.is_error);
+        assert_eq!(
+            result.text(),
+            "This MCP server no longer offers `search_events`. Pluk refreshed its tool list. Tools you can call now: get_resource. Not turned on yet: search_events_v2. Ask the owner to turn one on in Pluk if you need it. List your tools again to see the change."
+        );
+        assert_eq!(registered(&adapter, &conn).names(), ["get_resource".to_string()]);
+        assert!(adapter.instructions(&conn).contains("Enabled tools: get_resource."));
+        let after = host.handlers["get_resource"](json!({ "q": "trace" })).await;
+        assert_eq!(after.text(), "found trace");
+
+        client::shutdown(&conn.id);
+    }
+
+    #[tokio::test]
+    async fn a_restarted_server_is_checked_again_before_the_next_call() {
+        let (endpoint, tools) = upstream().await;
+        let (_dir, store) = store();
+        let adapter = McpProxyAdapter::new(store.clone());
+        let mut conn = integration("restarted-upstream", json!({ "url": endpoint }));
+        conn.query_policy = Some(enabling("search"));
+        adapter.test_connection(&conn).await.expect("discover");
+        store
+            .approve_proxy_tools(&conn.id, &["search".to_string()])
+            .expect("approve");
+        let host = registered(&adapter, &conn);
+
+        // A newer version comes up after a restart, as `npx -y pkg@latest` does.
+        *tools.lock().expect("tools") = vec![tool("search", "Search everything, including drafts")];
+        client::shutdown(&conn.id);
+        let result = host.handlers["search"](json!({ "q": "onboarding" })).await;
+
+        assert!(result.is_error);
+        assert_eq!(result.text(), TOOL_CHANGED);
 
         client::shutdown(&conn.id);
     }
