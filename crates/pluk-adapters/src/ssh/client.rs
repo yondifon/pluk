@@ -99,7 +99,7 @@ async fn run_ssh_attempt(
         "-o".to_string(),
         "ControlMaster=auto".to_string(),
         "-o".to_string(),
-        "ControlPersist=10m".to_string(),
+        format!("ControlPersist={}", pluk_ssh::CONTROL_PERSIST),
         "-o".to_string(),
         "ServerAliveInterval=30".to_string(),
         "-o".to_string(),

@@ -51,13 +51,17 @@ pub fn classify_sql_error(err: &AdapterError) -> SqlErrorInfo {
     }
 
     if err.is_ssh_pending() {
+        let named = pluk_ssh::agent_named_in(msg);
+        let approve_in = named.unwrap_or("their key agent, security key, or browser");
+        let unlock = named.unwrap_or("their key agent");
+        let retry = pluk_ssh::SSH_RETRY_AFTER_SECS;
+        let wait = pluk_ssh::SSH_CONNECT_WAIT_MS / 1000;
         return SqlErrorInfo {
             category: SqlErrorCategory::PendingApproval,
             message: "SSH connection is waiting on an approval.".to_string(),
-            hint: Some(match pluk_ssh::agent_named_in(msg) {
-                Some(agent) => format!("Approve the sign-in in {agent}, then retry. Pluk keeps connecting meanwhile. If no prompt is visible, unlock {agent} and retry."),
-                None => "Approve the SSH sign-in in your key agent, security key, or browser, then retry. Pluk keeps connecting meanwhile. If no prompt is visible, unlock your key agent and retry.".to_string(),
-            }),
+            hint: Some(format!(
+                "Ask the user to approve the sign-in in {approve_in}. Retry in about {retry} seconds; the retry waits up to {wait} seconds for the approval. Pluk keeps connecting meanwhile. If the user sees no prompt, they should unlock {unlock}."
+            )),
             code: code.unwrap_or_else(|| "SSH_CONNECT_PENDING".to_string()),
         };
     }
@@ -254,6 +258,9 @@ pub fn format_sql_error(err: &AdapterError) -> String {
         inner.insert("hint".into(), serde_json::Value::String(hint));
     }
     inner.insert("code".into(), serde_json::Value::String(info.code));
+    if info.category == SqlErrorCategory::PendingApproval {
+        inner.insert("retry_after_seconds".into(), pluk_ssh::SSH_RETRY_AFTER_SECS.into());
+    }
     obj.insert("error".into(), serde_json::Value::Object(inner));
     format!(
         "Error: {}",

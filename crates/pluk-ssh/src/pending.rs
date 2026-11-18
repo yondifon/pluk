@@ -3,7 +3,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 pub const SSH_PENDING_CODE: &str = "SSH_CONNECT_PENDING";
 pub const SSH_STALLED_CODE: &str = "SSH_CONNECT_STALLED";
-pub const SSH_CONNECT_WAIT_MS: u64 = 25_000;
+/// How long an agent's call waits on a connect that needs an approval.
+/// MCP clients built on the official SDKs give up on a call after 60s.
+pub const SSH_CONNECT_WAIT_MS: u64 = 45_000;
+/// How long an agent should wait before it retries a pending connect.
+pub const SSH_RETRY_AFTER_SECS: u64 = 10;
 pub const SSH_PENDING_MAX_REPORTS: u32 = 2;
 /// How long a connect waits on the agent before someone is told to act.
 pub const APPROVAL_NOTICE_AFTER_MS: u64 = 3_000;
@@ -214,7 +218,10 @@ pub fn ssh_pending_error(agent: Option<&str>) -> CodedError {
     };
     coded(
         SSH_PENDING_CODE,
-        format!("SSH connect is still running. It may be waiting {waiting_on}. It continues in the background; retry in a moment."),
+        format!(
+            "SSH connect is still running. It may be waiting {waiting_on}. It continues in the background. Retry in about {SSH_RETRY_AFTER_SECS} seconds; the retry waits up to {} seconds for the approval.",
+            SSH_CONNECT_WAIT_MS / 1000
+        ),
     )
 }
 

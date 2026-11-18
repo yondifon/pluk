@@ -157,8 +157,38 @@ async fn a_connect_that_never_finishes_answers_still_connecting_before_the_clien
         let start = tokio::time::Instant::now();
         let result = host.tools["list_tables"](json!({})).await;
         assert!(result.is_error);
-        assert!(start.elapsed() <= std::time::Duration::from_secs(45));
+        assert!(start.elapsed() < std::time::Duration::from_secs(60));
         assert!(result.text().contains("SSH_CONNECT_PENDING"), "{}", result.text());
+    }).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_approval_given_within_40_seconds_answers_the_first_call() {
+    use super::ConnectStep;
+    use std::time::Duration;
+    let (_dir, store) = temp_store();
+    let host = capture_for(&ssh_integration("slow-approval"), store);
+    let driver = pluk_db::fake::FakeDriver::new_postgres();
+    let steps = connect_steps(vec![ConnectStep::After(Duration::from_secs(40), driver)]);
+    super::TEST_CONNECT.scope(steps, async {
+        let result = host.tools["list_tables"](json!({})).await;
+        assert!(!result.is_error, "{}", result.text());
+    }).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pending_answer_tells_the_agent_who_acts_and_when_to_retry() {
+    use super::ConnectStep;
+    let (_dir, store) = temp_store();
+    let host = capture_for(&ssh_integration("retry-after"), store);
+    super::TEST_CONNECT.scope(connect_steps(vec![ConnectStep::Hang]), async {
+        let result = host.tools["list_tables"](json!({})).await;
+        let body: Value = serde_json::from_str(result.text().trim_start_matches("Error: ")).unwrap();
+        assert_eq!(body["error"]["code"], "SSH_CONNECT_PENDING");
+        assert_eq!(body["error"]["retry_after_seconds"], pluk_ssh::SSH_RETRY_AFTER_SECS);
+        let hint = body["error"]["hint"].as_str().unwrap();
+        assert!(hint.contains("Ask the user"), "{hint}");
+        assert!(hint.contains(&format!("about {} seconds", pluk_ssh::SSH_RETRY_AFTER_SECS)), "{hint}");
     }).await;
 }
 
@@ -169,7 +199,7 @@ async fn a_connect_still_pending_is_joined_by_the_retry_instead_of_restarted() {
     let (_dir, store) = temp_store();
     let host = capture_for(&ssh_integration("retry-join"), store);
     let driver = pluk_db::fake::FakeDriver::new_postgres();
-    let steps = connect_steps(vec![ConnectStep::After(Duration::from_secs(40), driver)]);
+    let steps = connect_steps(vec![ConnectStep::After(Duration::from_secs(70), driver)]);
     super::TEST_CONNECT.scope(steps, async {
         let first = host.tools["list_tables"](json!({})).await;
         assert!(first.is_error);
@@ -297,7 +327,7 @@ async fn testing_from_the_app_joins_a_connect_started_through_a_group() {
     let host = capture_for(&via_group, store.clone());
     let adapter = crate::sql::SqlAdapter::postgres(store, Arc::new(SqlCancelRegistry::default()));
     let driver = pluk_db::fake::FakeDriver::new_postgres();
-    let steps = connect_steps(vec![ConnectStep::After(Duration::from_secs(40), driver)]);
+    let steps = connect_steps(vec![ConnectStep::After(Duration::from_secs(70), driver)]);
     super::TEST_CONNECT.scope(steps, async {
         let first = host.tools["list_tables"](json!({})).await;
         assert!(first.text().contains("SSH_CONNECT_PENDING"), "{}", first.text());
@@ -378,12 +408,12 @@ async fn a_failed_call_records_how_long_it_waited_and_keeps_it_after_reopen() {
         assert!(result.is_error);
         let page = store.read_log_page(&LogScope::Connection("duration".into()), LogRange::All, None).unwrap();
         assert_eq!(page.entries[0].verdict, "error");
-        assert_eq!(page.entries[0].duration_ms, Some(45_000));
+        assert_eq!(page.entries[0].duration_ms, Some(55_000));
     }).await;
     drop(host);
     drop(store);
     let reopened = Store::open(&dir.path().join("pluk.db")).unwrap();
-    assert_eq!(reopened.read_log_page(&LogScope::Connection("duration".into()), LogRange::All, None).unwrap().entries[0].duration_ms, Some(45_000));
+    assert_eq!(reopened.read_log_page(&LogScope::Connection("duration".into()), LogRange::All, None).unwrap().entries[0].duration_ms, Some(55_000));
 }
 
 #[tokio::test]

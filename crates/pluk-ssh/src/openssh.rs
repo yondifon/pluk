@@ -2,8 +2,8 @@
 //!
 //! Mirrors `pluk/src/db/ssh.ts` OpenSSH path: agent and passphrase-less key
 //! tunnels go through the system `ssh` binary with `ControlMaster=auto` and
-//! `ControlPersist=10m`, forwards added/removed with `ssh -O forward/cancel`,
-//! master polled every 30s.
+//! `ControlPersist` set to [`CONTROL_PERSIST`], forwards added/removed with
+//! `ssh -O forward/cancel`, master polled every 30s.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -20,7 +20,9 @@ use crate::pending::{
 };
 
 pub const HANDSHAKE_TIMEOUT_MS: u64 = 180_000;
-pub const CONTROL_PERSIST: &str = "10m";
+/// How long a master stays up after its last use.
+/// A new master means a new key approval, so one should cover a working session.
+pub const CONTROL_PERSIST: &str = "4h";
 pub const CONTROL_CMD_TIMEOUT_MS: u64 = 10_000;
 pub const MASTER_POLL_MS: u64 = 30_000;
 pub const READINESS_TIMEOUT_MS: u64 = 15_000;
@@ -210,6 +212,24 @@ async fn run_ssh_command(args: &[String], timeout_ms: u64) -> (i32, String) {
     }
 }
 
+/// How a master starts: in the background, shared, and kept after its last use.
+fn master_options() -> Vec<String> {
+    [
+        "-N",
+        "-f",
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        &format!("ControlPersist={CONTROL_PERSIST}"),
+        "-o",
+        "ServerAliveInterval=10",
+        "-o",
+        "ServerAliveCountMax=2",
+    ]
+    .map(str::to_string)
+    .to_vec()
+}
+
 async fn ensure_master(
     config: &SshTunnelConfig,
     target: &[String],
@@ -242,18 +262,7 @@ async fn ensure_master(
         return Ok(());
     }
 
-    let mut args = vec![
-        "-N".to_string(),
-        "-f".to_string(),
-        "-o".to_string(),
-        "ControlMaster=auto".to_string(),
-        "-o".to_string(),
-        format!("ControlPersist={CONTROL_PERSIST}"),
-        "-o".to_string(),
-        "ServerAliveInterval=10".to_string(),
-        "-o".to_string(),
-        "ServerAliveCountMax=2".to_string(),
-    ];
+    let mut args = master_options();
     args.extend_from_slice(target);
 
     if config.auth_type == "key"
@@ -688,6 +697,31 @@ mod tests {
         assert!(t.contains(&"-o".to_string()));
         assert!(t.contains(&"alice".to_string()));
         assert!(t.contains(&"2200".to_string()));
+    }
+
+    /// `ssh_config` time format: a number with an optional s, m or h unit.
+    fn persist_seconds(value: &str) -> u64 {
+        let (number, unit) = value.split_at(value.trim_end_matches(char::is_alphabetic).len());
+        let number: u64 = number.parse().expect("persist number");
+        number
+            * match unit {
+                "" | "s" => 1,
+                "m" => 60,
+                "h" => 3600,
+                other => panic!("unexpected unit {other}"),
+            }
+    }
+
+    #[test]
+    fn a_master_outlives_an_hour_of_no_queries() {
+        let options = master_options();
+        let persist = options
+            .iter()
+            .find_map(|option| option.strip_prefix("ControlPersist="))
+            .expect("ControlPersist option");
+        // A pooled connection closes after 5 idle minutes. The master must
+        // still be up after a long pause, or the next call asks for a new approval.
+        assert!(persist_seconds(persist) >= 3600, "ControlPersist={persist}");
     }
 
     #[test]

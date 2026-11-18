@@ -13,11 +13,11 @@ pub use config::{
     expand_home, expand_proxy_command, parse_ssh_config, resolve_agent_socket, split_command,
 };
 pub use openssh::{
-    HANDSHAKE_TIMEOUT_MS, SshError, SshTunnelConfig, Tunnel, connect_master, control_dir, control_path,
+    CONTROL_PERSIST, HANDSHAKE_TIMEOUT_MS, SshError, SshTunnelConfig, Tunnel, connect_master, control_dir, control_path,
     kill_master,
 };
 pub use pending::{
-    ApprovalHook, SignInHook, SSH_CONNECT_WAIT_MS, SSH_PENDING_CODE, SSH_PENDING_MAX_REPORTS, SSH_STALLED_CODE,
+    ApprovalHook, SignInHook, SSH_CONNECT_WAIT_MS, SSH_PENDING_CODE, SSH_PENDING_MAX_REPORTS, SSH_RETRY_AFTER_SECS, SSH_STALLED_CODE,
     clear_connect_episode, connect_agent, connect_wait_error, is_ssh_agent_retryable_error,
     is_ssh_auth_error, is_ssh_fatal_error, is_ssh_host_verification_error, is_ssh_pending, is_ssh_policy_error,
     is_ssh_retryable_error, is_ssh_stalled, is_transient_ssh_error, record_connect_failure_msg,

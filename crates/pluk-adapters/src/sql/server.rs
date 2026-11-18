@@ -70,8 +70,9 @@ pub(super) struct Patience {
 
 impl Patience {
     /// An agent's call: it answers "still connecting" and the agent retries.
+    /// The whole call stays under the 60s an MCP client waits.
     pub(super) const AGENT: Self = Self {
-        deadline: Duration::from_secs(45),
+        deadline: Duration::from_secs(55),
         ssh_wait: Duration::from_millis(SSH_CONNECT_WAIT_MS),
     };
     /// A person is watching the screen, so wait for the approval itself.
