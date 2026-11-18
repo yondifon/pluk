@@ -284,12 +284,19 @@ impl Adapter for McpProxyAdapter {
 
     fn instructions(&self, conn: &Integration) -> String {
         let live = self.live_tools(conn);
-        let policy = if live.is_empty() {
-            "No tools from this server are turned on.".to_string()
+        let mut policy = if live.is_empty() {
+            "No tools from this server can be called right now.".to_string()
         } else {
             let names: Vec<&str> = live.iter().map(|spec| spec.name.as_str()).collect();
             format!("Enabled tools: {}.", names.join(", "))
         };
+        let changed = Reach::of(&self.store, conn).changed;
+        if !changed.is_empty() {
+            policy.push_str(&format!(
+                " Held until the owner approves them again, because they changed on the server: {}.",
+                changed.join(", ")
+            ));
+        }
         build_instructions(
             &conn.name,
             conn.environment,
@@ -455,32 +462,61 @@ fn refuse_unless_approved(store: &Store, conn: &Integration, name: &str) -> Resu
     }
 }
 
-/// Names what the agent can use instead: the tools it can call now, and the
-/// ones only the owner can turn on.
-fn tool_gone(store: &Store, conn: &Integration, name: &str) -> AdapterError {
-    let gate = tool_gate(conn.query_policy.as_deref());
-    let mut callable = Vec::new();
-    let mut waiting = Vec::new();
-    for tool in catalog::snapshot(store, &conn.id).unwrap_or_default() {
-        match tool.state() {
-            ToolState::Approved if gate.enabled(&tool.name, false) => callable.push(tool.name),
-            ToolState::New | ToolState::Changed => waiting.push(tool.name),
-            _ => {}
+/// The snapshot as an agent needs it: what it can call, what the owner turned
+/// on but must approve again, and what was never turned on.
+#[derive(Default)]
+struct Reach {
+    callable: Vec<String>,
+    changed: Vec<String>,
+    not_on: Vec<String>,
+}
+
+impl Reach {
+    fn of(store: &Store, conn: &Integration) -> Self {
+        let gate = tool_gate(conn.query_policy.as_deref());
+        let mut reach = Reach::default();
+        for tool in catalog::snapshot(store, &conn.id).unwrap_or_default() {
+            let on = gate.enabled(&tool.name, false);
+            match tool.state() {
+                ToolState::Approved if on => reach.callable.push(tool.name),
+                ToolState::Changed if on => reach.changed.push(tool.name),
+                ToolState::Missing => {}
+                _ => reach.not_on.push(tool.name),
+            }
         }
+        reach
     }
-    let mut message = format!("This MCP server no longer offers `{name}`. Pluk refreshed its tool list.");
-    if callable.is_empty() {
-        message.push_str(" No tools from this server are turned on.");
-    } else {
-        message.push_str(&format!(" Tools you can call now: {}.", callable.join(", ")));
+
+    /// The tools that need the owner, or nothing when none do.
+    fn held(&self) -> String {
+        let mut text = String::new();
+        if !self.changed.is_empty() {
+            text.push_str(&format!(
+                " Turned on, but changed on the server since the owner approved them: {}.",
+                self.changed.join(", ")
+            ));
+        }
+        if !self.not_on.is_empty() {
+            text.push_str(&format!(" Not turned on: {}.", self.not_on.join(", ")));
+        }
+        if !text.is_empty() {
+            text.push_str(" Ask the owner to turn on the ones you need in Pluk.");
+        }
+        text
     }
-    if !waiting.is_empty() {
-        message.push_str(&format!(
-            " Not turned on yet: {}. Ask the owner to turn one on in Pluk if you need it.",
-            waiting.join(", ")
-        ));
-    }
-    message.push_str(" List your tools again to see the change.");
+}
+
+/// Names what the agent can use instead, and what only the owner can unlock.
+fn tool_gone(store: &Store, conn: &Integration, name: &str) -> AdapterError {
+    let reach = Reach::of(store, conn);
+    let callable = match reach.callable.is_empty() {
+        true => "none".to_string(),
+        false => reach.callable.join(", "),
+    };
+    let message = format!(
+        "This MCP server no longer offers `{name}`. Pluk refreshed its tool list. Tools you can call now: {callable}.{} List your tools again to see the change.",
+        reach.held()
+    );
     AdapterError::new(message).with_code(TOOL_GONE_CODE)
 }
 
@@ -1432,12 +1468,59 @@ mod tests {
         assert!(result.is_error);
         assert_eq!(
             result.text(),
-            "This MCP server no longer offers `search_events`. Pluk refreshed its tool list. Tools you can call now: get_resource. Not turned on yet: search_events_v2. Ask the owner to turn one on in Pluk if you need it. List your tools again to see the change."
+            "This MCP server no longer offers `search_events`. Pluk refreshed its tool list. Tools you can call now: get_resource. Not turned on: search_events_v2. Ask the owner to turn on the ones you need in Pluk. List your tools again to see the change."
         );
         assert_eq!(registered(&adapter, &conn).names(), ["get_resource".to_string()]);
         assert!(adapter.instructions(&conn).contains("Enabled tools: get_resource."));
         let after = host.handlers["get_resource"](json!({ "q": "trace" })).await;
         assert_eq!(after.text(), "found trace");
+
+        client::shutdown(&conn.id);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_keeps_unchanged_tools_on_and_names_reworded_ones_as_changed() {
+        let (endpoint, tools) = upstream().await;
+        *tools.lock().expect("tools") = vec![
+            tool("search_events", "Search events"),
+            tool("find_projects", "List projects"),
+            tool("get_resource", "Get one resource"),
+        ];
+        let (_dir, store) = store();
+        let adapter = McpProxyAdapter::new(store.clone());
+        let mut conn = integration("reworded-upstream", json!({ "url": endpoint }));
+        conn.query_policy = Some(
+            json!({ "tools": {
+                "search_events": { "enabled": true },
+                "find_projects": { "enabled": true },
+                "get_resource": { "enabled": true },
+            }})
+            .to_string(),
+        );
+        adapter.test_connection(&conn).await.expect("discover");
+        let all = ["search_events", "find_projects", "get_resource"].map(str::to_string);
+        store.approve_proxy_tools(&conn.id, &all).expect("approve");
+        let host = registered(&adapter, &conn);
+
+        // An upgrade drops one tool, rewords another, and keeps a third as it was.
+        *tools.lock().expect("tools") = vec![
+            tool("find_projects", "List or search projects"),
+            tool("get_resource", "Get one resource"),
+            tool("search_logs", "Search logs"),
+        ];
+        let gone = host.handlers["search_events"](json!({})).await;
+
+        assert_eq!(
+            gone.text(),
+            "This MCP server no longer offers `search_events`. Pluk refreshed its tool list. Tools you can call now: get_resource. Turned on, but changed on the server since the owner approved them: find_projects. Not turned on: search_logs. Ask the owner to turn on the ones you need in Pluk. List your tools again to see the change."
+        );
+        let unchanged = host.handlers["get_resource"](json!({ "q": "trace" })).await;
+        assert_eq!(unchanged.text(), "found trace");
+        let instructions = adapter.instructions(&conn);
+        assert!(
+            instructions.contains("Enabled tools: get_resource. Held until the owner approves them again, because they changed on the server: find_projects."),
+            "{instructions}"
+        );
 
         client::shutdown(&conn.id);
     }
@@ -1649,7 +1732,7 @@ mod tests {
         adapter.test_connection(&conn).await.expect("discover");
         let none = adapter.instructions(&conn);
         assert!(
-            none.contains("Current policy: No tools from this server are turned on."),
+            none.contains("Current policy: No tools from this server can be called right now."),
             "{none}"
         );
 
